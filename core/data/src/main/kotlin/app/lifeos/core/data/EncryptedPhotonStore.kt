@@ -30,7 +30,7 @@ class EncryptedPhotonStore(context: Context) : PhotonRepository {
     private val mutex = Mutex()
 
     override suspend fun save(photon: Photon): Unit = withContext(Dispatchers.IO) { mutex.withLock {
-        check(directory.isDirectory || directory.mkdirs()) { "Photon vault unavailable" }
+        ensureDirectory()
         val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
         val encrypted = cipher.doFinal(PhotonCodec.encode(photon))
         val output = ByteArrayOutputStream()
@@ -51,28 +51,31 @@ class EncryptedPhotonStore(context: Context) : PhotonRepository {
         }
     } }
 
+    override suspend fun load(id: PhotonId): Photon? = withContext(Dispatchers.IO) { mutex.withLock {
+        ensureDirectory()
+        val name = "${safeId(id)}.photon"
+        val file = directory.resolve(name)
+        val backup = directory.resolve("$name.bak")
+        if (!file.exists() && !backup.exists()) return@withLock null
+
+        val photon = readPhotonInternal(name)
+        require(photon.id == id) { "Photon identity mismatch" }
+        photon
+    } }
+
     override suspend fun loadReport(): PhotonLoadReport = withContext(Dispatchers.IO) { mutex.withLock {
-        check(directory.isDirectory || directory.mkdirs()) { "Photon vault unavailable" }
+        ensureDirectory()
         val files = directory.listFiles() ?: throw IOException("Photon vault cannot be listed")
-        val names = files.map { it.name.removeSuffix(".bak") }.filter { it.endsWith(".photon") }.distinct()
+        val names = files
+            .map { it.name.removeSuffix(".bak") }
+            .filter { it.endsWith(".photon") }
+            .distinct()
+            .sorted()
         val photons = mutableListOf<Photon>()
         val failures = mutableListOf<String>()
         for (name in names) {
             try {
-                val bytes = AtomicFile(directory.resolve(name)).openRead().use { input ->
-                    val output = ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        require(output.size() + count <= 4 * 1024 * 1024 + 128) { "Photon file too large" }
-                        output.write(buffer, 0, count)
-                    }
-                    output.toByteArray()
-                }
-                val photon = decrypt(bytes)
-                require(name == "${safeId(photon.id)}.photon") { "Photon identity mismatch" }
-                photons += photon
+                photons += readPhotonInternal(name)
             } catch (error: Exception) {
                 failures += name
             }
@@ -87,22 +90,48 @@ class EncryptedPhotonStore(context: Context) : PhotonRepository {
     }
 
     override suspend fun delete(id: PhotonId): Unit = withContext(Dispatchers.IO) { mutex.withLock {
-        val target = AtomicFile(directory.resolve("${safeId(id)}.photon"))
+        ensureDirectory()
+        val name = "${safeId(id)}.photon"
+        val target = AtomicFile(directory.resolve(name))
         target.delete()
-        check(!target.baseFile.exists() && !directory.resolve("${safeId(id)}.photon.bak").exists())
+        check(!target.baseFile.exists() && !directory.resolve("$name.bak").exists())
     } }
+
+    private fun readPhotonInternal(name: String): Photon {
+        require(name.endsWith(".photon")) { "Invalid photon file name" }
+        val bytes = AtomicFile(directory.resolve(name)).openRead().use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                require(output.size() + count <= MAX_FILE_BYTES) { "Photon file too large" }
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+        val photon = decrypt(bytes)
+        require(name == "${safeId(photon.id)}.photon") { "Photon identity mismatch" }
+        return photon
+    }
+
+    private fun ensureDirectory() {
+        check(directory.isDirectory || directory.mkdirs()) { "Photon vault unavailable" }
+    }
 
     private fun safeId(id: PhotonId): String = id.value.also {
         require(it.matches(Regex("[A-Za-z0-9_-]{1,128}"))) { "Invalid photon ID" }
     }
 
     private fun decrypt(container: ByteArray): Photon {
+        require(container.size <= MAX_FILE_BYTES) { "Photon file too large" }
         val input = DataInputStream(ByteArrayInputStream(container))
         val version = input.readInt()
         require(version in 1..FORMAT_VERSION) { "Unsupported photon format" }
         val iv = ByteArray(input.readInt().also { require(it in 12..32) })
         input.readFully(iv)
         val encrypted = input.readBytes()
+        require(encrypted.isNotEmpty()) { "Missing photon ciphertext" }
         val cipher = Cipher.getInstance(TRANSFORMATION).apply {
             init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
         }
@@ -131,5 +160,6 @@ class EncryptedPhotonStore(context: Context) : PhotonRepository {
         const val KEY_ALIAS = "lifeos.photon.v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val FORMAT_VERSION = PhotonCodec.VERSION
+        const val MAX_FILE_BYTES = 4 * 1024 * 1024 + 128
     }
 }
