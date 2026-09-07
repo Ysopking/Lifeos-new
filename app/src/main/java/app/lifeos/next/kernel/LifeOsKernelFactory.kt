@@ -5,6 +5,9 @@ import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
+import app.lifeos.core.language.GoalPhotonFactory
+import app.lifeos.core.language.LanguageUnderstandingEngine
+import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.worker.WorkerId
 import app.lifeos.core.runtime.DurableLifeOsRuntime
 import app.lifeos.core.runtime.DurableRuntimeStateBridge
@@ -70,6 +73,9 @@ class LifeOsKernelFactory(
         val registry = StaticFieldRegistry(listOf(matrix))
         val executor = InfluenceExecutor()
         val mmsiRuntime = MmsiRuntimeBackendProbe(appContext)
+        val languageUnderstanding = LanguageUnderstandingEngine()
+        val goalPhotonFactory = GoalPhotonFactory()
+        val languageContextBuilder = PhotonLanguageContextBuilder()
 
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
@@ -223,6 +229,9 @@ class LifeOsKernelFactory(
             cognitiveOutcomes = cognitiveOutcomes,
             cognitiveTriggers = cognitiveTriggers,
             mmsiRuntime = mmsiRuntime,
+            languageUnderstanding = languageUnderstanding,
+            goalPhotonFactory = goalPhotonFactory,
+            languageContextBuilder = languageContextBuilder,
         )
     }
 
