@@ -35,7 +35,9 @@ import app.lifeos.core.runtime.cognition.DurableCognitionDispatcher
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveEventJournal
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveOutcomeJournal
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveTriggerSink
+import app.lifeos.core.runtime.cognition.InMemoryPhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.OutcomeTriggerObserver
+import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
 import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
@@ -78,6 +80,7 @@ class LifeOsKernelFactory(
             scheduler = cognitiveScheduler,
             durableDispatcher = DurableCognitionDispatcher(taskEngine),
         )
+        val photonTransactions = InMemoryPhotonTransactionJournal()
         val cognitiveOutcomes = InMemoryCognitiveOutcomeJournal()
         val cognitiveTriggers = InMemoryCognitiveTriggerSink()
 
@@ -100,6 +103,7 @@ class LifeOsKernelFactory(
             observer = CompositeDurableTaskExecutionObserver(
                 listOf(
                     durableStateBridge,
+                    PhotonTransactionObserver(photonTransactions),
                     OutcomeTriggerObserver(
                         outcomes = cognitiveOutcomes,
                         triggers = cognitiveTriggers,
@@ -208,6 +212,7 @@ class LifeOsKernelFactory(
             scope = scope,
             bootCoordinator = bootCoordinator,
             continuousCognition = continuousCognition,
+            photonTransactions = photonTransactions,
             cognitiveOutcomes = cognitiveOutcomes,
             cognitiveTriggers = cognitiveTriggers,
         )
