@@ -51,3 +51,9 @@ data class FieldInfluence(
     val explanation: String,
     val occurredAt: Instant = Instant.now(),
 )
+
+interface PhotonStore {
+    suspend fun save(photon: Photon)
+    suspend fun loadAll(): List<Photon>
+    suspend fun delete(id: PhotonId)
+}
