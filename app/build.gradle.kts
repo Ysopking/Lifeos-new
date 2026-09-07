@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "app.lifeos.next"
-    compileSdk = 36
+    compileSdk = 37
     defaultConfig {
         applicationId = "app.lifeos.next"
         minSdk = 26
