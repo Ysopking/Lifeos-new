@@ -7,6 +7,7 @@ import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.model.worker.WorkerId
 import java.time.Duration
 import java.time.Instant
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -22,7 +23,7 @@ class TaskSchedulerLoopTest {
         val persisted = queuedTask(repository, "persisted")
         val signal = ConflatedTaskSchedulerSignal()
         val dispatched = mutableListOf<LifeTask>()
-        val loop = loop(repository, signal) { dispatched += it }
+        val loop = loop(backgroundScope, repository, signal) { dispatched += it }
 
         loop.start()
         runCurrent()
@@ -36,7 +37,7 @@ class TaskSchedulerLoopTest {
         val repository = InMemoryTaskRepository()
         val signal = ConflatedTaskSchedulerSignal()
         val dispatched = mutableListOf<LifeTask>()
-        val loop = loop(repository, signal) { dispatched += it }
+        val loop = loop(backgroundScope, repository, signal) { dispatched += it }
         val engine = DurableTaskEngine(repository, signal) { t0 }
 
         loop.start()
@@ -58,7 +59,7 @@ class TaskSchedulerLoopTest {
         val repository = InMemoryTaskRepository()
         val signal = ConflatedTaskSchedulerSignal()
         val dispatched = mutableListOf<LifeTask>()
-        val loop = loop(repository, signal) { dispatched += it }
+        val loop = loop(backgroundScope, repository, signal) { dispatched += it }
 
         loop.start()
         runCurrent()
@@ -77,7 +78,7 @@ class TaskSchedulerLoopTest {
         queuedTask(repository, "once")
         val signal = ConflatedTaskSchedulerSignal()
         val dispatched = mutableListOf<LifeTask>()
-        val loop = loop(repository, signal) { dispatched += it }
+        val loop = loop(backgroundScope, repository, signal) { dispatched += it }
 
         loop.start()
         loop.start()
@@ -88,6 +89,7 @@ class TaskSchedulerLoopTest {
     }
 
     private fun loop(
+        scope: CoroutineScope,
         repository: InMemoryTaskRepository,
         signal: ConflatedTaskSchedulerSignal,
         dispatch: suspend (LifeTask) -> Unit,
@@ -99,7 +101,7 @@ class TaskSchedulerLoopTest {
             now = { t0 },
         )
         return TaskSchedulerLoop(
-            scope = backgroundScope,
+            scope = scope,
             scheduler = scheduler,
             wakeSource = signal,
             batchSize = 16,
