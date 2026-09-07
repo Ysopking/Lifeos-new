@@ -1,5 +1,7 @@
 package app.lifeos.core.runtime.boot
 
+import kotlinx.coroutines.CancellationException
+
 interface StoreProbe {
     val storeId: String
     suspend fun probe(): StoreStatus
@@ -15,16 +17,22 @@ class CompositeStoreVerifier(
     }
 
     override suspend fun verify(): StoreVerificationResult {
-        val statuses = probes.map { probe ->
-            runCatching { probe.probe() }
-                .getOrElse { error ->
-                    StoreStatus(
-                        storeId = probe.storeId,
-                        state = StoreState.UNAVAILABLE,
-                        message = error.message ?: error::class.simpleName,
-                    )
-                }
+        val statuses = mutableListOf<StoreStatus>()
+        for (probe in probes) {
+            val status = try {
+                probe.probe()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                StoreStatus(
+                    storeId = probe.storeId,
+                    state = StoreState.UNAVAILABLE,
+                    message = error.message ?: error::class.simpleName,
+                )
+            }
+            statuses += status
         }
+
         val fatal = statuses.any { it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH }
         val recoverable = statuses.any {
             it.state == StoreState.STALE ||
@@ -47,10 +55,14 @@ fun interface BootDeltaSource {
 class CompositeBootDeltaDetector(
     private val sources: List<BootDeltaSource>,
 ) : BootDeltaDetector {
-    override suspend fun detect(context: BootContext): Long = sources.sumOf { source ->
-        val count = source.count(context)
-        require(count >= 0) { "Boot delta sources must not return negative counts" }
-        count
+    override suspend fun detect(context: BootContext): Long {
+        var total = 0L
+        for (source in sources) {
+            val count = source.count(context)
+            require(count >= 0) { "Boot delta sources must not return negative counts" }
+            total = Math.addExact(total, count)
+        }
+        return total
     }
 }
 
