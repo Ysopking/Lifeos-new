@@ -30,7 +30,8 @@ class RuleBasedEntityExtractor {
         "today" to "relative:today", "yesterday" to "relative:yesterday", "tomorrow" to "relative:tomorrow",
     )
     private val fileRegex = Regex("(?i)([\\p{L}\\p{N}_ .-]+\\.(?:png|jpe?g|webp|pdf|txt|md|json|kt|java|cpp|h|apk))")
-    private val timeRegex = Regex("(?i)\\b(?:[01]?\\d|2[0-3])[:.]?[0-5]\\d\\b|\\b(?:[01]?\\d|2[0-3])\\s*(?:uhr|am|pm)\\b")
+    // A bare dot-separated HH.MM is intentionally not accepted because it is ambiguous with DD.MM dates.
+    private val timeRegex = Regex("(?i)(?<![\\d./-])(?:[01]?\\d|2[0-3]):[0-5]\\d(?![\\d./-])|\\b(?:[01]?\\d|2[0-3])\\s*(?:uhr|am|pm)\\b")
     private val dateRegex = Regex("\\b(?:0?[1-9]|[12]\\d|3[01])[./-](?:0?[1-9]|1[0-2])(?:[./-](?:19|20)\\d{2})?\\b")
 
     fun extract(utterance: NormalizedUtterance): List<SemanticEntity> {
