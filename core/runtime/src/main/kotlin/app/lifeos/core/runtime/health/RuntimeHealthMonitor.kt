@@ -16,6 +16,7 @@ class RuntimeHealthMonitor(
     private val scope: CoroutineScope,
     private val runtime: LifeOsRuntime,
     private val graph: HealthGraph,
+    private val classifier: FailureClassifier = FailureClassifier(),
     private val nodeId: HealthNodeId = HealthNodeId("runtime"),
     private val now: () -> Instant = Instant::now,
 ) {
@@ -42,6 +43,25 @@ class RuntimeHealthMonitor(
                 message = "Runtime running",
                 observedAt = now(),
             )
+
+            RuntimeStatus.DEGRADED -> {
+                val observedAt = now()
+                val failure = state.lastFailure ?: RuntimeFailure(
+                    category = RuntimeFailureCategory.UNKNOWN,
+                    source = "durable-runtime",
+                    message = "Runtime entered DEGRADED without structured failure",
+                )
+                graph.record(
+                    HealthObservation(
+                        nodeId = nodeId,
+                        state = HealthState.DEGRADED,
+                        observedAt = observedAt,
+                        source = failure.source,
+                        message = failure.message,
+                        classification = classifier.classify(failure),
+                    )
+                )
+            }
 
             RuntimeStatus.STOPPED -> graph.recordHealthy(
                 id = nodeId,
