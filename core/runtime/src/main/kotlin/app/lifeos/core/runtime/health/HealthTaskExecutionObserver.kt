@@ -15,6 +15,7 @@ class HealthTaskExecutionObserver(
     private val now: () -> Instant = Instant::now,
 ) : DurableTaskExecutionObserver {
     override suspend fun onExecutionResult(result: CognitiveTaskExecutionResult) {
+        graph.register(workerNodeId, HealthScope.WORKER)
         val observedAt = now()
         graph.recordHealthy(
             id = workerNodeId,
@@ -49,6 +50,7 @@ class HealthTaskExecutionObserver(
     }
 
     override suspend fun onDispatchFailure(task: LifeTask, error: Exception) {
+        graph.register(workerNodeId, HealthScope.WORKER)
         graph.recordFailure(
             id = workerNodeId,
             failure = RuntimeFailure(
