@@ -13,6 +13,7 @@ class LanguageUnderstandingEngine(
     private val normalizer: UtteranceNormalizer = UtteranceNormalizer(),
     private val intentClassifier: RuleBasedIntentClassifier = RuleBasedIntentClassifier(),
     private val entityExtractor: RuleBasedEntityExtractor = RuleBasedEntityExtractor(),
+    private val constraintExtractor: RuleBasedConstraintExtractor = RuleBasedConstraintExtractor(),
     private val referenceExtractor: ReferenceExpressionExtractor = ReferenceExpressionExtractor(),
     private val referenceResolver: ReferenceResolver = ReferenceResolver(),
 ) {
@@ -23,7 +24,7 @@ class LanguageUnderstandingEngine(
         val entities = entityExtractor.extract(utterance)
         val references = referenceExtractor.extract(utterance, topIntent).map { referenceResolver.resolve(it, context) }
         val ambiguities = buildAmbiguities(evidence, references, topIntent)
-        val constraints = buildConstraints(entities, references)
+        val constraints = buildConstraints(utterance, entities, references)
         val confidence = calculateConfidence(evidence.first().score, entities, references, ambiguities)
         val goal = GoalFrame(
             intent = topIntent,
@@ -42,6 +43,7 @@ class LanguageUnderstandingEngine(
         "${intent.name.lowercase()}: ${utterance.original.trim()}"
 
     private fun buildConstraints(
+        utterance: NormalizedUtterance,
         entities: List<SemanticEntity>,
         references: List<ResolvedReference>,
     ): List<GoalConstraint> {
@@ -54,6 +56,7 @@ class LanguageUnderstandingEngine(
                 source = "entity:${entity.rawText}",
             )
         }
+        constraints += constraintExtractor.extract(utterance)
         references.filter { it.targetPhotonId != null }.forEach { reference ->
             constraints += GoalConstraint(
                 key = "reference.${reference.expression.kind.name.lowercase()}",
@@ -62,7 +65,7 @@ class LanguageUnderstandingEngine(
                 source = "reference:${reference.expression.rawText}",
             )
         }
-        return constraints
+        return constraints.distinctBy { Triple(it.key, it.value, it.source) }
     }
 
     private fun buildAmbiguities(
@@ -136,7 +139,7 @@ class GoalPhotonFactory {
         createdAt: Instant = Instant.now(),
     ): GoalPhoton {
         val frame = result.goal
-        val parentIds = sourcePhotonId?.let(::setOf).orEmpty()
+        val parentIds = sourcePhotonId?.let { setOf(it) }.orEmpty()
         val relations = sourcePhotonId?.let {
             setOf(PhotonRelation(it, RelationType.DERIVED_FROM, frame.confidence))
         }.orEmpty()
