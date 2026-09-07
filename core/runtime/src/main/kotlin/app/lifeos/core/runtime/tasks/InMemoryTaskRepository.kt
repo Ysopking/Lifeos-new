@@ -42,9 +42,10 @@ class InMemoryTaskRepository : TaskRepository {
         tasks.values
             .asSequence()
             .filter { task ->
+                val scheduledAt = task.scheduledAt
                 task.state == TaskState.QUEUED ||
                     (task.state == TaskState.RETRY_WAIT &&
-                        (task.scheduledAt == null || !task.scheduledAt.isAfter(now)))
+                        (scheduledAt == null || !scheduledAt.isAfter(now)))
             }
             .sortedWith(
                 compareByDescending<LifeTask> { it.priority.weight }
