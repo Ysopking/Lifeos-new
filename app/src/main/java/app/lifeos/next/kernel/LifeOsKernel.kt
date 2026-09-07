@@ -15,6 +15,7 @@ import app.lifeos.core.runtime.cognition.CognitiveWorkBudget
 import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
 import app.lifeos.core.runtime.cognition.PhotonDelta
 import app.lifeos.core.runtime.cognition.PhotonDeltaType
+import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
@@ -32,6 +33,7 @@ class LifeOsKernel internal constructor(
     val runtime: LifeOsRuntime,
     val matrix: ThoughtMatrix,
     val photonStore: PhotonRepository,
+    val photonTransactions: PhotonTransactionJournal,
     val cognitiveOutcomes: CognitiveOutcomeJournal,
     val cognitiveTriggers: CognitiveTriggerSink,
     private val supervisor: RuntimeSupervisor,
