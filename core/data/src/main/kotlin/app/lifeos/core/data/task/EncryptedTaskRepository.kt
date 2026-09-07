@@ -149,6 +149,26 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
         claimed
     }
 
+    override suspend fun renewLease(
+        id: TaskId,
+        workerId: WorkerId,
+        renewedAt: Instant,
+        leaseUntil: Instant,
+    ): LifeTask? = ioLocked {
+        require(leaseUntil.isAfter(renewedAt)) { "Renewed task lease must expire after renewal" }
+        val current = readTaskIfPresentInternal(id) ?: return@ioLocked null
+        if (current.state !in LEASED_STATES || current.claimedBy != workerId) {
+            return@ioLocked null
+        }
+
+        val renewed = current.copy(
+            updatedAt = renewedAt,
+            leaseExpiresAt = leaseUntil,
+        )
+        writeTaskInternal(renewed)
+        renewed
+    }
+
     private suspend fun <T> ioLocked(block: () -> T): T = withContext(Dispatchers.IO) {
         mutex.withLock { block() }
     }
