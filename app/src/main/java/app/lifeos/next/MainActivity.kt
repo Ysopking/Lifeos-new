@@ -18,6 +18,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -26,9 +27,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.runtime.CognitiveRuntime
 import app.lifeos.core.runtime.ThoughtMatrix
 import kotlinx.coroutines.launch
@@ -43,13 +46,21 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun LifeOsApp() {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val matrix = remember { ThoughtMatrix() }
+    val store = remember(context) { EncryptedPhotonStore(context.applicationContext) }
     val runtime = remember { CognitiveRuntime(scope, listOf(matrix)) }
     val runtimeState by runtime.state.collectAsState()
     val matrixState by matrix.state.collectAsState()
     val messages = remember { mutableStateListOf<String>() }
     var input by remember { mutableStateOf("") }
     DisposableEffect(runtime) { runtime.start(); onDispose { runtime.stop() } }
+    LaunchedEffect(Unit) {
+        store.loadAll().forEach { photon ->
+            messages += photon.content
+            runtime.ingest(photon)
+        }
+    }
 
     MaterialTheme {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -66,7 +77,11 @@ private fun LifeOsApp() {
                 Button(
                     onClick = {
                         val content = input.trim(); input = ""; messages += content
-                        scope.launch { runtime.ingest(Photon(content = content, provenance = Provenance("local-chat", "user"), tags = setOf("chat"))) }
+                        scope.launch {
+                            val photon = Photon(content = content, provenance = Provenance("local-chat", "user"), tags = setOf("chat"))
+                            store.save(photon)
+                            runtime.ingest(photon)
+                        }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = input.isNotBlank(),
