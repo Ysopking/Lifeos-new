@@ -11,8 +11,7 @@ class RuntimeSupervisor(
     suspend fun start() = mutex.withLock {
         when (runtime.state.value.status) {
             RuntimeStatus.STARTING,
-            RuntimeStatus.RUNNING,
-            -> return@withLock
+            RuntimeStatus.RUNNING -> return@withLock
 
             else -> runtime.start()
         }
@@ -22,8 +21,7 @@ class RuntimeSupervisor(
         when (runtime.state.value.status) {
             RuntimeStatus.CREATED,
             RuntimeStatus.STOPPING,
-            RuntimeStatus.STOPPED,
-            -> return@withLock
+            RuntimeStatus.STOPPED -> return@withLock
 
             else -> runtime.stop()
         }
