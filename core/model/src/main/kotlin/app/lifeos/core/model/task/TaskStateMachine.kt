@@ -14,6 +14,7 @@ object TaskStateMachine {
             TaskState.RETRY_WAIT,
             TaskState.INTERRUPTED,
             TaskState.COMPLETED,
+            TaskState.SUPERSEDED,
             TaskState.FAILED,
             TaskState.CANCELLED,
         )
@@ -22,6 +23,7 @@ object TaskStateMachine {
             TaskState.RETRY_WAIT,
             TaskState.INTERRUPTED,
             TaskState.COMPLETED,
+            TaskState.SUPERSEDED,
             TaskState.FAILED,
             TaskState.CANCELLED,
         )
@@ -33,6 +35,7 @@ object TaskStateMachine {
             TaskState.CANCELLED,
         )
         TaskState.COMPLETED,
+        TaskState.SUPERSEDED,
         TaskState.FAILED,
         TaskState.CANCELLED -> false
     }
