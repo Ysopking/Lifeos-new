@@ -16,9 +16,9 @@ data class DurableCognitiveDispatchResult(
 }
 
 /**
- * Converts an accepted cognitive work item into the existing durable task model.
- * The task repository remains the durable idempotency boundary across restarts;
- * the processing ledger additionally suppresses concurrent process-local duplicates.
+ * Converts accepted cognitive work into the existing durable task model.
+ * The durable task repository is the cross-process idempotency boundary;
+ * the processing ledger additionally suppresses process-local duplicate submissions.
  */
 class DurableCognitionDispatcher(
     private val taskEngine: DurableTaskEngine,
@@ -46,7 +46,7 @@ class DurableCognitionDispatcher(
         return try {
             val task = taskEngine.submit(
                 TaskDraft(
-                    type = item.deltaType.toTaskType(),
+                    type = TaskType.PROCESS_PHOTON,
                     priority = item.priority.toTaskPriority(),
                     inputPhotonIds = setOf(photonId),
                     inputPhotonRevisions = mapOf(photonId to revision),
@@ -62,14 +62,6 @@ class DurableCognitionDispatcher(
             ledger.abort(key)
             throw error
         }
-    }
-
-    private fun PhotonDeltaType?.toTaskType(): TaskType = when (this) {
-        null,
-        PhotonDeltaType.CREATED,
-        PhotonDeltaType.ACTIVATED -> TaskType.PROCESS_PHOTON
-
-        else -> TaskType.REPROCESS_PHOTON
     }
 
     private fun CognitivePriority.toTaskPriority(): TaskPriority = when (this) {
