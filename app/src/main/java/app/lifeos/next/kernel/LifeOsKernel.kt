@@ -27,6 +27,7 @@ class LifeOsKernel internal constructor(
     val photonStore: PhotonRepository,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
+    private val durableResources: DurableRuntimeResources,
 ) {
     private val startLock = Any()
     private var bootstrapJob: Job? = null
@@ -103,8 +104,9 @@ class LifeOsKernel internal constructor(
         }
 
         try {
-            supervisor.start()
             val report = photonStore.loadReport()
+            recoverExpiredLeases()
+            supervisor.start()
             report.photons.forEach { runtime.ingest(it) }
             mutableBootstrapState.value = KernelBootstrapState(
                 status = KernelBootstrapStatus.READY,
@@ -127,5 +129,16 @@ class LifeOsKernel internal constructor(
                 )
             }
         }
+    }
+
+    private suspend fun recoverExpiredLeases() {
+        while (true) {
+            val result = durableResources.leaseRecovery.recoverExpired(LEASE_RECOVERY_BATCH_SIZE)
+            if (result.scanned < LEASE_RECOVERY_BATCH_SIZE || result.recovered == 0) return
+        }
+    }
+
+    private companion object {
+        const val LEASE_RECOVERY_BATCH_SIZE = 100
     }
 }
