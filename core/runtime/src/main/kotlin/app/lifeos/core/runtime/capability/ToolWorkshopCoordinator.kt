@@ -76,13 +76,11 @@ class ToolWorkshopCoordinator(
         val build = buildRunner.build(source)
         require(build.toolId == toolId) { "Build runner changed generated tool id" }
         val initial = GeneratedToolRecord(
-            manifest = GeneratedToolManifest(
+            manifest = manifest(
                 toolId = toolId,
-                sourceCapability = specification.requiredCapability.capabilityId,
+                specification = specification,
                 sourceHash = build.sourceHash,
                 buildHash = build.buildHash,
-                permissions = specification.allowedPermissions,
-                generatedAt = now(),
             ),
             state = GeneratedToolState.GENERATED,
         )
@@ -132,17 +130,31 @@ class ToolWorkshopCoordinator(
     ): GeneratedToolRecord {
         registry.register(
             GeneratedToolRecord(
-                manifest = GeneratedToolManifest(
+                manifest = manifest(
                     toolId = toolId,
-                    sourceCapability = specification.requiredCapability.capabilityId,
+                    specification = specification,
                     sourceHash = sourceHash,
                     buildHash = null,
-                    permissions = specification.allowedPermissions,
-                    generatedAt = now(),
                 ),
                 state = GeneratedToolState.GENERATED,
             )
         )
         return registry.transition(toolId, GeneratedToolState.REJECTED, message = reason)
     }
+
+    private fun manifest(
+        toolId: String,
+        specification: ToolSpecification,
+        sourceHash: String,
+        buildHash: String?,
+    ) = GeneratedToolManifest(
+        toolId = toolId,
+        sourceCapability = specification.requiredCapability.capabilityId,
+        sourceHash = sourceHash,
+        buildHash = buildHash,
+        permissions = specification.allowedPermissions,
+        generatedAt = now(),
+        requiredInputs = specification.requiredCapability.requiredInputs,
+        requiredOutputs = specification.requiredCapability.requiredOutputs,
+    )
 }
