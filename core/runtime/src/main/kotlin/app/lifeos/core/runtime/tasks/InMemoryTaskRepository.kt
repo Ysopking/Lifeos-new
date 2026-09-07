@@ -111,6 +111,26 @@ class InMemoryTaskRepository : TaskRepository {
         claimed
     }
 
+    override suspend fun renewLease(
+        id: TaskId,
+        workerId: WorkerId,
+        renewedAt: Instant,
+        leaseUntil: Instant,
+    ): LifeTask? = mutex.withLock {
+        require(leaseUntil.isAfter(renewedAt)) { "Renewed task lease must expire after renewal" }
+        val current = tasks[id] ?: return@withLock null
+        if (current.state !in LEASED_STATES || current.claimedBy != workerId) {
+            return@withLock null
+        }
+
+        val renewed = current.copy(
+            updatedAt = renewedAt,
+            leaseExpiresAt = leaseUntil,
+        )
+        tasks[id] = renewed
+        renewed
+    }
+
     private companion object {
         val LEASED_STATES = setOf(
             TaskState.CLAIMED,
