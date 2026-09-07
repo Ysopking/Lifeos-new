@@ -97,7 +97,14 @@ class LanguageGoalCapabilityRouterTest {
     @Test
     fun `scene construction contract mismatch is exposed instead of silently selected`() = runTest {
         val registry = CapabilityRegistry()
-        registry.register(descriptor("scene.construct.procedural", "broken-scene-core", outputs = setOf("scene-graph")))
+        registry.register(
+            descriptor(
+                "scene.construct.procedural",
+                "broken-scene-core",
+                inputs = setOf("goal-photon", "scene-template"),
+                outputs = setOf("scene-graph"),
+            )
+        )
 
         val result = LanguageGoalCapabilityRouter(registry).route(goal(IntentType.CREATE_IMAGE))
 
