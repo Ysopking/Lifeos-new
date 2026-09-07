@@ -66,12 +66,13 @@ class CognitiveTaskWorker(
         val startedAt = now()
         require(task.leaseExpiresAt?.isAfter(startedAt) == true) { "Task lease has expired" }
 
-        val running = tasks.transition(
+        val running = tasks.startExecution(
             id = task.id,
-            expected = TaskState.CLAIMED,
-            next = TaskState.RUNNING,
-            at = startedAt,
-        ) ?: error("Claimed task could not transition to RUNNING: ${task.id.value}")
+            workerId = workerId,
+            startedAt = startedAt,
+        ) ?: error(
+            "Claimed task could not start execution because ownership, lease, state, or attempt budget changed: ${task.id.value}"
+        )
 
         val activeTask = renewLeaseOrThrow(running, startedAt)
 

@@ -75,6 +75,9 @@ class InMemoryTaskRepository : TaskRepository {
         at: Instant,
     ): LifeTask? = mutex.withLock {
         require(next != TaskState.CLAIMED) { "Use claim() for QUEUED -> CLAIMED" }
+        require(!(expected == TaskState.CLAIMED && next == TaskState.RUNNING)) {
+            "Use startExecution() for CLAIMED -> RUNNING"
+        }
         val current = tasks[id] ?: return@withLock null
         if (current.state != expected) return@withLock null
 
@@ -109,6 +112,31 @@ class InMemoryTaskRepository : TaskRepository {
         )
         tasks[id] = claimed
         claimed
+    }
+
+    override suspend fun startExecution(
+        id: TaskId,
+        workerId: WorkerId,
+        startedAt: Instant,
+    ): LifeTask? = mutex.withLock {
+        val current = tasks[id] ?: return@withLock null
+        if (
+            current.state != TaskState.CLAIMED ||
+            current.claimedBy != workerId ||
+            current.leaseExpiresAt?.isAfter(startedAt) != true ||
+            current.attempt >= current.maxAttempts
+        ) {
+            return@withLock null
+        }
+
+        TaskStateMachine.requireTransition(TaskState.CLAIMED, TaskState.RUNNING)
+        val running = current.copy(
+            state = TaskState.RUNNING,
+            attempt = current.attempt + 1,
+            updatedAt = startedAt,
+        )
+        tasks[id] = running
+        running
     }
 
     override suspend fun renewLease(
