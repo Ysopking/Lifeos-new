@@ -34,8 +34,7 @@ object TaskStateMachine {
         )
         TaskState.COMPLETED,
         TaskState.FAILED,
-        TaskState.CANCELLED,
-        -> false
+        TaskState.CANCELLED -> false
     }
 
     fun requireTransition(from: TaskState, to: TaskState) {
