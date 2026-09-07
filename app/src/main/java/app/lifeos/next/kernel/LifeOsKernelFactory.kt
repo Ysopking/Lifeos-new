@@ -32,6 +32,7 @@ import app.lifeos.core.runtime.cognition.CognitiveScheduler
 import app.lifeos.core.runtime.cognition.CompositeDurableTaskExecutionObserver
 import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
 import app.lifeos.core.runtime.cognition.DurableCognitionDispatcher
+import app.lifeos.core.runtime.cognition.DurableCognitiveTriggerSink
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveEventJournal
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveOutcomeJournal
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveTriggerSink
@@ -82,7 +83,11 @@ class LifeOsKernelFactory(
         )
         val photonTransactions = InMemoryPhotonTransactionJournal()
         val cognitiveOutcomes = InMemoryCognitiveOutcomeJournal()
-        val cognitiveTriggers = InMemoryCognitiveTriggerSink()
+        val cognitiveTriggers = DurableCognitiveTriggerSink(
+            journal = InMemoryCognitiveTriggerSink(),
+            photons = store,
+            taskEngine = taskEngine,
+        )
 
         val durableWorkerId = WorkerId("cognitive-worker-0")
         val workerFactory = CognitiveWorkerFactory(
