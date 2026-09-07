@@ -1,6 +1,7 @@
 package app.lifeos.core.model.task
 
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.worker.WorkerId
 import java.time.Instant
 
 data class LifeTask(
@@ -15,6 +16,8 @@ data class LifeTask(
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = createdAt,
     val scheduledAt: Instant? = null,
+    val claimedBy: WorkerId? = null,
+    val leaseExpiresAt: Instant? = null,
 ) {
     init {
         require(idempotencyKey.isNotBlank()) { "Idempotency key must not be blank" }
@@ -22,5 +25,23 @@ data class LifeTask(
         require(maxAttempts > 0) { "Task maxAttempts must be positive" }
         require(attempt <= maxAttempts) { "Task attempt must not exceed maxAttempts" }
         require(!updatedAt.isBefore(createdAt)) { "Task updatedAt must not precede createdAt" }
+        require((claimedBy == null) == (leaseExpiresAt == null)) {
+            "Task claim owner and lease expiry must be present together"
+        }
+
+        val requiresLease = state in setOf(
+            TaskState.CLAIMED,
+            TaskState.RUNNING,
+            TaskState.CHECKPOINTED,
+        )
+        if (requiresLease) {
+            require(claimedBy != null && leaseExpiresAt != null) {
+                "Owned task state requires worker claim and lease"
+            }
+        } else {
+            require(claimedBy == null && leaseExpiresAt == null) {
+                "Unowned task state must not retain a worker lease"
+            }
+        }
     }
 }
