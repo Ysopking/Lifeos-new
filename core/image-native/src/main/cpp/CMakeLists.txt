@@ -8,6 +8,7 @@ add_library(lifeos_mmsi_native SHARED
     vulkan_dispatch.cpp
     ahardwarebuffer_probe.cpp
     vulkan_ahb_dispatch.cpp
+    vulkan_sync_fd_dispatch.cpp
 )
 
 target_compile_features(lifeos_mmsi_native PRIVATE cxx_std_20)
