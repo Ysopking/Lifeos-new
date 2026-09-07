@@ -1,6 +1,7 @@
 package app.lifeos.core.image.nativebackend
 
 import android.content.Context
+import app.lifeos.core.image.Rgba8Image
 import app.lifeos.core.image.SpectralReconstructor
 import java.io.Closeable
 import java.nio.ByteBuffer
@@ -18,11 +19,19 @@ class MmsiProceduralSpectralHardwarePipeline private constructor(
     private val albedo: NativeIntrinsicAlbedoHardwareBufferBridge = NativeIntrinsicAlbedoHardwareBufferBridge(),
     private val spectralExpansion: NativeSpectralCoefficientBridge = NativeSpectralCoefficientBridge(),
     private val sync: NativeMmsiSyncBridge = NativeMmsiSyncBridge(),
+    private val readback: NativeMmsiOutputReadbackBridge = NativeMmsiOutputReadbackBridge(),
 ) : Closeable {
     data class DispatchResult(
         val accepted: Boolean,
         val releaseFence: MmsiSyncFence?,
     )
+
+    data class RenderResult(
+        val accepted: Boolean,
+        val image: Rgba8Image?,
+    ) {
+        init { require(accepted == (image != null)) }
+    }
 
     @Synchronized
     fun dispatchTile(
@@ -85,6 +94,52 @@ class MmsiProceduralSpectralHardwarePipeline private constructor(
             albedoFence?.close()
             phase2Fence?.close()
             phase3AcquireFence?.close()
+        }
+    }
+
+    @Synchronized
+    fun renderTileRgba8(
+        storage: HardwareBufferMmsiInterop.SpectralStorageSet,
+        width: Int,
+        height: Int,
+        intrinsicAlbedoRgba32f: ByteBuffer,
+        normals: ByteBuffer,
+        depth: ByteBuffer,
+        roughness: ByteBuffer,
+        coefficientProjection: SpectralReconstructor.CoefficientProjection,
+        forwardParameters: VulkanMmsiRenderer.Parameters,
+        rgbProjection: SpectralReconstructor.RgbProjection,
+        readbackTimeoutMs: Int = NativeMmsiOutputReadbackBridge.DEFAULT_TIMEOUT_MS,
+    ): RenderResult {
+        val dispatched = dispatchTile(
+            storage = storage,
+            width = width,
+            height = height,
+            intrinsicAlbedoRgba32f = intrinsicAlbedoRgba32f,
+            normals = normals,
+            depth = depth,
+            roughness = roughness,
+            coefficientProjection = coefficientProjection,
+            forwardParameters = forwardParameters,
+            rgbProjection = rgbProjection,
+        )
+        if (!dispatched.accepted) {
+            dispatched.releaseFence?.close()
+            return RenderResult(false, null)
+        }
+        return try {
+            RenderResult(
+                accepted = true,
+                image = readback.readRgba8(
+                    outputRgba32f = storage.outputRgba32f,
+                    width = width,
+                    height = height,
+                    acquireFence = dispatched.releaseFence,
+                    timeoutMs = readbackTimeoutMs,
+                ),
+            )
+        } finally {
+            dispatched.releaseFence?.close()
         }
     }
 
