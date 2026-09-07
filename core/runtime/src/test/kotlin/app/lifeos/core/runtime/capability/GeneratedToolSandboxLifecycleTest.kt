@@ -48,6 +48,47 @@ class GeneratedToolSandboxLifecycleTest {
     }
 
     @Test
+    fun declaredTempWriteReceivesPerInvocationPermit() = runTest {
+        val tools = GeneratedToolRegistry()
+        tools.register(verifiedRecord(permissions = setOf(ToolPermission.WRITE_TEMP_FILE)))
+        val lifecycle = GeneratedToolLifecycleCoordinator(tools)
+        lifecycle.admitToTrial("tool-1")
+
+        val decision = assertIs<GeneratedToolInvocationDecision.Granted>(
+            lifecycle.authorizeTrialInvocation(
+                toolId = "tool-1",
+                invocationId = "trial-1",
+                requestedPermissions = setOf(ToolPermission.WRITE_TEMP_FILE),
+            )
+        )
+
+        assertEquals("tool-1", decision.permit.toolId)
+        assertEquals("trial-1", decision.permit.invocationId)
+        assertEquals(setOf(ToolPermission.WRITE_TEMP_FILE), decision.permit.grantedPermissions)
+        assertEquals(GeneratedToolState.TRIAL, tools.get("tool-1")?.state)
+    }
+
+    @Test
+    fun undeclaredNetworkRequestIsDeniedAndQuarantinesTrial() = runTest {
+        val tools = GeneratedToolRegistry()
+        tools.register(verifiedRecord(permissions = setOf(ToolPermission.WRITE_TEMP_FILE)))
+        val lifecycle = GeneratedToolLifecycleCoordinator(tools)
+        lifecycle.admitToTrial("tool-1")
+
+        val decision = assertIs<GeneratedToolInvocationDecision.Denied>(
+            lifecycle.authorizeTrialInvocation(
+                toolId = "tool-1",
+                invocationId = "trial-network",
+                requestedPermissions = setOf(ToolPermission.NETWORK_ACCESS),
+            )
+        )
+
+        assertTrue(decision.reasons.any { it.contains("permissions-not-declared:NETWORK_ACCESS") })
+        assertTrue(decision.reasons.any { it.contains("permissions-outside-sandbox:NETWORK_ACCESS") })
+        assertEquals(GeneratedToolState.QUARANTINED, tools.get("tool-1")?.state)
+    }
+
+    @Test
     fun threeCleanTrialsRequireExplicitPromotionAndRegisterCapability() = runTest {
         val tools = GeneratedToolRegistry()
         val capabilities = CapabilityRegistry()
