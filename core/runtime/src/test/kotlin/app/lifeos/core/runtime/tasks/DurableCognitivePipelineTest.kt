@@ -29,10 +29,11 @@ class DurableCognitivePipelineTest {
         assertEquals(TaskState.QUEUED, second.state)
         assertEquals(TaskPriority.INTERACTIVE, second.priority)
         assertEquals(setOf(photon.id), second.inputPhotonIds)
+        assertEquals(mapOf(photon.id to photon.revision), second.inputPhotonRevisions)
     }
 
     @Test
-    fun newPhotonRevisionCreatesNewLogicalTask() = runTest {
+    fun newPhotonRevisionCreatesNewLogicalTaskWithNewRevisionPin() = runTest {
         val repository = InMemoryTaskRepository()
         val signal = ConflatedTaskSchedulerSignal()
         val pipeline = pipeline(backgroundScope, repository, signal)
@@ -44,6 +45,8 @@ class DurableCognitivePipelineTest {
 
         assertNotEquals(first.id, second.id)
         assertNotEquals(first.idempotencyKey, second.idempotencyKey)
+        assertEquals(mapOf(revisionOne.id to 1L), first.inputPhotonRevisions)
+        assertEquals(mapOf(revisionTwo.id to 2L), second.inputPhotonRevisions)
     }
 
     private fun pipeline(
