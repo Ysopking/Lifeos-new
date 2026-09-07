@@ -21,12 +21,13 @@ class DurableLifeOsRuntime(
     override fun start() = synchronized(lifecycleLock) {
         when (state.value.status) {
             RuntimeStatus.STARTING,
-            RuntimeStatus.RUNNING -> return@synchronized
+            RuntimeStatus.RUNNING,
+            RuntimeStatus.STOPPING -> return@synchronized
 
             else -> Unit
         }
 
-        stopJob?.cancel()
+        if (stopJob?.isActive == true) return@synchronized
         stopJob = null
         stateBridge.markStarting()
         try {

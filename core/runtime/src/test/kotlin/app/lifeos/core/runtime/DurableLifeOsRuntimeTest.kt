@@ -7,6 +7,7 @@ import app.lifeos.core.model.task.TaskPriority
 import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.runtime.tasks.DurableProcessingPipeline
 import java.time.Instant
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -50,6 +51,38 @@ class DurableLifeOsRuntimeTest {
     }
 
     @Test
+    fun startWhileStoppingDoesNotCancelStopLifecycle() = runTest {
+        val stopGate = CompletableDeferred<Unit>()
+        val pipeline = FakePipeline(t0, stopGate = stopGate)
+        val bridge = DurableRuntimeStateBridge()
+        val runtime = DurableLifeOsRuntime(
+            scope = backgroundScope,
+            pipeline = pipeline,
+            stateBridge = bridge,
+        )
+
+        runtime.start()
+        runtime.stop()
+        runCurrent()
+
+        assertEquals(RuntimeStatus.STOPPING, runtime.state.value.status)
+        assertEquals(1, pipeline.starts)
+        assertEquals(1, pipeline.stops)
+
+        runtime.start()
+        assertEquals(RuntimeStatus.STOPPING, runtime.state.value.status)
+        assertEquals(1, pipeline.starts)
+
+        stopGate.complete(Unit)
+        runCurrent()
+
+        assertEquals(RuntimeStatus.STOPPED, runtime.state.value.status)
+        runtime.start()
+        assertEquals(RuntimeStatus.RUNNING, runtime.state.value.status)
+        assertEquals(2, pipeline.starts)
+    }
+
+    @Test
     fun startFailureMarksRuntimeFailed() = runTest {
         val pipeline = FakePipeline(t0, failStart = true)
         val bridge = DurableRuntimeStateBridge()
@@ -72,6 +105,7 @@ class DurableLifeOsRuntimeTest {
     private class FakePipeline(
         private val now: Instant,
         private val failStart: Boolean = false,
+        private val stopGate: CompletableDeferred<Unit>? = null,
     ) : DurableProcessingPipeline {
         var starts = 0
             private set
@@ -86,6 +120,7 @@ class DurableLifeOsRuntimeTest {
 
         override suspend fun stop() {
             stops += 1
+            stopGate?.await()
         }
 
         override suspend fun submitPhoton(
