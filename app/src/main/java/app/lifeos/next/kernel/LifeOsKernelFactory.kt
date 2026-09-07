@@ -68,6 +68,7 @@ class LifeOsKernelFactory(
             scope = scope,
             scheduler = taskScheduler,
             wakeSource = schedulerSignal,
+            rescanInterval = SCHEDULER_RESCAN_INTERVAL,
         )
         val leaseRecovery = LeaseRecoveryService(
             tasks = taskRepository,
@@ -110,5 +111,6 @@ class LifeOsKernelFactory(
         val TASK_LEASE_DURATION: Duration = Duration.ofSeconds(30)
         val HEARTBEAT_INTERVAL: Duration = Duration.ofSeconds(10)
         val LEASE_RECOVERY_INTERVAL: Duration = Duration.ofSeconds(30)
+        val SCHEDULER_RESCAN_INTERVAL: Duration = Duration.ofSeconds(5)
     }
 }
