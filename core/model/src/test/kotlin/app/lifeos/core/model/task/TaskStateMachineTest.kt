@@ -15,6 +15,12 @@ class TaskStateMachineTest {
     }
 
     @Test
+    fun staleRunningTaskCanBeSuperseded() {
+        assertTrue(TaskStateMachine.canTransition(TaskState.RUNNING, TaskState.SUPERSEDED))
+        assertTrue(TaskStateMachine.canTransition(TaskState.CHECKPOINTED, TaskState.SUPERSEDED))
+    }
+
+    @Test
     fun interruptedTaskMustRecoverBeforeRequeue() {
         assertFalse(TaskStateMachine.canTransition(TaskState.INTERRUPTED, TaskState.QUEUED))
         assertTrue(TaskStateMachine.canTransition(TaskState.INTERRUPTED, TaskState.RECOVERING))
@@ -24,6 +30,7 @@ class TaskStateMachineTest {
     @Test
     fun terminalStatesCannotReenterExecution() {
         assertFalse(TaskStateMachine.canTransition(TaskState.COMPLETED, TaskState.RUNNING))
+        assertFalse(TaskStateMachine.canTransition(TaskState.SUPERSEDED, TaskState.RUNNING))
         assertFalse(TaskStateMachine.canTransition(TaskState.FAILED, TaskState.QUEUED))
         assertFalse(TaskStateMachine.canTransition(TaskState.CANCELLED, TaskState.CLAIMED))
     }
