@@ -51,6 +51,35 @@ class RuntimeHealthMonitorTest {
         monitor.stop()
     }
 
+    @Test
+    fun degradedRuntimeRemainsDegradedWithStructuredFailureContext() = runTest {
+        val runtime = FakeRuntime()
+        val graph = HealthGraph(unhealthyAfterConsecutiveFailures = 3, now = { t0 })
+        val monitor = RuntimeHealthMonitor(
+            scope = this,
+            runtime = runtime,
+            graph = graph,
+            now = { t0 },
+        )
+        monitor.start()
+
+        runtime.mutableState.value = RuntimeState(
+            status = RuntimeStatus.DEGRADED,
+            lastFailure = RuntimeFailure(
+                category = RuntimeFailureCategory.TIMEOUT,
+                source = "durable-runtime",
+                message = "runtime temporarily degraded",
+            ),
+        )
+        advanceUntilIdle()
+
+        val node = assertNotNull(graph.node(HealthNodeId("runtime")))
+        assertEquals(HealthState.DEGRADED, node.state)
+        assertEquals(1, node.consecutiveFailures)
+        assertEquals("runtime temporarily degraded", node.lastMessage)
+        monitor.stop()
+    }
+
     private class FakeRuntime : LifeOsRuntime {
         val mutableState = MutableStateFlow(RuntimeState())
         override val state: StateFlow<RuntimeState> = mutableState
