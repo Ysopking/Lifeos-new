@@ -16,10 +16,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * Process-level owner for the current LIFEOS runtime graph.
+ * Process-level owner for the LIFEOS runtime graph.
  *
- * Bootstrap is kept here so stored photons are replayed at most once during a
- * normal process lifetime instead of once per ViewModel instance.
+ * Bootstrap recovers durable task ownership before starting scheduling, then
+ * re-submits stored photons through revision-aware idempotent task keys.
  */
 class LifeOsKernel internal constructor(
     val runtime: LifeOsRuntime,
@@ -27,7 +27,6 @@ class LifeOsKernel internal constructor(
     val photonStore: PhotonRepository,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
-    @Suppress("unused")
     private val durableResources: DurableRuntimeResources,
 ) {
     private val startLock = Any()
@@ -105,9 +104,12 @@ class LifeOsKernel internal constructor(
         }
 
         try {
+            recoverExpiredTaskLeases()
             supervisor.start()
+
             val report = photonStore.loadReport()
             report.photons.forEach { runtime.ingest(it) }
+
             mutableBootstrapState.value = KernelBootstrapState(
                 status = KernelBootstrapStatus.READY,
                 photons = report.photons,
@@ -129,5 +131,16 @@ class LifeOsKernel internal constructor(
                 )
             }
         }
+    }
+
+    private suspend fun recoverExpiredTaskLeases() {
+        while (true) {
+            val result = durableResources.leaseRecovery.recoverExpired(limit = RECOVERY_BATCH_SIZE)
+            if (result.scanned < RECOVERY_BATCH_SIZE || result.recovered == 0) return
+        }
+    }
+
+    private companion object {
+        const val RECOVERY_BATCH_SIZE = 100
     }
 }
