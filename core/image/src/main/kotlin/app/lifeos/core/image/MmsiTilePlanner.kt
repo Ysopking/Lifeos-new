@@ -24,7 +24,7 @@ data class MmsiTilePlan(
 class MmsiTilePlanner(
     private val budgetBytes: Long = 96L * 1024L * 1024L,
     private val overheadBytes: Long = 8L * 1024L * 1024L,
-    private val bytesPerPixel: Int = 52,
+    private val bytesPerPixel: Int = MmsiBufferLayout.BYTES_PER_PIXEL,
     private val workgroupSize: Int = 8,
 ) {
     init {
