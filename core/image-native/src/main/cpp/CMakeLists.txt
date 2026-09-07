@@ -6,6 +6,7 @@ add_library(lifeos_mmsi_native SHARED
     phase1_ahb.cpp
     phase2_spectral_ahb.cpp
     geometry_ahb.cpp
+    intrinsic_albedo_ahb.cpp
     vulkan_probe.cpp
     vulkan_dispatch.cpp
     ahardwarebuffer_probe.cpp
