@@ -10,18 +10,20 @@ class RuleBasedIntentClassifier {
         val predicate: (Set<String>, String, Int) -> Boolean,
     )
 
+    private val imageNouns = setOf("bild", "bilder", "foto", "fotos", "grafik", "grafiken", "image", "images", "picture", "pictures", "photo", "photos")
+
     private val rules = listOf(
         Rule(IntentType.CREATE_IMAGE, 0.62, "image creation verb + image noun") { w, _, _ ->
-            w.any { it in setOf("erzeuge", "erstelle", "generiere", "zeichne", "render", "create", "generate", "draw", "render") } &&
-                w.any { it in setOf("bild", "foto", "grafik", "image", "picture", "photo") }
+            w.any { it in setOf("erzeuge", "erstelle", "generiere", "zeichne", "render", "rendere", "create", "generate", "draw", "render") } &&
+                w.any { it in imageNouns }
         },
         Rule(IntentType.CREATE_IMAGE, 0.28, "visual scene vocabulary") { w, _, _ ->
-            w.any { it in setOf("bild", "foto", "image", "picture") } &&
-                w.any { it in setOf("szene", "scene", "menschen", "people", "person", "leute", "spielen", "playing") }
+            w.any { it in imageNouns } &&
+                w.any { it in setOf("szene", "szenen", "scene", "scenes", "menschen", "people", "person", "personen", "leute", "spielen", "playing") }
         },
         Rule(IntentType.TRANSFORM_IMAGE, 0.72, "image transformation vocabulary") { w, _, _ ->
-            w.any { it in setOf("bild", "foto", "image", "photo") } &&
-                w.any { it in setOf("andere", "aendere", "bearbeite", "wärmer", "waermer", "heller", "dunkler", "schaerfer", "schärfer", "edit", "change", "warmer", "brighter", "darker", "sharper") }
+            w.any { it in imageNouns } &&
+                w.any { it in setOf("ändere", "aendere", "bearbeite", "wärmer", "waermer", "heller", "dunkler", "schaerfer", "schärfer", "edit", "change", "warmer", "brighter", "darker", "sharper") }
         },
         Rule(IntentType.SEARCH, 0.75, "explicit search verb") { w, _, _ ->
             w.any { it in setOf("suche", "finde", "recherchiere", "deepsearch", "search", "find", "research", "lookup") }
