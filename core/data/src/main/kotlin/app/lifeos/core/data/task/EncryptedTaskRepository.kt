@@ -90,6 +90,22 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
             .toList()
     }
 
+    override suspend fun listExpiredLeases(now: Instant, limit: Int): List<LifeTask> = ioLocked {
+        require(limit > 0) { "Expired lease limit must be positive" }
+        val report = loadReportInternal()
+        requireReadableVault(report)
+
+        report.tasks
+            .asSequence()
+            .filter { task ->
+                task.state in LEASED_STATES &&
+                    task.leaseExpiresAt?.isAfter(now) == false
+            }
+            .sortedWith(compareBy<LifeTask> { it.leaseExpiresAt }.thenBy { it.createdAt })
+            .take(limit)
+            .toList()
+    }
+
     override suspend fun transition(
         id: TaskId,
         expected: TaskState,
@@ -271,6 +287,11 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
     )
 
     private companion object {
+        val LEASED_STATES = setOf(
+            TaskState.CLAIMED,
+            TaskState.RUNNING,
+            TaskState.CHECKPOINTED,
+        )
         const val KEY_ALIAS = "lifeos.task.v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val CONTAINER_VERSION = 1
