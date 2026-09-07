@@ -37,3 +37,17 @@ class PhotonCodecTest {
         assertFails { PhotonCodec.decode(byteArrayOf(127, -1, -1, -1)) }
     }
 }
+
+class PhotonValidationTest {
+    @Test fun rejectsInfiniteEnergyAndMass() {
+        assertFails { Photon(content = "Test", energy = Double.POSITIVE_INFINITY, provenance = Provenance("test", "user")) }
+        assertFails { Photon(content = "Test", semanticMass = Double.NaN, provenance = Provenance("test", "user")) }
+    }
+
+    @Test fun rejectsMalformedUtf8InsteadOfSilentlyChangingContent() {
+        val photon = Photon(id = PhotonId("abc"), content = "Test", provenance = Provenance("test", "user"))
+        val bytes = PhotonCodec.encode(photon)
+        bytes[4] = 0xFF.toByte()
+        assertFails { PhotonCodec.decode(bytes) }
+    }
+}

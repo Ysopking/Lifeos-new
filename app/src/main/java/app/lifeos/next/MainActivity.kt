@@ -3,117 +3,77 @@ package app.lifeos.next
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import app.lifeos.core.model.Photon
-import app.lifeos.core.model.Provenance
-import app.lifeos.core.data.EncryptedPhotonStore
-import app.lifeos.core.runtime.CognitiveRuntime
-import app.lifeos.core.runtime.ThoughtMatrix
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.CancellationException
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { LifeOsApp() }
+        val model = ViewModelProvider(this)[LifeOsViewModel::class.java]
+        setContent { LifeOsApp(model) }
     }
 }
 
 @Composable
-private fun LifeOsApp() {
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-    val matrix = remember { ThoughtMatrix() }
-    val store = remember(context) { EncryptedPhotonStore(context.applicationContext) }
-    val runtime = remember { CognitiveRuntime(scope, listOf(matrix)) }
-    val runtimeState by runtime.state.collectAsState()
-    val matrixState by matrix.state.collectAsState()
-    val messages = remember { mutableStateListOf<String>() }
-    var input by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(true) }
-    var saving by remember { mutableStateOf(false) }
-    var storageStatus by remember { mutableStateOf("Speicher wird geladen …") }
-    var storageError by remember { mutableStateOf<String?>(null) }
-    DisposableEffect(runtime) { runtime.start(); onDispose { runtime.stop() } }
-    LaunchedEffect(Unit) {
-        try {
-            val report = store.loadReport()
-            report.photons.forEach { photon ->
-                messages += photon.content
-                runtime.ingest(photon)
-            }
-            storageStatus = "Geladen: ${report.photons.size} · Nicht lesbar: ${report.unreadableFiles.size}"
-            if (report.unreadableFiles.isNotEmpty()) {
-                storageError = "Einige Photonen konnten nicht geladen werden. Die Dateien bleiben erhalten."
-            }
-        } catch (error: CancellationException) { throw error
-        } catch (error: Exception) {
-            storageError = "Speicher konnte nicht geöffnet werden. Bitte App neu starten."
-        } finally { loading = false }
+private fun LifeOsApp(model: LifeOsViewModel) {
+    val state by model.state.collectAsStateWithLifecycle()
+    val runtime by model.runtimeState.collectAsStateWithLifecycle()
+    val matrix by model.matrixState.collectAsStateWithLifecycle()
+    var query by rememberSaveable { mutableStateOf("") }
+    var diagnostics by rememberSaveable { mutableStateOf(false) }
+    val visible = remember(state.photons, query) {
+        val term = query.trim()
+        state.photons.filter { it.content.contains(term, ignoreCase = true) || it.tags.any { tag -> tag.contains(term, ignoreCase = true) } }
     }
-
-    MaterialTheme {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("LIFEOS", style = MaterialTheme.typography.headlineLarge)
-                Text("Runtime ${if (runtimeState.running) "aktiv" else "pausiert"} · Photonen ${matrixState.nodes.size}")
-                Card(Modifier.fillMaxWidth().weight(1f)) {
-                    LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (messages.isEmpty()) item { Text("Schreibe einen Gedanken. Er wird als Photon in die Gedankenmatrix aufgenommen.") }
-                        items(messages) { Card { Text(it, Modifier.padding(12.dp)) } }
+    val dateFormat = remember { DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm").withZone(ZoneId.systemDefault()) }
+    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.safeDrawingPadding().imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("LIFEOS · Gedanken", style = MaterialTheme.typography.headlineMedium)
+                Text("${state.photons.size} gespeichert · lokal verschlüsselt", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), label = { Text("Gedanken durchsuchen") }, singleLine = true)
+                LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (state.loading) item { Text("Gedanken werden geladen …") }
+                    else if (visible.isEmpty()) item { Text(if (query.isBlank()) "Halte deinen ersten Gedanken fest." else "Keine passenden Gedanken gefunden.") }
+                    items(visible, key = { it.id.value }) { photon ->
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                SelectionContainer { Text(photon.content) }
+                                Text(dateFormat.format(photon.provenance.createdAt), style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
                     }
                 }
-                OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth(), label = { Text("Gedanke") }, maxLines = 4, enabled = !loading && !saving)
-                Button(
-                    onClick = {
-                        val content = input.trim()
-                        saving = true
-                        scope.launch {
-                            try {
-                                val photon = Photon(content = content, provenance = Provenance("local-chat", "user"), tags = setOf("chat"))
-                                store.save(photon)
-                                messages += content
-                                input = ""
-                                storageStatus = "Zuletzt eingegebener Gedanke ist gespeichert."
-                                runtime.ingest(photon)
-                            } catch (error: CancellationException) { throw error
-                            } catch (error: Exception) {
-                                storageError = "Vorgang fehlgeschlagen. Noch vorhandene Eingabe bleibt erhalten."
-                            } finally { saving = false }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = input.isNotBlank() && !loading && !saving,
-                ) { Text("Als Photon aufnehmen") }
-                Text(storageStatus, style = MaterialTheme.typography.bodySmall)
-                storageError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                runtimeState.lastError?.let { Text("Runtime-Fehler: $it", color = MaterialTheme.colorScheme.error) }
-                Text("Verarbeitet: ${runtimeState.processed} · Feldenergie: ${"%.1f".format(matrixState.totalEnergy)}", style = MaterialTheme.typography.bodySmall)
+                if (state.unreadable > 0) Text("${state.unreadable} Datei(en) nicht lesbar. Originaldateien bleiben erhalten.", color = MaterialTheme.colorScheme.error)
+                state.error?.let { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = if (state.loadFailed) model::retryLoad else model::dismissError) {
+                        Text(if (state.loadFailed) "Erneut laden" else "Meldung schließen")
+                    }
+                }
+                OutlinedTextField(state.draft, model::editDraft, Modifier.fillMaxWidth(), label = { Text("Neuer Gedanke") }, maxLines = 4, enabled = !state.saving)
+                Button(model::saveDraft, Modifier.fillMaxWidth(), enabled = state.draft.isNotBlank() && !state.loading && !state.loadFailed && !state.saving) {
+                    Text(if (state.saving) "Wird gespeichert …" else "Gedanken speichern")
+                }
+                TextButton(onClick = { diagnostics = !diagnostics }) { Text(if (diagnostics) "Diagnose schließen" else "Diagnose") }
+                if (diagnostics) AlertDialog(
+                    onDismissRequest = { diagnostics = false },
+                    confirmButton = { TextButton(onClick = { diagnostics = false }) { Text("Schließen") } },
+                    title = { Text("App-Diagnose") },
+                    text = { Text("Version ${BuildConfig.VERSION_NAME}\nRuntime: ${if (runtime.running) "aktiv" else "gestoppt"}\nIndexiert: ${matrix.nodes.size}\nVerarbeitet: ${runtime.processed}\nFehlgeschlagen: ${runtime.failed}\nFeldeinflüsse im Verlauf: ${runtime.recentInfluences.size}\nFeldenergie: ${"%.1f".format(matrix.totalEnergy)}\n${runtime.lastError ?: "Kein Runtime-Fehler"}") },
+                )
             }
         }
     }

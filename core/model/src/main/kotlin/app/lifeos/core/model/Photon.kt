@@ -37,6 +37,7 @@ data class Photon(
     init {
         require(content.isNotBlank())
         require(revision > 0)
+        require(semanticMass.isFinite() && energy.isFinite())
         require(semanticMass >= 0.0 && energy >= 0.0)
         require(confidence in 0.0..1.0)
     }

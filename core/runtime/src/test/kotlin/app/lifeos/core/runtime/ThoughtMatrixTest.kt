@@ -14,3 +14,17 @@ class ThoughtMatrixTest {
         assertEquals(2.5, matrix.state.value.totalEnergy)
     }
 }
+
+class MatrixRevisionTest {
+    @Test fun duplicateAndStaleRevisionsCannotOverwriteNewKnowledge() = runTest {
+        val matrix = ThoughtMatrix()
+        val photon = Photon(content = "Original", energy = 2.0, provenance = Provenance("test", "user"))
+        matrix.influence(photon)
+        matrix.influence(photon.copy(revision = 2, content = "Aktualisiert", energy = 5.0))
+        matrix.influence(photon)
+        matrix.influence(photon.copy(revision = 2, energy = 99.0))
+        assertEquals(1, matrix.state.value.nodes.size)
+        assertEquals(5.0, matrix.state.value.totalEnergy)
+        assertEquals("Aktualisiert", matrix.state.value.nodes[photon.id]?.summary)
+    }
+}

@@ -12,27 +12,25 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
-import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonStore
-import app.lifeos.core.model.Provenance
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.security.KeyStore
-import java.time.Instant
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 class EncryptedPhotonStore(context: Context) : PhotonStore {
-    private val directory = context.filesDir.resolve("photon-vault").apply { mkdirs() }
+    private val directory = context.filesDir.resolve("photon-vault")
     private val key: SecretKey by lazy { loadOrCreateKey() }
 
     private val mutex = Mutex()
 
     override suspend fun save(photon: Photon): Unit = withContext(Dispatchers.IO) { mutex.withLock {
+        check(directory.isDirectory || directory.mkdirs()) { "Photon vault unavailable" }
         val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
         val encrypted = cipher.doFinal(PhotonCodec.encode(photon))
         val output = ByteArrayOutputStream()
@@ -56,6 +54,7 @@ class EncryptedPhotonStore(context: Context) : PhotonStore {
     data class LoadReport(val photons: List<Photon>, val unreadableFiles: List<String>)
 
     suspend fun loadReport(): LoadReport = withContext(Dispatchers.IO) { mutex.withLock {
+        check(directory.isDirectory || directory.mkdirs()) { "Photon vault unavailable" }
         val files = directory.listFiles() ?: throw IOException("Photon vault cannot be listed")
         val names = files.map { it.name.removeSuffix(".bak") }.filter { it.endsWith(".photon") }.distinct()
         val photons = mutableListOf<Photon>()

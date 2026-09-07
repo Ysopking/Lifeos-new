@@ -10,8 +10,8 @@ android {
         applicationId = "app.lifeos.next"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "2.0.0-alpha01"
+        versionCode = 2
+        versionName = "2.0.0-alpha02"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -35,5 +35,6 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

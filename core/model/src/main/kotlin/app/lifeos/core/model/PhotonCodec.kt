@@ -5,6 +5,8 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.time.Instant
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 
 /** Version 1 is read-only; version 2 preserves the complete photon graph metadata. */
 object PhotonCodec {
@@ -66,7 +68,9 @@ object PhotonCodec {
     private fun DataInputStream.text(): String {
         val size = readInt()
         require(size in 0..MAX_BYTES && size <= available()) { "Invalid text length" }
-        return ByteArray(size).also { readFully(it) }.toString(Charsets.UTF_8)
+        val bytes = ByteArray(size).also { readFully(it) }
+        return Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
     }
     private fun DataOutputStream.count(size: Int) { require(size in 0..MAX_ITEMS); writeInt(size) }
     private fun DataInputStream.count(): Int = readInt().also { require(it in 0..MAX_ITEMS) }
