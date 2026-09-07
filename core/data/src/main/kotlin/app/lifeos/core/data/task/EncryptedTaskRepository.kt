@@ -239,7 +239,7 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
             val containerVersion = input.readInt()
             require(containerVersion == CONTAINER_VERSION) { "Unsupported task container" }
             val codecVersion = input.readInt()
-            require(codecVersion == TaskCodec.VERSION) { "Unsupported task codec" }
+            require(codecVersion in 1..TaskCodec.VERSION) { "Unsupported task codec" }
             val ivSize = input.readInt()
             require(ivSize in 12..32) { "Invalid task IV length" }
             val iv = ByteArray(ivSize).also(input::readFully)
