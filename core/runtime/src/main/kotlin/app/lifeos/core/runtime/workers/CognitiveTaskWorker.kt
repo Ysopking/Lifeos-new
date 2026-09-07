@@ -219,6 +219,8 @@ class CognitiveTaskWorker(
         ) ?: throw LeaseOwnershipLostException("Task lease ownership lost: ${task.id.value}")
     } catch (cancelled: CancellationException) {
         throw cancelled
+    } catch (leaseLost: LeaseOwnershipLostException) {
+        throw leaseLost
     } catch (error: Exception) {
         throw LeaseOwnershipLostException(
             message = "Task lease renewal failed: ${task.id.value}",
@@ -229,41 +231,50 @@ class CognitiveTaskWorker(
     private suspend fun <T> withLeaseHeartbeat(
         task: LifeTask,
         block: suspend () -> T,
-    ): T = coroutineScope {
-        val heartbeat = launch {
-            while (isActive) {
-                delay(heartbeatInterval.toMillis())
-                val renewedAt = now()
-                try {
-                    val renewed = tasks.renewLease(
-                        id = task.id,
-                        workerId = workerId,
-                        renewedAt = renewedAt,
-                        leaseUntil = renewedAt.plus(leaseDuration),
-                    )
-                    if (renewed == null) {
+    ): T = try {
+        coroutineScope {
+            val heartbeat = launch {
+                while (isActive) {
+                    delay(heartbeatInterval.toMillis())
+                    val renewedAt = now()
+                    try {
+                        val renewed = tasks.renewLease(
+                            id = task.id,
+                            workerId = workerId,
+                            renewedAt = renewedAt,
+                            leaseUntil = renewedAt.plus(leaseDuration),
+                        )
+                        if (renewed == null) {
+                            this@coroutineScope.cancel(
+                                LeaseOwnershipLostCancellation(
+                                    "Task lease ownership lost: ${task.id.value}"
+                                )
+                            )
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
                         this@coroutineScope.cancel(
-                            LeaseOwnershipLostException("Task lease ownership lost: ${task.id.value}")
+                            LeaseOwnershipLostCancellation(
+                                message = "Task lease heartbeat failed: ${task.id.value}",
+                                cause = error,
+                            )
                         )
                     }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    this@coroutineScope.cancel(
-                        LeaseOwnershipLostException(
-                            message = "Task lease heartbeat failed: ${task.id.value}",
-                            cause = error,
-                        )
-                    )
                 }
             }
-        }
 
-        try {
-            block()
-        } finally {
-            heartbeat.cancelAndJoin()
+            try {
+                block()
+            } finally {
+                heartbeat.cancelAndJoin()
+            }
         }
+    } catch (leaseLost: LeaseOwnershipLostCancellation) {
+        throw LeaseOwnershipLostException(
+            message = leaseLost.message ?: "Task lease ownership lost: ${task.id.value}",
+            cause = leaseLost.cause,
+        )
     }
 
     private suspend fun transitionFinal(task: LifeTask, state: TaskState): LifeTask =
@@ -282,6 +293,11 @@ class CognitiveTaskWorker(
     )
 
     private class LeaseOwnershipLostException(
+        message: String,
+        cause: Throwable? = null,
+    ) : Exception(message, cause)
+
+    private class LeaseOwnershipLostCancellation(
         message: String,
         cause: Throwable? = null,
     ) : CancellationException(message) {
