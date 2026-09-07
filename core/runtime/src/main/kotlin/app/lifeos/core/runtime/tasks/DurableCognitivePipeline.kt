@@ -6,21 +6,30 @@ import app.lifeos.core.model.task.TaskDraft
 import app.lifeos.core.model.task.TaskPriority
 import app.lifeos.core.model.task.TaskType
 
-class DurableCognitivePipeline(
-    private val taskEngine: DurableTaskEngine,
-    private val schedulerLoop: TaskSchedulerLoop,
-) {
-    fun start() {
-        schedulerLoop.start()
-    }
-
-    suspend fun stop() {
-        schedulerLoop.stop()
-    }
-
+interface DurableProcessingPipeline {
+    fun start()
+    suspend fun stop()
     suspend fun submitPhoton(
         photon: Photon,
         priority: TaskPriority = TaskPriority.INTERACTIVE,
+    ): LifeTask
+}
+
+class DurableCognitivePipeline(
+    private val taskEngine: DurableTaskEngine,
+    private val schedulerLoop: TaskSchedulerLoop,
+) : DurableProcessingPipeline {
+    override fun start() {
+        schedulerLoop.start()
+    }
+
+    override suspend fun stop() {
+        schedulerLoop.stop()
+    }
+
+    override suspend fun submitPhoton(
+        photon: Photon,
+        priority: TaskPriority,
     ): LifeTask = taskEngine.submit(
         TaskDraft(
             type = TaskType.PROCESS_PHOTON,
