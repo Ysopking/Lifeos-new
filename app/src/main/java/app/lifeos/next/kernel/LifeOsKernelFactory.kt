@@ -61,6 +61,9 @@ import app.lifeos.core.runtime.tasks.TaskSchedulerLoop
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
 import app.lifeos.core.runtime.workers.CognitiveWorkerFactory
 import app.lifeos.core.runtime.workers.ReportingCognitiveTaskDispatcher
+import app.lifeos.core.scene.ProceduralSceneCompiler
+import app.lifeos.core.scene.ReferenceCpuSceneRasterizer
+import app.lifeos.core.scene.SceneRasterizer
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CoroutineDispatcher
@@ -84,6 +87,8 @@ class LifeOsKernelFactory(
         val languageUnderstanding = LanguageUnderstandingEngine()
         val goalPhotonFactory = GoalPhotonFactory()
         val languageContextBuilder = PhotonLanguageContextBuilder()
+        val sceneCompiler = ProceduralSceneCompiler()
+        val sceneRasterizer: SceneRasterizer = ReferenceCpuSceneRasterizer()
         val capabilityRegistry = CapabilityRegistry(
             listOf(
                 CapabilityDescriptor(
@@ -100,11 +105,37 @@ class LifeOsKernelFactory(
                     cost = 0.0,
                 ),
                 CapabilityDescriptor(
+                    capabilityId = CapabilityId("scene.construct.procedural"),
+                    providerId = "procedural-scene-core",
+                    providerType = ProviderType.MODULE,
+                    contract = CapabilityContract(
+                        requiredInputs = setOf("goal-photon"),
+                        outputs = setOf("scene-graph"),
+                    ),
+                    state = ProviderState.ACTIVE,
+                    trustLevel = TrustLevel.SYSTEM,
+                    reliability = 0.92,
+                    cost = 0.0,
+                ),
+                CapabilityDescriptor(
+                    capabilityId = CapabilityId("scene.rasterize.mmsi"),
+                    providerId = "scene-reference-rasterizer",
+                    providerType = ProviderType.MODULE,
+                    contract = CapabilityContract(
+                        requiredInputs = setOf("scene-graph"),
+                        outputs = setOf("mmsi-geometry-buffers"),
+                    ),
+                    state = ProviderState.ACTIVE,
+                    trustLevel = TrustLevel.SYSTEM,
+                    reliability = 0.96,
+                    cost = 0.0,
+                ),
+                CapabilityDescriptor(
                     capabilityId = CapabilityId("image.render.mmsi"),
                     providerId = "mmsi-runtime",
                     providerType = ProviderType.MODULE,
                     contract = CapabilityContract(
-                        requiredInputs = setOf("scene-geometry"),
+                        requiredInputs = setOf("mmsi-geometry-buffers"),
                         outputs = setOf("image-photon"),
                     ),
                     state = ProviderState.ACTIVE,
@@ -272,6 +303,8 @@ class LifeOsKernelFactory(
             goalPhotonFactory = goalPhotonFactory,
             languageContextBuilder = languageContextBuilder,
             goalCapabilityRouter = goalCapabilityRouter,
+            sceneCompiler = sceneCompiler,
+            sceneRasterizer = sceneRasterizer,
         )
     }
 
