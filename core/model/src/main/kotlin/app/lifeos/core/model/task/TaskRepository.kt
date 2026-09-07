@@ -17,6 +17,8 @@ interface TaskRepository {
 
     suspend fun listRunnable(now: Instant, limit: Int = 100): List<LifeTask>
 
+    suspend fun listExpiredLeases(now: Instant, limit: Int = 100): List<LifeTask>
+
     suspend fun transition(
         id: TaskId,
         expected: TaskState,
