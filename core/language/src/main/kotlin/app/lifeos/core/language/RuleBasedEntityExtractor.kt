@@ -14,6 +14,7 @@ class RuleBasedEntityExtractor {
         "red", "green", "blue", "yellow", "orange", "purple", "black", "white", "grey", "gray", "brown",
     )
     private val imageWords = setOf("bild", "bilder", "foto", "fotos", "grafik", "grafiken", "image", "images", "photo", "photos", "picture", "pictures")
+    private val personWords = setOf("mensch", "menschen", "person", "personen", "leute", "mann", "frau", "people", "persons", "person", "man", "woman")
     private val actionWords = setOf(
         "spielen", "spielt", "laufend", "laufen", "sitzt", "sitzen", "steht", "stehen", "fliegt", "fahren",
         "playing", "play", "running", "run", "sitting", "sit", "standing", "stand", "flying", "driving",
@@ -42,6 +43,7 @@ class RuleBasedEntityExtractor {
             }
             if (word in colors) entities += entity(EntityType.COLOR, token.original, word, index, 0.98)
             if (word in imageWords) entities += entity(EntityType.IMAGE, token.original, "image", index, 0.99)
+            if (word in personWords) entities += entity(EntityType.PERSON, token.original, "person", index, 0.96)
             if (word in actionWords) entities += entity(EntityType.ACTION, token.original, word, index, 0.90)
             if (word in objectWords) entities += entity(EntityType.OBJECT, token.original, word, index, 0.92)
             if (word in styleWords) entities += entity(EntityType.STYLE, token.original, word, index, 0.96)
