@@ -82,7 +82,7 @@ class CognitiveTaskWorkerHeartbeatTest {
     }
 
     @Test
-    fun recoveryWinningOwnershipStopsOldWorkerWithoutCoroutineCancellationEscaping() = runTest {
+    fun ownerSafeInterruptionStopsOldWorkerWithoutCoroutineCancellationEscaping() = runTest {
         supervisorScope {
             val tasks = InMemoryTaskRepository()
             val photons = FakePhotonRepository()
@@ -112,11 +112,10 @@ class CognitiveTaskWorkerHeartbeatTest {
 
             advanceTimeBy(5_000)
             val interrupted = checkNotNull(
-                tasks.transition(
-                    claimed.id,
-                    TaskState.RUNNING,
-                    TaskState.INTERRUPTED,
-                    t0.plusSeconds(5),
+                tasks.interruptExecution(
+                    id = claimed.id,
+                    workerId = workerId,
+                    interruptedAt = t0.plusSeconds(5),
                 )
             )
             val recovering = checkNotNull(
@@ -127,11 +126,13 @@ class CognitiveTaskWorkerHeartbeatTest {
                     t0.plusSeconds(5),
                 )
             )
-            tasks.transition(
-                recovering.id,
-                TaskState.RECOVERING,
-                TaskState.QUEUED,
-                t0.plusSeconds(5),
+            checkNotNull(
+                tasks.transition(
+                    recovering.id,
+                    TaskState.RECOVERING,
+                    TaskState.QUEUED,
+                    t0.plusSeconds(5),
+                )
             )
 
             advanceTimeBy(5_000)
