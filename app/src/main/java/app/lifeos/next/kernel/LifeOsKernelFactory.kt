@@ -1,6 +1,7 @@
 package app.lifeos.next.kernel
 
 import android.content.Context
+import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
@@ -80,6 +81,7 @@ class LifeOsKernelFactory(
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val appContext = context.applicationContext
         val store = EncryptedPhotonStore(appContext)
+        val assetStore = EncryptedBinaryAssetStore(appContext)
         val matrix = ThoughtMatrix()
         val registry = StaticFieldRegistry(listOf(matrix))
         val executor = InfluenceExecutor()
@@ -89,6 +91,13 @@ class LifeOsKernelFactory(
         val languageContextBuilder = PhotonLanguageContextBuilder()
         val sceneCompiler = ProceduralSceneCompiler()
         val sceneRasterizer: SceneRasterizer = ReferenceCpuSceneRasterizer()
+        val proceduralImageGenerator = ProceduralImageGenerationEngine(
+            context = appContext,
+            runtimeProbe = mmsiRuntime,
+            sceneCompiler = sceneCompiler,
+            sceneRasterizer = sceneRasterizer,
+            computeDispatcher = dispatcher,
+        )
         val capabilityRegistry = CapabilityRegistry(
             listOf(
                 CapabilityDescriptor(
@@ -305,6 +314,8 @@ class LifeOsKernelFactory(
             goalCapabilityRouter = goalCapabilityRouter,
             sceneCompiler = sceneCompiler,
             sceneRasterizer = sceneRasterizer,
+            imageAssets = assetStore,
+            proceduralImageGenerator = proceduralImageGenerator,
         )
     }
 

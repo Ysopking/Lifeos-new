@@ -1,10 +1,17 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.image.DeterministicPngEncoder
+import app.lifeos.core.image.ImageAssetDescriptor
+import app.lifeos.core.image.ImagePhotonFactory
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
+import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.GoalPhotonFactory
+import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.language.PhotonLanguageContextBuilder
+import app.lifeos.core.model.BinaryAssetStore
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
 import app.lifeos.core.runtime.RuntimeSupervisor
@@ -23,7 +30,10 @@ import app.lifeos.core.runtime.cognition.PhotonDeltaType
 import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.scene.ProceduralSceneCompiler
+import app.lifeos.core.scene.SceneGraphPhotonFactory
 import app.lifeos.core.scene.SceneRasterizer
+import java.security.MessageDigest
+import java.time.Instant
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -49,6 +59,9 @@ class LifeOsKernel internal constructor(
     val sceneCompiler: ProceduralSceneCompiler,
     /** Deterministic reference rasterizer; native backends may replace it behind the same contract. */
     val sceneRasterizer: SceneRasterizer,
+    /** Encrypted binary vault; Photon.content stores only compact asset references. */
+    val imageAssets: BinaryAssetStore,
+    private val proceduralImageGenerator: ProceduralImageGenerationEngine,
     private val languageUnderstanding: LanguageUnderstandingEngine,
     private val goalPhotonFactory: GoalPhotonFactory,
     private val languageContextBuilder: PhotonLanguageContextBuilder,
@@ -57,6 +70,9 @@ class LifeOsKernel internal constructor(
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
     private val continuousCognition: ContinuousCognitionEngine,
+    private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
+    private val imagePhotonFactory: ImagePhotonFactory = ImagePhotonFactory(),
+    private val sceneGraphPhotonFactory: SceneGraphPhotonFactory = SceneGraphPhotonFactory(),
 ) {
     private val startLock = Any()
     private var bootstrapJob: Job? = null
@@ -90,8 +106,8 @@ class LifeOsKernel internal constructor(
     }
 
     /**
-     * Persists the user's exact utterance first, then derives a structured GoalPhoton and a
-     * capability-resolution decision. The original text is never replaced by interpretation.
+     * Persists the user's exact utterance first, derives a GoalPhoton, resolves capabilities, and
+     * executes an action-ready CREATE_IMAGE goal entirely offline before returning to the caller.
      */
     suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
         require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
@@ -110,12 +126,26 @@ class LifeOsKernel internal constructor(
                 createdAt = photon.provenance.createdAt,
             )
             val goal = persistAndIngest(goalPhoton.photon)
+            val imageGeneration = when {
+                understanding.goal.intent != IntentType.CREATE_IMAGE -> null
+                !routing.ready -> ImageGenerationResult.Blocked(
+                    routing.blockingGaps
+                        .map { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
+                        .ifEmpty { listOf("image goal is not action-ready") },
+                )
+                else -> generateImage(
+                    goal = understanding.goal,
+                    sourcePhotonId = photon.id,
+                    goalPhotonId = goalPhoton.photon.id,
+                )
+            }
             LanguageSubmissionResult(
                 source = source,
                 understanding = understanding,
                 goalPhoton = goalPhoton,
                 goal = goal,
                 routing = routing,
+                imageGeneration = imageGeneration,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -125,6 +155,13 @@ class LifeOsKernel internal constructor(
                 languageFailure = error.message ?: error::class.simpleName,
             )
         }
+    }
+
+    /** Reads and integrity-verifies an image asset referenced by a generated image photon. */
+    suspend fun loadImageAsset(photon: Photon): ByteArray? {
+        if (photon.mimeType != ImagePhotonFactory.IMAGE_REFERENCE_MIME) return null
+        val descriptor = runCatching { ImageAssetDescriptor.decode(photon.content) }.getOrNull() ?: return null
+        return imageAssets.load(descriptor.asset)
     }
 
     suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult {
@@ -176,6 +213,67 @@ class LifeOsKernel internal constructor(
             )
         }
     }
+
+    private suspend fun generateImage(
+        goal: GoalFrame,
+        sourcePhotonId: PhotonId,
+        goalPhotonId: PhotonId,
+    ): ImageGenerationResult {
+        return try {
+            when (val rendered = proceduralImageGenerator.render(goal)) {
+                is ProceduralImageRenderResult.Blocked -> ImageGenerationResult.Blocked(rendered.reasons)
+                is ProceduralImageRenderResult.Rendered -> {
+                    val createdAt = Instant.now()
+                    val sceneGraphPhoton = sceneGraphPhotonFactory.create(
+                        graph = rendered.graph,
+                        goalPhotonId = goalPhotonId,
+                        createdAt = createdAt,
+                    )
+                    val sceneSubmission = persistAndIngest(sceneGraphPhoton.photon)
+                    val pngBytes = pngEncoder.encode(rendered.image)
+                    val asset = imageAssets.save(pngBytes, "image/png")
+                    try {
+                        val descriptor = ImageAssetDescriptor(
+                            asset = asset,
+                            width = rendered.image.width,
+                            height = rendered.image.height,
+                            pixelSha256 = sha256(rendered.image.copyRgba()),
+                            sceneId = rendered.graph.sceneId,
+                            rendererId = rendered.rendererId,
+                        )
+                        val imagePhoton = imagePhotonFactory.create(
+                            descriptor = descriptor,
+                            parentIds = setOf(sourcePhotonId, goalPhotonId, sceneGraphPhoton.photon.id),
+                            confidence = rendered.graph.confidence,
+                            createdAt = createdAt,
+                        )
+                        val imageSubmission = persistAndIngest(imagePhoton)
+                        ImageGenerationResult.Generated(
+                            GeneratedImageResult(
+                                scene = sceneSubmission,
+                                image = imageSubmission,
+                                descriptor = descriptor,
+                                rendererId = rendered.rendererId,
+                            ),
+                        )
+                    } catch (cancelled: CancellationException) {
+                        runCatching { imageAssets.delete(asset.id) }
+                        throw cancelled
+                    } catch (error: Exception) {
+                        runCatching { imageAssets.delete(asset.id) }
+                        ImageGenerationResult.Failed(error.message ?: error::class.simpleName ?: "image commit failed")
+                    }
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            ImageGenerationResult.Failed(error.message ?: error::class.simpleName ?: "image generation failed")
+        }
+    }
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     /** Final process teardown hook; normal Activity/ViewModel destruction must not call this. */
     internal fun shutdown() {
@@ -276,7 +374,7 @@ class LifeOsKernel internal constructor(
             maxDurationMs = 30_000,
             maxModuleInvocations = 16,
             maxNewPhotons = 16,
-            maxNetworkCalls = 4,
+            maxNetworkCalls = 0,
         )
     }
 }
