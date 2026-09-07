@@ -13,5 +13,7 @@ class CognitiveRuntimeTest {
         runtime.ingest(Photon(content = "test", provenance = Provenance("test", "test")))
         testScheduler.advanceUntilIdle()
         assertEquals(1, runtime.state.value.processed)
+        runtime.stop()
+        assertEquals(false, runtime.state.value.running)
     }
 }
