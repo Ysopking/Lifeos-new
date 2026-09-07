@@ -50,6 +50,7 @@ class LifeOsKernelFactory(
             photons = store,
             fields = registry,
             executor = executor,
+            checkpoints = checkpointRepository,
             leaseDuration = TASK_LEASE_DURATION,
             heartbeatInterval = HEARTBEAT_INTERVAL,
         )

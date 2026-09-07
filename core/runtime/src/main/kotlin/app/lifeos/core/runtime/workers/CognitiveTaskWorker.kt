@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.workers
 import app.lifeos.core.model.FieldInfluence
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.checkpoint.CheckpointRepository
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskId
 import app.lifeos.core.model.task.TaskRepository
@@ -13,6 +14,8 @@ import app.lifeos.core.runtime.FieldRegistry
 import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.RuntimeFailure
 import app.lifeos.core.runtime.RuntimeFailureCategory
+import app.lifeos.core.runtime.checkpoints.FieldCheckpointManager
+import app.lifeos.core.runtime.checkpoints.FieldCheckpointStorageException
 import app.lifeos.core.runtime.tasks.ClaimedTaskDispatcher
 import app.lifeos.core.runtime.tasks.RetryPolicy
 import java.time.Duration
@@ -41,11 +44,14 @@ class CognitiveTaskWorker(
     private val photons: PhotonRepository,
     private val fields: FieldRegistry,
     private val executor: InfluenceExecutor,
+    checkpoints: CheckpointRepository? = null,
     private val retryPolicy: RetryPolicy = RetryPolicy(),
     private val leaseDuration: Duration = Duration.ofSeconds(30),
     private val heartbeatInterval: Duration = Duration.ofSeconds(10),
     private val now: () -> Instant = Instant::now,
 ) : ClaimedTaskDispatcher {
+    private val checkpointManager = FieldCheckpointManager(checkpoints)
+
     init {
         require(!leaseDuration.isZero && !leaseDuration.isNegative) {
             "Worker lease duration must be positive"
@@ -179,7 +185,35 @@ class CognitiveTaskWorker(
             }
         }
 
-        val execution = executor.execute(photon, fields.activeFields())
+        val activeFields = fields.activeFields()
+        var checkpoint = try {
+            checkpointManager.load(task.id, activeFields)
+        } catch (error: FieldCheckpointStorageException) {
+            return checkpointFailure(photonId, error)
+        }
+
+        val execution = try {
+            executor.execute(
+                photon = photon,
+                fields = activeFields,
+                completedFieldIndexes = checkpoint.completedFieldIndexes,
+                onFieldSuccess = { fieldIndex ->
+                    val checkpointTime = now()
+                    renewLeaseOrThrow(task, checkpointTime)
+                    checkpoint = checkpointManager.recordSuccess(
+                        taskId = task.id,
+                        state = checkpoint,
+                        fieldIndex = fieldIndex,
+                        createdAt = checkpointTime,
+                    )
+                },
+            )
+        } catch (leaseLost: LeaseOwnershipLostException) {
+            throw leaseLost
+        } catch (error: FieldCheckpointStorageException) {
+            return checkpointFailure(photonId, error)
+        }
+
         return if (execution.failures.isNotEmpty()) {
             WorkResult(
                 photonId = photon.id,
@@ -196,12 +230,30 @@ class CognitiveTaskWorker(
         }
     }
 
+    private fun checkpointFailure(
+        photonId: PhotonId,
+        error: FieldCheckpointStorageException,
+    ) = failureWork(
+        photonId = photonId,
+        failure = RuntimeFailure(
+            category = RuntimeFailureCategory.STORAGE,
+            source = "checkpoint-repository",
+            message = error.message ?: "Checkpoint persistence failed",
+            photonId = photonId,
+        ),
+    )
+
     private suspend fun finish(task: LifeTask, work: WorkResult): CognitiveTaskExecutionResult {
         val finalTask = if (work.finalState == TaskState.FAILED) {
             scheduleRetryOrFinish(task, work.failures)
         } else {
             finishOwnedExecution(task, work.finalState)
         }
+
+        if (finalTask.state == TaskState.COMPLETED || finalTask.state == TaskState.SUPERSEDED) {
+            checkpointManager.clearBestEffort(task.id)
+        }
+
         return CognitiveTaskExecutionResult(
             taskId = finalTask.id,
             photonId = work.photonId,
