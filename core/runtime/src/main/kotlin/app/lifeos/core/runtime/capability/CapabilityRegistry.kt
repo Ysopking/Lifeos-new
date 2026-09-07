@@ -3,9 +3,17 @@ package app.lifeos.core.runtime.capability
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class CapabilityRegistry {
+class CapabilityRegistry(
+    initialProviders: Iterable<CapabilityDescriptor> = emptyList(),
+) {
     private val mutex = Mutex()
     private val providers = linkedMapOf<Pair<CapabilityId, String>, CapabilityDescriptor>()
+
+    init {
+        initialProviders.forEach { descriptor ->
+            providers[descriptor.capabilityId to descriptor.providerId] = descriptor
+        }
+    }
 
     suspend fun register(descriptor: CapabilityDescriptor): CapabilityDescriptor = mutex.withLock {
         providers[descriptor.capabilityId to descriptor.providerId] = descriptor
