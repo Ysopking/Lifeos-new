@@ -6,6 +6,11 @@ import java.nio.ByteOrder
 
 /** Zero-copy JNI entry point for the MMSI inverse-radiometry pass. */
 class NativeMmsiBridge {
+    fun isAvailable(): Boolean = runCatching {
+        ensureLoaded()
+        true
+    }.getOrDefault(false)
+
     fun inverseRadiometry(
         rgb: ByteBuffer,
         normals: ByteBuffer,
