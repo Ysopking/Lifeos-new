@@ -14,6 +14,7 @@ import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.RuntimeFailure
 import app.lifeos.core.runtime.RuntimeFailureCategory
 import app.lifeos.core.runtime.tasks.ClaimedTaskDispatcher
+import app.lifeos.core.runtime.tasks.RetryPolicy
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
@@ -40,6 +41,7 @@ class CognitiveTaskWorker(
     private val photons: PhotonRepository,
     private val fields: FieldRegistry,
     private val executor: InfluenceExecutor,
+    private val retryPolicy: RetryPolicy = RetryPolicy(),
     private val leaseDuration: Duration = Duration.ofSeconds(30),
     private val heartbeatInterval: Duration = Duration.ofSeconds(10),
     private val now: () -> Instant = Instant::now,
@@ -87,6 +89,7 @@ class CognitiveTaskWorker(
                         category = RuntimeFailureCategory.INVARIANT,
                         source = "cognitive-worker",
                         message = "Unsupported task type: ${activeTask.type}",
+                        recoverable = false,
                         photonId = activeTask.inputPhotonIds.singleOrNull(),
                     ),
                 )
@@ -127,6 +130,7 @@ class CognitiveTaskWorker(
                     category = RuntimeFailureCategory.INVARIANT,
                     source = "cognitive-worker",
                     message = "PROCESS_PHOTON requires exactly one input photon",
+                    recoverable = false,
                 ),
             )
 
@@ -148,6 +152,7 @@ class CognitiveTaskWorker(
                 category = RuntimeFailureCategory.STORAGE,
                 source = "photon-repository",
                 message = "Input photon not found",
+                recoverable = false,
                 photonId = photonId,
             ),
         )
@@ -167,6 +172,7 @@ class CognitiveTaskWorker(
                         category = RuntimeFailureCategory.STORAGE,
                         source = "photon-repository",
                         message = "Expected photon revision $expectedRevision but found older revision ${photon.revision}",
+                        recoverable = false,
                         photonId = photonId,
                     ),
                 )
@@ -191,13 +197,38 @@ class CognitiveTaskWorker(
     }
 
     private suspend fun finish(task: LifeTask, work: WorkResult): CognitiveTaskExecutionResult {
-        val finalTask = finishOwnedExecution(task, work.finalState)
+        val finalTask = if (work.finalState == TaskState.FAILED) {
+            scheduleRetryOrFinish(task, work.failures)
+        } else {
+            finishOwnedExecution(task, work.finalState)
+        }
         return CognitiveTaskExecutionResult(
             taskId = finalTask.id,
             photonId = work.photonId,
             finalState = finalTask.state,
             influences = work.influences,
             failures = work.failures,
+        )
+    }
+
+    private suspend fun scheduleRetryOrFinish(
+        task: LifeTask,
+        failures: List<RuntimeFailure>,
+    ): LifeTask {
+        val scheduledAt = now()
+        val retry = retryPolicy.nextRetry(
+            task = task,
+            failures = failures,
+            scheduledAt = scheduledAt,
+        ) ?: return finishOwnedExecution(task, TaskState.FAILED)
+
+        return tasks.scheduleRetry(
+            id = task.id,
+            workerId = workerId,
+            retryAt = retry.retryAt,
+            scheduledAt = scheduledAt,
+        ) ?: throw LeaseOwnershipLostException(
+            "Task execution ownership lost before retry scheduling: ${task.id.value}"
         )
     }
 

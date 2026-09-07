@@ -67,6 +67,34 @@ class DurableRuntimeStateBridgeTest {
     }
 
     @Test
+    fun retryWaitExecutionRecordsFailureButDoesNotIncrementFailedCounter() = runTest {
+        val bridge = DurableRuntimeStateBridge()
+        val photonId = PhotonId.new()
+        val failure = RuntimeFailure(
+            category = RuntimeFailureCategory.FIELD,
+            source = "field[0]",
+            message = "retry me",
+            photonId = photonId,
+        )
+
+        bridge.onExecutionResult(
+            CognitiveTaskExecutionResult(
+                taskId = TaskId.new(),
+                photonId = photonId,
+                finalState = TaskState.RETRY_WAIT,
+                influences = emptyList(),
+                failures = listOf(failure),
+            )
+        )
+
+        val state = bridge.state.value
+        assertEquals(0, state.processed)
+        assertEquals(0, state.failed)
+        assertEquals(failure, state.lastFailure)
+        assertEquals(photonId, state.lastPhotonId)
+    }
+
+    @Test
     fun failedExecutionUpdatesFailureWithoutIncrementingProcessed() = runTest {
         val bridge = DurableRuntimeStateBridge()
         val photonId = PhotonId.new()

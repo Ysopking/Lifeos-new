@@ -20,6 +20,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.test.fail
 
 class CognitiveTaskWorkerTest {
@@ -90,7 +92,7 @@ class CognitiveTaskWorkerTest {
     }
 
     @Test
-    fun olderStoredRevisionFailsPinnedNewerTask() = runTest {
+    fun olderStoredRevisionFailsPinnedNewerTaskPermanently() = runTest {
         val tasks = InMemoryTaskRepository()
         val photons = FakePhotonRepository()
         val stored = photon()
@@ -107,10 +109,11 @@ class CognitiveTaskWorkerTest {
 
         assertEquals(TaskState.FAILED, result.finalState)
         assertEquals(RuntimeFailureCategory.STORAGE, result.failures.single().category)
+        assertEquals(false, result.failures.single().recoverable)
     }
 
     @Test
-    fun fieldFailureMarksTaskFailedButHealthyFieldStillRuns() = runTest {
+    fun fieldFailureSchedulesRetryAndHealthyFieldStillRuns() = runTest {
         val tasks = InMemoryTaskRepository()
         val photons = FakePhotonRepository()
         val photon = photon()
@@ -135,15 +138,44 @@ class CognitiveTaskWorkerTest {
         )
 
         val result = worker.execute(claimed)
+        val storedTask = assertNotNull(tasks.get(claimed.id))
 
-        assertEquals(TaskState.FAILED, result.finalState)
+        assertEquals(TaskState.RETRY_WAIT, result.finalState)
+        assertEquals(TaskState.RETRY_WAIT, storedTask.state)
+        assertTrue(assertNotNull(storedTask.scheduledAt).isAfter(t0))
         assertEquals(1, result.influences.size)
         assertEquals(1, result.failures.size)
         assertEquals(RuntimeFailureCategory.FIELD, result.failures.single().category)
     }
 
     @Test
-    fun missingInputPhotonFailsTaskAsStorageFailure() = runTest {
+    fun exhaustedAttemptBudgetTurnsRetryableFailureIntoPermanentFailure() = runTest {
+        val tasks = InMemoryTaskRepository()
+        val photons = FakePhotonRepository()
+        val photon = photon()
+        photons.save(photon)
+        val claimed = claimedTask(
+            tasks = tasks,
+            owner = workerId,
+            photonId = photon.id,
+            expectedRevision = photon.revision,
+            maxAttempts = 1,
+        )
+        val worker = worker(
+            tasks,
+            photons,
+            listOf(ForceField { error("still broken") }),
+        )
+
+        val result = worker.execute(claimed)
+
+        assertEquals(TaskState.FAILED, result.finalState)
+        assertEquals(TaskState.FAILED, tasks.get(claimed.id)?.state)
+        assertEquals(1, tasks.get(claimed.id)?.attempt)
+    }
+
+    @Test
+    fun missingInputPhotonFailsTaskAsPermanentStorageFailure() = runTest {
         val tasks = InMemoryTaskRepository()
         val photons = FakePhotonRepository()
         val missingId = PhotonId.new()
@@ -154,6 +186,7 @@ class CognitiveTaskWorkerTest {
 
         assertEquals(TaskState.FAILED, result.finalState)
         assertEquals(RuntimeFailureCategory.STORAGE, result.failures.single().category)
+        assertEquals(false, result.failures.single().recoverable)
     }
 
     @Test
@@ -240,12 +273,14 @@ class CognitiveTaskWorkerTest {
         expectedRevision: Long?,
         acquiredAt: Instant = t0,
         leaseUntil: Instant = t0.plusSeconds(30),
+        maxAttempts: Int = 3,
     ): LifeTask {
         val task = LifeTask(
             type = TaskType.PROCESS_PHOTON,
             inputPhotonIds = setOf(photonId),
             inputPhotonRevisions = expectedRevision?.let { mapOf(photonId to it) } ?: emptyMap(),
             idempotencyKey = "process:${photonId.value}:r${expectedRevision ?: "legacy"}",
+            maxAttempts = maxAttempts,
             createdAt = acquiredAt,
             updatedAt = acquiredAt,
         )
