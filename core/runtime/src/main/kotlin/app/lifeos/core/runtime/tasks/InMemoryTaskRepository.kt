@@ -75,19 +75,18 @@ class InMemoryTaskRepository : TaskRepository {
         at: Instant,
     ): LifeTask? = mutex.withLock {
         require(next != TaskState.CLAIMED) { "Use claim() for QUEUED -> CLAIMED" }
-        require(!(expected == TaskState.CLAIMED && next == TaskState.RUNNING)) {
-            "Use startExecution() for CLAIMED -> RUNNING"
+        require(expected !in LEASED_STATES) {
+            "Use owner-safe execution operations for transitions from leased task states"
         }
         val current = tasks[id] ?: return@withLock null
         if (current.state != expected) return@withLock null
 
         TaskStateMachine.requireTransition(expected, next)
-        val keepsLease = next == TaskState.RUNNING || next == TaskState.CHECKPOINTED
         val updated = current.copy(
             state = next,
             updatedAt = at,
-            claimedBy = if (keepsLease) current.claimedBy else null,
-            leaseExpiresAt = if (keepsLease) current.leaseExpiresAt else null,
+            claimedBy = null,
+            leaseExpiresAt = null,
         )
         tasks[id] = updated
         updated
@@ -137,6 +136,90 @@ class InMemoryTaskRepository : TaskRepository {
         )
         tasks[id] = running
         running
+    }
+
+    override suspend fun finishExecution(
+        id: TaskId,
+        workerId: WorkerId,
+        finalState: TaskState,
+        finishedAt: Instant,
+    ): LifeTask? = mutex.withLock {
+        require(finalState in EXECUTION_TERMINAL_STATES) {
+            "Execution can finish only as COMPLETED, SUPERSEDED, or FAILED"
+        }
+        val current = tasks[id] ?: return@withLock null
+        if (
+            current.state !in EXECUTION_STATES ||
+            current.claimedBy != workerId ||
+            current.leaseExpiresAt?.isAfter(finishedAt) != true
+        ) {
+            return@withLock null
+        }
+
+        TaskStateMachine.requireTransition(current.state, finalState)
+        val finished = current.copy(
+            state = finalState,
+            updatedAt = finishedAt,
+            scheduledAt = null,
+            claimedBy = null,
+            leaseExpiresAt = null,
+        )
+        tasks[id] = finished
+        finished
+    }
+
+    override suspend fun interruptExecution(
+        id: TaskId,
+        workerId: WorkerId,
+        interruptedAt: Instant,
+    ): LifeTask? = mutex.withLock {
+        val current = tasks[id] ?: return@withLock null
+        if (
+            current.state !in EXECUTION_STATES ||
+            current.claimedBy != workerId
+        ) {
+            return@withLock null
+        }
+
+        TaskStateMachine.requireTransition(current.state, TaskState.INTERRUPTED)
+        val interrupted = current.copy(
+            state = TaskState.INTERRUPTED,
+            updatedAt = interruptedAt,
+            scheduledAt = null,
+            claimedBy = null,
+            leaseExpiresAt = null,
+        )
+        tasks[id] = interrupted
+        interrupted
+    }
+
+    override suspend fun scheduleRetry(
+        id: TaskId,
+        workerId: WorkerId,
+        retryAt: Instant,
+        scheduledAt: Instant,
+    ): LifeTask? = mutex.withLock {
+        require(!retryAt.isBefore(scheduledAt)) { "Retry time must not precede scheduling time" }
+        val current = tasks[id] ?: return@withLock null
+        if (
+            current.state !in EXECUTION_STATES ||
+            current.claimedBy != workerId ||
+            current.leaseExpiresAt?.isAfter(scheduledAt) != true ||
+            current.attempt >= current.maxAttempts
+        ) {
+            return@withLock null
+        }
+
+        TaskStateMachine.requireTransition(current.state, TaskState.RETRY_WAIT)
+        val retry = current.copy(
+            state = TaskState.RETRY_WAIT,
+            updatedAt = scheduledAt,
+            scheduledAt = retryAt,
+            claimedBy = null,
+            leaseExpiresAt = null,
+        )
+        tasks[id] = retry
+        retry
     }
 
     override suspend fun renewLease(
@@ -197,6 +280,15 @@ class InMemoryTaskRepository : TaskRepository {
             TaskState.CLAIMED,
             TaskState.RUNNING,
             TaskState.CHECKPOINTED,
+        )
+        val EXECUTION_STATES = setOf(
+            TaskState.RUNNING,
+            TaskState.CHECKPOINTED,
+        )
+        val EXECUTION_TERMINAL_STATES = setOf(
+            TaskState.COMPLETED,
+            TaskState.SUPERSEDED,
+            TaskState.FAILED,
         )
     }
 }

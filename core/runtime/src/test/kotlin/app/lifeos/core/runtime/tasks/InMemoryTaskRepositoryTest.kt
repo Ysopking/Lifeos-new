@@ -163,11 +163,14 @@ class InMemoryTaskRepositoryTest {
         val repository = InMemoryTaskRepository()
         val worker = WorkerId("worker-a")
         val running = runningTask(repository, "recovery-wins", worker)
-        repository.transition(
-            running.id,
-            TaskState.RUNNING,
-            TaskState.INTERRUPTED,
-            t0.plusSeconds(33),
+        val interrupted = checkNotNull(
+            repository.interruptExpiredLease(
+                id = running.id,
+                expectedState = TaskState.RUNNING,
+                expectedWorkerId = worker,
+                expectedLeaseExpiresAt = checkNotNull(running.leaseExpiresAt),
+                at = t0.plusSeconds(33),
+            )
         )
 
         val renewed = repository.renewLease(
@@ -178,6 +181,7 @@ class InMemoryTaskRepositoryTest {
         )
 
         assertNull(renewed)
+        assertEquals(TaskState.INTERRUPTED, interrupted.state)
         assertEquals(TaskState.INTERRUPTED, repository.get(running.id)?.state)
     }
 
@@ -197,36 +201,76 @@ class InMemoryTaskRepositoryTest {
     }
 
     @Test
-    fun terminalTransitionClearsWorkerLease() = runTest {
+    fun ownerSafeFinishClearsWorkerLease() = runTest {
         val repository = InMemoryTaskRepository()
         val worker = WorkerId("worker-a")
-        val task = task("lease-cleared")
-        repository.create(task)
-        repository.transition(task.id, TaskState.CREATED, TaskState.QUEUED, t0.plusSeconds(1))
-        val claimed = checkNotNull(
-            repository.claim(
-                task.id,
-                worker,
-                t0.plusSeconds(2),
-                t0.plusSeconds(32),
-            )
-        )
-        checkNotNull(
-            repository.startExecution(
-                id = claimed.id,
-                workerId = worker,
-                startedAt = t0.plusSeconds(3),
-            )
-        )
-        val completed = repository.transition(
-            task.id,
-            TaskState.RUNNING,
-            TaskState.COMPLETED,
-            t0.plusSeconds(4),
+        val running = runningTask(repository, "lease-cleared", worker)
+
+        val completed = repository.finishExecution(
+            id = running.id,
+            workerId = worker,
+            finalState = TaskState.COMPLETED,
+            finishedAt = t0.plusSeconds(4),
         )
 
+        assertEquals(TaskState.COMPLETED, completed?.state)
         assertNull(completed?.claimedBy)
         assertNull(completed?.leaseExpiresAt)
+    }
+
+    @Test
+    fun differentWorkerCannotFinishExecution() = runTest {
+        val repository = InMemoryTaskRepository()
+        val running = runningTask(repository, "foreign-finish", WorkerId("worker-a"))
+
+        val completed = repository.finishExecution(
+            id = running.id,
+            workerId = WorkerId("worker-b"),
+            finalState = TaskState.COMPLETED,
+            finishedAt = t0.plusSeconds(4),
+        )
+
+        assertNull(completed)
+        assertEquals(TaskState.RUNNING, repository.get(running.id)?.state)
+        assertEquals(WorkerId("worker-a"), repository.get(running.id)?.claimedBy)
+    }
+
+    @Test
+    fun expiredLeaseCannotFinishExecution() = runTest {
+        val repository = InMemoryTaskRepository()
+        val worker = WorkerId("worker-a")
+        val running = runningTask(repository, "expired-finish", worker)
+
+        val completed = repository.finishExecution(
+            id = running.id,
+            workerId = worker,
+            finalState = TaskState.COMPLETED,
+            finishedAt = t0.plusSeconds(32),
+        )
+
+        assertNull(completed)
+        assertEquals(TaskState.RUNNING, repository.get(running.id)?.state)
+    }
+
+    @Test
+    fun ownerCanScheduleRetryAndReleaseLease() = runTest {
+        val repository = InMemoryTaskRepository()
+        val worker = WorkerId("worker-a")
+        val running = runningTask(repository, "retry-owner", worker)
+        val scheduledAt = t0.plusSeconds(4)
+        val retryAt = scheduledAt.plusSeconds(10)
+
+        val retry = repository.scheduleRetry(
+            id = running.id,
+            workerId = worker,
+            retryAt = retryAt,
+            scheduledAt = scheduledAt,
+        )
+
+        assertEquals(TaskState.RETRY_WAIT, retry?.state)
+        assertEquals(retryAt, retry?.scheduledAt)
+        assertNull(retry?.claimedBy)
+        assertNull(retry?.leaseExpiresAt)
     }
 
     private suspend fun runningTask(
