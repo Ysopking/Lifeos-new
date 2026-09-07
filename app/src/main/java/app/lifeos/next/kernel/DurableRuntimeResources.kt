@@ -2,10 +2,10 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.model.checkpoint.CheckpointRepository
 import app.lifeos.core.model.task.TaskRepository
-import app.lifeos.core.runtime.tasks.DurableCognitivePipeline
+import app.lifeos.core.runtime.LifeOsRuntime
 
 internal data class DurableRuntimeResources(
-    val pipeline: DurableCognitivePipeline,
+    val runtime: LifeOsRuntime,
     val taskRepository: TaskRepository,
     val checkpointRepository: CheckpointRepository,
 )
