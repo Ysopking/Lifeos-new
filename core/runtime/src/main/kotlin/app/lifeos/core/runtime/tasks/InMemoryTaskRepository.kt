@@ -131,6 +131,35 @@ class InMemoryTaskRepository : TaskRepository {
         renewed
     }
 
+    override suspend fun interruptExpiredLease(
+        id: TaskId,
+        expectedState: TaskState,
+        expectedWorkerId: WorkerId,
+        expectedLeaseExpiresAt: Instant,
+        at: Instant,
+    ): LifeTask? = mutex.withLock {
+        require(expectedState in LEASED_STATES) { "Expected state must hold a worker lease" }
+        val current = tasks[id] ?: return@withLock null
+        if (
+            current.state != expectedState ||
+            current.claimedBy != expectedWorkerId ||
+            current.leaseExpiresAt != expectedLeaseExpiresAt ||
+            current.leaseExpiresAt?.isAfter(at) != false
+        ) {
+            return@withLock null
+        }
+
+        TaskStateMachine.requireTransition(expectedState, TaskState.INTERRUPTED)
+        val interrupted = current.copy(
+            state = TaskState.INTERRUPTED,
+            updatedAt = at,
+            claimedBy = null,
+            leaseExpiresAt = null,
+        )
+        tasks[id] = interrupted
+        interrupted
+    }
+
     private companion object {
         val LEASED_STATES = setOf(
             TaskState.CLAIMED,
