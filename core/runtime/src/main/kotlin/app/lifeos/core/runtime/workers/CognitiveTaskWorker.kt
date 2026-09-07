@@ -4,6 +4,7 @@ import app.lifeos.core.model.FieldInfluence
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.task.LifeTask
+import app.lifeos.core.model.task.TaskId
 import app.lifeos.core.model.task.TaskRepository
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskType
@@ -19,7 +20,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
 data class CognitiveTaskExecutionResult(
-    val taskId: app.lifeos.core.model.task.TaskId,
+    val taskId: TaskId,
     val photonId: PhotonId?,
     val finalState: TaskState,
     val influences: List<FieldInfluence>,
@@ -42,12 +43,14 @@ class CognitiveTaskWorker(
     suspend fun execute(task: LifeTask): CognitiveTaskExecutionResult {
         require(task.state == TaskState.CLAIMED) { "Worker accepts only CLAIMED tasks" }
         require(task.claimedBy == workerId) { "Task is claimed by a different worker" }
+        val startedAt = now()
+        require(task.leaseExpiresAt?.isAfter(startedAt) == true) { "Task lease has expired" }
 
         val running = tasks.transition(
             id = task.id,
             expected = TaskState.CLAIMED,
             next = TaskState.RUNNING,
-            at = now(),
+            at = startedAt,
         ) ?: error("Claimed task could not transition to RUNNING: ${task.id.value}")
 
         return try {
