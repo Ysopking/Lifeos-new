@@ -5,6 +5,9 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.task.TaskPriority
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.worker.WorkerId
+import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
+import app.lifeos.core.runtime.recovery.LeaseRecoveryService
+import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.runTest
@@ -61,12 +64,22 @@ class DurableCognitivePipelineTest {
             dispatcher = ClaimedTaskDispatcher { },
             now = { t0 },
         )
-        val loop = TaskSchedulerLoop(
+        val schedulerLoop = TaskSchedulerLoop(
             scope = scope,
             scheduler = scheduler,
             wakeSource = signal,
         )
-        return DurableCognitivePipeline(engine, loop)
+        val recoveryService = LeaseRecoveryService(
+            tasks = repository,
+            schedulerSignal = signal,
+            now = { t0 },
+        )
+        val recoveryLoop = LeaseRecoveryLoop(
+            scope = scope,
+            recovery = recoveryService,
+            interval = Duration.ofSeconds(30),
+        )
+        return DurableCognitivePipeline(engine, schedulerLoop, recoveryLoop)
     }
 
     private fun photon() = Photon(
