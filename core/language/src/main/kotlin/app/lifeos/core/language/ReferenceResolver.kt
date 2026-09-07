@@ -10,9 +10,9 @@ class ReferenceExpressionExtractor {
         val words = utterance.tokens.filter { it.kind == TokenKind.WORD }.map { it.normalized }
         val wordSet = words.toSet()
         val preferred = buildSet {
-            if (wordSet.any { it in setOf("bild", "foto", "image", "photo", "picture") }) add("image")
-            if (wordSet.any { it in setOf("datei", "file", "dokument", "document") }) add("file")
-            if (wordSet.any { it in setOf("ziel", "goal", "plan", "aufgabe", "task") }) add("goal")
+            if (wordSet.any { it in setOf("bild", "bilder", "foto", "fotos", "image", "images", "photo", "photos", "picture", "pictures") }) add("image")
+            if (wordSet.any { it in setOf("datei", "dateien", "file", "files", "dokument", "dokumente", "document", "documents") }) add("file")
+            if (wordSet.any { it in setOf("ziel", "ziele", "goal", "goals", "plan", "aufgabe", "aufgaben", "task", "tasks") }) add("goal")
         }
         val result = mutableListOf<ReferenceExpression>()
 
@@ -25,13 +25,13 @@ class ReferenceExpressionExtractor {
         if (wordSet.any { it in setOf("vorher", "zuvor", "previous", "before") }) {
             result += ReferenceExpression(ReferenceKind.PREVIOUS, "previous", preferred, 0.92)
         }
-        if (wordSet.any { it in setOf("letzte", "letzten", "letztes", "last") }) {
+        if (wordSet.any { it in setOf("letzte", "letzten", "letztes", "letzter", "last") }) {
             result += ReferenceExpression(ReferenceKind.LAST_RESULT, "last", preferred, 0.90)
         }
-        if (wordSet.any { it in setOf("dieses", "diese", "diesen", "this") } && preferred.isNotEmpty()) {
+        if (wordSet.any { it in setOf("dieses", "diese", "diesen", "dieser", "this", "these") } && preferred.isNotEmpty()) {
             result += ReferenceExpression(ReferenceKind.THIS, "this", preferred, 0.88)
         }
-        if (wordSet.any { it in setOf("das", "that") } && preferred.isNotEmpty()) {
+        if (wordSet.any { it in setOf("das", "jene", "jener", "jenes", "that", "those") } && preferred.isNotEmpty()) {
             result += ReferenceExpression(ReferenceKind.THAT, "that", preferred, 0.82)
         }
         if (topIntent == IntentType.CONTINUE && result.isEmpty()) {
