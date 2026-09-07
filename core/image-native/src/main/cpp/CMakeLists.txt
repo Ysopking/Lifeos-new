@@ -3,6 +3,7 @@ project(lifeos_mmsi_native LANGUAGES CXX)
 
 add_library(lifeos_mmsi_native SHARED
     mmsi_native.cpp
+    phase1_ahb.cpp
     vulkan_probe.cpp
     vulkan_dispatch.cpp
     ahardwarebuffer_probe.cpp
