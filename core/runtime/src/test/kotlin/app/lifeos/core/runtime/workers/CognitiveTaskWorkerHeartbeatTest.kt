@@ -52,7 +52,7 @@ class CognitiveTaskWorkerHeartbeatTest {
                     }
                 )
             ),
-            executor = InfluenceExecutor(),
+            executor = InfluenceExecutor(fieldTimeoutMillis = 60_000),
             leaseDuration = Duration.ofSeconds(30),
             heartbeatInterval = Duration.ofSeconds(10),
             now = { t0.plusMillis(testScheduler.currentTime) },
@@ -101,7 +101,7 @@ class CognitiveTaskWorkerHeartbeatTest {
                         }
                     )
                 ),
-                executor = InfluenceExecutor(),
+                executor = InfluenceExecutor(fieldTimeoutMillis = 60_000),
                 leaseDuration = Duration.ofSeconds(30),
                 heartbeatInterval = Duration.ofSeconds(10),
                 now = { t0.plusMillis(testScheduler.currentTime) },
@@ -200,3 +200,4 @@ class CognitiveTaskWorkerHeartbeatTest {
         }
     }
 }
+
