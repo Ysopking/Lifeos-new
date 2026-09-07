@@ -20,7 +20,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
+import kotlin.test.fail
 
 class CognitiveTaskWorkerTest {
     private val t0 = Instant.parse("2026-09-07T15:00:00Z")
@@ -117,8 +117,11 @@ class CognitiveTaskWorkerTest {
             listOf(ForceField { throw CancellationException("stop") }),
         )
 
-        assertFailsWith<CancellationException> {
+        try {
             worker.execute(claimed)
+            fail("Expected CancellationException")
+        } catch (cancelled: CancellationException) {
+            assertEquals("stop", cancelled.message)
         }
         assertEquals(TaskState.INTERRUPTED, tasks.get(claimed.id)?.state)
     }
@@ -132,8 +135,11 @@ class CognitiveTaskWorkerTest {
         val claimed = claimedTask(tasks, WorkerId("other-worker"), photon.id)
         val worker = worker(tasks, photons, emptyList())
 
-        assertFailsWith<IllegalArgumentException> {
+        try {
             worker.execute(claimed)
+            fail("Expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+            // Expected: the worker must never execute another worker's lease.
         }
     }
 
