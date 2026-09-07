@@ -35,7 +35,14 @@ class LanguageGoalCapabilityRouterTest {
     @Test
     fun `scene compiler alone still leaves rasterization as honest blocking gap`() = runTest {
         val registry = CapabilityRegistry()
-        registry.register(descriptor("scene.construct.procedural", "scene-core", outputs = setOf("scene-graph")))
+        registry.register(
+            descriptor(
+                "scene.construct.procedural",
+                "scene-core",
+                inputs = setOf("goal-photon"),
+                outputs = setOf("scene-graph"),
+            )
+        )
         registry.register(
             descriptor(
                 "image.render.mmsi",
@@ -55,7 +62,14 @@ class LanguageGoalCapabilityRouterTest {
     @Test
     fun `image creation becomes routable only when all three image stages satisfy contracts`() = runTest {
         val registry = CapabilityRegistry()
-        registry.register(descriptor("scene.construct.procedural", "scene-core", outputs = setOf("scene-graph")))
+        registry.register(
+            descriptor(
+                "scene.construct.procedural",
+                "scene-core",
+                inputs = setOf("goal-photon"),
+                outputs = setOf("scene-graph"),
+            )
+        )
         registry.register(
             descriptor(
                 "scene.rasterize.mmsi",
@@ -78,6 +92,26 @@ class LanguageGoalCapabilityRouterTest {
         assertTrue(result.ready)
         assertTrue(result.gaps.isEmpty())
         assertEquals(3, result.selectedProviders.size)
+    }
+
+    @Test
+    fun `scene construction contract mismatch is exposed instead of silently selected`() = runTest {
+        val registry = CapabilityRegistry()
+        registry.register(
+            descriptor(
+                "scene.construct.procedural",
+                "broken-scene-core",
+                inputs = setOf("goal-photon", "scene-template"),
+                outputs = setOf("scene-graph"),
+            )
+        )
+
+        val result = LanguageGoalCapabilityRouter(registry).route(goal(IntentType.CREATE_IMAGE))
+
+        assertTrue(result.gaps.any {
+            it.requirement.capabilityId == CapabilityId("scene.construct.procedural") &&
+                it.type == CapabilityGapType.CONTRACT_MISMATCH
+        })
     }
 
     @Test
