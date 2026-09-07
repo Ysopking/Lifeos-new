@@ -16,7 +16,7 @@ class CognitiveRuntime(
     private val scope: CoroutineScope,
     private val fieldRegistry: FieldRegistry,
     private val influenceExecutor: InfluenceExecutor,
-) {
+) : LifeOsRuntime {
     constructor(
         scope: CoroutineScope,
         fields: List<ForceField>,
@@ -29,9 +29,9 @@ class CognitiveRuntime(
     private val queue = Channel<Photon>(Channel.BUFFERED)
     private var worker: Job? = null
     private val mutableState = MutableStateFlow(RuntimeState())
-    val state: StateFlow<RuntimeState> = mutableState.asStateFlow()
+    override val state: StateFlow<RuntimeState> = mutableState.asStateFlow()
 
-    fun start() {
+    override fun start() {
         if (worker?.isActive == true) return
         mutableState.update { it.copy(status = RuntimeStatus.STARTING) }
         val next = scope.launch {
@@ -77,14 +77,14 @@ class CognitiveRuntime(
         }
     }
 
-    fun stop() {
+    override fun stop() {
         mutableState.update { it.copy(status = RuntimeStatus.STOPPING) }
         worker?.cancel()
         worker = null
         mutableState.update { it.copy(status = RuntimeStatus.STOPPED) }
     }
 
-    suspend fun ingest(photon: Photon) {
+    override suspend fun ingest(photon: Photon) {
         queue.send(photon)
     }
 }
