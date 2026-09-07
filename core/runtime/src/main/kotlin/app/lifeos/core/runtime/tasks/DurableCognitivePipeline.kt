@@ -5,6 +5,7 @@ import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskDraft
 import app.lifeos.core.model.task.TaskPriority
 import app.lifeos.core.model.task.TaskType
+import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
 
 interface DurableProcessingPipeline {
     fun start()
@@ -18,13 +19,16 @@ interface DurableProcessingPipeline {
 class DurableCognitivePipeline(
     private val taskEngine: DurableTaskEngine,
     private val schedulerLoop: TaskSchedulerLoop,
+    private val recoveryLoop: LeaseRecoveryLoop,
 ) : DurableProcessingPipeline {
     override fun start() {
+        recoveryLoop.start()
         schedulerLoop.start()
     }
 
     override suspend fun stop() {
         schedulerLoop.stop()
+        recoveryLoop.stop()
     }
 
     override suspend fun submitPhoton(
