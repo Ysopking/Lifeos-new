@@ -32,7 +32,8 @@ private fun LifeOsApp(model: LifeOsViewModel) {
     val runtime by model.runtimeState.collectAsStateWithLifecycle()
     val matrix by model.matrixState.collectAsStateWithLifecycle()
     val health by model.healthState.collectAsStateWithLifecycle()
-    val safeMode by model.safeModeReasons.collectAsStateWithLifecycle()
+    val protection by model.healthProtection.collectAsStateWithLifecycle()
+    val safeMode = protection.safeReasons
     var query by rememberSaveable { mutableStateOf("") }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
     val visible = remember(state.photons, query) {
@@ -49,6 +50,10 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                     "Geschützter Modus: automatische Verarbeitung pausiert. Gedanken und Diagnose bleiben verfügbar.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (safeMode.isNotEmpty()) TextButton(onClick = model::resumeProcessing,
+                    enabled = !state.recovering && !state.loading) {
+                    Text(if (state.recovering) "Wird geprüft …" else "Prüfen und Verarbeitung fortsetzen")
+                }
                 OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), label = { Text("Gedanken durchsuchen") }, singleLine = true)
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (state.loading) item { Text("Gedanken werden geladen …") }
@@ -70,7 +75,7 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                     }
                 }
                 OutlinedTextField(state.draft, model::editDraft, Modifier.fillMaxWidth(), label = { Text("Neuer Gedanke") }, maxLines = 4, enabled = !state.saving)
-                Button(model::saveDraft, Modifier.fillMaxWidth(), enabled = state.draft.isNotBlank() && !state.loading && !state.loadFailed && !state.saving) {
+                Button(model::saveDraft, Modifier.fillMaxWidth(), enabled = state.draft.isNotBlank() && !state.loading && !state.loadFailed && !state.saving && !state.recovering) {
                     Text(if (state.saving) "Wird gespeichert …" else "Gedanken speichern")
                 }
                 TextButton(onClick = { diagnostics = !diagnostics }) { Text(if (diagnostics) "Diagnose schließen" else "Diagnose") }

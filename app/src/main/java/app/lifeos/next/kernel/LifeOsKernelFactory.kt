@@ -37,7 +37,9 @@ class LifeOsKernelFactory(
         val store = EncryptedPhotonStore(appContext)
         val matrix = ThoughtMatrix()
         val registry = StaticFieldRegistry(listOf(matrix))
-        val health = app.lifeos.core.runtime.health.RecoveryCoordinator()
+        val health = app.lifeos.core.runtime.health.RecoveryCoordinator(
+            controls = app.lifeos.core.runtime.health.HealthControlRepository(EncryptedHealthControlStore(appContext)),
+        )
         val executor = InfluenceExecutor(health)
 
         val taskRepository = EncryptedTaskRepository(appContext)

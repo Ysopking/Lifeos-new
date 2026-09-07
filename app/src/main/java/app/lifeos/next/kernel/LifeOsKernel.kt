@@ -6,6 +6,13 @@ import app.lifeos.core.runtime.LifeOsRuntime
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.health.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.first
 import app.lifeos.core.runtime.ThoughtMatrix
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -35,6 +42,7 @@ class LifeOsKernel internal constructor(
 ) {
     private val startLock = Any()
     private var bootstrapJob: Job? = null
+    private val recoveryMutex = Mutex()
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
     val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
@@ -100,7 +108,38 @@ class LifeOsKernel internal constructor(
         scope.cancel()
     }
 
-    private suspend fun bootstrap() {
+    /** User-requested resumption of boot protection only; module quarantine needs its own repair. */
+    suspend fun resumeAfterVerification(): Boolean = withContext(Dispatchers.Default) {
+        recoveryMutex.withLock {
+            val snapshot = health.controls.snapshot()
+            val resumable = setOf("BootLoop", "BootGuard", "BootstrapRuntime")
+            if (snapshot.quarantined.isNotEmpty() || snapshot.safeReasons.isEmpty() ||
+                !resumable.containsAll(snapshot.safeReasons)) return@withLock false
+            synchronized(startLock) { bootstrapJob }.let { it?.cancelAndJoin() }
+            val released = health.verifyAndRelease(snapshot.safeReasons) {
+                withTimeout(15_000) {
+                    supervisor.stop()
+                    runtime.state.first { it.status == app.lifeos.core.runtime.RuntimeStatus.STOPPED ||
+                        it.status == app.lifeos.core.runtime.RuntimeStatus.CREATED }
+                    val report = photonStore.loadReport()
+                    check(report.unreadableFiles.isEmpty()) { "Vault verification failed" }
+                    durableResources.taskRepository.listRunnable(java.time.Instant.now(), 100)
+                    durableResources.taskRepository.listExpiredLeases(java.time.Instant.now(), 100)
+                    // Runtime starts with its schedulers still paused by safe mode.
+                    supervisor.start()
+                    check(runtime.state.value.running)
+                    bootGuard.markStable()
+                    bootGuard.begin() // Arm the next stability window before releasing boot protection.
+                }
+            }
+            if (released) synchronized(startLock) {
+                bootstrapJob = scope.launch { bootstrap(countAttempt = false) }
+            }
+            released
+        }
+    }
+
+    private suspend fun bootstrap(countAttempt: Boolean = true) {
         mutableBootstrapState.update {
             it.copy(
                 status = KernelBootstrapStatus.LOADING,
@@ -109,8 +148,9 @@ class LifeOsKernel internal constructor(
         }
 
         try {
+            health.restoreProtection()
             try {
-                if (bootGuard.begin()) health.safeMode.enter("BootLoop")
+                if (countAttempt && bootGuard.begin()) health.safeMode.enter("BootLoop")
             } catch (error: Exception) {
                 health.safeMode.enter("BootGuard")
             }

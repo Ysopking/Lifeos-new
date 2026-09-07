@@ -7,15 +7,40 @@ class ComponentUnavailable(val node: HealthNode) : IllegalStateException("Compon
 
 /** One attempt per call; existing durable-task retry policy retains ownership of task retries. */
 class RecoveryCoordinator(
+    val controls: HealthControlRepository = HealthControlRepository(),
     val graph: HealthGraph = HealthGraph(),
-    val safeMode: SafeModeController = SafeModeController(),
-    val quarantine: QuarantineRegistry = QuarantineRegistry(),
+    val safeMode: SafeModeController = SafeModeController(controls),
+    val quarantine: QuarantineRegistry = QuarantineRegistry(controls),
     private val classifier: FailureClassifier = FailureClassifier(),
     private val breakerFactory: () -> CircuitBreaker = { CircuitBreaker() },
 ) {
     private val transitionLock = Any()
     private val breakers = mutableMapOf<String, CircuitBreaker>()
-    @Synchronized private fun breaker(node: HealthNode) = breakers.getOrPut(node.id, breakerFactory)
+    private fun breaker(node: HealthNode) = synchronized(transitionLock) {
+        breakers.getOrPut(node.id, breakerFactory)
+    }
+
+    fun restoreProtection() {
+        controls.snapshot().quarantined.forEach {
+            graph.record(HealthNode(it), HealthState.QUARANTINED, "restored-protection")
+        }
+    }
+
+    /** Probe while protection stays active. A newer protection decision invalidates the release. */
+    suspend fun verifyAndRelease(targets: Set<String>, probe: suspend () -> Unit): Boolean {
+        require(targets.isNotEmpty())
+        val before = controls.snapshot()
+        probe()
+        return synchronized(transitionLock) {
+            if (!controls.releaseVerified(before.revision, targets)) false else {
+                targets.forEach { id ->
+                    breakers.remove(id)
+                    graph.record(HealthNode(id), HealthState.UNKNOWN, "verified-release-awaiting-operation")
+                }
+                true
+            }
+        }
+    }
 
     suspend fun <T> execute(node: HealthNode, action: suspend () -> T): T {
         val circuit = breaker(node)

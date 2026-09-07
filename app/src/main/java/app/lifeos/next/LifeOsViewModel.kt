@@ -18,6 +18,7 @@ data class LifeOsState(
     val draft: String = "",
     val loading: Boolean = true,
     val saving: Boolean = false,
+    val recovering: Boolean = false,
     val loadFailed: Boolean = false,
     val unreadable: Int = 0,
     val error: String? = null,
@@ -31,7 +32,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     val runtimeState = kernel.runtime.state
     val matrixState = kernel.matrix.state
     val healthState = kernel.health.graph.states
-    val safeModeReasons = kernel.health.safeMode.reasons
+    val healthProtection = kernel.health.controls.changes
 
     init {
         observeKernel()
@@ -55,13 +56,28 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         kernel.retryBootstrap()
     }
 
+    fun resumeProcessing() {
+        if (mutableState.value.recovering || mutableState.value.loading) return
+        mutableState.update { it.copy(recovering = true) }
+        viewModelScope.launch {
+            try {
+                val resumed = kernel.resumeAfterVerification()
+                if (!resumed) mutableState.update { it.copy(error =
+                    "Schutz bleibt aktiv. Eine Komponente benötigt eine gesonderte Reparatur oder die Prüfung wurde überholt.") }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                mutableState.update { it.copy(error = "Prüfung fehlgeschlagen. Schutz bleibt aktiv; Inhalte bleiben erhalten.") }
+            } finally { mutableState.update { it.copy(recovering = false) } }
+        }
+    }
+
     fun dismissError() {
         mutableState.update { it.copy(error = null) }
     }
 
     fun saveDraft() {
         val current = mutableState.value
-        if (current.loading || current.loadFailed || current.saving || current.draft.isBlank()) return
+        if (current.loading || current.loadFailed || current.saving || current.recovering || current.draft.isBlank()) return
 
         val photon = Photon(
             content = current.draft.trim(),
