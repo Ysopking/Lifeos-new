@@ -1,6 +1,6 @@
 package app.lifeos.core.image.nativebackend
 
-import android.system.Os
+import android.os.ParcelFileDescriptor
 import java.io.Closeable
 
 /**
@@ -22,7 +22,7 @@ class MmsiSyncFence internal constructor(
         val current = descriptor
         descriptor = -1
         if (current >= 0) {
-            runCatching { Os.close(current) }
+            runCatching { ParcelFileDescriptor.adoptFd(current).close() }
         }
     }
 
