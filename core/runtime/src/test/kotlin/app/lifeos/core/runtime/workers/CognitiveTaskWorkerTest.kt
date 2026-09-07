@@ -32,7 +32,7 @@ class CognitiveTaskWorkerTest {
         val photons = FakePhotonRepository()
         val photon = photon()
         photons.save(photon)
-        val claimed = claimedTask(tasks, workerId, photon.id)
+        val claimed = claimedTask(tasks, workerId, photon.id, expectedRevision = photon.revision)
         val worker = worker(
             tasks,
             photons,
@@ -58,12 +58,64 @@ class CognitiveTaskWorkerTest {
     }
 
     @Test
+    fun newerStoredRevisionSupersedesPinnedOlderTaskWithoutRunningFields() = runTest {
+        val tasks = InMemoryTaskRepository()
+        val photons = FakePhotonRepository()
+        val original = photon()
+        photons.save(original.copy(revision = 2))
+        val claimed = claimedTask(
+            tasks = tasks,
+            owner = workerId,
+            photonId = original.id,
+            expectedRevision = 1,
+        )
+        var executions = 0
+        val worker = worker(
+            tasks,
+            photons,
+            listOf(
+                ForceField {
+                    executions += 1
+                    null
+                }
+            ),
+        )
+
+        val result = worker.execute(claimed)
+
+        assertEquals(TaskState.SUPERSEDED, result.finalState)
+        assertEquals(TaskState.SUPERSEDED, tasks.get(claimed.id)?.state)
+        assertEquals(0, executions)
+        assertEquals(emptyList(), result.failures)
+    }
+
+    @Test
+    fun olderStoredRevisionFailsPinnedNewerTask() = runTest {
+        val tasks = InMemoryTaskRepository()
+        val photons = FakePhotonRepository()
+        val stored = photon()
+        photons.save(stored)
+        val claimed = claimedTask(
+            tasks = tasks,
+            owner = workerId,
+            photonId = stored.id,
+            expectedRevision = 2,
+        )
+        val worker = worker(tasks, photons, emptyList())
+
+        val result = worker.execute(claimed)
+
+        assertEquals(TaskState.FAILED, result.finalState)
+        assertEquals(RuntimeFailureCategory.STORAGE, result.failures.single().category)
+    }
+
+    @Test
     fun fieldFailureMarksTaskFailedButHealthyFieldStillRuns() = runTest {
         val tasks = InMemoryTaskRepository()
         val photons = FakePhotonRepository()
         val photon = photon()
         photons.save(photon)
-        val claimed = claimedTask(tasks, workerId, photon.id)
+        val claimed = claimedTask(tasks, workerId, photon.id, expectedRevision = photon.revision)
         val worker = worker(
             tasks,
             photons,
@@ -95,7 +147,7 @@ class CognitiveTaskWorkerTest {
         val tasks = InMemoryTaskRepository()
         val photons = FakePhotonRepository()
         val missingId = PhotonId.new()
-        val claimed = claimedTask(tasks, workerId, missingId)
+        val claimed = claimedTask(tasks, workerId, missingId, expectedRevision = 1)
         val worker = worker(tasks, photons, emptyList())
 
         val result = worker.execute(claimed)
@@ -110,7 +162,7 @@ class CognitiveTaskWorkerTest {
         val photons = FakePhotonRepository()
         val photon = photon()
         photons.save(photon)
-        val claimed = claimedTask(tasks, workerId, photon.id)
+        val claimed = claimedTask(tasks, workerId, photon.id, expectedRevision = photon.revision)
         val worker = worker(
             tasks,
             photons,
@@ -132,7 +184,7 @@ class CognitiveTaskWorkerTest {
         val photons = FakePhotonRepository()
         val photon = photon()
         photons.save(photon)
-        val claimed = claimedTask(tasks, WorkerId("other-worker"), photon.id)
+        val claimed = claimedTask(tasks, WorkerId("other-worker"), photon.id, expectedRevision = photon.revision)
         val worker = worker(tasks, photons, emptyList())
 
         try {
@@ -153,6 +205,7 @@ class CognitiveTaskWorkerTest {
             tasks = tasks,
             owner = workerId,
             photonId = photon.id,
+            expectedRevision = photon.revision,
             acquiredAt = t0.minusSeconds(60),
             leaseUntil = t0.minusSeconds(30),
         )
@@ -184,13 +237,15 @@ class CognitiveTaskWorkerTest {
         tasks: InMemoryTaskRepository,
         owner: WorkerId,
         photonId: PhotonId,
+        expectedRevision: Long?,
         acquiredAt: Instant = t0,
         leaseUntil: Instant = t0.plusSeconds(30),
     ): LifeTask {
         val task = LifeTask(
             type = TaskType.PROCESS_PHOTON,
             inputPhotonIds = setOf(photonId),
-            idempotencyKey = "process:${photonId.value}:r1",
+            inputPhotonRevisions = expectedRevision?.let { mapOf(photonId to it) } ?: emptyMap(),
+            idempotencyKey = "process:${photonId.value}:r${expectedRevision ?: "legacy"}",
             createdAt = acquiredAt,
             updatedAt = acquiredAt,
         )
