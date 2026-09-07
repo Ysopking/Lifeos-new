@@ -81,7 +81,7 @@ class BootCoordinator(
             val matrix = thoughtMatrixWarmup.warmup()
             val capabilities = capabilityWarmup.warmup()
 
-            val preDeltaContext = BootContext(
+            val context = BootContext(
                 stores = stores,
                 runtimeState = runtimeState,
                 photons = photons,
@@ -91,29 +91,29 @@ class BootCoordinator(
             )
 
             transition(BootState.ANALYZING_DELTAS)
-            val deltaCount = deltaDetector.detect(preDeltaContext)
+            val deltaCount = deltaDetector.detect(context)
             require(deltaCount >= 0) { "Detected delta count must not be negative" }
             snapshot = snapshot.copy(detectedDeltaCount = deltaCount)
 
             transition(BootState.VALIDATING)
-            when (val validation = validator.validate(preDeltaContext)) {
+            when (val validation = validator.validate(context)) {
                 BootValidationResult.Ready -> {
                     transition(BootState.READY)
-                    BootRunResult.Ready(snapshot)
+                    BootRunResult.Ready(snapshot, context)
                 }
 
                 is BootValidationResult.Degraded -> {
                     transition(BootState.DEGRADED) {
                         it.copy(warnings = it.warnings + validation.limitations.sorted())
                     }
-                    BootRunResult.Degraded(snapshot)
+                    BootRunResult.Degraded(snapshot, context)
                 }
 
                 is BootValidationResult.RecoveryRequired -> {
                     transition(BootState.RECOVERING) {
                         it.copy(failures = it.failures + validation.failures)
                     }
-                    BootRunResult.RecoveryRequired(snapshot)
+                    BootRunResult.RecoveryRequired(snapshot, context)
                 }
 
                 is BootValidationResult.Fatal -> {

@@ -11,6 +11,23 @@ import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.StaticFieldRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
+import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.CapabilityWarmup
+import app.lifeos.core.runtime.boot.CapabilityWarmupResult
+import app.lifeos.core.runtime.boot.CompositeBootDeltaDetector
+import app.lifeos.core.runtime.boot.CompositeStoreVerifier
+import app.lifeos.core.runtime.boot.DefaultBootValidator
+import app.lifeos.core.runtime.boot.ModuleRehydrator
+import app.lifeos.core.runtime.boot.ModuleRestoreSummary
+import app.lifeos.core.runtime.boot.PhotonRehydrator
+import app.lifeos.core.runtime.boot.RehydratedRuntimeState
+import app.lifeos.core.runtime.boot.RuntimeBootstrapper
+import app.lifeos.core.runtime.boot.StateRehydrator
+import app.lifeos.core.runtime.boot.StoreProbe
+import app.lifeos.core.runtime.boot.StoreState
+import app.lifeos.core.runtime.boot.StoreStatus
+import app.lifeos.core.runtime.boot.ThoughtMatrixWarmup
+import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
 import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
@@ -21,12 +38,13 @@ import app.lifeos.core.runtime.tasks.TaskSchedulerLoop
 import app.lifeos.core.runtime.workers.CognitiveTaskWorker
 import app.lifeos.core.runtime.workers.ReportingCognitiveTaskDispatcher
 import java.time.Duration
+import java.time.Instant
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 
-/** Single composition point for the current process-level LIFEOS runtime graph. */
+/** Single composition point for the process-level LIFEOS runtime and boot graph. */
 class LifeOsKernelFactory(
     private val context: Context,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
@@ -91,11 +109,65 @@ class LifeOsKernelFactory(
             stateBridge = durableStateBridge,
         )
         val supervisor = RuntimeSupervisor(durableRuntime)
-        val durableResources = DurableRuntimeResources(
-            runtime = durableRuntime,
-            taskRepository = taskRepository,
-            checkpointRepository = checkpointRepository,
-            leaseRecovery = leaseRecovery,
+
+        val bootCoordinator = BootCoordinator(
+            runtimeBootstrapper = object : RuntimeBootstrapper {
+                override suspend fun bootstrap() = Unit
+            },
+            storeVerifier = CompositeStoreVerifier(
+                probes = listOf(
+                    object : StoreProbe {
+                        override val storeId: String = "photon-store"
+
+                        override suspend fun probe(): StoreStatus {
+                            val report = store.loadReport()
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.unreadableFiles.isEmpty()) {
+                                    StoreState.HEALTHY
+                                } else {
+                                    StoreState.PARTIALLY_RECOVERABLE
+                                },
+                                message = if (report.unreadableFiles.isEmpty()) {
+                                    null
+                                } else {
+                                    "unreadable:${report.unreadableFiles.size}"
+                                },
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "task-store"
+
+                        override suspend fun probe(): StoreStatus {
+                            val now = Instant.now()
+                            taskRepository.listRunnable(now, limit = 1)
+                            taskRepository.listExpiredLeases(now, limit = 1)
+                            return StoreStatus(storeId, StoreState.HEALTHY)
+                        }
+                    },
+                )
+            ),
+            stateRehydrator = object : StateRehydrator {
+                override suspend fun rehydrate(): RehydratedRuntimeState {
+                    recoverExpiredLeases(leaseRecovery)
+                    return RehydratedRuntimeState()
+                }
+            },
+            photonRehydrator = PhotonRehydrator(store),
+            moduleRehydrator = object : ModuleRehydrator {
+                override suspend fun rehydrate() = ModuleRestoreSummary(
+                    restored = registry.activeFields().size,
+                )
+            },
+            thoughtMatrixWarmup = object : ThoughtMatrixWarmup {
+                override suspend fun warmup() = ThoughtMatrixWarmupResult()
+            },
+            capabilityWarmup = object : CapabilityWarmup {
+                override suspend fun warmup() = CapabilityWarmupResult()
+            },
+            deltaDetector = CompositeBootDeltaDetector(emptyList()),
+            validator = DefaultBootValidator(),
         )
 
         return LifeOsKernel(
@@ -104,11 +176,19 @@ class LifeOsKernelFactory(
             photonStore = store,
             supervisor = supervisor,
             scope = scope,
-            durableResources = durableResources,
+            bootCoordinator = bootCoordinator,
         )
     }
 
+    private suspend fun recoverExpiredLeases(recovery: LeaseRecoveryService) {
+        while (true) {
+            val result = recovery.recoverExpired(LEASE_RECOVERY_BATCH_SIZE)
+            if (result.scanned < LEASE_RECOVERY_BATCH_SIZE || result.recovered == 0) return
+        }
+    }
+
     private companion object {
+        const val LEASE_RECOVERY_BATCH_SIZE = 100
         val TASK_LEASE_DURATION: Duration = Duration.ofSeconds(30)
         val HEARTBEAT_INTERVAL: Duration = Duration.ofSeconds(10)
         val LEASE_RECOVERY_INTERVAL: Duration = Duration.ofSeconds(30)

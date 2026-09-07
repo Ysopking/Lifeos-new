@@ -5,6 +5,9 @@ import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.ThoughtMatrix
+import app.lifeos.core.runtime.boot.BootContext
+import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootRunResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -15,19 +18,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/**
- * Process-level owner for the current LIFEOS runtime graph.
- *
- * Bootstrap is kept here so stored photons are replayed at most once during a
- * normal process lifetime instead of once per ViewModel instance.
- */
+/** Process-level owner for the LIFEOS runtime graph and its deterministic boot lifecycle. */
 class LifeOsKernel internal constructor(
     val runtime: LifeOsRuntime,
     val matrix: ThoughtMatrix,
     val photonStore: PhotonRepository,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
-    private val durableResources: DurableRuntimeResources,
+    private val bootCoordinator: BootCoordinator,
 ) {
     private val startLock = Any()
     private var bootstrapJob: Job? = null
@@ -99,29 +97,55 @@ class LifeOsKernel internal constructor(
         mutableBootstrapState.update {
             it.copy(
                 status = KernelBootstrapStatus.LOADING,
+                warnings = emptyList(),
                 failureMessage = null,
             )
         }
 
         try {
-            val report = photonStore.loadReport()
-            recoverExpiredLeases()
-            supervisor.start()
-            report.photons.forEach { runtime.ingest(it) }
-            mutableBootstrapState.value = KernelBootstrapState(
-                status = KernelBootstrapStatus.READY,
-                photons = report.photons,
-                unreadableFiles = report.unreadableFiles.size,
-            )
+            when (val result = bootCoordinator.boot()) {
+                is BootRunResult.Ready -> completeBoot(
+                    context = result.context,
+                    warnings = result.snapshot.warnings,
+                    degraded = false,
+                )
+
+                is BootRunResult.Degraded -> completeBoot(
+                    context = result.context,
+                    warnings = result.snapshot.warnings,
+                    degraded = true,
+                )
+
+                is BootRunResult.RecoveryRequired -> {
+                    mutableBootstrapState.value = KernelBootstrapState(
+                        status = KernelBootstrapStatus.FAILED,
+                        unreadableFiles = result.context.photons.unreadableFiles.size,
+                        warnings = result.snapshot.warnings,
+                        failureMessage = result.snapshot.failures
+                            .joinToString("; ")
+                            .ifBlank { "Runtime recovery is required" },
+                    )
+                }
+
+                is BootRunResult.Failed -> {
+                    mutableBootstrapState.value = KernelBootstrapState(
+                        status = KernelBootstrapStatus.FAILED,
+                        warnings = result.snapshot.warnings,
+                        failureMessage = result.cause.message ?: result.cause::class.simpleName,
+                    )
+                }
+            }
         } catch (cancelled: CancellationException) {
             mutableBootstrapState.update {
                 it.copy(
                     status = KernelBootstrapStatus.CREATED,
+                    warnings = emptyList(),
                     failureMessage = null,
                 )
             }
             throw cancelled
         } catch (error: Exception) {
+            runCatching { supervisor.stop() }
             mutableBootstrapState.update {
                 it.copy(
                     status = KernelBootstrapStatus.FAILED,
@@ -131,14 +155,25 @@ class LifeOsKernel internal constructor(
         }
     }
 
-    private suspend fun recoverExpiredLeases() {
-        while (true) {
-            val result = durableResources.leaseRecovery.recoverExpired(LEASE_RECOVERY_BATCH_SIZE)
-            if (result.scanned < LEASE_RECOVERY_BATCH_SIZE || result.recovered == 0) return
-        }
-    }
+    private suspend fun completeBoot(
+        context: BootContext,
+        warnings: List<String>,
+        degraded: Boolean,
+    ) {
+        val displayReport = photonStore.loadReport()
+        supervisor.start()
 
-    private companion object {
-        const val LEASE_RECOVERY_BATCH_SIZE = 100
+        val runtimePhotons = context.photons.hot + context.photons.warm
+        runtimePhotons.forEach { runtime.ingest(it) }
+
+        mutableBootstrapState.value = KernelBootstrapState(
+            status = if (degraded) KernelBootstrapStatus.DEGRADED else KernelBootstrapStatus.READY,
+            photons = displayReport.photons,
+            unreadableFiles = maxOf(
+                displayReport.unreadableFiles.size,
+                context.photons.unreadableFiles.size,
+            ),
+            warnings = warnings,
+        )
     }
 }
