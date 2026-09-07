@@ -21,6 +21,58 @@ class SpectralReconstructor(
         val coefficients: DoubleArray,
     )
 
+    /** Affine RGB -> regularized spectral-basis coefficient transform for one incident spectrum. */
+    data class CoefficientProjection(
+        val bias: DoubleArray,
+        val rgbToCoefficients: Array<DoubleArray>,
+    ) {
+        val componentCount: Int get() = bias.size
+
+        init {
+            require(bias.isNotEmpty())
+            require(rgbToCoefficients.size == bias.size)
+            require(rgbToCoefficients.all { it.size == 3 })
+            require(bias.all { it.isFinite() })
+            require(rgbToCoefficients.all { row -> row.all { it.isFinite() } })
+        }
+
+        fun project(rgb: RgbSample): DoubleArray = DoubleArray(componentCount) { component ->
+            bias[component] +
+                rgbToCoefficients[component][0] * rgb.r +
+                rgbToCoefficients[component][1] * rgb.g +
+                rgbToCoefficients[component][2] * rgb.b
+        }
+    }
+
+    /** Affine spectral-basis coefficient -> linear RGB transform for one target illuminant. */
+    data class RgbProjection(
+        val meanRgb: DoubleArray,
+        val coefficientsToRgb: Array<DoubleArray>,
+    ) {
+        val componentCount: Int get() = coefficientsToRgb.firstOrNull()?.size ?: 0
+
+        init {
+            require(meanRgb.size == 3)
+            require(coefficientsToRgb.size == 3)
+            require(componentCount > 0)
+            require(coefficientsToRgb.all { it.size == componentCount })
+            require(meanRgb.all { it.isFinite() })
+            require(coefficientsToRgb.all { row -> row.all { it.isFinite() } })
+        }
+
+        fun project(coefficients: DoubleArray): RgbSample {
+            require(coefficients.size == componentCount)
+            val rgb = DoubleArray(3) { channel ->
+                var value = meanRgb[channel]
+                for (component in coefficients.indices) {
+                    value += coefficientsToRgb[channel][component] * coefficients[component]
+                }
+                value.coerceIn(0.0, 1.0)
+            }
+            return RgbSample(rgb[0], rgb[1], rgb[2])
+        }
+    }
+
     init {
         require(smoothnessGamma >= 0.0)
         require(ridge > 0.0)
@@ -37,30 +89,14 @@ class SpectralReconstructor(
 
         val sensors = sensorResponse.curves(grid)
         val channels = doubleArrayOf(linearRgb.r, linearRgb.g, linearRgb.b)
-        val a = Array(3) { DoubleArray(basis.size) }
-        val base = DoubleArray(3)
-
-        for (channel in 0..2) {
-            val normalization = integrateProduct(sensors[channel], incident.values, null).coerceAtLeast(1e-12)
-            base[channel] = integrateProduct(sensors[channel], incident.values, mean) / normalization
-            for (component in basis.indices) {
-                a[channel][component] = integrateProduct(sensors[channel], incident.values, basis[component]) / normalization
-            }
-        }
-
+        val a = responseMatrix(incident, mean, basis, sensors)
+        val base = meanResponse(incident, mean, sensors)
         val rhs = DoubleArray(3) { channels[it] - base[it] }
-        val normal = Array(basis.size) { DoubleArray(basis.size) }
+        val normal = regularizedNormalMatrix(a, basis)
         val projected = DoubleArray(basis.size)
 
         for (i in basis.indices) {
             for (channel in 0..2) projected[i] += a[channel][i] * rhs[channel]
-            for (j in basis.indices) {
-                var value = 0.0
-                for (channel in 0..2) value += a[channel][i] * a[channel][j]
-                value += smoothnessGamma * curvatureInnerProduct(basis[i], basis[j])
-                if (i == j) value += ridge
-                normal[i][j] = value
-            }
         }
 
         val coefficients = solveLinearSystem(normal, projected)
@@ -92,8 +128,88 @@ class SpectralReconstructor(
         )
     }
 
+    /**
+     * Precomputes the exact affine coefficient transform of this regularized solver for a fixed
+     * incident spectrum. Four solver evaluations are enough because the inverse system is linear
+     * in RGB after the regularization matrix has been fixed.
+     */
+    fun coefficientProjection(incident: SpectralCurve): CoefficientProjection {
+        require(incident.grid == grid)
+        val zero = reconstruct(RgbSample(0.0, 0.0, 0.0), incident).coefficients
+        val unitR = reconstruct(RgbSample(1.0, 0.0, 0.0), incident).coefficients
+        val unitG = reconstruct(RgbSample(0.0, 1.0, 0.0), incident).coefficients
+        val unitB = reconstruct(RgbSample(0.0, 0.0, 1.0), incident).coefficients
+        val matrix = Array(zero.size) { component ->
+            doubleArrayOf(
+                unitR[component] - zero[component],
+                unitG[component] - zero[component],
+                unitB[component] - zero[component],
+            )
+        }
+        return CoefficientProjection(zero.copyOf(), matrix)
+    }
+
+    /**
+     * Precomputes the spectral-basis -> linear RGB transform for a target illuminant. This lets
+     * the GPU carry compact basis coefficients instead of all sampled wavelength bands.
+     */
+    fun rgbProjection(illuminant: SpectralCurve): RgbProjection {
+        require(illuminant.grid == grid)
+        require(illuminant.values.any { it > 0.0 }) { "Illuminant must contain energy" }
+        val mean = basisLibrary.mean(grid)
+        val basis = basisLibrary.components(grid)
+        val sensors = sensorResponse.curves(grid)
+        val base = meanResponse(illuminant, mean, sensors)
+        val matrix = responseMatrix(illuminant, mean, basis, sensors)
+        return RgbProjection(
+            meanRgb = base,
+            coefficientsToRgb = Array(3) { channel -> matrix[channel].copyOf() },
+        )
+    }
+
     fun predictRgb(reflectance: DoubleArray, incident: SpectralCurve): RgbSample =
         predictRgb(reflectance, incident, sensorResponse.curves(grid))
+
+    private fun responseMatrix(
+        incident: SpectralCurve,
+        mean: DoubleArray,
+        basis: List<DoubleArray>,
+        sensors: Array<DoubleArray>,
+    ): Array<DoubleArray> {
+        require(mean.size == grid.bandCount)
+        val matrix = Array(3) { DoubleArray(basis.size) }
+        for (channel in 0..2) {
+            val normalization = integrateProduct(sensors[channel], incident.values, null).coerceAtLeast(1e-12)
+            for (component in basis.indices) {
+                matrix[channel][component] = integrateProduct(
+                    sensors[channel],
+                    incident.values,
+                    basis[component],
+                ) / normalization
+            }
+        }
+        return matrix
+    }
+
+    private fun meanResponse(
+        incident: SpectralCurve,
+        mean: DoubleArray,
+        sensors: Array<DoubleArray>,
+    ): DoubleArray = DoubleArray(3) { channel ->
+        val normalization = integrateProduct(sensors[channel], incident.values, null).coerceAtLeast(1e-12)
+        integrateProduct(sensors[channel], incident.values, mean) / normalization
+    }
+
+    private fun regularizedNormalMatrix(a: Array<DoubleArray>, basis: List<DoubleArray>): Array<DoubleArray> =
+        Array(basis.size) { i ->
+            DoubleArray(basis.size) { j ->
+                var value = 0.0
+                for (channel in 0..2) value += a[channel][i] * a[channel][j]
+                value += smoothnessGamma * curvatureInnerProduct(basis[i], basis[j])
+                if (i == j) value += ridge
+                value
+            }
+        }
 
     private fun predictRgb(
         reflectance: DoubleArray,
