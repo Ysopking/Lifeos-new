@@ -39,6 +39,26 @@ interface TaskRepository {
         startedAt: Instant,
     ): LifeTask?
 
+    suspend fun finishExecution(
+        id: TaskId,
+        workerId: WorkerId,
+        finalState: TaskState,
+        finishedAt: Instant,
+    ): LifeTask?
+
+    suspend fun interruptExecution(
+        id: TaskId,
+        workerId: WorkerId,
+        interruptedAt: Instant,
+    ): LifeTask?
+
+    suspend fun scheduleRetry(
+        id: TaskId,
+        workerId: WorkerId,
+        retryAt: Instant,
+        scheduledAt: Instant,
+    ): LifeTask?
+
     suspend fun renewLease(
         id: TaskId,
         workerId: WorkerId,
