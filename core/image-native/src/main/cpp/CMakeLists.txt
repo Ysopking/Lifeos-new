@@ -4,6 +4,7 @@ project(lifeos_mmsi_native LANGUAGES CXX)
 add_library(lifeos_mmsi_native SHARED
     mmsi_native.cpp
     vulkan_probe.cpp
+    vulkan_dispatch.cpp
 )
 
 target_compile_features(lifeos_mmsi_native PRIVATE cxx_std_20)
