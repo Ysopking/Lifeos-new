@@ -119,7 +119,11 @@ class InMemoryTaskRepository : TaskRepository {
     ): LifeTask? = mutex.withLock {
         require(leaseUntil.isAfter(renewedAt)) { "Renewed task lease must expire after renewal" }
         val current = tasks[id] ?: return@withLock null
-        if (current.state !in LEASED_STATES || current.claimedBy != workerId) {
+        if (
+            current.state !in LEASED_STATES ||
+            current.claimedBy != workerId ||
+            current.leaseExpiresAt?.isAfter(renewedAt) != true
+        ) {
             return@withLock null
         }
 
