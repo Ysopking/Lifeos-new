@@ -169,6 +169,35 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
         renewed
     }
 
+    override suspend fun interruptExpiredLease(
+        id: TaskId,
+        expectedState: TaskState,
+        expectedWorkerId: WorkerId,
+        expectedLeaseExpiresAt: Instant,
+        at: Instant,
+    ): LifeTask? = ioLocked {
+        require(expectedState in LEASED_STATES) { "Expected state must hold a worker lease" }
+        val current = readTaskIfPresentInternal(id) ?: return@ioLocked null
+        if (
+            current.state != expectedState ||
+            current.claimedBy != expectedWorkerId ||
+            current.leaseExpiresAt != expectedLeaseExpiresAt ||
+            current.leaseExpiresAt?.isAfter(at) != false
+        ) {
+            return@ioLocked null
+        }
+
+        TaskStateMachine.requireTransition(expectedState, TaskState.INTERRUPTED)
+        val interrupted = current.copy(
+            state = TaskState.INTERRUPTED,
+            updatedAt = at,
+            claimedBy = null,
+            leaseExpiresAt = null,
+        )
+        writeTaskInternal(interrupted)
+        interrupted
+    }
+
     private suspend fun <T> ioLocked(block: () -> T): T = withContext(Dispatchers.IO) {
         mutex.withLock { block() }
     }
