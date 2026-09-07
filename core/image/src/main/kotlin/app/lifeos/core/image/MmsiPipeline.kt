@@ -4,7 +4,6 @@ import java.time.Instant
 import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.pow
-import kotlin.math.sqrt
 
 enum class MmsiBackend { CPU_REFERENCE, NATIVE_SIMD, VULKAN_COMPUTE }
 
@@ -54,6 +53,14 @@ data class IntrinsicMaterialSample(
     val effectiveLight: Double,
 )
 
+private fun stableHalfVector(light: SolarVector, view: SolarVector): SolarVector {
+    val x = light.x + view.x
+    val y = light.y + view.y
+    val z = light.z + view.z
+    val lengthSquared = x * x + y * y + z * z
+    return if (lengthSquared <= 1e-12) view.normalized() else SolarVector(x, y, z).normalized()
+}
+
 /** Phase 1: deterministic inverse radiometry with GGX-based specular removal. */
 class InverseRadiometryPass {
     fun execute(observation: MaterialObservation, context: DeLightingContext): IntrinsicMaterialSample {
@@ -61,8 +68,7 @@ class InverseRadiometryPass {
         val l = context.sunDirection.normalized()
         val v = context.viewDirection.normalized()
         val nDotL = max(0.001, n.dot(l) * observation.sunVisibility)
-        val hRaw = SolarVector(l.x + v.x, l.y + v.y, l.z + v.z)
-        val h = hRaw.normalized()
+        val h = stableHalfVector(l, v)
         val nDotH = max(0.0, n.dot(h))
         val nDotV = max(0.001, n.dot(v))
         val rough = max(0.04, observation.roughness)
@@ -156,7 +162,7 @@ class ForwardSynthesisPass(
         val n = pixel.normal.normalized()
         val l = context.sunDirection.normalized()
         val v = SolarVector(0.0, 0.0, 1.0)
-        val h = SolarVector(l.x + v.x, l.y + v.y, l.z + v.z).normalized()
+        val h = stableHalfVector(l, v)
         val nDotL = max(0.0, n.dot(l))
         val nDotV = max(0.001, n.dot(v))
         val nDotH = max(0.0, n.dot(h))
