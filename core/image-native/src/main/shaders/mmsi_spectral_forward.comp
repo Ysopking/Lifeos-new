@@ -1,0 +1,138 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+const float PI = 3.14159265358979323846;
+
+// Two vec4 blocks per pixel: [c0,c1,c2,c3] and [c4,c5,0,0].
+layout(std430, binding = 0) readonly buffer SpectralCoefficientBuffer {
+    vec4 coefficientBlocks[];
+};
+
+layout(std430, binding = 1) readonly buffer NormalDepthBuffer {
+    vec4 normalDepth[];
+};
+
+layout(std430, binding = 2) readonly buffer RoughnessBuffer {
+    float roughness[];
+};
+
+layout(std430, binding = 3) writeonly buffer OutputBuffer {
+    vec4 outputColor[];
+};
+
+layout(std140, binding = 4) uniform SpectralSynthesisParams {
+    vec4 sunDirectionAndSolidAngle;
+    vec4 sunColor;
+    vec4 skyAmbientColor;
+    uvec2 resolution;
+    float shadowFloor;
+    float _padding;
+    vec4 meanRgb;
+    vec4 coefficientRgb0;
+    vec4 coefficientRgb1;
+    vec4 coefficientRgb2;
+    vec4 coefficientRgb3;
+    vec4 coefficientRgb4;
+    vec4 coefficientRgb5;
+} params;
+
+float fresnelSchlick(float cosTheta, float f0) {
+    return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+float geometrySchlickGGX(float nDotV, float rough) {
+    float r = rough + 1.0;
+    float k = (r * r) / 8.0;
+    return nDotV / max(nDotV * (1.0 - k) + k, 1e-5);
+}
+
+float geometrySmith(vec3 n, vec3 v, vec3 l, float rough) {
+    float nDotV = max(dot(n, v), 0.0);
+    float nDotL = max(dot(n, l), 0.0);
+    return geometrySchlickGGX(nDotV, rough) * geometrySchlickGGX(nDotL, rough);
+}
+
+float screenSpaceSoftShadow(uvec2 pixel, vec3 lightDir, float lightAngle) {
+    vec4 source = normalDepth[pixel.y * params.resolution.x + pixel.x];
+    float sourceDepth = source.w;
+    float visibility = 1.0;
+    float tangent = tan(max(lightAngle, 1e-4));
+
+    for (int step = 1; step <= 24; ++step) {
+        float t = float(step) * 0.015;
+        vec2 offset = lightDir.xy * t * vec2(params.resolution);
+        ivec2 samplePixel = ivec2(pixel) + ivec2(round(offset));
+        if (samplePixel.x < 0 || samplePixel.y < 0 ||
+            samplePixel.x >= int(params.resolution.x) || samplePixel.y >= int(params.resolution.y)) {
+            break;
+        }
+        uint sampleIndex = uint(samplePixel.y) * params.resolution.x + uint(samplePixel.x);
+        float occluderDepth = normalDepth[sampleIndex].w;
+        float expectedDepth = sourceDepth + lightDir.z * t;
+        float delta = expectedDepth - occluderDepth;
+        if (delta > 0.001) {
+            float coneRadius = max(t * tangent, 1e-4);
+            float intersection = clamp(delta / coneRadius, 0.0, 1.0);
+            visibility = min(visibility, 1.0 - intersection);
+        }
+    }
+    return max(visibility, params.shadowFloor);
+}
+
+vec3 acesToneMap(vec3 color) {
+    vec3 a = color * (2.51 * color + vec3(0.03));
+    vec3 b = color * (2.43 * color + vec3(0.59)) + vec3(0.14);
+    return clamp(a / b, 0.0, 1.0);
+}
+
+vec3 spectralBaseColor(uint pixelIndex) {
+    vec4 head = coefficientBlocks[pixelIndex * 2u];
+    vec4 tail = coefficientBlocks[pixelIndex * 2u + 1u];
+    vec3 color = params.meanRgb.rgb;
+    color += head.x * params.coefficientRgb0.rgb;
+    color += head.y * params.coefficientRgb1.rgb;
+    color += head.z * params.coefficientRgb2.rgb;
+    color += head.w * params.coefficientRgb3.rgb;
+    color += tail.x * params.coefficientRgb4.rgb;
+    color += tail.y * params.coefficientRgb5.rgb;
+    return clamp(color, vec3(0.0), vec3(1.0));
+}
+
+void main() {
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= params.resolution.x || pixel.y >= params.resolution.y) return;
+
+    uint index = pixel.y * params.resolution.x + pixel.x;
+    vec3 baseColor = spectralBaseColor(index);
+    vec4 nd = normalDepth[index];
+    vec3 n = normalize(nd.xyz);
+    float rough = clamp(roughness[index], 0.04, 1.0);
+
+    vec3 l = normalize(params.sunDirectionAndSolidAngle.xyz);
+    vec3 v = vec3(0.0, 0.0, 1.0);
+    vec3 hRaw = l + v;
+    vec3 h = dot(hRaw, hRaw) <= 1e-10 ? v : normalize(hRaw);
+
+    float nDotL = max(dot(n, l), 0.0);
+    float nDotV = max(dot(n, v), 0.001);
+    float nDotH = max(dot(n, h), 0.0);
+    float hDotV = max(dot(h, v), 0.0);
+    float a = rough * rough;
+    float a2 = a * a;
+    float denom = nDotH * nDotH * (a2 - 1.0) + 1.0;
+    float d = a2 / max(PI * denom * denom, 1e-6);
+    float g = geometrySmith(n, v, l, rough);
+    float f = fresnelSchlick(hDotV, 0.04);
+    float specular = (d * g * f) / (4.0 * nDotV * max(nDotL, 0.001) + 1e-4);
+    float kd = 1.0 - f;
+
+    float shadow = screenSpaceSoftShadow(pixel, l, params.sunDirectionAndSolidAngle.w);
+    vec3 direct = (kd * baseColor / PI + vec3(specular)) * params.sunColor.rgb * nDotL * shadow;
+    float ao = clamp(0.35 + 0.65 * n.z, 0.0, 1.0);
+    vec3 ambient = baseColor * params.skyAmbientColor.rgb * ao;
+
+    vec3 mapped = acesToneMap(max(direct + ambient, vec3(0.0)));
+    vec3 srgb = pow(mapped, vec3(1.0 / 2.2));
+    outputColor[index] = vec4(srgb, 1.0);
+}
