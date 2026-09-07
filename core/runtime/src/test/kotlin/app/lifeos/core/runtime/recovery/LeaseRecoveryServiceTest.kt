@@ -37,14 +37,7 @@ class LeaseRecoveryServiceTest {
     fun currentLeaseIsLeftUntouched() = runTest {
         val repository = InMemoryTaskRepository()
         val task = queuedTask(repository, "current")
-        val claimed = checkNotNull(
-            repository.claim(
-                task.id,
-                WorkerId("worker"),
-                now.minusSeconds(5),
-                now.plusSeconds(30),
-            )
-        )
+        val claimed = checkNotNull(repository.claim(task.id, WorkerId("worker"), now.minusSeconds(5), now.plusSeconds(30)))
         val signal = RecordingSignal()
         val service = LeaseRecoveryService(repository, signal) { now }
 
@@ -59,14 +52,7 @@ class LeaseRecoveryServiceTest {
     fun completedTaskIsNeverRecovered() = runTest {
         val repository = InMemoryTaskRepository()
         val running = expiredRunningTask(repository, "completed")
-        val completed = checkNotNull(
-            repository.transition(
-                running.id,
-                TaskState.RUNNING,
-                TaskState.COMPLETED,
-                now.minusSeconds(1),
-            )
-        )
+        val completed = checkNotNull(repository.transition(running.id, TaskState.RUNNING, TaskState.COMPLETED, now.minusSeconds(1)))
         val signal = RecordingSignal()
         val service = LeaseRecoveryService(repository, signal) { now }
 
@@ -77,49 +63,18 @@ class LeaseRecoveryServiceTest {
         assertEquals(0, signal.wakes)
     }
 
-    private suspend fun expiredRunningTask(
-        repository: InMemoryTaskRepository,
-        key: String,
-    ): LifeTask {
+    private suspend fun expiredRunningTask(repository: InMemoryTaskRepository, key: String): LifeTask {
         val queued = queuedTask(repository, key)
-        val claimed = checkNotNull(
-            repository.claim(
-                queued.id,
-                WorkerId("old-worker"),
-                now.minusSeconds(60),
-                now.minusSeconds(30),
-            )
-        )
-        return checkNotNull(
-            repository.transition(
-                claimed.id,
-                TaskState.CLAIMED,
-                TaskState.RUNNING,
-                now.minusSeconds(50),
-            )
-        )
+        val worker = WorkerId("old-worker")
+        val claimed = checkNotNull(repository.claim(queued.id, worker, now.minusSeconds(60), now.minusSeconds(30)))
+        return checkNotNull(repository.startExecution(claimed.id, worker, now.minusSeconds(50)))
     }
 
-    private suspend fun queuedTask(
-        repository: InMemoryTaskRepository,
-        key: String,
-    ): LifeTask {
+    private suspend fun queuedTask(repository: InMemoryTaskRepository, key: String): LifeTask {
         val createdAt = now.minusSeconds(120)
-        val task = LifeTask(
-            type = TaskType.PROCESS_PHOTON,
-            idempotencyKey = key,
-            createdAt = createdAt,
-            updatedAt = createdAt,
-        )
+        val task = LifeTask(type = TaskType.PROCESS_PHOTON, idempotencyKey = key, createdAt = createdAt, updatedAt = createdAt)
         repository.create(task)
-        return checkNotNull(
-            repository.transition(
-                task.id,
-                TaskState.CREATED,
-                TaskState.QUEUED,
-                createdAt,
-            )
-        )
+        return checkNotNull(repository.transition(task.id, TaskState.CREATED, TaskState.QUEUED, createdAt))
     }
 
     private class RecordingSignal : TaskSchedulerSignal {

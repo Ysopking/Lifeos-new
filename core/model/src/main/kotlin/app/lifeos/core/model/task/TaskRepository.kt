@@ -33,6 +33,12 @@ interface TaskRepository {
         leaseUntil: Instant,
     ): LifeTask?
 
+    suspend fun startExecution(
+        id: TaskId,
+        workerId: WorkerId,
+        startedAt: Instant,
+    ): LifeTask?
+
     suspend fun renewLease(
         id: TaskId,
         workerId: WorkerId,

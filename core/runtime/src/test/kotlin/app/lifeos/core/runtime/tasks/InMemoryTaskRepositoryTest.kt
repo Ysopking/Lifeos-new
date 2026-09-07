@@ -199,16 +199,25 @@ class InMemoryTaskRepositoryTest {
     @Test
     fun terminalTransitionClearsWorkerLease() = runTest {
         val repository = InMemoryTaskRepository()
+        val worker = WorkerId("worker-a")
         val task = task("lease-cleared")
         repository.create(task)
         repository.transition(task.id, TaskState.CREATED, TaskState.QUEUED, t0.plusSeconds(1))
-        repository.claim(
-            task.id,
-            WorkerId("worker-a"),
-            t0.plusSeconds(2),
-            t0.plusSeconds(32),
+        val claimed = checkNotNull(
+            repository.claim(
+                task.id,
+                worker,
+                t0.plusSeconds(2),
+                t0.plusSeconds(32),
+            )
         )
-        repository.transition(task.id, TaskState.CLAIMED, TaskState.RUNNING, t0.plusSeconds(3))
+        checkNotNull(
+            repository.startExecution(
+                id = claimed.id,
+                workerId = worker,
+                startedAt = t0.plusSeconds(3),
+            )
+        )
         val completed = repository.transition(
             task.id,
             TaskState.RUNNING,
@@ -237,11 +246,10 @@ class InMemoryTaskRepositoryTest {
             )
         )
         return checkNotNull(
-            repository.transition(
-                claimed.id,
-                TaskState.CLAIMED,
-                TaskState.RUNNING,
-                t0.plusSeconds(3),
+            repository.startExecution(
+                id = claimed.id,
+                workerId = worker,
+                startedAt = t0.plusSeconds(3),
             )
         )
     }

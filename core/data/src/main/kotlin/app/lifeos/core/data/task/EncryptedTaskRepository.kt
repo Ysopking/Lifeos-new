@@ -113,6 +113,9 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
         at: Instant,
     ): LifeTask? = ioLocked {
         require(next != TaskState.CLAIMED) { "Use claim() for QUEUED -> CLAIMED" }
+        require(!(expected == TaskState.CLAIMED && next == TaskState.RUNNING)) {
+            "Use startExecution() for CLAIMED -> RUNNING"
+        }
         val current = readTaskIfPresentInternal(id) ?: return@ioLocked null
         if (current.state != expected) return@ioLocked null
 
@@ -147,6 +150,31 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
         )
         writeTaskInternal(claimed)
         claimed
+    }
+
+    override suspend fun startExecution(
+        id: TaskId,
+        workerId: WorkerId,
+        startedAt: Instant,
+    ): LifeTask? = ioLocked {
+        val current = readTaskIfPresentInternal(id) ?: return@ioLocked null
+        if (
+            current.state != TaskState.CLAIMED ||
+            current.claimedBy != workerId ||
+            current.leaseExpiresAt?.isAfter(startedAt) != true ||
+            current.attempt >= current.maxAttempts
+        ) {
+            return@ioLocked null
+        }
+
+        TaskStateMachine.requireTransition(TaskState.CLAIMED, TaskState.RUNNING)
+        val running = current.copy(
+            state = TaskState.RUNNING,
+            attempt = current.attempt + 1,
+            updatedAt = startedAt,
+        )
+        writeTaskInternal(running)
+        running
     }
 
     override suspend fun renewLease(

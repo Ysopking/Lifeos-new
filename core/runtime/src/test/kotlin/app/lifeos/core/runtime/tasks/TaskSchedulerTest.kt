@@ -36,13 +36,9 @@ class TaskSchedulerTest {
     fun retryWaitTaskIsNormalizedBeforeClaim() = runTest {
         val repository = InMemoryTaskRepository()
         val task = queuedTask(repository, "retry")
-        repository.claim(
-            task.id,
-            WorkerId("old-worker"),
-            t0,
-            t0.plusSeconds(30),
-        )
-        repository.transition(task.id, TaskState.CLAIMED, TaskState.RUNNING, t0)
+        val oldWorker = WorkerId("old-worker")
+        val claimed = checkNotNull(repository.claim(task.id, oldWorker, t0, t0.plusSeconds(30)))
+        checkNotNull(repository.startExecution(claimed.id, oldWorker, t0))
         repository.transition(task.id, TaskState.RUNNING, TaskState.RETRY_WAIT, t0)
 
         val dispatched = mutableListOf<LifeTask>()
@@ -112,13 +108,6 @@ class TaskSchedulerTest {
             updatedAt = t0,
         )
         repository.create(task)
-        return checkNotNull(
-            repository.transition(
-                task.id,
-                TaskState.CREATED,
-                TaskState.QUEUED,
-                t0,
-            )
-        )
+        return checkNotNull(repository.transition(task.id, TaskState.CREATED, TaskState.QUEUED, t0))
     }
 }
