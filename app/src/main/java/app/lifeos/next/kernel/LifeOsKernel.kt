@@ -8,6 +8,16 @@ import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootContext
 import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootRunResult
+import app.lifeos.core.runtime.cognition.CognitiveOutcomeJournal
+import app.lifeos.core.runtime.cognition.CognitivePriority
+import app.lifeos.core.runtime.cognition.CognitiveTriggerSink
+import app.lifeos.core.runtime.cognition.CognitiveWorkBudget
+import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
+import app.lifeos.core.runtime.cognition.PhotonDelta
+import app.lifeos.core.runtime.cognition.PhotonDeltaType
+import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
+import app.lifeos.core.runtime.cognition.SalienceVector
+import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -23,9 +33,13 @@ class LifeOsKernel internal constructor(
     val runtime: LifeOsRuntime,
     val matrix: ThoughtMatrix,
     val photonStore: PhotonRepository,
+    val photonTransactions: PhotonTransactionJournal,
+    val cognitiveOutcomes: CognitiveOutcomeJournal,
+    val cognitiveTriggers: CognitiveTriggerSink,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
+    private val continuousCognition: ContinuousCognitionEngine,
 ) {
     private val startLock = Any()
     private var bootstrapJob: Job? = null
@@ -59,6 +73,7 @@ class LifeOsKernel internal constructor(
     }
 
     suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult {
+        val previous = photonStore.load(photon.id)
         photonStore.save(photon)
         mutableBootstrapState.update { current ->
             val photons = (current.photons.filterNot { it.id == photon.id } + photon)
@@ -67,10 +82,34 @@ class LifeOsKernel internal constructor(
         }
 
         return try {
-            runtime.ingest(photon)
+            val submission = continuousCognition.submit(
+                delta = PhotonDelta(
+                    source = "kernel-live-submit",
+                    photonId = photon.id,
+                    revisionBefore = previous?.revision,
+                    revisionAfter = photon.revision,
+                    type = if (previous == null) PhotonDeltaType.CREATED else PhotonDeltaType.UPDATED,
+                    importanceHint = photon.semanticMass,
+                    timestamp = photon.provenance.createdAt,
+                    correlationId = photon.id.value,
+                ),
+                priority = CognitivePriority.USER_BLOCKING,
+                salience = SalienceVector(
+                    novelty = if (previous == null) 1.0 else 0.25,
+                    relevance = 1.0,
+                    urgency = 1.0,
+                    semanticMass = photon.semanticMass,
+                    confidenceImpact = abs(photon.confidence - (previous?.confidence ?: 0.0)),
+                    goalAffinity = if ("chat" in photon.tags) 1.0 else 0.5,
+                ),
+                targetModules = setOf("Gedankenmatrix"),
+                budget = LIVE_SUBMISSION_BUDGET,
+            )
+            val durable = submission.accepted && submission.durableTaskId != null
             PhotonSubmissionResult(
                 photon = photon,
-                processingQueued = true,
+                processingQueued = durable,
+                processingFailure = if (durable) null else "Cognitive work was not durabilized",
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -174,6 +213,15 @@ class LifeOsKernel internal constructor(
                 context.photons.unreadableFiles.size,
             ),
             warnings = warnings,
+        )
+    }
+
+    private companion object {
+        val LIVE_SUBMISSION_BUDGET = CognitiveWorkBudget(
+            maxDurationMs = 30_000,
+            maxModuleInvocations = 16,
+            maxNewPhotons = 16,
+            maxNetworkCalls = 4,
         )
     }
 }

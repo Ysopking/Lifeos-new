@@ -28,6 +28,16 @@ import app.lifeos.core.runtime.boot.StoreState
 import app.lifeos.core.runtime.boot.StoreStatus
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmup
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
+import app.lifeos.core.runtime.cognition.CognitiveScheduler
+import app.lifeos.core.runtime.cognition.CompositeDurableTaskExecutionObserver
+import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
+import app.lifeos.core.runtime.cognition.DurableCognitionDispatcher
+import app.lifeos.core.runtime.cognition.InMemoryCognitiveEventJournal
+import app.lifeos.core.runtime.cognition.InMemoryCognitiveOutcomeJournal
+import app.lifeos.core.runtime.cognition.InMemoryCognitiveTriggerSink
+import app.lifeos.core.runtime.cognition.InMemoryPhotonTransactionJournal
+import app.lifeos.core.runtime.cognition.OutcomeTriggerObserver
+import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
 import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
@@ -35,7 +45,8 @@ import app.lifeos.core.runtime.tasks.DurableCognitivePipeline
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
 import app.lifeos.core.runtime.tasks.TaskScheduler
 import app.lifeos.core.runtime.tasks.TaskSchedulerLoop
-import app.lifeos.core.runtime.workers.CognitiveTaskWorker
+import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
+import app.lifeos.core.runtime.workers.CognitiveWorkerFactory
 import app.lifeos.core.runtime.workers.ReportingCognitiveTaskDispatcher
 import java.time.Duration
 import java.time.Instant
@@ -61,21 +72,44 @@ class LifeOsKernelFactory(
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
         val schedulerSignal = ConflatedTaskSchedulerSignal()
         val taskEngine = DurableTaskEngine(taskRepository, schedulerSignal)
+
+        val cognitiveEventJournal = InMemoryCognitiveEventJournal()
+        val cognitiveScheduler = CognitiveScheduler()
+        val continuousCognition = ContinuousCognitionEngine(
+            journal = cognitiveEventJournal,
+            scheduler = cognitiveScheduler,
+            durableDispatcher = DurableCognitionDispatcher(taskEngine),
+        )
+        val photonTransactions = InMemoryPhotonTransactionJournal()
+        val cognitiveOutcomes = InMemoryCognitiveOutcomeJournal()
+        val cognitiveTriggers = InMemoryCognitiveTriggerSink()
+
         val durableWorkerId = WorkerId("cognitive-worker-0")
-        val cognitiveWorker = CognitiveTaskWorker(
-            workerId = durableWorkerId,
+        val workerFactory = CognitiveWorkerFactory(
             tasks = taskRepository,
             photons = store,
             fields = registry,
             executor = executor,
             checkpoints = checkpointRepository,
-            leaseDuration = TASK_LEASE_DURATION,
-            heartbeatInterval = HEARTBEAT_INTERVAL,
+            config = CognitiveWorkerConfig(
+                leaseDuration = TASK_LEASE_DURATION,
+                heartbeatInterval = HEARTBEAT_INTERVAL,
+            ),
         )
+        val cognitiveWorker = workerFactory.create(durableWorkerId)
         val durableStateBridge = DurableRuntimeStateBridge()
         val reportingDispatcher = ReportingCognitiveTaskDispatcher(
             worker = cognitiveWorker,
-            observer = durableStateBridge,
+            observer = CompositeDurableTaskExecutionObserver(
+                listOf(
+                    durableStateBridge,
+                    PhotonTransactionObserver(photonTransactions),
+                    OutcomeTriggerObserver(
+                        outcomes = cognitiveOutcomes,
+                        triggers = cognitiveTriggers,
+                    ),
+                )
+            ),
         )
         val taskScheduler = TaskScheduler(
             tasks = taskRepository,
@@ -177,6 +211,10 @@ class LifeOsKernelFactory(
             supervisor = supervisor,
             scope = scope,
             bootCoordinator = bootCoordinator,
+            continuousCognition = continuousCognition,
+            photonTransactions = photonTransactions,
+            cognitiveOutcomes = cognitiveOutcomes,
+            cognitiveTriggers = cognitiveTriggers,
         )
     }
 

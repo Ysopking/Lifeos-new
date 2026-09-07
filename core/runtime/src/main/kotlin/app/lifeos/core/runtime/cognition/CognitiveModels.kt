@@ -73,10 +73,18 @@ data class CognitiveWorkItem(
     val enqueuedAt: Instant = Instant.now(),
     val targetModules: Set<String> = emptySet(),
     val budget: CognitiveWorkBudget,
+    val photonId: PhotonId? = null,
+    val photonRevision: Long? = null,
+    val deltaType: PhotonDeltaType? = null,
 ) {
     init {
         require(id.isNotBlank()) { "Work id must not be blank" }
         require(triggeringDeltaId.isNotBlank()) { "Triggering delta id must not be blank" }
         require(salience.isFinite() && salience >= 0.0) { "Salience must be finite and non-negative" }
+        require(photonRevision == null || photonRevision > 0) { "Photon revision must be positive" }
+        require(photonRevision == null || photonId != null) {
+            "Photon revision requires a photon id"
+        }
+        require(targetModules.none { it.isBlank() }) { "Target modules must not be blank" }
     }
 }
