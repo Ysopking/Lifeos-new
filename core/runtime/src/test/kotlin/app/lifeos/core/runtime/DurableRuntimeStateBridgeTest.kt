@@ -44,6 +44,29 @@ class DurableRuntimeStateBridgeTest {
     }
 
     @Test
+    fun supersededExecutionIsNeutralForProcessedAndFailedCounters() = runTest {
+        val bridge = DurableRuntimeStateBridge()
+        val photonId = PhotonId.new()
+        bridge.markRunning()
+
+        bridge.onExecutionResult(
+            CognitiveTaskExecutionResult(
+                taskId = TaskId.new(),
+                photonId = photonId,
+                finalState = TaskState.SUPERSEDED,
+                influences = emptyList(),
+                failures = emptyList(),
+            )
+        )
+
+        val state = bridge.state.value
+        assertEquals(RuntimeStatus.RUNNING, state.status)
+        assertEquals(0, state.processed)
+        assertEquals(0, state.failed)
+        assertEquals(photonId, state.lastPhotonId)
+    }
+
+    @Test
     fun failedExecutionUpdatesFailureWithoutIncrementingProcessed() = runTest {
         val bridge = DurableRuntimeStateBridge()
         val photonId = PhotonId.new()
