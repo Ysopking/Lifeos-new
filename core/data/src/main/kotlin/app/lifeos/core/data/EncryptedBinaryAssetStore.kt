@@ -124,8 +124,6 @@ class EncryptedBinaryAssetStore(context: Context) : BinaryAssetStore {
         }
     }
 
-    private fun ByteArrayInputStream.unused() = Unit
-
     private fun java.io.InputStream.readBytesLimited(maxBytes: Int): ByteArray {
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(8192)
