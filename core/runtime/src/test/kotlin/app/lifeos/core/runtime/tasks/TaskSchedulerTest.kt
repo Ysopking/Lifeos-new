@@ -39,7 +39,14 @@ class TaskSchedulerTest {
         val oldWorker = WorkerId("old-worker")
         val claimed = checkNotNull(repository.claim(task.id, oldWorker, t0, t0.plusSeconds(30)))
         checkNotNull(repository.startExecution(claimed.id, oldWorker, t0))
-        repository.transition(task.id, TaskState.RUNNING, TaskState.RETRY_WAIT, t0)
+        checkNotNull(
+            repository.scheduleRetry(
+                id = task.id,
+                workerId = oldWorker,
+                retryAt = t0,
+                scheduledAt = t0,
+            )
+        )
 
         val dispatched = mutableListOf<LifeTask>()
         val scheduler = scheduler(repository) { dispatched += it }
