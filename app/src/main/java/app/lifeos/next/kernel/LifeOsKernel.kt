@@ -12,6 +12,7 @@ import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootContext
 import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootRunResult
+import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.cognition.CognitiveOutcomeJournal
 import app.lifeos.core.runtime.cognition.CognitivePriority
 import app.lifeos.core.runtime.cognition.CognitiveTriggerSink
@@ -45,6 +46,7 @@ class LifeOsKernel internal constructor(
     private val languageUnderstanding: LanguageUnderstandingEngine,
     private val goalPhotonFactory: GoalPhotonFactory,
     private val languageContextBuilder: PhotonLanguageContextBuilder,
+    private val goalCapabilityRouter: LanguageGoalCapabilityRouter,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
@@ -82,8 +84,8 @@ class LifeOsKernel internal constructor(
     }
 
     /**
-     * Persists the user's exact utterance first, then derives a structured GoalPhoton from local,
-     * deterministic language understanding. The original text is never replaced by interpretation.
+     * Persists the user's exact utterance first, then derives a structured GoalPhoton and a
+     * capability-resolution decision. The original text is never replaced by interpretation.
      */
     suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
         require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
@@ -95,6 +97,7 @@ class LifeOsKernel internal constructor(
         val source = persistAndIngest(photon)
         return try {
             val understanding = languageUnderstanding.understand(photon.content, context)
+            val routing = goalCapabilityRouter.route(understanding.goal)
             val goalPhoton = goalPhotonFactory.create(
                 result = understanding,
                 sourcePhotonId = photon.id,
@@ -106,6 +109,7 @@ class LifeOsKernel internal constructor(
                 understanding = understanding,
                 goalPhoton = goalPhoton,
                 goal = goal,
+                routing = routing,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
