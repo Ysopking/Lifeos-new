@@ -14,6 +14,7 @@ class RuleBasedEntityExtractor {
         "red", "green", "blue", "yellow", "orange", "purple", "black", "white", "grey", "gray", "brown",
     )
     private val imageWords = setOf("bild", "bilder", "foto", "fotos", "grafik", "grafiken", "image", "images", "photo", "photos", "picture", "pictures")
+    private val personWords = setOf("mensch", "menschen", "person", "personen", "leute", "leuten", "mann", "frau", "people", "persons", "person", "man", "woman")
     private val actionWords = setOf(
         "spielen", "spielt", "laufend", "laufen", "sitzt", "sitzen", "steht", "stehen", "fliegt", "fahren",
         "playing", "play", "running", "run", "sitting", "sit", "standing", "stand", "flying", "driving",
@@ -29,7 +30,8 @@ class RuleBasedEntityExtractor {
         "today" to "relative:today", "yesterday" to "relative:yesterday", "tomorrow" to "relative:tomorrow",
     )
     private val fileRegex = Regex("(?i)([\\p{L}\\p{N}_ .-]+\\.(?:png|jpe?g|webp|pdf|txt|md|json|kt|java|cpp|h|apk))")
-    private val timeRegex = Regex("(?i)\\b(?:[01]?\\d|2[0-3])[:.]?[0-5]\\d\\b|\\b(?:[01]?\\d|2[0-3])\\s*(?:uhr|am|pm)\\b")
+    // A bare dot-separated HH.MM is intentionally not accepted because it is ambiguous with DD.MM dates.
+    private val timeRegex = Regex("(?i)(?<![\\d./-])(?:[01]?\\d|2[0-3]):[0-5]\\d(?![\\d./-])|\\b(?:[01]?\\d|2[0-3])\\s*(?:uhr|am|pm)\\b")
     private val dateRegex = Regex("\\b(?:0?[1-9]|[12]\\d|3[01])[./-](?:0?[1-9]|1[0-2])(?:[./-](?:19|20)\\d{2})?\\b")
 
     fun extract(utterance: NormalizedUtterance): List<SemanticEntity> {
@@ -42,6 +44,7 @@ class RuleBasedEntityExtractor {
             }
             if (word in colors) entities += entity(EntityType.COLOR, token.original, word, index, 0.98)
             if (word in imageWords) entities += entity(EntityType.IMAGE, token.original, "image", index, 0.99)
+            if (word in personWords) entities += entity(EntityType.PERSON, token.original, "person", index, 0.96)
             if (word in actionWords) entities += entity(EntityType.ACTION, token.original, word, index, 0.90)
             if (word in objectWords) entities += entity(EntityType.OBJECT, token.original, word, index, 0.92)
             if (word in styleWords) entities += entity(EntityType.STYLE, token.original, word, index, 0.96)
