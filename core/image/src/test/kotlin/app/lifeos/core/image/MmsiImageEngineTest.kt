@@ -39,6 +39,26 @@ class MmsiImageEngineTest {
     }
 
     @Test
+    fun antiparallelSunAndViewRemainNumericallyStable() {
+        val pass = InverseRadiometryPass()
+        val result = pass.execute(
+            observation = MaterialObservation(
+                srgb = RgbSample(0.25, 0.30, 0.35),
+                normal = SurfaceNormal(0.0, 0.0, 1.0),
+                roughness = 0.7,
+            ),
+            context = DeLightingContext(
+                sunDirection = SolarVector(0.0, 0.0, -1.0),
+                sunIntensity = 0.0,
+                ambientIntensity = 0.2,
+                viewDirection = SolarVector(0.0, 0.0, 1.0),
+            ),
+        )
+        assertTrue(result.linearDiffuseAlbedo.r in 0.0..1.0)
+        assertTrue(result.removedSpecular.isFinite())
+    }
+
+    @Test
     fun fullMmsiPipelineIsDeterministicAndBounded() {
         val engine = MmsiImageEngine()
         val request = MmsiImageEngine.Request(
