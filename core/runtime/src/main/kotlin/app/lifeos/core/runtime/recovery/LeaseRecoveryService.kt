@@ -26,10 +26,18 @@ class LeaseRecoveryService(
         var skipped = 0
 
         for (task in expired) {
-            val interrupted = tasks.transition(
+            val workerId = task.claimedBy
+            val leaseExpiresAt = task.leaseExpiresAt
+            if (workerId == null || leaseExpiresAt == null) {
+                skipped += 1
+                continue
+            }
+
+            val interrupted = tasks.interruptExpiredLease(
                 id = task.id,
-                expected = task.state,
-                next = TaskState.INTERRUPTED,
+                expectedState = task.state,
+                expectedWorkerId = workerId,
+                expectedLeaseExpiresAt = leaseExpiresAt,
                 at = recoveryTime,
             )
             if (interrupted == null) {
