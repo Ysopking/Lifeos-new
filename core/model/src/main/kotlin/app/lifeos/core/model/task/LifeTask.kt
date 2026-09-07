@@ -10,6 +10,7 @@ data class LifeTask(
     val state: TaskState = TaskState.CREATED,
     val priority: TaskPriority = TaskPriority.NORMAL,
     val inputPhotonIds: Set<PhotonId> = emptySet(),
+    val inputPhotonRevisions: Map<PhotonId, Long> = emptyMap(),
     val idempotencyKey: String,
     val attempt: Int = 0,
     val maxAttempts: Int = 3,
@@ -21,6 +22,12 @@ data class LifeTask(
 ) {
     init {
         require(idempotencyKey.isNotBlank()) { "Idempotency key must not be blank" }
+        require(inputPhotonRevisions.keys.all { it in inputPhotonIds }) {
+            "Pinned photon revisions must reference declared task inputs"
+        }
+        require(inputPhotonRevisions.values.all { it > 0 }) {
+            "Pinned photon revisions must be positive"
+        }
         require(attempt >= 0) { "Task attempt must not be negative" }
         require(maxAttempts > 0) { "Task maxAttempts must be positive" }
         require(attempt <= maxAttempts) { "Task attempt must not exceed maxAttempts" }
