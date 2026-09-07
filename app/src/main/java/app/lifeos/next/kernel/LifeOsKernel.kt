@@ -1,6 +1,6 @@
 package app.lifeos.next.kernel
 
-import app.lifeos.core.model.PhotonStore
+import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.ThoughtMatrix
@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
 class LifeOsKernel internal constructor(
     val runtime: LifeOsRuntime,
     val matrix: ThoughtMatrix,
-    val photonStore: PhotonStore,
+    val photonStore: PhotonRepository,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
 ) {
