@@ -5,13 +5,13 @@ import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
 import app.lifeos.core.model.worker.WorkerId
-import app.lifeos.core.runtime.CognitiveRuntime
 import app.lifeos.core.runtime.DurableLifeOsRuntime
 import app.lifeos.core.runtime.DurableRuntimeStateBridge
 import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.StaticFieldRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
+import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
 import app.lifeos.core.runtime.tasks.DurableCognitivePipeline
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
@@ -36,12 +36,6 @@ class LifeOsKernelFactory(
         val matrix = ThoughtMatrix()
         val registry = StaticFieldRegistry(listOf(matrix))
         val executor = InfluenceExecutor()
-        val runtime = CognitiveRuntime(
-            scope = scope,
-            fieldRegistry = registry,
-            influenceExecutor = executor,
-        )
-        val supervisor = RuntimeSupervisor(runtime)
 
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
@@ -76,14 +70,20 @@ class LifeOsKernelFactory(
             pipeline = durablePipeline,
             stateBridge = durableStateBridge,
         )
+        val supervisor = RuntimeSupervisor(durableRuntime)
+        val leaseRecovery = LeaseRecoveryService(
+            tasks = taskRepository,
+            schedulerSignal = schedulerSignal,
+        )
         val durableResources = DurableRuntimeResources(
             runtime = durableRuntime,
             taskRepository = taskRepository,
             checkpointRepository = checkpointRepository,
+            leaseRecovery = leaseRecovery,
         )
 
         return LifeOsKernel(
-            runtime = runtime,
+            runtime = durableRuntime,
             matrix = matrix,
             photonStore = store,
             supervisor = supervisor,
