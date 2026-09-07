@@ -96,11 +96,10 @@ class CognitiveTaskWorker(
             throw leaseLost
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                tasks.transition(
+                tasks.interruptExecution(
                     id = activeTask.id,
-                    expected = TaskState.RUNNING,
-                    next = TaskState.INTERRUPTED,
-                    at = now(),
+                    workerId = workerId,
+                    interruptedAt = now(),
                 )
             }
             throw cancelled
@@ -192,7 +191,7 @@ class CognitiveTaskWorker(
     }
 
     private suspend fun finish(task: LifeTask, work: WorkResult): CognitiveTaskExecutionResult {
-        val finalTask = transitionFinal(task, work.finalState)
+        val finalTask = finishOwnedExecution(task, work.finalState)
         return CognitiveTaskExecutionResult(
             taskId = finalTask.id,
             photonId = work.photonId,
@@ -278,13 +277,17 @@ class CognitiveTaskWorker(
         )
     }
 
-    private suspend fun transitionFinal(task: LifeTask, state: TaskState): LifeTask =
-        tasks.transition(
+    private suspend fun finishOwnedExecution(task: LifeTask, state: TaskState): LifeTask {
+        val finishedAt = now()
+        return tasks.finishExecution(
             id = task.id,
-            expected = TaskState.RUNNING,
-            next = state,
-            at = now(),
-        ) ?: error("Running task could not transition to $state: ${task.id.value}")
+            workerId = workerId,
+            finalState = state,
+            finishedAt = finishedAt,
+        ) ?: throw LeaseOwnershipLostException(
+            "Task execution ownership lost before $state: ${task.id.value}"
+        )
+    }
 
     private data class WorkResult(
         val photonId: PhotonId?,
