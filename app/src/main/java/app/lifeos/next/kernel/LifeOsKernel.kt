@@ -59,14 +59,29 @@ class LifeOsKernel internal constructor(
         supervisor.stop()
     }
 
-    suspend fun persistAndIngest(photon: Photon) {
+    suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult {
         photonStore.save(photon)
         mutableBootstrapState.update { current ->
             val photons = (current.photons.filterNot { it.id == photon.id } + photon)
                 .sortedBy { it.provenance.createdAt }
             current.copy(photons = photons)
         }
-        runtime.ingest(photon)
+
+        return try {
+            runtime.ingest(photon)
+            PhotonSubmissionResult(
+                photon = photon,
+                processingQueued = true,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            PhotonSubmissionResult(
+                photon = photon,
+                processingQueued = false,
+                processingFailure = error.message ?: error::class.simpleName,
+            )
+        }
     }
 
     /** Final process teardown hook; normal Activity/ViewModel destruction must not call this. */
