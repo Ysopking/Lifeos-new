@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#if defined(__aarch64__) || defined(__ARM_NEON)
+#if defined(__aarch64__)
 #include <arm_neon.h>
 #endif
 
@@ -79,7 +79,7 @@ inline void process_scalar_pixel(
     output[base + 2] = std::clamp((b - specular) / totalLight, 0.0f, 1.0f);
 }
 
-#if defined(__aarch64__) || defined(__ARM_NEON)
+#if defined(__aarch64__)
 void inverse_radiometry_neon(
     const std::uint8_t* rgb,
     const float* normals,
@@ -167,7 +167,7 @@ void inverse_radiometry(
     std::size_t count,
     const Context& ctx
 ) {
-#if defined(__aarch64__) || defined(__ARM_NEON)
+#if defined(__aarch64__)
     inverse_radiometry_neon(rgb, normals, roughness, output, count, ctx);
 #else
     float hx, hy, hz;
