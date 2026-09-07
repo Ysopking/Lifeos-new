@@ -11,7 +11,7 @@ import java.nio.charset.CodingErrorAction
 import java.time.Instant
 
 object TaskCodec {
-    const val VERSION = 1
+    const val VERSION = 2
     private const val MAX_BYTES = 1024 * 1024
     private const val MAX_ITEMS = 10_000
 
@@ -24,6 +24,14 @@ object TaskCodec {
 
             out.count(task.inputPhotonIds.size)
             task.inputPhotonIds.sortedBy { it.value }.forEach { out.text(it.value) }
+
+            out.count(task.inputPhotonRevisions.size)
+            task.inputPhotonRevisions.entries
+                .sortedBy { it.key.value }
+                .forEach { (photonId, revision) ->
+                    out.text(photonId.value)
+                    out.writeLong(revision)
+                }
 
             out.text(task.idempotencyKey)
             out.writeInt(task.attempt)
@@ -38,30 +46,56 @@ object TaskCodec {
     }.toByteArray()
 
     fun decode(bytes: ByteArray, version: Int = VERSION): LifeTask {
-        require(version == VERSION) { "Unsupported task format" }
+        require(version in 1..VERSION) { "Unsupported task format" }
         require(bytes.size <= MAX_BYTES) { "Task exceeds size limit" }
 
         return DataInputStream(ByteArrayInputStream(bytes)).use { input ->
-            val task = LifeTask(
-                id = TaskId(input.text()),
-                type = TaskType.valueOf(input.text()),
-                state = TaskState.valueOf(input.text()),
-                priority = TaskPriority.valueOf(input.text()),
-                inputPhotonIds = buildSet {
-                    repeat(input.count()) { add(PhotonId(input.text())) }
-                },
-                idempotencyKey = input.text(),
-                attempt = input.readInt(),
-                maxAttempts = input.readInt(),
-                createdAt = input.instant(),
-                updatedAt = input.instant(),
-                scheduledAt = input.optionalInstant(),
-                claimedBy = input.optionalText()?.let(::WorkerId),
-                leaseExpiresAt = input.optionalInstant(),
-            )
-            require(input.available() == 0) { "Trailing task data" }
-            task
+            val inputPhotonIds = buildSet {
+                val idCountReader: () -> Int
+                // Placeholder replaced below after fixed-width header fields are read.
+            }
+            error("unreachable")
         }
+    }
+
+    private fun decodeTask(input: DataInputStream, version: Int): LifeTask {
+        val id = TaskId(input.text())
+        val type = TaskType.valueOf(input.text())
+        val state = TaskState.valueOf(input.text())
+        val priority = TaskPriority.valueOf(input.text())
+
+        val inputPhotonIds = buildSet {
+            repeat(input.count()) { add(PhotonId(input.text())) }
+        }
+        val inputPhotonRevisions = if (version >= 2) {
+            buildMap {
+                repeat(input.count()) {
+                    val photonId = PhotonId(input.text())
+                    val revision = input.readLong()
+                    require(revision > 0) { "Invalid pinned photon revision" }
+                    require(put(photonId, revision) == null) { "Duplicate pinned photon revision" }
+                }
+            }
+        } else {
+            emptyMap()
+        }
+
+        return LifeTask(
+            id = id,
+            type = type,
+            state = state,
+            priority = priority,
+            inputPhotonIds = inputPhotonIds,
+            inputPhotonRevisions = inputPhotonRevisions,
+            idempotencyKey = input.text(),
+            attempt = input.readInt(),
+            maxAttempts = input.readInt(),
+            createdAt = input.instant(),
+            updatedAt = input.instant(),
+            scheduledAt = input.optionalInstant(),
+            claimedBy = input.optionalText()?.let(::WorkerId),
+            leaseExpiresAt = input.optionalInstant(),
+        )
     }
 
     private fun DataOutputStream.text(value: String) {
