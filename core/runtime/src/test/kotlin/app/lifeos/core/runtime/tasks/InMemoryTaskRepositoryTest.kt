@@ -58,6 +58,63 @@ class InMemoryTaskRepositoryTest {
     }
 
     @Test
+    fun currentOwnerCanRenewRunningLease() = runTest {
+        val repository = InMemoryTaskRepository()
+        val worker = WorkerId("worker-a")
+        val running = runningTask(repository, "renew", worker)
+
+        val renewed = repository.renewLease(
+            id = running.id,
+            workerId = worker,
+            renewedAt = t0.plusSeconds(10),
+            leaseUntil = t0.plusSeconds(40),
+        )
+
+        assertEquals(TaskState.RUNNING, renewed?.state)
+        assertEquals(worker, renewed?.claimedBy)
+        assertEquals(t0.plusSeconds(40), renewed?.leaseExpiresAt)
+    }
+
+    @Test
+    fun differentWorkerCannotRenewLease() = runTest {
+        val repository = InMemoryTaskRepository()
+        val running = runningTask(repository, "wrong-owner", WorkerId("worker-a"))
+
+        val renewed = repository.renewLease(
+            id = running.id,
+            workerId = WorkerId("worker-b"),
+            renewedAt = t0.plusSeconds(10),
+            leaseUntil = t0.plusSeconds(40),
+        )
+
+        assertNull(renewed)
+        assertEquals(t0.plusSeconds(32), repository.get(running.id)?.leaseExpiresAt)
+    }
+
+    @Test
+    fun recoveredTaskCannotBeResurrectedByLateHeartbeat() = runTest {
+        val repository = InMemoryTaskRepository()
+        val worker = WorkerId("worker-a")
+        val running = runningTask(repository, "recovery-wins", worker)
+        repository.transition(
+            running.id,
+            TaskState.RUNNING,
+            TaskState.INTERRUPTED,
+            t0.plusSeconds(33),
+        )
+
+        val renewed = repository.renewLease(
+            id = running.id,
+            workerId = worker,
+            renewedAt = t0.plusSeconds(34),
+            leaseUntil = t0.plusSeconds(64),
+        )
+
+        assertNull(renewed)
+        assertEquals(TaskState.INTERRUPTED, repository.get(running.id)?.state)
+    }
+
+    @Test
     fun runnableTasksAreOrderedByPriority() = runTest {
         val repository = InMemoryTaskRepository()
         val normal = task("normal", TaskPriority.NORMAL)
@@ -94,6 +151,32 @@ class InMemoryTaskRepositoryTest {
 
         assertNull(completed?.claimedBy)
         assertNull(completed?.leaseExpiresAt)
+    }
+
+    private suspend fun runningTask(
+        repository: InMemoryTaskRepository,
+        key: String,
+        worker: WorkerId,
+    ): LifeTask {
+        val task = task(key)
+        repository.create(task)
+        repository.transition(task.id, TaskState.CREATED, TaskState.QUEUED, t0.plusSeconds(1))
+        val claimed = checkNotNull(
+            repository.claim(
+                task.id,
+                worker,
+                t0.plusSeconds(2),
+                t0.plusSeconds(32),
+            )
+        )
+        return checkNotNull(
+            repository.transition(
+                claimed.id,
+                TaskState.CLAIMED,
+                TaskState.RUNNING,
+                t0.plusSeconds(3),
+            )
+        )
     }
 
     private fun task(
