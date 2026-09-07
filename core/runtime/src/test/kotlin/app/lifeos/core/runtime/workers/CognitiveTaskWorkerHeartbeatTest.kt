@@ -81,7 +81,7 @@ class CognitiveTaskWorkerHeartbeatTest {
     }
 
     @Test
-    fun recoveryWinningOwnershipPreventsOldWorkerFromFinishingTask() = runTest {
+    fun recoveryWinningOwnershipStopsOldWorkerWithoutCoroutineCancellationEscaping() = runTest {
         val tasks = InMemoryTaskRepository()
         val photons = FakePhotonRepository()
         val photon = photon()
@@ -137,9 +137,9 @@ class CognitiveTaskWorkerHeartbeatTest {
 
         try {
             execution.await()
-            fail("Expected lease-loss cancellation")
-        } catch (_: CancellationException) {
-            // Expected: the old worker must stop once its ownership is gone.
+            fail("Expected lease ownership loss")
+        } catch (error: Exception) {
+            assertTrue(error !is CancellationException)
         }
         assertEquals(TaskState.QUEUED, tasks.get(claimed.id)?.state)
     }
