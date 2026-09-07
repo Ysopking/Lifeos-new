@@ -58,8 +58,8 @@ class RecoveryCoordinatorTest {
         assertEquals(2, health.recent(nodeId).count { it.state != HealthState.QUARANTINED })
     }
 
-    private fun action(id: String, result: RecoveryActionResult) = object : RecoveryAction {
-        override val id: String = id
+    private fun action(actionId: String, result: RecoveryActionResult) = object : RecoveryAction {
+        override val id: String = actionId
         override suspend fun execute(): RecoveryActionResult = result
     }
 }
