@@ -20,6 +20,7 @@ import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -82,66 +83,68 @@ class CognitiveTaskWorkerHeartbeatTest {
 
     @Test
     fun recoveryWinningOwnershipStopsOldWorkerWithoutCoroutineCancellationEscaping() = runTest {
-        val tasks = InMemoryTaskRepository()
-        val photons = FakePhotonRepository()
-        val photon = photon()
-        photons.save(photon)
-        val claimed = claimedTask(tasks, photon)
-        val worker = CognitiveTaskWorker(
-            workerId = workerId,
-            tasks = tasks,
-            photons = photons,
-            fields = StaticFieldRegistry(
-                listOf(
-                    ForceField {
-                        delay(45_000)
-                        null
-                    }
+        supervisorScope {
+            val tasks = InMemoryTaskRepository()
+            val photons = FakePhotonRepository()
+            val photon = photon()
+            photons.save(photon)
+            val claimed = claimedTask(tasks, photon)
+            val worker = CognitiveTaskWorker(
+                workerId = workerId,
+                tasks = tasks,
+                photons = photons,
+                fields = StaticFieldRegistry(
+                    listOf(
+                        ForceField {
+                            delay(45_000)
+                            null
+                        }
+                    )
+                ),
+                executor = InfluenceExecutor(),
+                leaseDuration = Duration.ofSeconds(30),
+                heartbeatInterval = Duration.ofSeconds(10),
+                now = { t0.plusMillis(testScheduler.currentTime) },
+            )
+
+            val execution = async { worker.execute(claimed) }
+            runCurrent()
+
+            advanceTimeBy(5_000)
+            val interrupted = checkNotNull(
+                tasks.transition(
+                    claimed.id,
+                    TaskState.RUNNING,
+                    TaskState.INTERRUPTED,
+                    t0.plusSeconds(5),
                 )
-            ),
-            executor = InfluenceExecutor(),
-            leaseDuration = Duration.ofSeconds(30),
-            heartbeatInterval = Duration.ofSeconds(10),
-            now = { t0.plusMillis(testScheduler.currentTime) },
-        )
-
-        val execution = async { worker.execute(claimed) }
-        runCurrent()
-
-        advanceTimeBy(5_000)
-        val interrupted = checkNotNull(
-            tasks.transition(
-                claimed.id,
-                TaskState.RUNNING,
-                TaskState.INTERRUPTED,
-                t0.plusSeconds(5),
             )
-        )
-        val recovering = checkNotNull(
+            val recovering = checkNotNull(
+                tasks.transition(
+                    interrupted.id,
+                    TaskState.INTERRUPTED,
+                    TaskState.RECOVERING,
+                    t0.plusSeconds(5),
+                )
+            )
             tasks.transition(
-                interrupted.id,
-                TaskState.INTERRUPTED,
+                recovering.id,
                 TaskState.RECOVERING,
+                TaskState.QUEUED,
                 t0.plusSeconds(5),
             )
-        )
-        tasks.transition(
-            recovering.id,
-            TaskState.RECOVERING,
-            TaskState.QUEUED,
-            t0.plusSeconds(5),
-        )
 
-        advanceTimeBy(5_000)
-        runCurrent()
+            advanceTimeBy(5_000)
+            runCurrent()
 
-        try {
-            execution.await()
-            fail("Expected lease ownership loss")
-        } catch (error: Exception) {
-            assertTrue(error !is CancellationException)
+            try {
+                execution.await()
+                fail("Expected lease ownership loss")
+            } catch (error: Exception) {
+                assertTrue(error !is CancellationException)
+            }
+            assertEquals(TaskState.QUEUED, tasks.get(claimed.id)?.state)
         }
-        assertEquals(TaskState.QUEUED, tasks.get(claimed.id)?.state)
     }
 
     private suspend fun claimedTask(
