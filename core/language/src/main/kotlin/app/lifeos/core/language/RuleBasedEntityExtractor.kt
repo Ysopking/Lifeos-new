@@ -14,7 +14,7 @@ class RuleBasedEntityExtractor {
         "red", "green", "blue", "yellow", "orange", "purple", "black", "white", "grey", "gray", "brown",
     )
     private val imageWords = setOf("bild", "bilder", "foto", "fotos", "grafik", "grafiken", "image", "images", "photo", "photos", "picture", "pictures")
-    private val personWords = setOf("mensch", "menschen", "person", "personen", "leute", "mann", "frau", "people", "persons", "person", "man", "woman")
+    private val personWords = setOf("mensch", "menschen", "person", "personen", "leute", "leuten", "mann", "frau", "people", "persons", "person", "man", "woman")
     private val actionWords = setOf(
         "spielen", "spielt", "laufend", "laufen", "sitzt", "sitzen", "steht", "stehen", "fliegt", "fahren",
         "playing", "play", "running", "run", "sitting", "sit", "standing", "stand", "flying", "driving",
