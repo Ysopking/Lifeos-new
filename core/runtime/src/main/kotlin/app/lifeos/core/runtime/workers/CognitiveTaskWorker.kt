@@ -86,7 +86,8 @@ class CognitiveTaskWorker(
 
         return try {
             val work = when (activeTask.type) {
-                TaskType.PROCESS_PHOTON -> withLeaseHeartbeat(activeTask) {
+                TaskType.PROCESS_PHOTON,
+                TaskType.REPROCESS_PHOTON -> withLeaseHeartbeat(activeTask) {
                     processPhoton(activeTask)
                 }
                 else -> failureWork(
@@ -135,7 +136,7 @@ class CognitiveTaskWorker(
                 failure = RuntimeFailure(
                     category = RuntimeFailureCategory.INVARIANT,
                     source = "cognitive-worker",
-                    message = "PROCESS_PHOTON requires exactly one input photon",
+                    message = "Photon-processing task requires exactly one input photon",
                     recoverable = false,
                 ),
             )
