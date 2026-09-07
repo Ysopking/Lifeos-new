@@ -12,5 +12,6 @@ class LifeOsApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         kernel = LifeOsKernelFactory(this).create()
+        kernel.start()
     }
 }
