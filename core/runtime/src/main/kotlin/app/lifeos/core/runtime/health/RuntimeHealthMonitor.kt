@@ -6,7 +6,6 @@ import app.lifeos.core.runtime.RuntimeFailureCategory
 import app.lifeos.core.runtime.RuntimeState
 import app.lifeos.core.runtime.RuntimeStatus
 import java.time.Instant
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collect
@@ -25,6 +24,7 @@ class RuntimeHealthMonitor(
 
     fun start(): Job = synchronized(lock) {
         job?.takeIf { it.isActive } ?: scope.launch {
+            graph.register(nodeId, HealthScope.RUNTIME)
             runtime.state.collect { state -> observe(state) }
         }.also { job = it }
     }
