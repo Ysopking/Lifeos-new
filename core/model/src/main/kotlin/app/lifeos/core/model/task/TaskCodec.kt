@@ -50,11 +50,9 @@ object TaskCodec {
         require(bytes.size <= MAX_BYTES) { "Task exceeds size limit" }
 
         return DataInputStream(ByteArrayInputStream(bytes)).use { input ->
-            val inputPhotonIds = buildSet {
-                val idCountReader: () -> Int
-                // Placeholder replaced below after fixed-width header fields are read.
-            }
-            error("unreachable")
+            val task = decodeTask(input, version)
+            require(input.available() == 0) { "Trailing task data" }
+            task
         }
     }
 
