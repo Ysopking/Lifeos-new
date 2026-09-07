@@ -127,6 +127,25 @@ class CognitiveTaskWorker(
             ),
         )
 
+        val expectedRevision = task.inputPhotonRevisions[photonId]
+        if (expectedRevision != null) {
+            if (photon.revision > expectedRevision) {
+                return supersede(task, photonId)
+            }
+            if (photon.revision < expectedRevision) {
+                return fail(
+                    task,
+                    photonId = photonId,
+                    failure = RuntimeFailure(
+                        category = RuntimeFailureCategory.STORAGE,
+                        source = "photon-repository",
+                        message = "Expected photon revision $expectedRevision but found older revision ${photon.revision}",
+                        photonId = photonId,
+                    ),
+                )
+            }
+        }
+
         val execution = executor.execute(photon, fields.activeFields())
         if (execution.failures.isNotEmpty()) {
             val failedTask = transitionFinal(task, TaskState.FAILED)
@@ -145,6 +164,20 @@ class CognitiveTaskWorker(
             photonId = photon.id,
             finalState = completedTask.state,
             influences = execution.influences,
+            failures = emptyList(),
+        )
+    }
+
+    private suspend fun supersede(
+        task: LifeTask,
+        photonId: PhotonId,
+    ): CognitiveTaskExecutionResult {
+        val supersededTask = transitionFinal(task, TaskState.SUPERSEDED)
+        return CognitiveTaskExecutionResult(
+            taskId = supersededTask.id,
+            photonId = photonId,
+            finalState = supersededTask.state,
+            influences = emptyList(),
             failures = emptyList(),
         )
     }
