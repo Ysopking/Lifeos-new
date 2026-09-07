@@ -35,6 +35,7 @@ class DurableCognitivePipeline(
             type = TaskType.PROCESS_PHOTON,
             priority = priority,
             inputPhotonIds = setOf(photon.id),
+            inputPhotonRevisions = mapOf(photon.id to photon.revision),
             idempotencyKey = idempotencyKey(photon),
         )
     )
