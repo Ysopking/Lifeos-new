@@ -10,6 +10,7 @@ enum class TaskState {
     INTERRUPTED,
     RECOVERING,
     COMPLETED,
+    SUPERSEDED,
     FAILED,
     CANCELLED,
 }
