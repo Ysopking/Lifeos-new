@@ -7,5 +7,6 @@ data class PhotonLoadReport(
 
 /** Persistence contract used above the Android-specific encrypted store. */
 interface PhotonRepository : PhotonStore {
+    suspend fun load(id: PhotonId): Photon?
     suspend fun loadReport(): PhotonLoadReport
 }
