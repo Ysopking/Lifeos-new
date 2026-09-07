@@ -12,13 +12,13 @@ import kotlinx.coroutines.test.runTest
 
 class LanguageGoalCapabilityRouterTest {
     @Test
-    fun `image creation exposes missing scene construction instead of pretending MMSI is sufficient`() = runTest {
+    fun `image creation exposes construction and rasterization gaps when only MMSI exists`() = runTest {
         val registry = CapabilityRegistry()
         registry.register(
             descriptor(
                 id = "image.render.mmsi",
                 provider = "mmsi-runtime",
-                inputs = setOf("scene-geometry"),
+                inputs = setOf("mmsi-geometry-buffers"),
                 outputs = setOf("image-photon"),
             )
         )
@@ -28,21 +28,47 @@ class LanguageGoalCapabilityRouterTest {
         assertFalse(result.ready)
         assertEquals(1, result.selectedProviders.size)
         assertEquals("mmsi-runtime", result.selectedProviders[CapabilityId("image.render.mmsi")]?.providerId)
-        assertTrue(result.gaps.any {
-            it.requirement.capabilityId == CapabilityId("scene.construct.procedural") &&
-                it.type == CapabilityGapType.CAPABILITY_MISSING
-        })
+        assertTrue(result.gaps.any { it.requirement.capabilityId == CapabilityId("scene.construct.procedural") })
+        assertTrue(result.gaps.any { it.requirement.capabilityId == CapabilityId("scene.rasterize.mmsi") })
     }
 
     @Test
-    fun `image creation becomes routable when scene and MMSI providers satisfy contracts`() = runTest {
+    fun `scene compiler alone still leaves rasterization as honest blocking gap`() = runTest {
         val registry = CapabilityRegistry()
-        registry.register(descriptor("scene.construct.procedural", "scene-core", outputs = setOf("scene-geometry")))
+        registry.register(descriptor("scene.construct.procedural", "scene-core", outputs = setOf("scene-graph")))
         registry.register(
             descriptor(
                 "image.render.mmsi",
                 "mmsi-runtime",
-                inputs = setOf("scene-geometry"),
+                inputs = setOf("mmsi-geometry-buffers"),
+                outputs = setOf("image-photon"),
+            )
+        )
+
+        val result = LanguageGoalCapabilityRouter(registry).route(goal(IntentType.CREATE_IMAGE))
+
+        assertFalse(result.ready)
+        assertEquals(setOf(CapabilityId("scene.construct.procedural"), CapabilityId("image.render.mmsi")), result.selectedProviders.keys)
+        assertEquals(listOf(CapabilityId("scene.rasterize.mmsi")), result.blockingGaps.map { it.requirement.capabilityId })
+    }
+
+    @Test
+    fun `image creation becomes routable only when all three image stages satisfy contracts`() = runTest {
+        val registry = CapabilityRegistry()
+        registry.register(descriptor("scene.construct.procedural", "scene-core", outputs = setOf("scene-graph")))
+        registry.register(
+            descriptor(
+                "scene.rasterize.mmsi",
+                "scene-rasterizer",
+                inputs = setOf("scene-graph"),
+                outputs = setOf("mmsi-geometry-buffers"),
+            )
+        )
+        registry.register(
+            descriptor(
+                "image.render.mmsi",
+                "mmsi-runtime",
+                inputs = setOf("mmsi-geometry-buffers"),
                 outputs = setOf("image-photon"),
             )
         )
@@ -51,7 +77,7 @@ class LanguageGoalCapabilityRouterTest {
 
         assertTrue(result.ready)
         assertTrue(result.gaps.isEmpty())
-        assertEquals(setOf(CapabilityId("scene.construct.procedural"), CapabilityId("image.render.mmsi")), result.selectedProviders.keys)
+        assertEquals(3, result.selectedProviders.size)
     }
 
     @Test
