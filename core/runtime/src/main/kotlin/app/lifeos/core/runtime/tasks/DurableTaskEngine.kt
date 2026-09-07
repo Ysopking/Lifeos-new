@@ -18,6 +18,7 @@ class DurableTaskEngine(
             type = draft.type,
             priority = draft.priority,
             inputPhotonIds = draft.inputPhotonIds,
+            inputPhotonRevisions = draft.inputPhotonRevisions,
             idempotencyKey = draft.idempotencyKey,
             maxAttempts = draft.maxAttempts,
             createdAt = createdAt,
