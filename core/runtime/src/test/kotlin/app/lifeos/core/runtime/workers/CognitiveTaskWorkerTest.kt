@@ -143,6 +143,30 @@ class CognitiveTaskWorkerTest {
         }
     }
 
+    @Test
+    fun workerRejectsExpiredLease() = runTest {
+        val tasks = InMemoryTaskRepository()
+        val photons = FakePhotonRepository()
+        val photon = photon()
+        photons.save(photon)
+        val claimed = claimedTask(
+            tasks = tasks,
+            owner = workerId,
+            photonId = photon.id,
+            acquiredAt = t0.minusSeconds(60),
+            leaseUntil = t0.minusSeconds(30),
+        )
+        val worker = worker(tasks, photons, emptyList())
+
+        try {
+            worker.execute(claimed)
+            fail("Expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+            // Expected: expired claims must never start execution.
+        }
+        assertEquals(TaskState.CLAIMED, tasks.get(claimed.id)?.state)
+    }
+
     private fun worker(
         tasks: InMemoryTaskRepository,
         photons: PhotonRepository,
@@ -160,17 +184,19 @@ class CognitiveTaskWorkerTest {
         tasks: InMemoryTaskRepository,
         owner: WorkerId,
         photonId: PhotonId,
+        acquiredAt: Instant = t0,
+        leaseUntil: Instant = t0.plusSeconds(30),
     ): LifeTask {
         val task = LifeTask(
             type = TaskType.PROCESS_PHOTON,
             inputPhotonIds = setOf(photonId),
             idempotencyKey = "process:${photonId.value}:r1",
-            createdAt = t0,
-            updatedAt = t0,
+            createdAt = acquiredAt,
+            updatedAt = acquiredAt,
         )
         tasks.create(task)
-        tasks.transition(task.id, TaskState.CREATED, TaskState.QUEUED, t0)
-        return checkNotNull(tasks.claim(task.id, owner, t0, t0.plusSeconds(30)))
+        tasks.transition(task.id, TaskState.CREATED, TaskState.QUEUED, acquiredAt)
+        return checkNotNull(tasks.claim(task.id, owner, acquiredAt, leaseUntil))
     }
 
     private fun photon() = Photon(
