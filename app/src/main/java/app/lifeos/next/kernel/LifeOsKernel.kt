@@ -22,6 +22,8 @@ import app.lifeos.core.runtime.cognition.PhotonDelta
 import app.lifeos.core.runtime.cognition.PhotonDeltaType
 import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
+import app.lifeos.core.scene.ProceduralSceneCompiler
+import app.lifeos.core.scene.SceneRasterizer
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +45,10 @@ class LifeOsKernel internal constructor(
     val cognitiveTriggers: CognitiveTriggerSink,
     /** Lazily probes and selects the strongest offline MMSI execution path supported by this device. */
     val mmsiRuntime: MmsiRuntimeBackendProbe,
+    /** Deterministic GoalFrame -> SceneGraph compiler used by image action execution. */
+    val sceneCompiler: ProceduralSceneCompiler,
+    /** Deterministic reference rasterizer; native backends may replace it behind the same contract. */
+    val sceneRasterizer: SceneRasterizer,
     private val languageUnderstanding: LanguageUnderstandingEngine,
     private val goalPhotonFactory: GoalPhotonFactory,
     private val languageContextBuilder: PhotonLanguageContextBuilder,
