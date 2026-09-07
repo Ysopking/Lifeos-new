@@ -1,5 +1,6 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
@@ -36,6 +37,8 @@ class LifeOsKernel internal constructor(
     val photonTransactions: PhotonTransactionJournal,
     val cognitiveOutcomes: CognitiveOutcomeJournal,
     val cognitiveTriggers: CognitiveTriggerSink,
+    /** Lazily probes and selects the strongest offline MMSI execution path supported by this device. */
+    val mmsiRuntime: MmsiRuntimeBackendProbe,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,

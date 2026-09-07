@@ -4,6 +4,7 @@ import android.content.Context
 import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
+import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.model.worker.WorkerId
 import app.lifeos.core.runtime.DurableLifeOsRuntime
 import app.lifeos.core.runtime.DurableRuntimeStateBridge
@@ -68,6 +69,7 @@ class LifeOsKernelFactory(
         val matrix = ThoughtMatrix()
         val registry = StaticFieldRegistry(listOf(matrix))
         val executor = InfluenceExecutor()
+        val mmsiRuntime = MmsiRuntimeBackendProbe(appContext)
 
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
@@ -220,6 +222,7 @@ class LifeOsKernelFactory(
             photonTransactions = photonTransactions,
             cognitiveOutcomes = cognitiveOutcomes,
             cognitiveTriggers = cognitiveTriggers,
+            mmsiRuntime = mmsiRuntime,
         )
     }
 
