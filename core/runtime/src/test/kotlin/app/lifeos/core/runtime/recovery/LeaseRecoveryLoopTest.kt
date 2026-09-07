@@ -21,19 +21,10 @@ class LeaseRecoveryLoopTest {
     fun startImmediatelyRecoversAlreadyExpiredLease() = runTest {
         var now = t0
         val repository = InMemoryTaskRepository()
-        val running = runningTask(
-            repository = repository,
-            key = "expired-at-start",
-            acquiredAt = t0.minusSeconds(60),
-            leaseUntil = t0.minusSeconds(30),
-        )
+        val running = runningTask(repository, "expired-at-start", t0.minusSeconds(60), t0.minusSeconds(30))
         val signal = RecordingSignal()
         val service = LeaseRecoveryService(repository, signal) { now }
-        val loop = LeaseRecoveryLoop(
-            scope = backgroundScope,
-            recovery = service,
-            interval = Duration.ofSeconds(30),
-        )
+        val loop = LeaseRecoveryLoop(backgroundScope, service, Duration.ofSeconds(30))
 
         loop.start()
         runCurrent()
@@ -47,19 +38,10 @@ class LeaseRecoveryLoopTest {
     fun leaseThatExpiresAfterRestartIsRecoveredOnLaterCycle() = runTest {
         var now = t0
         val repository = InMemoryTaskRepository()
-        val running = runningTask(
-            repository = repository,
-            key = "expires-later",
-            acquiredAt = t0.minusSeconds(5),
-            leaseUntil = t0.plusSeconds(20),
-        )
+        val running = runningTask(repository, "expires-later", t0.minusSeconds(5), t0.plusSeconds(20))
         val signal = RecordingSignal()
         val service = LeaseRecoveryService(repository, signal) { now }
-        val loop = LeaseRecoveryLoop(
-            scope = backgroundScope,
-            recovery = service,
-            interval = Duration.ofSeconds(30),
-        )
+        val loop = LeaseRecoveryLoop(backgroundScope, service, Duration.ofSeconds(30))
 
         loop.start()
         runCurrent()
@@ -79,19 +61,10 @@ class LeaseRecoveryLoopTest {
     fun startIsIdempotent() = runTest {
         var now = t0
         val repository = InMemoryTaskRepository()
-        val running = runningTask(
-            repository = repository,
-            key = "idempotent",
-            acquiredAt = t0.minusSeconds(60),
-            leaseUntil = t0.minusSeconds(30),
-        )
+        val running = runningTask(repository, "idempotent", t0.minusSeconds(60), t0.minusSeconds(30))
         val signal = RecordingSignal()
         val service = LeaseRecoveryService(repository, signal) { now }
-        val loop = LeaseRecoveryLoop(
-            scope = backgroundScope,
-            recovery = service,
-            interval = Duration.ofSeconds(30),
-        )
+        val loop = LeaseRecoveryLoop(backgroundScope, service, Duration.ofSeconds(30))
 
         loop.start()
         loop.start()
@@ -109,37 +82,12 @@ class LeaseRecoveryLoopTest {
         leaseUntil: Instant,
     ): LifeTask {
         val createdAt = acquiredAt.minusSeconds(60)
-        val task = LifeTask(
-            type = TaskType.PROCESS_PHOTON,
-            idempotencyKey = key,
-            createdAt = createdAt,
-            updatedAt = createdAt,
-        )
+        val worker = WorkerId("old-worker")
+        val task = LifeTask(type = TaskType.PROCESS_PHOTON, idempotencyKey = key, createdAt = createdAt, updatedAt = createdAt)
         repository.create(task)
-        val queued = checkNotNull(
-            repository.transition(
-                task.id,
-                TaskState.CREATED,
-                TaskState.QUEUED,
-                createdAt,
-            )
-        )
-        val claimed = checkNotNull(
-            repository.claim(
-                queued.id,
-                WorkerId("old-worker"),
-                acquiredAt,
-                leaseUntil,
-            )
-        )
-        return checkNotNull(
-            repository.transition(
-                claimed.id,
-                TaskState.CLAIMED,
-                TaskState.RUNNING,
-                acquiredAt,
-            )
-        )
+        val queued = checkNotNull(repository.transition(task.id, TaskState.CREATED, TaskState.QUEUED, createdAt))
+        val claimed = checkNotNull(repository.claim(queued.id, worker, acquiredAt, leaseUntil))
+        return checkNotNull(repository.startExecution(claimed.id, worker, acquiredAt))
     }
 
     private class RecordingSignal : TaskSchedulerSignal {
