@@ -85,8 +85,10 @@ class MmsiImageEngine(
         val values = DoubleArray(grid.bandCount) { index ->
             val wavelength = grid.wavelengthNm(index).toDouble()
             // Smooth daylight approximation centered in the photopic range.
-            val blueShoulder = kotlin.math.exp(-0.5 * kotlin.math.pow((wavelength - 460.0) / 95.0, 2.0))
-            val broadDaylight = kotlin.math.exp(-0.5 * kotlin.math.pow((wavelength - 560.0) / 180.0, 2.0))
+            val blueDelta = (wavelength - 460.0) / 95.0
+            val broadDelta = (wavelength - 560.0) / 180.0
+            val blueShoulder = kotlin.math.exp(-0.5 * Math.pow(blueDelta, 2.0))
+            val broadDaylight = kotlin.math.exp(-0.5 * Math.pow(broadDelta, 2.0))
             0.35 * blueShoulder + 0.9 * broadDaylight
         }
         val max = values.maxOrNull()?.coerceAtLeast(1e-9) ?: 1.0
