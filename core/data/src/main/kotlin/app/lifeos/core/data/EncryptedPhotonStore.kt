@@ -1,32 +1,32 @@
 package app.lifeos.core.data
 
 import android.content.Context
-import android.util.AtomicFile
-import app.lifeos.core.model.PhotonCodec
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import java.io.IOException
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.util.AtomicFile
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonCodec
 import app.lifeos.core.model.PhotonId
-import app.lifeos.core.model.PhotonStore
+import app.lifeos.core.model.PhotonLoadReport
+import app.lifeos.core.model.PhotonRepository
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.IOException
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
-class EncryptedPhotonStore(context: Context) : PhotonStore {
+class EncryptedPhotonStore(context: Context) : PhotonRepository {
     private val directory = context.filesDir.resolve("photon-vault")
     private val key: SecretKey by lazy { loadOrCreateKey() }
-
     private val mutex = Mutex()
 
     override suspend fun save(photon: Photon): Unit = withContext(Dispatchers.IO) { mutex.withLock {
@@ -51,9 +51,7 @@ class EncryptedPhotonStore(context: Context) : PhotonStore {
         }
     } }
 
-    data class LoadReport(val photons: List<Photon>, val unreadableFiles: List<String>)
-
-    suspend fun loadReport(): LoadReport = withContext(Dispatchers.IO) { mutex.withLock {
+    override suspend fun loadReport(): PhotonLoadReport = withContext(Dispatchers.IO) { mutex.withLock {
         check(directory.isDirectory || directory.mkdirs()) { "Photon vault unavailable" }
         val files = directory.listFiles() ?: throw IOException("Photon vault cannot be listed")
         val names = files.map { it.name.removeSuffix(".bak") }.filter { it.endsWith(".photon") }.distinct()
@@ -75,9 +73,11 @@ class EncryptedPhotonStore(context: Context) : PhotonStore {
                 val photon = decrypt(bytes)
                 require(name == "${safeId(photon.id)}.photon") { "Photon identity mismatch" }
                 photons += photon
-            } catch (error: Exception) { failures += name }
+            } catch (error: Exception) {
+                failures += name
+            }
         }
-        LoadReport(photons.sortedBy { it.provenance.createdAt }, failures)
+        PhotonLoadReport(photons.sortedBy { it.provenance.createdAt }, failures)
     } }
 
     override suspend fun loadAll(): List<Photon> {
@@ -103,7 +103,9 @@ class EncryptedPhotonStore(context: Context) : PhotonStore {
         val iv = ByteArray(input.readInt().also { require(it in 12..32) })
         input.readFully(iv)
         val encrypted = input.readBytes()
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv)) }
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply {
+            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+        }
         return PhotonCodec.decode(cipher.doFinal(encrypted), version)
     }
 
@@ -111,11 +113,16 @@ class EncryptedPhotonStore(context: Context) : PhotonStore {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
-            init(KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build())
+            init(
+                KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build()
+            )
             generateKey()
         }
     }
