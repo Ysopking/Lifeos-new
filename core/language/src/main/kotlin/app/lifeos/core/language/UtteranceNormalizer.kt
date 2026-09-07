@@ -34,8 +34,7 @@ class UtteranceNormalizer {
     private fun canonicalize(value: String): String = Normalizer
         .normalize(value, Normalizer.Form.NFKC)
         .lowercase(Locale.ROOT)
-        .replace('ß', 's')
-        .replace("ss", "ss")
+        .replace("ß", "ss")
 
     private fun detectLanguage(tokens: List<LanguageToken>): LanguageCode {
         val words = tokens.asSequence().filter { it.kind == TokenKind.WORD }.map { it.normalized }.toList()
