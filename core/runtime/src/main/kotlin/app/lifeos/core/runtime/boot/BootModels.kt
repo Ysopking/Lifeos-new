@@ -137,8 +137,23 @@ sealed interface BootValidationResult {
 sealed interface BootRunResult {
     val snapshot: BootSnapshot
 
-    data class Ready(override val snapshot: BootSnapshot) : BootRunResult
-    data class Degraded(override val snapshot: BootSnapshot) : BootRunResult
-    data class RecoveryRequired(override val snapshot: BootSnapshot) : BootRunResult
-    data class Failed(override val snapshot: BootSnapshot, val cause: Throwable) : BootRunResult
+    data class Ready(
+        override val snapshot: BootSnapshot,
+        val context: BootContext,
+    ) : BootRunResult
+
+    data class Degraded(
+        override val snapshot: BootSnapshot,
+        val context: BootContext,
+    ) : BootRunResult
+
+    data class RecoveryRequired(
+        override val snapshot: BootSnapshot,
+        val context: BootContext,
+    ) : BootRunResult
+
+    data class Failed(
+        override val snapshot: BootSnapshot,
+        val cause: Throwable,
+    ) : BootRunResult
 }
