@@ -55,6 +55,19 @@ class InMemoryTaskRepository : TaskRepository {
             .toList()
     }
 
+    override suspend fun listExpiredLeases(now: Instant, limit: Int): List<LifeTask> = mutex.withLock {
+        require(limit > 0) { "Expired lease limit must be positive" }
+        tasks.values
+            .asSequence()
+            .filter { task ->
+                task.state in LEASED_STATES &&
+                    task.leaseExpiresAt?.isAfter(now) == false
+            }
+            .sortedWith(compareBy<LifeTask> { it.leaseExpiresAt }.thenBy { it.createdAt })
+            .take(limit)
+            .toList()
+    }
+
     override suspend fun transition(
         id: TaskId,
         expected: TaskState,
@@ -96,5 +109,13 @@ class InMemoryTaskRepository : TaskRepository {
         )
         tasks[id] = claimed
         claimed
+    }
+
+    private companion object {
+        val LEASED_STATES = setOf(
+            TaskState.CLAIMED,
+            TaskState.RUNNING,
+            TaskState.CHECKPOINTED,
+        )
     }
 }
