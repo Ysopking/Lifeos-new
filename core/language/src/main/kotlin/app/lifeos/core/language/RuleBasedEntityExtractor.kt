@@ -13,13 +13,13 @@ class RuleBasedEntityExtractor {
         "rot", "gruen", "grün", "blau", "gelb", "orange", "lila", "violett", "schwarz", "weiss", "weiß", "grau", "braun",
         "red", "green", "blue", "yellow", "orange", "purple", "black", "white", "grey", "gray", "brown",
     )
-    private val imageWords = setOf("bild", "foto", "grafik", "image", "photo", "picture")
+    private val imageWords = setOf("bild", "bilder", "foto", "fotos", "grafik", "grafiken", "image", "images", "photo", "photos", "picture", "pictures")
     private val actionWords = setOf(
         "spielen", "spielt", "laufend", "laufen", "sitzt", "sitzen", "steht", "stehen", "fliegt", "fahren",
         "playing", "play", "running", "run", "sitting", "sit", "standing", "stand", "flying", "driving",
     )
     private val objectWords = setOf(
-        "fussball", "fußball", "ball", "auto", "fahrrad", "hund", "katze", "baum", "haus", "football", "soccer", "car", "bike", "dog", "cat", "tree", "house",
+        "fussball", "ball", "auto", "fahrrad", "hund", "katze", "baum", "haus", "football", "soccer", "car", "bike", "dog", "cat", "tree", "house",
     )
     private val styleWords = setOf(
         "fotorealistisch", "realistisch", "cinematisch", "comic", "vektor", "aquarell", "photorealistic", "realistic", "cinematic", "vector", "watercolor",
@@ -60,7 +60,7 @@ class RuleBasedEntityExtractor {
 
     private fun extractLocations(utterance: NormalizedUtterance): List<SemanticEntity> {
         val result = mutableListOf<SemanticEntity>()
-        val prepositions = setOf("in", "bei", "near", "at")
+        val prepositions = setOf("in", "bei", "am", "near", "at")
         for (i in 0 until utterance.tokens.lastIndex) {
             val token = utterance.tokens[i]
             if (token.normalized !in prepositions) continue
