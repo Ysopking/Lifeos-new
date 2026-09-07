@@ -51,8 +51,18 @@ class LeaseRecoveryServiceTest {
     @Test
     fun completedTaskIsNeverRecovered() = runTest {
         val repository = InMemoryTaskRepository()
-        val running = expiredRunningTask(repository, "completed")
-        val completed = checkNotNull(repository.transition(running.id, TaskState.RUNNING, TaskState.COMPLETED, now.minusSeconds(1)))
+        val worker = WorkerId("worker")
+        val queued = queuedTask(repository, "completed")
+        val claimed = checkNotNull(repository.claim(queued.id, worker, now.minusSeconds(10), now.plusSeconds(30)))
+        val running = checkNotNull(repository.startExecution(claimed.id, worker, now.minusSeconds(9)))
+        val completed = checkNotNull(
+            repository.finishExecution(
+                id = running.id,
+                workerId = worker,
+                finalState = TaskState.COMPLETED,
+                finishedAt = now.minusSeconds(1),
+            )
+        )
         val signal = RecordingSignal()
         val service = LeaseRecoveryService(repository, signal) { now }
 
