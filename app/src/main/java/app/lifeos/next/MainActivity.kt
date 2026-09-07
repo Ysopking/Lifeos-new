@@ -35,6 +35,7 @@ import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.runtime.CognitiveRuntime
 import app.lifeos.core.runtime.ThoughtMatrix
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,12 +55,26 @@ private fun LifeOsApp() {
     val matrixState by matrix.state.collectAsState()
     val messages = remember { mutableStateListOf<String>() }
     var input by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(true) }
+    var saving by remember { mutableStateOf(false) }
+    var storageStatus by remember { mutableStateOf("Speicher wird geladen …") }
+    var storageError by remember { mutableStateOf<String?>(null) }
     DisposableEffect(runtime) { runtime.start(); onDispose { runtime.stop() } }
     LaunchedEffect(Unit) {
-        store.loadAll().forEach { photon ->
-            messages += photon.content
-            runtime.ingest(photon)
-        }
+        try {
+            val report = store.loadReport()
+            report.photons.forEach { photon ->
+                messages += photon.content
+                runtime.ingest(photon)
+            }
+            storageStatus = "Geladen: ${report.photons.size} · Nicht lesbar: ${report.unreadableFiles.size}"
+            if (report.unreadableFiles.isNotEmpty()) {
+                storageError = "Einige Photonen konnten nicht geladen werden. Die Dateien bleiben erhalten."
+            }
+        } catch (error: CancellationException) { throw error
+        } catch (error: Exception) {
+            storageError = "Speicher konnte nicht geöffnet werden. Bitte App neu starten."
+        } finally { loading = false }
     }
 
     MaterialTheme {
@@ -73,19 +88,31 @@ private fun LifeOsApp() {
                         items(messages) { Card { Text(it, Modifier.padding(12.dp)) } }
                     }
                 }
-                OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth(), label = { Text("Gedanke") }, maxLines = 4)
+                OutlinedTextField(input, { input = it }, Modifier.fillMaxWidth(), label = { Text("Gedanke") }, maxLines = 4, enabled = !loading && !saving)
                 Button(
                     onClick = {
-                        val content = input.trim(); input = ""; messages += content
+                        val content = input.trim()
+                        saving = true
                         scope.launch {
-                            val photon = Photon(content = content, provenance = Provenance("local-chat", "user"), tags = setOf("chat"))
-                            store.save(photon)
-                            runtime.ingest(photon)
+                            try {
+                                val photon = Photon(content = content, provenance = Provenance("local-chat", "user"), tags = setOf("chat"))
+                                store.save(photon)
+                                messages += content
+                                input = ""
+                                storageStatus = "Zuletzt eingegebener Gedanke ist gespeichert."
+                                runtime.ingest(photon)
+                            } catch (error: CancellationException) { throw error
+                            } catch (error: Exception) {
+                                storageError = "Vorgang fehlgeschlagen. Noch vorhandene Eingabe bleibt erhalten."
+                            } finally { saving = false }
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = input.isNotBlank(),
+                    enabled = input.isNotBlank() && !loading && !saving,
                 ) { Text("Als Photon aufnehmen") }
+                Text(storageStatus, style = MaterialTheme.typography.bodySmall)
+                storageError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                runtimeState.lastError?.let { Text("Runtime-Fehler: $it", color = MaterialTheme.colorScheme.error) }
                 Text("Verarbeitet: ${runtimeState.processed} · Feldenergie: ${"%.1f".format(matrixState.totalEnergy)}", style = MaterialTheme.typography.bodySmall)
             }
         }
