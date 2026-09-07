@@ -32,6 +32,14 @@ import app.lifeos.core.runtime.boot.StoreState
 import app.lifeos.core.runtime.boot.StoreStatus
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmup
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
+import app.lifeos.core.runtime.capability.CapabilityContract
+import app.lifeos.core.runtime.capability.CapabilityDescriptor
+import app.lifeos.core.runtime.capability.CapabilityId
+import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
+import app.lifeos.core.runtime.capability.ProviderState
+import app.lifeos.core.runtime.capability.ProviderType
+import app.lifeos.core.runtime.capability.TrustLevel
 import app.lifeos.core.runtime.cognition.CognitiveScheduler
 import app.lifeos.core.runtime.cognition.CompositeDurableTaskExecutionObserver
 import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
@@ -76,6 +84,37 @@ class LifeOsKernelFactory(
         val languageUnderstanding = LanguageUnderstandingEngine()
         val goalPhotonFactory = GoalPhotonFactory()
         val languageContextBuilder = PhotonLanguageContextBuilder()
+        val capabilityRegistry = CapabilityRegistry(
+            listOf(
+                CapabilityDescriptor(
+                    capabilityId = CapabilityId("language.understand"),
+                    providerId = "language-core",
+                    providerType = ProviderType.MODULE,
+                    contract = CapabilityContract(
+                        requiredInputs = setOf("chat-photon"),
+                        outputs = setOf("goal-photon"),
+                    ),
+                    state = ProviderState.ACTIVE,
+                    trustLevel = TrustLevel.SYSTEM,
+                    reliability = 1.0,
+                    cost = 0.0,
+                ),
+                CapabilityDescriptor(
+                    capabilityId = CapabilityId("image.render.mmsi"),
+                    providerId = "mmsi-runtime",
+                    providerType = ProviderType.MODULE,
+                    contract = CapabilityContract(
+                        requiredInputs = setOf("scene-geometry"),
+                        outputs = setOf("image-photon"),
+                    ),
+                    state = ProviderState.ACTIVE,
+                    trustLevel = TrustLevel.SYSTEM,
+                    reliability = 0.95,
+                    cost = 0.0,
+                ),
+            )
+        )
+        val goalCapabilityRouter = LanguageGoalCapabilityRouter(capabilityRegistry)
 
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
@@ -232,6 +271,7 @@ class LifeOsKernelFactory(
             languageUnderstanding = languageUnderstanding,
             goalPhotonFactory = goalPhotonFactory,
             languageContextBuilder = languageContextBuilder,
+            goalCapabilityRouter = goalCapabilityRouter,
         )
     }
 
