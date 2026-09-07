@@ -7,6 +7,7 @@ Clean-room Android rebuild of LIFEOS. The app is offline-first and models every 
 - `app`: Jetpack Compose shell and dependency composition
 - `core:model`: immutable photon, relation, provenance and field contracts
 - `core:runtime`: always-on delta processing and runtime health state
+- `core:data`: private AES-GCM photon vault backed by Android Keystore
 
 The startup path is intentionally small. Continuous ingestion, re-evaluation, learning, convergence and health monitoring belong to `CognitiveRuntime`, not to application boot.
 
