@@ -6,6 +6,7 @@ import app.lifeos.core.model.task.TaskPriority
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.worker.WorkerId
 import java.time.Instant
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,7 +19,7 @@ class DurableCognitivePipelineTest {
     fun samePhotonRevisionMapsToSameLogicalTask() = runTest {
         val repository = InMemoryTaskRepository()
         val signal = ConflatedTaskSchedulerSignal()
-        val pipeline = pipeline(repository, signal)
+        val pipeline = pipeline(backgroundScope, repository, signal)
         val photon = photon()
 
         val first = pipeline.submitPhoton(photon)
@@ -34,7 +35,7 @@ class DurableCognitivePipelineTest {
     fun newPhotonRevisionCreatesNewLogicalTask() = runTest {
         val repository = InMemoryTaskRepository()
         val signal = ConflatedTaskSchedulerSignal()
-        val pipeline = pipeline(repository, signal)
+        val pipeline = pipeline(backgroundScope, repository, signal)
         val revisionOne = photon()
         val revisionTwo = revisionOne.copy(revision = 2)
 
@@ -46,6 +47,7 @@ class DurableCognitivePipelineTest {
     }
 
     private fun pipeline(
+        scope: CoroutineScope,
         repository: InMemoryTaskRepository,
         signal: ConflatedTaskSchedulerSignal,
     ): DurableCognitivePipeline {
@@ -57,7 +59,7 @@ class DurableCognitivePipelineTest {
             now = { t0 },
         )
         val loop = TaskSchedulerLoop(
-            scope = backgroundScope,
+            scope = scope,
             scheduler = scheduler,
             wakeSource = signal,
         )
