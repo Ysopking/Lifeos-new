@@ -23,12 +23,12 @@ Priority:
 
 | Original family | Representative original modules | LIFEOS-new status | What already exists | Main gap | Priority |
 |---|---|---|---|---|---|
-| BOOT_RESILIENCE | CrashGuard, DeepCoreConvergenceEngine, ForensicBootEngine, DuplicateResolver, ForensicRecoveryEngine, PreInitRecoveryKernel | **PARTIAL / strong base** | LifeOsKernel, DurableLifeOsRuntime, RuntimeSupervisor, LeaseRecoveryService/Loop, RetryPolicy, checkpoint resume | health graph, crash reporting, boot-loop protection, invariant recovery policy | P1 |
+| BOOT_RESILIENCE | CrashGuard, DeepCoreConvergenceEngine, ForensicBootEngine, DuplicateResolver, ForensicRecoveryEngine, PreInitRecoveryKernel | **PARTIAL / strong base** | LifeOsKernel, DurableLifeOsRuntime, RuntimeSupervisor, LeaseRecoveryService/Loop, RetryPolicy, checkpoint resume | boot cognition snapshot, integrity scan, context/memory/goal rehydration, capability discovery, delta analysis, boot report, boot-loop protection | **P0** |
 | SECURITY_VAULT | VaultRepository, CalendarVaultRepository, DocumentVaultRepository, SemanticMemoryVaultRepository, TelemetryVaultRepository | **PARTIAL / strong base** | encrypted PhotonStore, EncryptedTaskRepository, EncryptedCheckpointRepository, Android Keystore/AES-GCM | typed personal vault projections, backup/import policy, audit/permission layer | P1 |
 | INGESTION_STORAGE | ImapIngestionEngine, WhatsAppBridge, WhatsAppIngestionEngine, MultiAccountIngestionKernel, AutonomousIngestionDaemon, CloudBackupDiscoveryEngine | **MISSING user capability** | durable Photon persistence and direct Photon lookup | live Gmail/IMAP ingestion, WhatsApp notification/export ingestion, files/share targets, dedup/provenance fan-out | **P0** |
 | MEMORY_CONVERGENCE | ProjectConsolidationEngine, ForensicProjectSynthesizer, IncubationImpulseStore and matrix/convergence components | **PARTIAL** | ThoughtMatrix, persistent Photons, replayable task processing | working/episodic/semantic/procedural memory, conversation continuity, project consolidation, relevance retrieval | **P0** |
 | FIELD_WORLD_FORMULA | DeterministicFieldEngine, FieldDynamicsService, LifeTrajectoryPlanner, PredictiveFieldEngine, HierarchicalWeltformelEngine, WorldFormulaService | **EARLY PARTIAL** | ForceField contract, FieldRegistry, InfluenceExecutor, ThoughtMatrix as field | typed field state, trajectory model, cross-domain coupling, forecasts, world-formula state/repository | P2 |
-| COGNITION_ADAPTATION | InformationPartitionEngine, AdaptationSynthesizer, AralEngine, ShadowValidator, AutonomousExpansionEngine | **EARLY PARTIAL** | durable worker execution, retry/recovery/checkpoint substrate | capability-gap detection, strategy selection, shadow validation, bounded adaptation | P2/P3 |
+| COGNITION_ADAPTATION | InformationPartitionEngine, AdaptationSynthesizer, AralEngine, ShadowValidator, AutonomousExpansionEngine | **EARLY PARTIAL** | durable worker execution, retry/recovery/checkpoint substrate | always-on learning, outcome evaluation, capability-gap detection, strategy selection, shadow validation, bounded adaptation | **P0 for learning/gap detection**, P2/P3 for autonomous evolution |
 | CHAT_SOCIAL_LINGUISTICS | ChatStateClassifier, RelationalProfiler, TemplateSynthesizer, IntentResolver, InteractiveLifeChatEngine, ChatMasterHub, PersonalityStylingEngine, ColloquialMimicryEngine, DudenGrammarEngine | **MISSING core behavior** | basic chat UI + photon/task runtime | persistent intent, reference resolution ("weiter", "das andere"), active-goal stack, entity/relation graph, style memory, chat history retrieval | **P0** |
 | SEARCH_BROWSER | DeepSearchOrchestrator, DeepSearchEngine, DeterministicDeepSearchEngine, DeepSearchImageReferenceResolver | **MISSING** | none productive in app runtime | search task model, source/evidence assimilation, browser/app adapters, result verification | P2 |
 | LEGAL_AUTHORITY | CaseLifecycleEngine, ObjectionSynthesizer, LegalExploitationEngine, HighPrecedentLegalEngine, NormCollisionEngine, ProUserLegalKernel | **MISSING** | durable artifacts/tasks can support it later | case graph, legal-source ingestion, deadline/authority workflow, document synthesis/verification | P2 |
@@ -36,12 +36,57 @@ Priority:
 | ENTERPRISE_BUSINESS | ZeroBudgetBusinessEngine, EnterpriseValuationEngine, LiveEnterpriseSourcingEngine | **MISSING** | none specialist | business/opportunity/valuation workflows | P2 |
 | PLANNING_AUTOMATION_SENTINEL | AutonomousAutomationDaemon and planning/sentinel functions; LifeTrajectoryPlanner contributes cross-domain planning | **PARTIAL technical substrate** | durable scheduler, task graph primitives, wake/rescan loop, retry scheduling | personal day planner, triggers/conditions/actions, calendar integration, dependency graph, replanning, quiet automation policy | **P0** |
 | ORGANIZATION_GOVERNANCE | GoalVerificationEngine, CSuiteKernelEngine, CSuiteV39Kernel, DepartmentRegistry, SelfValidationEngine, ToolWerkstatt | **EARLY PARTIAL** | RuntimeSupervisor and task ownership rules | goals/departments/capability routing, consensus, self-validation, governance gates | P1/P2 |
-| WORKSHOP_HOTSWAP_RUNTIME | HotSwapController, BuiltInToolEngine, DexHotSwapEngine, DynamicPluginModule, EmbeddedPythonExecutionBridge | **MISSING in-app platform** | external GitHub CI is currently used to generate/test debug APKs | BuildStudio, workspace/file tree, patch engine, tests, Git integration, artifact registry; later safe shadow/canary hot-swap | **P0 for BuildStudio**, P3 for Hot-Swap |
+| WORKSHOP_HOTSWAP_RUNTIME | HotSwapController, BuiltInToolEngine, DexHotSwapEngine, DynamicPluginModule, EmbeddedPythonExecutionBridge | **MISSING in-app platform** | external GitHub CI is currently used to generate/test debug APKs | capability-gap/tool-genesis pipeline, BuildStudio, workspace/file tree, patch engine, tests, Git integration, artifact registry; later safe shadow/canary hot-swap | **P0 for Tool Genesis/BuildStudio**, P3 for Hot-Swap |
 | SENSORY_MEDIA | DeterministicImageEngine, ImageReferenceResolver, ContinuousBehaviorEngine, HardwareLoadCouplingEngine | **MISSING** | none productive | media/share ingestion, device signals where useful, image/document sensory routing | P2 |
 | INFRASTRUCTURE_DATA | ApplicationModule and shared composition/data infrastructure | **STRONG FOUNDATION** | LifeOsKernelFactory, model/runtime/data modules, versioned codecs, repositories | schema/projection registry and migrations for new personal domains | P1 |
 | GENERAL_CORE | SchemaRegistry and general reusable core services | **PARTIAL** | versioned Photon/Task/Checkpoint codecs and repositories | unified schema registry, projection migration contracts | P1 |
 
 ## P0 capability recovery plan
+
+### P0-0 — Boot Cognition + Continuous Learning + Tool Genesis
+
+This is a first-class P0 capability, not merely resilience infrastructure.
+
+Original guidance:
+- `FORENSIC_BOOT_ENGINE`
+- `PRE_INIT_RECOVERY_KERNEL`
+- `FORENSIC_RECOVERY_ENGINE`
+- `DEEP_CORE_CONVERGENCE_ENGINE`
+- `DUPLICATE_RESOLVER`
+- `AUTONOMOUS_EXPANSION_ENGINE`
+- `ADAPTATION_SYNTHESIZER`
+- `SELF_VALIDATION_ENGINE`
+- `TOOL_WERKSTATT`
+- `BUILT_IN_TOOL_ENGINE`
+- `SYNTHESIZED_MODULE`
+- `SHADOW_VALIDATOR`
+
+New implementation target:
+- `BootSnapshotLoader`
+- `BootIntegrityScanner`
+- `BootContextRehydrator`
+- `CapabilityDiscoveryEngine`
+- `BootDeltaAnalyzer`
+- `BootCognitionReport`
+- `ContinuousLearningCoordinator`
+- `LearningWatermark`
+- `OutcomeEvaluator`
+- `CapabilityGap`
+- `ToolNeedAnalyzer`
+- `ToolProposal`
+- `FunctionProposal`
+- `CapabilityRegistry`
+
+Acceptance requirements:
+- restart reconstructs active context/goals/projects from durable state;
+- boot identifies deltas, anomalies and unfinished work instead of only replaying photons;
+- a durable boot report records restored/recovered/changed state;
+- learning continues after boot for the whole runtime lifecycle;
+- outcomes can produce structured capability gaps;
+- capability gaps may create tool/function proposals;
+- generated code or modules cannot silently activate themselves.
+
+Detailed architecture: `docs/BOOT_LEARNING_TOOL_GENESIS.md`.
 
 ### P0-A — Chat Context Core
 Original guidance:
@@ -175,26 +220,32 @@ Rule: generating code is not activating code. Initial activation remains commit/
 ## Sequenced implementation roadmap
 
 1. **3E Health Core**
-2. **4A Chat Context Core**
-3. **4B Conversation/Project Memory**
-4. **4C Live Data Hub (Gmail/IMAP, WhatsApp, calendar, notifications/share)**
-5. **4D Personal Planner + Automation Orchestrator**
-6. **4E Finance Core**
-7. **4F External App Interaction Gateway**
-8. **4G BuildStudio v1**
-9. **4H WorkerRegistry + CapabilityMatcher**
-10. Memory v2 consolidation
-11. DeepSearch / Genesis / Convergence
-12. Field/Weltformel v2
-13. Safe shadow/canary module replacement
-14. Tool synthesis and bounded evolution
+2. **3F Boot Cognition Core**
+3. **3G Continuous Learning Core**
+4. **3H Capability Gap / Tool Genesis Core**
+5. **4A Chat Context Core**
+6. **4B Conversation/Project Memory**
+7. **4C Live Data Hub (Gmail/IMAP, WhatsApp, calendar, notifications/share)**
+8. **4D Personal Planner + Automation Orchestrator**
+9. **4E Finance Core**
+10. **4F External App Interaction Gateway**
+11. **4G BuildStudio v1**
+12. **4H WorkerRegistry + CapabilityMatcher**
+13. Memory v2 consolidation
+14. DeepSearch / Genesis / Convergence
+15. Field/Weltformel v2
+16. Safe shadow/canary module replacement
+17. Tool synthesis and bounded evolution
 
 ## Non-negotiable architecture rules
 
 - PhotonStore remains source of truth; projections are rebuildable.
 - Durable tasks remain persist-first, idempotent and owner/lease safe.
 - All generated artifacts become photons with provenance.
+- Boot restores a consistent cognitive snapshot but learning remains active continuously after boot.
 - Chat context is persistent and project-aware.
+- Learning preserves observation/inference/user-confirmed/verified-outcome distinctions.
+- Capability gaps are durable objects and may generate tool/function proposals.
 - Automation actions are auditable and tied to an explicit goal/task.
 - External app interactions go through permissions/policy/audit.
 - Code generation does not imply activation.
