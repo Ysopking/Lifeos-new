@@ -6,4 +6,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = "LIFEOS-Next"
-include(":app", ":core:model", ":core:runtime")
+include(":app", ":core:model", ":core:runtime", ":core:data")
