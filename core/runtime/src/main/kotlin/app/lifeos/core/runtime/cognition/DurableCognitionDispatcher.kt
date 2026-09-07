@@ -18,7 +18,7 @@ data class DurableCognitiveDispatchResult(
 /**
  * Converts accepted cognitive work into the existing durable task model.
  * The durable task repository is the cross-process idempotency boundary;
- * the processing ledger additionally suppresses process-local duplicate submissions.
+ * the processing ledger additionally suppresses concurrent process-local duplicates.
  */
 class DurableCognitionDispatcher(
     private val taskEngine: DurableTaskEngine,
@@ -29,30 +29,41 @@ class DurableCognitionDispatcher(
             ?: return DurableCognitiveDispatchResult(item.id, skippedReason = "missing-photon-id")
         val revision = item.photonRevision
             ?: return DurableCognitiveDispatchResult(item.id, skippedReason = "missing-photon-revision")
-
+        val draft = TaskDraft(
+            type = TaskType.PROCESS_PHOTON,
+            priority = item.priority.toTaskPriority(),
+            inputPhotonIds = setOf(photonId),
+            inputPhotonRevisions = mapOf(photonId to revision),
+            idempotencyKey = idempotencyKey(item, photonId.value, revision),
+        )
         val key = CognitiveProcessingKey(
             deltaId = item.triggeringDeltaId,
             moduleId = DURABLE_MODULE_ID,
             operation = DURABLE_OPERATION,
             inputRevision = revision,
         )
+
+        when (ledger.state(key)) {
+            ProcessingState.PROCESSING -> return DurableCognitiveDispatchResult(
+                workId = item.id,
+                skippedReason = "already-processing",
+            )
+            ProcessingState.COMMITTED -> return DurableCognitiveDispatchResult(
+                workId = item.id,
+                task = taskEngine.submit(draft),
+            )
+            null -> Unit
+        }
+
         if (!ledger.tryStart(key)) {
             return DurableCognitiveDispatchResult(
                 workId = item.id,
-                skippedReason = "already-processing-or-committed",
+                skippedReason = "already-processing",
             )
         }
 
         return try {
-            val task = taskEngine.submit(
-                TaskDraft(
-                    type = TaskType.PROCESS_PHOTON,
-                    priority = item.priority.toTaskPriority(),
-                    inputPhotonIds = setOf(photonId),
-                    inputPhotonRevisions = mapOf(photonId to revision),
-                    idempotencyKey = idempotencyKey(item, photonId.value, revision),
-                )
-            )
+            val task = taskEngine.submit(draft)
             check(ledger.commit(key)) { "Cognitive durable ledger lost processing state" }
             DurableCognitiveDispatchResult(workId = item.id, task = task)
         } catch (cancelled: CancellationException) {
