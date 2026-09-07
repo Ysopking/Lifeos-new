@@ -76,6 +76,23 @@ class InMemoryTaskRepositoryTest {
     }
 
     @Test
+    fun expiredLeaseCannotBeRenewed() = runTest {
+        val repository = InMemoryTaskRepository()
+        val worker = WorkerId("worker-a")
+        val running = runningTask(repository, "expired-renewal", worker)
+
+        val renewed = repository.renewLease(
+            id = running.id,
+            workerId = worker,
+            renewedAt = t0.plusSeconds(33),
+            leaseUntil = t0.plusSeconds(63),
+        )
+
+        assertNull(renewed)
+        assertEquals(t0.plusSeconds(32), repository.get(running.id)?.leaseExpiresAt)
+    }
+
+    @Test
     fun differentWorkerCannotRenewLease() = runTest {
         val repository = InMemoryTaskRepository()
         val running = runningTask(repository, "wrong-owner", WorkerId("worker-a"))
@@ -89,6 +106,56 @@ class InMemoryTaskRepositoryTest {
 
         assertNull(renewed)
         assertEquals(t0.plusSeconds(32), repository.get(running.id)?.leaseExpiresAt)
+    }
+
+    @Test
+    fun heartbeatAfterExpiredScanMakesObservedLeaseCasStale() = runTest {
+        val repository = InMemoryTaskRepository()
+        val worker = WorkerId("worker-a")
+        val running = runningTask(repository, "scan-heartbeat-race", worker)
+        val observedLease = checkNotNull(running.leaseExpiresAt)
+        val expiredScan = repository.listExpiredLeases(t0.plusSeconds(33))
+        assertEquals(listOf(running.id), expiredScan.map { it.id })
+
+        val renewed = checkNotNull(
+            repository.renewLease(
+                id = running.id,
+                workerId = worker,
+                renewedAt = t0.plusSeconds(31),
+                leaseUntil = t0.plusSeconds(61),
+            )
+        )
+        val interrupted = repository.interruptExpiredLease(
+            id = running.id,
+            expectedState = TaskState.RUNNING,
+            expectedWorkerId = worker,
+            expectedLeaseExpiresAt = observedLease,
+            at = t0.plusSeconds(33),
+        )
+
+        assertNull(interrupted)
+        assertEquals(TaskState.RUNNING, repository.get(running.id)?.state)
+        assertEquals(renewed.leaseExpiresAt, repository.get(running.id)?.leaseExpiresAt)
+    }
+
+    @Test
+    fun unchangedExpiredLeaseCanBeInterruptedAtomically() = runTest {
+        val repository = InMemoryTaskRepository()
+        val worker = WorkerId("worker-a")
+        val running = runningTask(repository, "atomic-expiry", worker)
+        val observedLease = checkNotNull(running.leaseExpiresAt)
+
+        val interrupted = repository.interruptExpiredLease(
+            id = running.id,
+            expectedState = TaskState.RUNNING,
+            expectedWorkerId = worker,
+            expectedLeaseExpiresAt = observedLease,
+            at = t0.plusSeconds(33),
+        )
+
+        assertEquals(TaskState.INTERRUPTED, interrupted?.state)
+        assertNull(interrupted?.claimedBy)
+        assertNull(interrupted?.leaseExpiresAt)
     }
 
     @Test
