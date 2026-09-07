@@ -14,9 +14,16 @@ import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.RuntimeFailure
 import app.lifeos.core.runtime.RuntimeFailureCategory
 import app.lifeos.core.runtime.tasks.ClaimedTaskDispatcher
+import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class CognitiveTaskExecutionResult(
@@ -33,8 +40,21 @@ class CognitiveTaskWorker(
     private val photons: PhotonRepository,
     private val fields: FieldRegistry,
     private val executor: InfluenceExecutor,
+    private val leaseDuration: Duration = Duration.ofSeconds(30),
+    private val heartbeatInterval: Duration = Duration.ofSeconds(10),
     private val now: () -> Instant = Instant::now,
 ) : ClaimedTaskDispatcher {
+    init {
+        require(!leaseDuration.isZero && !leaseDuration.isNegative) {
+            "Worker lease duration must be positive"
+        }
+        require(!heartbeatInterval.isZero && !heartbeatInterval.isNegative) {
+            "Worker heartbeat interval must be positive"
+        }
+        require(heartbeatInterval < leaseDuration) {
+            "Worker heartbeat interval must be shorter than lease duration"
+        }
+    }
 
     override suspend fun dispatch(task: LifeTask) {
         execute(task)
@@ -53,24 +73,30 @@ class CognitiveTaskWorker(
             at = startedAt,
         ) ?: error("Claimed task could not transition to RUNNING: ${task.id.value}")
 
+        val activeTask = renewLeaseOrThrow(running, startedAt)
+
         return try {
-            when (running.type) {
-                TaskType.PROCESS_PHOTON -> processPhoton(running)
-                else -> fail(
-                    running,
-                    photonId = running.inputPhotonIds.singleOrNull(),
+            val work = when (activeTask.type) {
+                TaskType.PROCESS_PHOTON -> withLeaseHeartbeat(activeTask) {
+                    processPhoton(activeTask)
+                }
+                else -> failureWork(
+                    photonId = activeTask.inputPhotonIds.singleOrNull(),
                     failure = RuntimeFailure(
                         category = RuntimeFailureCategory.INVARIANT,
                         source = "cognitive-worker",
-                        message = "Unsupported task type: ${running.type}",
-                        photonId = running.inputPhotonIds.singleOrNull(),
+                        message = "Unsupported task type: ${activeTask.type}",
+                        photonId = activeTask.inputPhotonIds.singleOrNull(),
                     ),
                 )
             }
+            finish(activeTask, work)
+        } catch (leaseLost: LeaseOwnershipLostException) {
+            throw leaseLost
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
                 tasks.transition(
-                    id = running.id,
+                    id = activeTask.id,
                     expected = TaskState.RUNNING,
                     next = TaskState.INTERRUPTED,
                     at = now(),
@@ -78,23 +104,24 @@ class CognitiveTaskWorker(
             }
             throw cancelled
         } catch (error: Exception) {
-            fail(
-                running,
-                photonId = running.inputPhotonIds.singleOrNull(),
-                failure = RuntimeFailure(
-                    category = RuntimeFailureCategory.UNKNOWN,
-                    source = "cognitive-worker",
-                    message = error.message ?: error::class.simpleName ?: "Task execution failed",
-                    photonId = running.inputPhotonIds.singleOrNull(),
+            finish(
+                activeTask,
+                failureWork(
+                    photonId = activeTask.inputPhotonIds.singleOrNull(),
+                    failure = RuntimeFailure(
+                        category = RuntimeFailureCategory.UNKNOWN,
+                        source = "cognitive-worker",
+                        message = error.message ?: error::class.simpleName ?: "Task execution failed",
+                        photonId = activeTask.inputPhotonIds.singleOrNull(),
+                    ),
                 ),
             )
         }
     }
 
-    private suspend fun processPhoton(task: LifeTask): CognitiveTaskExecutionResult {
+    private suspend fun processPhoton(task: LifeTask): WorkResult {
         val photonId = task.inputPhotonIds.singleOrNull()
-            ?: return fail(
-                task,
+            ?: return failureWork(
                 photonId = null,
                 failure = RuntimeFailure(
                     category = RuntimeFailureCategory.INVARIANT,
@@ -106,8 +133,7 @@ class CognitiveTaskWorker(
         val photon = try {
             photons.load(photonId)
         } catch (error: Exception) {
-            return fail(
-                task,
+            return failureWork(
                 photonId = photonId,
                 failure = RuntimeFailure(
                     category = RuntimeFailureCategory.STORAGE,
@@ -116,8 +142,7 @@ class CognitiveTaskWorker(
                     photonId = photonId,
                 ),
             )
-        } ?: return fail(
-            task,
+        } ?: return failureWork(
             photonId = photonId,
             failure = RuntimeFailure(
                 category = RuntimeFailureCategory.STORAGE,
@@ -130,11 +155,13 @@ class CognitiveTaskWorker(
         val expectedRevision = task.inputPhotonRevisions[photonId]
         if (expectedRevision != null) {
             if (photon.revision > expectedRevision) {
-                return supersede(task, photonId)
+                return WorkResult(
+                    photonId = photonId,
+                    finalState = TaskState.SUPERSEDED,
+                )
             }
             if (photon.revision < expectedRevision) {
-                return fail(
-                    task,
+                return failureWork(
                     photonId = photonId,
                     failure = RuntimeFailure(
                         category = RuntimeFailureCategory.STORAGE,
@@ -147,54 +174,96 @@ class CognitiveTaskWorker(
         }
 
         val execution = executor.execute(photon, fields.activeFields())
-        if (execution.failures.isNotEmpty()) {
-            val failedTask = transitionFinal(task, TaskState.FAILED)
-            return CognitiveTaskExecutionResult(
-                taskId = failedTask.id,
+        return if (execution.failures.isNotEmpty()) {
+            WorkResult(
                 photonId = photon.id,
-                finalState = failedTask.state,
+                finalState = TaskState.FAILED,
                 influences = execution.influences,
                 failures = execution.failures,
             )
+        } else {
+            WorkResult(
+                photonId = photon.id,
+                finalState = TaskState.COMPLETED,
+                influences = execution.influences,
+            )
         }
+    }
 
-        val completedTask = transitionFinal(task, TaskState.COMPLETED)
+    private suspend fun finish(task: LifeTask, work: WorkResult): CognitiveTaskExecutionResult {
+        val finalTask = transitionFinal(task, work.finalState)
         return CognitiveTaskExecutionResult(
-            taskId = completedTask.id,
-            photonId = photon.id,
-            finalState = completedTask.state,
-            influences = execution.influences,
-            failures = emptyList(),
+            taskId = finalTask.id,
+            photonId = work.photonId,
+            finalState = finalTask.state,
+            influences = work.influences,
+            failures = work.failures,
         )
     }
 
-    private suspend fun supersede(
-        task: LifeTask,
-        photonId: PhotonId,
-    ): CognitiveTaskExecutionResult {
-        val supersededTask = transitionFinal(task, TaskState.SUPERSEDED)
-        return CognitiveTaskExecutionResult(
-            taskId = supersededTask.id,
-            photonId = photonId,
-            finalState = supersededTask.state,
-            influences = emptyList(),
-            failures = emptyList(),
-        )
-    }
-
-    private suspend fun fail(
-        task: LifeTask,
+    private fun failureWork(
         photonId: PhotonId?,
         failure: RuntimeFailure,
-    ): CognitiveTaskExecutionResult {
-        val failedTask = transitionFinal(task, TaskState.FAILED)
-        return CognitiveTaskExecutionResult(
-            taskId = failedTask.id,
-            photonId = photonId,
-            finalState = failedTask.state,
-            influences = emptyList(),
-            failures = listOf(failure),
+    ) = WorkResult(
+        photonId = photonId,
+        finalState = TaskState.FAILED,
+        failures = listOf(failure),
+    )
+
+    private suspend fun renewLeaseOrThrow(task: LifeTask, renewedAt: Instant): LifeTask = try {
+        tasks.renewLease(
+            id = task.id,
+            workerId = workerId,
+            renewedAt = renewedAt,
+            leaseUntil = renewedAt.plus(leaseDuration),
+        ) ?: throw LeaseOwnershipLostException("Task lease ownership lost: ${task.id.value}")
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        throw LeaseOwnershipLostException(
+            message = "Task lease renewal failed: ${task.id.value}",
+            cause = error,
         )
+    }
+
+    private suspend fun <T> withLeaseHeartbeat(
+        task: LifeTask,
+        block: suspend () -> T,
+    ): T = coroutineScope {
+        val heartbeat = launch {
+            while (isActive) {
+                delay(heartbeatInterval.toMillis())
+                val renewedAt = now()
+                try {
+                    val renewed = tasks.renewLease(
+                        id = task.id,
+                        workerId = workerId,
+                        renewedAt = renewedAt,
+                        leaseUntil = renewedAt.plus(leaseDuration),
+                    )
+                    if (renewed == null) {
+                        this@coroutineScope.cancel(
+                            LeaseOwnershipLostException("Task lease ownership lost: ${task.id.value}")
+                        )
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    this@coroutineScope.cancel(
+                        LeaseOwnershipLostException(
+                            message = "Task lease heartbeat failed: ${task.id.value}",
+                            cause = error,
+                        )
+                    )
+                }
+            }
+        }
+
+        try {
+            block()
+        } finally {
+            heartbeat.cancelAndJoin()
+        }
     }
 
     private suspend fun transitionFinal(task: LifeTask, state: TaskState): LifeTask =
@@ -204,4 +273,20 @@ class CognitiveTaskWorker(
             next = state,
             at = now(),
         ) ?: error("Running task could not transition to $state: ${task.id.value}")
+
+    private data class WorkResult(
+        val photonId: PhotonId?,
+        val finalState: TaskState,
+        val influences: List<FieldInfluence> = emptyList(),
+        val failures: List<RuntimeFailure> = emptyList(),
+    )
+
+    private class LeaseOwnershipLostException(
+        message: String,
+        cause: Throwable? = null,
+    ) : CancellationException(message) {
+        init {
+            if (cause != null) initCause(cause)
+        }
+    }
 }
