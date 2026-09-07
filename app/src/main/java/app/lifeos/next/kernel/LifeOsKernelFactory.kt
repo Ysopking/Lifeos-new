@@ -37,7 +37,8 @@ class LifeOsKernelFactory(
         val store = EncryptedPhotonStore(appContext)
         val matrix = ThoughtMatrix()
         val registry = StaticFieldRegistry(listOf(matrix))
-        val executor = InfluenceExecutor()
+        val health = app.lifeos.core.runtime.health.RecoveryCoordinator()
+        val executor = InfluenceExecutor(health)
 
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
@@ -54,7 +55,7 @@ class LifeOsKernelFactory(
             leaseDuration = TASK_LEASE_DURATION,
             heartbeatInterval = HEARTBEAT_INTERVAL,
         )
-        val durableStateBridge = DurableRuntimeStateBridge()
+        val durableStateBridge = DurableRuntimeStateBridge(health)
         val reportingDispatcher = ReportingCognitiveTaskDispatcher(
             worker = cognitiveWorker,
             observer = durableStateBridge,
@@ -70,6 +71,7 @@ class LifeOsKernelFactory(
             scheduler = taskScheduler,
             wakeSource = schedulerSignal,
             rescanInterval = SCHEDULER_RESCAN_INTERVAL,
+            health = health,
         )
         val leaseRecovery = LeaseRecoveryService(
             tasks = taskRepository,
@@ -79,6 +81,7 @@ class LifeOsKernelFactory(
             scope = scope,
             recovery = leaseRecovery,
             interval = LEASE_RECOVERY_INTERVAL,
+            health = health,
         )
         val durablePipeline = DurableCognitivePipeline(
             taskEngine = taskEngine,
@@ -105,6 +108,8 @@ class LifeOsKernelFactory(
             supervisor = supervisor,
             scope = scope,
             durableResources = durableResources,
+            health = health,
+            bootGuard = app.lifeos.core.runtime.health.BootLoopGuard(AndroidBootAttemptStore(appContext)),
         )
     }
 
@@ -115,3 +120,4 @@ class LifeOsKernelFactory(
         val SCHEDULER_RESCAN_INTERVAL: Duration = Duration.ofSeconds(5)
     }
 }
+

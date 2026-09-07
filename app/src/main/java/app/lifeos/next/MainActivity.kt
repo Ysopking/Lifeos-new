@@ -31,6 +31,8 @@ private fun LifeOsApp(model: LifeOsViewModel) {
     val state by model.state.collectAsStateWithLifecycle()
     val runtime by model.runtimeState.collectAsStateWithLifecycle()
     val matrix by model.matrixState.collectAsStateWithLifecycle()
+    val health by model.healthState.collectAsStateWithLifecycle()
+    val safeMode by model.safeModeReasons.collectAsStateWithLifecycle()
     var query by rememberSaveable { mutableStateOf("") }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
     val visible = remember(state.photons, query) {
@@ -43,6 +45,10 @@ private fun LifeOsApp(model: LifeOsViewModel) {
             Column(Modifier.safeDrawingPadding().imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("LIFEOS · Gedanken", style = MaterialTheme.typography.headlineMedium)
                 Text("${state.photons.size} gespeichert · lokal verschlüsselt", style = MaterialTheme.typography.bodySmall)
+                if (safeMode.isNotEmpty()) Text(
+                    "Geschützter Modus: automatische Verarbeitung pausiert. Gedanken und Diagnose bleiben verfügbar.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), label = { Text("Gedanken durchsuchen") }, singleLine = true)
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (state.loading) item { Text("Gedanken werden geladen …") }
@@ -72,9 +78,10 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                     onDismissRequest = { diagnostics = false },
                     confirmButton = { TextButton(onClick = { diagnostics = false }) { Text("Schließen") } },
                     title = { Text("App-Diagnose") },
-                    text = { Text("Version ${BuildConfig.VERSION_NAME}\nRuntime: ${if (runtime.running) "aktiv" else "gestoppt"}\nIndexiert: ${matrix.nodes.size}\nVerarbeitet: ${runtime.processed}\nFehlgeschlagen: ${runtime.failed}\nFeldeinflüsse im Verlauf: ${runtime.recentInfluences.size}\nFeldenergie: ${"%.1f".format(matrix.totalEnergy)}\n${runtime.lastError ?: "Kein Runtime-Fehler"}") },
+                    text = { Text("Version ${BuildConfig.VERSION_NAME}\nRuntime: ${if (runtime.running) "aktiv" else "gestoppt"}\nIndexiert: ${matrix.nodes.size}\nVerarbeitet: ${runtime.processed}\nFehlgeschlagen: ${runtime.failed}\nFeldeinflüsse im Verlauf: ${runtime.recentInfluences.size}\nFeldenergie: ${"%.1f".format(matrix.totalEnergy)}\n${runtime.lastError ?: "Kein Runtime-Fehler"}\nSchutzmodus: ${safeMode.joinToString().ifEmpty { "aus" }}\n${health.entries.joinToString("\n") { "${it.key}: ${it.value}" }}") },
                 )
             }
         }
     }
 }
+

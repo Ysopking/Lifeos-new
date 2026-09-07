@@ -9,7 +9,12 @@ data class InfluenceExecutionResult(
     val failures: List<RuntimeFailure>,
 )
 
-class InfluenceExecutor {
+class InfluenceExecutor(
+    private val health: app.lifeos.core.runtime.health.RecoveryCoordinator? = null,
+    private val fieldTimeoutMillis: Long = 30_000,
+) {
+    init { require(fieldTimeoutMillis > 0) }
+
     suspend fun execute(
         photon: Photon,
         fields: List<ForceField>,
@@ -27,7 +32,14 @@ class InfluenceExecutor {
             if (index in completedFieldIndexes) return@forEachIndexed
 
             val influence = try {
-                field.influence(photon)
+                val timedOperation: suspend () -> FieldInfluence? = {
+                    val result = kotlinx.coroutines.withTimeoutOrNull(fieldTimeoutMillis) {
+                        Result.success(field.influence(photon))
+                    } ?: throw java.util.concurrent.TimeoutException("Field budget exceeded")
+                    result.getOrThrow()
+                }
+                val node = app.lifeos.core.runtime.health.HealthNode("field[$index]:${field.javaClass.name}")
+                if (health != null) health.execute(node, timedOperation) else timedOperation()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -50,3 +62,4 @@ class InfluenceExecutor {
         )
     }
 }
+

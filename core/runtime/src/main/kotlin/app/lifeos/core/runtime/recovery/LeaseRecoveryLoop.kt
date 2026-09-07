@@ -14,6 +14,7 @@ class LeaseRecoveryLoop(
     private val recovery: LeaseRecoveryService,
     private val interval: Duration = Duration.ofSeconds(30),
     private val batchSize: Int = 100,
+    private val health: app.lifeos.core.runtime.health.RecoveryCoordinator? = null,
 ) {
     init {
         require(!interval.isZero && !interval.isNegative) {
@@ -28,7 +29,19 @@ class LeaseRecoveryLoop(
         if (job?.isActive == true) return
         job = scope.launch {
             while (currentCoroutineContext().isActive) {
-                drainExpiredLeases()
+
+                try {
+                    if (health == null) drainExpiredLeases() else if (!health.safeMode.active) {
+                        health.execute(app.lifeos.core.runtime.health.HealthNodes.TaskStore) {
+                            drainExpiredLeases()
+                        }
+                    }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    if (health == null) throw error
+                    // Keep the loop alive; its existing interval bounds repeated attempts.
+                }
                 delay(interval.toMillis())
             }
         }
@@ -47,3 +60,4 @@ class LeaseRecoveryLoop(
         }
     }
 }
+

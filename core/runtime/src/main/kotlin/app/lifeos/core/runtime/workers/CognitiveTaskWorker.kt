@@ -142,6 +142,8 @@ class CognitiveTaskWorker(
 
         val photon = try {
             photons.load(photonId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
             return failureWork(
                 photonId = photonId,
@@ -393,3 +395,4 @@ class CognitiveTaskWorker(
         }
     }
 }
+

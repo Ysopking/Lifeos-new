@@ -4,6 +4,8 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
 import app.lifeos.core.runtime.RuntimeSupervisor
+import app.lifeos.core.runtime.health.*
+import kotlinx.coroutines.delay
 import app.lifeos.core.runtime.ThoughtMatrix
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +30,8 @@ class LifeOsKernel internal constructor(
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val durableResources: DurableRuntimeResources,
+    val health: RecoveryCoordinator,
+    private val bootGuard: BootLoopGuard,
 ) {
     private val startLock = Any()
     private var bootstrapJob: Job? = null
@@ -61,7 +65,7 @@ class LifeOsKernel internal constructor(
     }
 
     suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult {
-        photonStore.save(photon)
+        health.execute(HealthNodes.PhotonStore) { photonStore.save(photon) }
         mutableBootstrapState.update { current ->
             val photons = (current.photons.filterNot { it.id == photon.id } + photon)
                 .sortedBy { it.provenance.createdAt }
@@ -69,7 +73,8 @@ class LifeOsKernel internal constructor(
         }
 
         return try {
-            runtime.ingest(photon)
+            if (health.safeMode.active) throw ComponentUnavailable(HealthNodes.Runtime)
+            health.execute(HealthNodes.TaskStore) { runtime.ingest(photon) }
             PhotonSubmissionResult(
                 photon = photon,
                 processingQueued = true,
@@ -104,19 +109,50 @@ class LifeOsKernel internal constructor(
         }
 
         try {
-            val report = photonStore.loadReport()
-            recoverExpiredLeases()
-            supervisor.start()
-            report.photons.forEach { runtime.ingest(it) }
+            try {
+                if (bootGuard.begin()) health.safeMode.enter("BootLoop")
+            } catch (error: Exception) {
+                health.safeMode.enter("BootGuard")
+            }
+            val report = health.execute(HealthNodes.PhotonStore) { photonStore.loadReport() }
+            // Publish the vault independently of task storage and automatic processing.
+            if (!health.safeMode.active) {
+                try {
+                    health.execute(HealthNodes.TaskStore) { recoverExpiredLeases() }
+                    supervisor.start()
+                    report.photons.forEach { photon ->
+                        health.execute(HealthNodes.TaskStore) { runtime.ingest(photon) }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    health.safeMode.enter("BootstrapRuntime")
+                    supervisor.stop()
+                }
+            }
             mutableBootstrapState.value = KernelBootstrapState(
                 status = KernelBootstrapStatus.READY,
                 photons = report.photons,
                 unreadableFiles = report.unreadableFiles.size,
             )
+            health.graph.record(HealthNodes.Kernel, if (health.safeMode.active)
+                HealthState.DEGRADED else HealthState.HEALTHY, "vault-ready")
+            if (!health.safeMode.active) {
+                // Only a stable runtime window clears consecutive incomplete boots.
+                delay(60_000)
+                val states = health.graph.states.value
+                if (!health.safeMode.active && runtime.state.value.running &&
+                    states[HealthNodes.TaskScheduler.id] == HealthState.HEALTHY &&
+                    states[HealthNodes.TaskStore.id] == HealthState.HEALTHY) {
+                    try { bootGuard.markStable() } catch (error: Exception) {
+                        health.safeMode.enter("BootGuard")
+                    }
+                }
+            }
         } catch (cancelled: CancellationException) {
             mutableBootstrapState.update {
                 it.copy(
-                    status = KernelBootstrapStatus.CREATED,
+                    status = if (it.status == KernelBootstrapStatus.READY) it.status else KernelBootstrapStatus.CREATED,
                     failureMessage = null,
                 )
             }
@@ -142,3 +178,4 @@ class LifeOsKernel internal constructor(
         const val LEASE_RECOVERY_BATCH_SIZE = 100
     }
 }
+

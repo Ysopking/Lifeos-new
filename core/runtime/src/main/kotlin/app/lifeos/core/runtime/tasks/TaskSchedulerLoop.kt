@@ -15,6 +15,7 @@ class TaskSchedulerLoop(
     private val wakeSource: TaskSchedulerWakeSource,
     private val batchSize: Int = 16,
     private val rescanInterval: Duration = Duration.ofSeconds(30),
+    private val health: app.lifeos.core.runtime.health.RecoveryCoordinator? = null,
 ) {
     init {
         require(batchSize > 0) { "Scheduler batch size must be positive" }
@@ -29,7 +30,19 @@ class TaskSchedulerLoop(
         if (job?.isActive == true) return
         job = scope.launch {
             while (currentCoroutineContext().isActive) {
-                drainRunnableWork()
+
+                try {
+                    if (health == null) drainRunnableWork() else if (!health.safeMode.active) {
+                        health.execute(app.lifeos.core.runtime.health.HealthNodes.TaskScheduler) {
+                            drainRunnableWork()
+                        }
+                    }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    if (health == null) throw error
+                    // Keep the loop alive; its existing interval bounds repeated attempts.
+                }
                 withTimeoutOrNull(rescanInterval.toMillis()) {
                     wakeSource.awaitWake()
                 }
@@ -50,3 +63,4 @@ class TaskSchedulerLoop(
         }
     }
 }
+

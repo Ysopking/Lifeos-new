@@ -30,6 +30,8 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     val state = mutableState.asStateFlow()
     val runtimeState = kernel.runtime.state
     val matrixState = kernel.matrix.state
+    val healthState = kernel.health.graph.states
+    val safeModeReasons = kernel.health.safeMode.reasons
 
     init {
         observeKernel()
@@ -121,3 +123,4 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         const val LOAD_ERROR_MESSAGE = "Speicher konnte nicht geladen werden. Bitte erneut versuchen."
     }
 }
+

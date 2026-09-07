@@ -21,7 +21,7 @@ The last 100 field influences are kept in memory for runtime diagnostics. Persis
 Requires JDK 17, Android SDK 37, Gradle 9.3.1 and AGP 9.1.1. Target SDK remains 36; minimum SDK is 26. Dependencies are kept on the existing project versions.
 
 ```bash
-gradle test :app:lintDebug :app:assembleDebug :app:assembleRelease
+gradle test :app:lintDebug :app:assembleDebug
 ```
 
 CI uploads `LIFEOS-Next-debug` and `LIFEOS-validation`. Release compilation verifies R8/resource shrinking, but the release APK is unsigned until a signing setup is provided. No credentials, signing keys or user content belong in this repository.
@@ -36,3 +36,8 @@ CI uploads `LIFEOS-Next-debug` and `LIFEOS-validation`. Release compilation veri
 ## Review coverage
 
 All source, test, manifest, resource, Gradle, CI and repository documentation files were reviewed in this optimization pass. Files with no concrete required change were retained. New automated checks cover field failure isolation, cancellation/restart, stale revisions, numeric validation and malformed UTF-8, alongside existing codec compatibility tests. This is a functional optimization pass, not a measured battery/performance benchmark or complete security audit.
+
+
+## Current development route
+
+The user-defined 20-block plan supersedes the previous A–J plan. Block 1 health implementation and outstanding acceptance checks are tracked in [docs/BLOCK-1-HEALTH.md](docs/BLOCK-1-HEALTH.md). Only Debug APK is an active build target. Subsequent blocks remain gated on tests, lint, Debug build and the current block’s Definition of Done.
