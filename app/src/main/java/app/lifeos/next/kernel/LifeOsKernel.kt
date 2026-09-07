@@ -1,6 +1,9 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
+import app.lifeos.core.language.GoalPhotonFactory
+import app.lifeos.core.language.LanguageUnderstandingEngine
+import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
@@ -39,6 +42,9 @@ class LifeOsKernel internal constructor(
     val cognitiveTriggers: CognitiveTriggerSink,
     /** Lazily probes and selects the strongest offline MMSI execution path supported by this device. */
     val mmsiRuntime: MmsiRuntimeBackendProbe,
+    private val languageUnderstanding: LanguageUnderstandingEngine,
+    private val goalPhotonFactory: GoalPhotonFactory,
+    private val languageContextBuilder: PhotonLanguageContextBuilder,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
@@ -75,6 +81,42 @@ class LifeOsKernel internal constructor(
         supervisor.stop()
     }
 
+    /**
+     * Persists the user's exact utterance first, then derives a structured GoalPhoton from local,
+     * deterministic language understanding. The original text is never replaced by interpretation.
+     */
+    suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
+        require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
+        val context = languageContextBuilder.build(
+            photons = mutableBootstrapState.value.photons,
+            now = photon.provenance.createdAt,
+            excludeIds = setOf(photon.id),
+        )
+        val source = persistAndIngest(photon)
+        return try {
+            val understanding = languageUnderstanding.understand(photon.content, context)
+            val goalPhoton = goalPhotonFactory.create(
+                result = understanding,
+                sourcePhotonId = photon.id,
+                createdAt = photon.provenance.createdAt,
+            )
+            val goal = persistAndIngest(goalPhoton.photon)
+            LanguageSubmissionResult(
+                source = source,
+                understanding = understanding,
+                goalPhoton = goalPhoton,
+                goal = goal,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            LanguageSubmissionResult(
+                source = source,
+                languageFailure = error.message ?: error::class.simpleName,
+            )
+        }
+    }
+
     suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult {
         val previous = photonStore.load(photon.id)
         photonStore.save(photon)
@@ -103,7 +145,7 @@ class LifeOsKernel internal constructor(
                     urgency = 1.0,
                     semanticMass = photon.semanticMass,
                     confidenceImpact = abs(photon.confidence - (previous?.confidence ?: 0.0)),
-                    goalAffinity = if ("chat" in photon.tags) 1.0 else 0.5,
+                    goalAffinity = if ("chat" in photon.tags || "goal" in photon.tags) 1.0 else 0.5,
                 ),
                 targetModules = setOf("Gedankenmatrix"),
                 budget = LIVE_SUBMISSION_BUDGET,

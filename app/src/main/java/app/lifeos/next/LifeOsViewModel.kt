@@ -3,6 +3,7 @@ package app.lifeos.next
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
 import app.lifeos.next.kernel.KernelBootstrapStatus
@@ -21,6 +22,7 @@ data class LifeOsState(
     val loadFailed: Boolean = false,
     val unreadable: Int = 0,
     val error: String? = null,
+    val lastGoal: GoalFrame? = null,
 )
 
 class LifeOsViewModel(application: Application) : AndroidViewModel(application) {
@@ -70,14 +72,16 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                val result = kernel.persistAndIngest(photon)
+                val result = kernel.persistUserUtterance(photon)
                 mutableState.update {
                     it.copy(
                         draft = "",
-                        error = if (result.processingQueued) {
-                            null
-                        } else {
-                            "Gedanke wurde gespeichert, konnte aber nicht zur Verarbeitung eingereiht werden."
+                        lastGoal = result.understanding?.goal ?: it.lastGoal,
+                        error = when {
+                            result.languageFailure != null -> "Gedanke wurde gespeichert, aber das lokale Sprachverständnis ist fehlgeschlagen."
+                            !result.source.processingQueued -> "Gedanke wurde gespeichert, konnte aber nicht zur Verarbeitung eingereiht werden."
+                            result.goal?.processingQueued != true -> "Gedanke wurde verstanden und gespeichert, das abgeleitete Ziel konnte aber nicht zur Verarbeitung eingereiht werden."
+                            else -> null
                         },
                     )
                 }
@@ -101,7 +105,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                 mutableState.update { current ->
                     val loadError = bootstrap.status == KernelBootstrapStatus.FAILED
                     current.copy(
-                        photons = bootstrap.photons.asReversed(),
+                        photons = bootstrap.photons.filterNot { "goal" in it.tags }.asReversed(),
                         loading = bootstrap.status == KernelBootstrapStatus.CREATED ||
                             bootstrap.status == KernelBootstrapStatus.LOADING,
                         loadFailed = loadError,
