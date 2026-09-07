@@ -157,7 +157,11 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
     ): LifeTask? = ioLocked {
         require(leaseUntil.isAfter(renewedAt)) { "Renewed task lease must expire after renewal" }
         val current = readTaskIfPresentInternal(id) ?: return@ioLocked null
-        if (current.state !in LEASED_STATES || current.claimedBy != workerId) {
+        if (
+            current.state !in LEASED_STATES ||
+            current.claimedBy != workerId ||
+            current.leaseExpiresAt?.isAfter(renewedAt) != true
+        ) {
             return@ioLocked null
         }
 
