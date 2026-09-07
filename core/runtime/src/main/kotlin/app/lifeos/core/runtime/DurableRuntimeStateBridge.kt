@@ -33,153 +33,47 @@ class DurableRuntimeStateBridge(
 
     fun markFailed(error: Throwable) {
         health?.graph?.record(app.lifeos.core.runtime.health.HealthNodes.Runtime,
-            app.li…4889 tokens truncated…WorkResult): CognitiveTaskExecutionResult {
-        val finalTask = if (work.finalState == TaskState.FAILED) {
-            scheduleRetryOrFinish(task, work.failures)
-        } else {
-            finishOwnedExecution(task, work.finalState)
+            app.lifeos.core.runtime.health.HealthState.UNHEALTHY, "runtime-failed")
+        health?.safeMode?.enter("Runtime")
+        mutableState.update { previous ->
+            previous.copy(
+                status = RuntimeStatus.FAILED,
+                lastFailure = RuntimeFailure(
+                    category = RuntimeFailureCategory.UNKNOWN,
+                    source = "durable-runtime",
+                    message = error.message ?: error::class.simpleName ?: "Durable runtime failure",
+                    photonId = previous.lastPhotonId,
+                ),
+            )
         }
+    }
 
-        if (finalTask.state == TaskState.COMPLETED || finalTask.state == TaskState.SUPERSEDED) {
-            checkpointManager.clearBestEffort(task.id)
+    override suspend fun onExecutionResult(result: CognitiveTaskExecutionResult) {
+        mutableState.update { previous ->
+            val completed = result.finalState == TaskState.COMPLETED
+            val failed = result.finalState == TaskState.FAILED
+            previous.copy(
+                processed = previous.processed + if (completed) 1 else 0,
+                failed = previous.failed + if (failed) 1 else 0,
+                lastPhotonId = result.photonId ?: previous.lastPhotonId,
+                lastFailure = result.failures.lastOrNull() ?: previous.lastFailure,
+                recentInfluences = (previous.recentInfluences + result.influences).takeLast(100),
+            )
         }
-
-        return CognitiveTaskExecutionResult(
-            taskId = finalTask.id,
-            photonId = work.photonId,
-            finalState = finalTask.state,
-            influences = work.influences,
-            failures = work.failures,
-        )
     }
 
-    private suspend fun scheduleRetryOrFinish(
-        task: LifeTask,
-        failures: List<RuntimeFailure>,
-    ): LifeTask {
-        val scheduledAt = now()
-        val retry = retryPolicy.nextRetry(
-            task = task,
-            failures = failures,
-            scheduledAt = scheduledAt,
-        ) ?: return finishOwnedExecution(task, TaskState.FAILED)
-
-        return tasks.scheduleRetry(
-            id = task.id,
-            workerId = workerId,
-            retryAt = retry.retryAt,
-            scheduledAt = scheduledAt,
-        ) ?: throw LeaseOwnershipLostException(
-            "Task execution ownership lost before retry scheduling: ${task.id.value}"
-        )
-    }
-
-    private fun failureWork(
-        photonId: PhotonId?,
-        failure: RuntimeFailure,
-    ) = WorkResult(
-        photonId = photonId,
-        finalState = TaskState.FAILED,
-        failures = listOf(failure),
-    )
-
-    private suspend fun renewLeaseOrThrow(task: LifeTask, renewedAt: Instant): LifeTask = try {
-        tasks.renewLease(
-            id = task.id,
-            workerId = workerId,
-            renewedAt = renewedAt,
-            leaseUntil = renewedAt.plus(leaseDuration),
-        ) ?: throw LeaseOwnershipLostException("Task lease ownership lost: ${task.id.value}")
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (leaseLost: LeaseOwnershipLostException) {
-        throw leaseLost
-    } catch (error: Exception) {
-        throw LeaseOwnershipLostException(
-            message = "Task lease renewal failed: ${task.id.value}",
-            cause = error,
-        )
-    }
-
-    private suspend fun <T> withLeaseHeartbeat(
-        task: LifeTask,
-        block: suspend () -> T,
-    ): T = try {
-        coroutineScope {
-            val heartbeat = launch {
-                while (isActive) {
-                    delay(heartbeatInterval.toMillis())
-                    val renewedAt = now()
-                    try {
-                        val renewed = tasks.renewLease(
-                            id = task.id,
-                            workerId = workerId,
-                            renewedAt = renewedAt,
-                            leaseUntil = renewedAt.plus(leaseDuration),
-                        )
-                        if (renewed == null) {
-                            this@coroutineScope.cancel(
-                                LeaseOwnershipLostCancellation(
-                                    "Task lease ownership lost: ${task.id.value}"
-                                )
-                            )
-                        }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
-                        this@coroutineScope.cancel(
-                            LeaseOwnershipLostCancellation(
-                                message = "Task lease heartbeat failed: ${task.id.value}",
-                                cause = error,
-                            )
-                        )
-                    }
-                }
-            }
-
-            try {
-                block()
-            } finally {
-                heartbeat.cancelAndJoin()
-            }
-        }
-    } catch (leaseLost: LeaseOwnershipLostCancellation) {
-        throw LeaseOwnershipLostException(
-            message = leaseLost.message ?: "Task lease ownership lost: ${task.id.value}",
-            cause = leaseLost.cause,
-        )
-    }
-
-    private suspend fun finishOwnedExecution(task: LifeTask, state: TaskState): LifeTask {
-        val finishedAt = now()
-        return tasks.finishExecution(
-            id = task.id,
-            workerId = workerId,
-            finalState = state,
-            finishedAt = finishedAt,
-        ) ?: throw LeaseOwnershipLostException(
-            "Task execution ownership lost before $state: ${task.id.value}"
-        )
-    }
-
-    private data class WorkResult(
-        val photonId: PhotonId?,
-        val finalState: TaskState,
-        val influences: List<FieldInfluence> = emptyList(),
-        val failures: List<RuntimeFailure> = emptyList(),
-    )
-
-    private class LeaseOwnershipLostException(
-        message: String,
-        cause: Throwable? = null,
-    ) : Exception(message, cause)
-
-    private class LeaseOwnershipLostCancellation(
-        message: String,
-        cause: Throwable? = null,
-    ) : CancellationException(message) {
-        init {
-            if (cause != null) initCause(cause)
+    override suspend fun onDispatchFailure(task: LifeTask, error: Exception) {
+        health?.graph?.record(app.lifeos.core.runtime.health.HealthNodes.Worker,
+            app.lifeos.core.runtime.health.HealthState.DEGRADED, "dispatch-failure")
+        mutableState.update { previous ->
+            previous.copy(
+                lastFailure = RuntimeFailure(
+                    category = RuntimeFailureCategory.UNKNOWN,
+                    source = "durable-dispatch",
+                    message = error.message ?: error::class.simpleName ?: "Durable dispatch failure",
+                    photonId = task.inputPhotonIds.singleOrNull(),
+                ),
+            )
         }
     }
 }
