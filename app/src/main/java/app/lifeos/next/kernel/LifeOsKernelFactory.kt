@@ -11,6 +11,13 @@ import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.StaticFieldRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
+import app.lifeos.core.runtime.health.CircuitBreaker
+import app.lifeos.core.runtime.health.HealthGate
+import app.lifeos.core.runtime.health.HealthGraph
+import app.lifeos.core.runtime.health.HealthNodeId
+import app.lifeos.core.runtime.health.HealthTaskExecutionObserver
+import app.lifeos.core.runtime.health.QuarantineRegistry
+import app.lifeos.core.runtime.health.RuntimeHealthMonitor
 import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
@@ -19,6 +26,7 @@ import app.lifeos.core.runtime.tasks.DurableTaskEngine
 import app.lifeos.core.runtime.tasks.TaskScheduler
 import app.lifeos.core.runtime.tasks.TaskSchedulerLoop
 import app.lifeos.core.runtime.workers.CognitiveTaskWorker
+import app.lifeos.core.runtime.workers.CompositeDurableTaskExecutionObserver
 import app.lifeos.core.runtime.workers.ReportingCognitiveTaskDispatcher
 import java.time.Duration
 import kotlinx.coroutines.CoroutineDispatcher
@@ -39,6 +47,11 @@ class LifeOsKernelFactory(
         val registry = StaticFieldRegistry(listOf(matrix))
         val executor = InfluenceExecutor()
 
+        val healthGraph = HealthGraph()
+        val circuitBreaker = CircuitBreaker()
+        val quarantineRegistry = QuarantineRegistry()
+        val healthGate = HealthGate(circuitBreaker, quarantineRegistry)
+
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
         val schedulerSignal = ConflatedTaskSchedulerSignal()
@@ -55,9 +68,17 @@ class LifeOsKernelFactory(
             heartbeatInterval = HEARTBEAT_INTERVAL,
         )
         val durableStateBridge = DurableRuntimeStateBridge()
+        val healthTaskObserver = HealthTaskExecutionObserver(
+            workerNodeId = HealthNodeId("worker:${durableWorkerId.value}"),
+            graph = healthGraph,
+        )
+        val executionObserver = CompositeDurableTaskExecutionObserver(
+            primary = durableStateBridge,
+            secondary = listOf(healthTaskObserver),
+        )
         val reportingDispatcher = ReportingCognitiveTaskDispatcher(
             worker = cognitiveWorker,
-            observer = durableStateBridge,
+            observer = executionObserver,
         )
         val taskScheduler = TaskScheduler(
             tasks = taskRepository,
@@ -90,12 +111,22 @@ class LifeOsKernelFactory(
             pipeline = durablePipeline,
             stateBridge = durableStateBridge,
         )
+        val runtimeHealthMonitor = RuntimeHealthMonitor(
+            scope = scope,
+            runtime = durableRuntime,
+            graph = healthGraph,
+        ).also { it.start() }
         val supervisor = RuntimeSupervisor(durableRuntime)
         val durableResources = DurableRuntimeResources(
             runtime = durableRuntime,
             taskRepository = taskRepository,
             checkpointRepository = checkpointRepository,
             leaseRecovery = leaseRecovery,
+            healthGraph = healthGraph,
+            circuitBreaker = circuitBreaker,
+            quarantineRegistry = quarantineRegistry,
+            healthGate = healthGate,
+            runtimeHealthMonitor = runtimeHealthMonitor,
         )
 
         return LifeOsKernel(
