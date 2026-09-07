@@ -31,9 +31,9 @@ import kotlinx.coroutines.withContext
 /**
  * File-backed encrypted TaskRepository for the private LIFEOS process.
  *
- * The repository serializes all state-changing operations with a Mutex, so a
- * QUEUED task can be claimed by at most one worker inside the app process.
- * Multi-process locking is intentionally out of scope for the current runtime.
+ * State-changing operations are serialized by a process-local Mutex. Worker-owned
+ * execution transitions use explicit owner/lease CAS methods instead of the generic
+ * transition path.
  */
 class EncryptedTaskRepository(context: Context) : TaskRepository {
     private val directory = context.filesDir.resolve("task-vault")
@@ -55,11 +55,7 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
     }
 
     override suspend fun get(id: TaskId): LifeTask? = ioLocked {
-        ensureDirectory()
-        val file = taskFile(id)
-        val backup = directory.resolve("${file.name}.bak")
-        if (!file.exists() && !backup.exists()) return@ioLocked null
-        readTaskInternal(file.name)
+        readTaskIfPresentInternal(id)
     }
 
     override suspend fun findByIdempotencyKey(key: String): LifeTask? = ioLocked {
@@ -98,8 +94,7 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
         report.tasks
             .asSequence()
             .filter { task ->
-                task.state in LEASED_STATES &&
-                    task.leaseExpiresAt?.isAfter(now) == false
+                task.state in LEASED_STATES && task.leaseExpiresAt?.isAfter(now) == false
             }
             .sortedWith(compareBy<LifeTask> { it.leaseExpiresAt }.thenBy { it.createdAt })
             .take(limit)
@@ -113,19 +108,18 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
         at: Instant,
     ): LifeTask? = ioLocked {
         require(next != TaskState.CLAIMED) { "Use claim() for QUEUED -> CLAIMED" }
-        require(!(expected == TaskState.CLAIMED && next == TaskState.RUNNING)) {
-            "Use startExecution() for CLAIMED -> RUNNING"
+        require(expected !in LEASED_STATES) {
+            "Use owner-safe execution operations for transitions from leased task states"
         }
         val current = readTaskIfPresentInternal(id) ?: return@ioLocked null
         if (current.state != expected) return@ioLocked null
 
         TaskStateMachine.requireTransition(expected, next)
-        val keepsLease = next == TaskState.RUNNING || next == TaskState.CHECKPOINTED
         val updated = current.copy(
             state = next,
             updatedAt = at,
-            claimedBy = if (keepsLease) current.claimedBy else null,
-            leaseExpiresAt = if (keepsLease) current.leaseExpiresAt else null,
+            claimedBy = null,
+            leaseExpiresAt = null,
         )
         writeTaskInternal(updated)
         updated
@@ -177,6 +171,87 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
         running
     }
 
+    override suspend fun finishExecution(
+        id: TaskId,
+        workerId: WorkerId,
+        finalState: TaskState,
+        finishedAt: Instant,
+    ): LifeTask? = ioLocked {
+        require(finalState in EXECUTION_TERMINAL_STATES) {
+            "Execution can finish only as COMPLETED, SUPERSEDED, or FAILED"
+        }
+        val current = readTaskIfPresentInternal(id) ?: return@ioLocked null
+        if (
+            current.state !in EXECUTION_STATES ||
+            current.claimedBy != workerId ||
+            current.leaseExpiresAt?.isAfter(finishedAt) != true
+        ) {
+            return@ioLocked null
+        }
+
+        TaskStateMachine.requireTransition(current.state, finalState)
+        val finished = current.copy(
+            state = finalState,
+            updatedAt = finishedAt,
+            scheduledAt = null,
+            claimedBy = null,
+            leaseExpiresAt = null,
+        )
+        writeTaskInternal(finished)
+        finished
+    }
+
+    override suspend fun interruptExecution(
+        id: TaskId,
+        workerId: WorkerId,
+        interruptedAt: Instant,
+    ): LifeTask? = ioLocked {
+        val current = readTaskIfPresentInternal(id) ?: return@ioLocked null
+        if (current.state !in EXECUTION_STATES || current.claimedBy != workerId) {
+            return@ioLocked null
+        }
+
+        TaskStateMachine.requireTransition(current.state, TaskState.INTERRUPTED)
+        val interrupted = current.copy(
+            state = TaskState.INTERRUPTED,
+            updatedAt = interruptedAt,
+            scheduledAt = null,
+            claimedBy = null,
+            leaseExpiresAt = null,
+        )
+        writeTaskInternal(interrupted)
+        interrupted
+    }
+
+    override suspend fun scheduleRetry(
+        id: TaskId,
+        workerId: WorkerId,
+        retryAt: Instant,
+        scheduledAt: Instant,
+    ): LifeTask? = ioLocked {
+        require(!retryAt.isBefore(scheduledAt)) { "Retry time must not precede scheduling time" }
+        val current = readTaskIfPresentInternal(id) ?: return@ioLocked null
+        if (
+            current.state !in EXECUTION_STATES ||
+            current.claimedBy != workerId ||
+            current.leaseExpiresAt?.isAfter(scheduledAt) != true ||
+            current.attempt >= current.maxAttempts
+        ) {
+            return@ioLocked null
+        }
+
+        TaskStateMachine.requireTransition(current.state, TaskState.RETRY_WAIT)
+        val retry = current.copy(
+            state = TaskState.RETRY_WAIT,
+            updatedAt = scheduledAt,
+            scheduledAt = retryAt,
+            claimedBy = null,
+            leaseExpiresAt = null,
+        )
+        writeTaskInternal(retry)
+        retry
+    }
+
     override suspend fun renewLease(
         id: TaskId,
         workerId: WorkerId,
@@ -223,6 +298,7 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
         val interrupted = current.copy(
             state = TaskState.INTERRUPTED,
             updatedAt = at,
+            scheduledAt = null,
             claimedBy = null,
             leaseExpiresAt = null,
         )
@@ -368,10 +444,12 @@ class EncryptedTaskRepository(context: Context) : TaskRepository {
     )
 
     private companion object {
-        val LEASED_STATES = setOf(
-            TaskState.CLAIMED,
-            TaskState.RUNNING,
-            TaskState.CHECKPOINTED,
+        val LEASED_STATES = setOf(TaskState.CLAIMED, TaskState.RUNNING, TaskState.CHECKPOINTED)
+        val EXECUTION_STATES = setOf(TaskState.RUNNING, TaskState.CHECKPOINTED)
+        val EXECUTION_TERMINAL_STATES = setOf(
+            TaskState.COMPLETED,
+            TaskState.SUPERSEDED,
+            TaskState.FAILED,
         )
         const val KEY_ALIAS = "lifeos.task.v1"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
