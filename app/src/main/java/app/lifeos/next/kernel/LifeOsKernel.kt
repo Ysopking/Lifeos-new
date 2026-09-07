@@ -27,6 +27,8 @@ class LifeOsKernel internal constructor(
     val photonStore: PhotonRepository,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
+    @Suppress("unused")
+    private val durableResources: DurableRuntimeResources,
 ) {
     private val startLock = Any()
     private var bootstrapJob: Job? = null
