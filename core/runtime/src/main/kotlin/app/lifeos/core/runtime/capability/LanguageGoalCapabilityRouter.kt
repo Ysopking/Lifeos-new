@@ -24,8 +24,9 @@ class LanguageGoalCapabilityMapper {
     fun plan(goal: GoalFrame): GoalCapabilityPlan {
         val requirements = when (goal.intent) {
             IntentType.CREATE_IMAGE -> listOf(
-                requirement("scene.construct.procedural", outputs = setOf("scene-geometry")),
-                requirement("image.render.mmsi", inputs = setOf("scene-geometry"), outputs = setOf("image-photon")),
+                requirement("scene.construct.procedural", outputs = setOf("scene-graph")),
+                requirement("scene.rasterize.mmsi", inputs = setOf("scene-graph"), outputs = setOf("mmsi-geometry-buffers")),
+                requirement("image.render.mmsi", inputs = setOf("mmsi-geometry-buffers"), outputs = setOf("image-photon")),
             )
             IntentType.TRANSFORM_IMAGE -> listOf(
                 requirement("image.transform.mmsi", inputs = setOf("image-photon"), outputs = setOf("image-photon")),
