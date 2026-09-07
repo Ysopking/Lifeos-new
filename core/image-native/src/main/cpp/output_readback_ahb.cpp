@@ -1,11 +1,12 @@
 #include <jni.h>
 #include <android/hardware_buffer.h>
 #include <android/hardware_buffer_jni.h>
-#include <android/sync.h>
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <poll.h>
 #include <unistd.h>
 
 namespace {
@@ -31,6 +32,17 @@ bool validate_blob(AHardwareBuffer* buffer, std::uint64_t requiredBytes) {
         desc.layers == 1 &&
         desc.width >= requiredBytes &&
         (desc.usage & AHARDWAREBUFFER_USAGE_CPU_READ_RARELY) != 0;
+}
+
+bool wait_fence(int fd, int timeoutMs) {
+    pollfd descriptor{};
+    descriptor.fd = fd;
+    descriptor.events = POLLIN;
+    int result;
+    do {
+        result = poll(&descriptor, 1, timeoutMs);
+    } while (result < 0 && errno == EINTR);
+    return result > 0 && (descriptor.revents & (POLLIN | POLLERR | POLLHUP)) != 0;
 }
 
 std::uint8_t quantize(float value) {
@@ -82,9 +94,9 @@ Java_app_lifeos_core_image_nativebackend_NativeMmsiOutputReadbackBridge_nativeRe
     }
 
     if (acquireFenceFd >= 0) {
-        const int waitResult = sync_wait(acquireFenceFd, timeoutMs);
+        const bool signaled = wait_fence(acquireFenceFd, timeoutMs);
         closeFence();
-        if (waitResult < 0) {
+        if (!signaled) {
             throw_illegal_state(env, "Timed out waiting for MMSI render completion");
             return;
         }
