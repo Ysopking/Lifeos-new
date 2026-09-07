@@ -108,9 +108,8 @@ sealed interface GeneratedToolPromotionEvaluation {
 
 /**
  * Explicit lifecycle gate after workshop verification. Nothing here executes a
- * generated artifact. It only controls whether a verified artifact may enter a
- * trial cohort and whether accumulated trial evidence is strong enough for an
- * explicit promotion to ACTIVE.
+ * generated artifact. It controls sandbox trial admission, per-invocation
+ * permission permits, trial evidence and explicit promotion to ACTIVE.
  */
 class GeneratedToolLifecycleCoordinator(
     private val tools: GeneratedToolRegistry,
@@ -144,6 +143,27 @@ class GeneratedToolLifecycleCoordinator(
                 GeneratedToolTrialAdmissionResult.Rejected(rejected, admission.reasons)
             }
         }
+    }
+
+    suspend fun authorizeTrialInvocation(
+        toolId: String,
+        invocationId: String,
+        requestedPermissions: Set<ToolPermission>,
+    ): GeneratedToolInvocationDecision {
+        val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        val decision = sandboxAdmission.authorizeTrialInvocation(
+            record = record,
+            invocationId = invocationId,
+            requestedPermissions = requestedPermissions,
+        )
+        if (decision is GeneratedToolInvocationDecision.Denied) {
+            tools.transition(
+                toolId = toolId,
+                to = GeneratedToolState.QUARANTINED,
+                message = "sandbox-invocation-denied:${decision.reasons.joinToString(";")}",
+            )
+        }
+        return decision
     }
 
     suspend fun recordTrial(
