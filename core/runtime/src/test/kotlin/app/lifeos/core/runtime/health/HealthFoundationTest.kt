@@ -5,6 +5,8 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.ForceField
 import app.lifeos.core.runtime.InfluenceExecutor
 import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
@@ -126,6 +128,26 @@ class HealthFoundationTest {
         assertTrue(BootLoopGuard(store).begin())
         BootLoopGuard(store).markStable()
         assertFalse(BootLoopGuard(store).begin())
+    }
+
+    @Test fun lateSuccessCannotClearConcurrentQuarantine() = runTest {
+        val health = RecoveryCoordinator()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val operation = launch {
+            health.execute(HealthNodes.Worker) {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        entered.await()
+        assertFailsWith<SecurityException> {
+            health.execute(HealthNodes.Worker) { throw SecurityException() }
+        }
+        release.complete(Unit)
+        operation.join()
+        assertTrue(health.quarantine.contains(HealthNodes.Worker))
+        assertEquals(HealthState.QUARANTINED, health.graph.states.value["Worker"])
     }
 
     @Test fun diagnosticHistoryIsBounded() {

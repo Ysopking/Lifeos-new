@@ -13,19 +13,27 @@ class RecoveryCoordinator(
     private val classifier: FailureClassifier = FailureClassifier(),
     private val breakerFactory: () -> CircuitBreaker = { CircuitBreaker() },
 ) {
+    private val transitionLock = Any()
     private val breakers = mutableMapOf<String, CircuitBreaker>()
     @Synchronized private fun breaker(node: HealthNode) = breakers.getOrPut(node.id, breakerFactory)
 
     suspend fun <T> execute(node: HealthNode, action: suspend () -> T): T {
-        if (quarantine.contains(node)) throw ComponentUnavailable(node)
         val circuit = breaker(node)
-        val token = circuit.acquire() ?: throw ComponentUnavailable(node)
-        if (circuit.state == CircuitBreaker.State.HALF_OPEN) {
-            graph.record(node, HealthState.RECOVERING, "recovery-probe")
+        val token = synchronized(transitionLock) {
+            if (quarantine.contains(node)) throw ComponentUnavailable(node)
+            val acquired = circuit.acquire() ?: throw ComponentUnavailable(node)
+            if (circuit.state == CircuitBreaker.State.HALF_OPEN) {
+                graph.record(node, HealthState.RECOVERING, "recovery-probe")
+            }
+            acquired
         }
         try {
             val result = action()
-            if (circuit.success(token)) graph.record(node, HealthState.HEALTHY, "verified-operation")
+            synchronized(transitionLock) {
+                if (!quarantine.contains(node) && circuit.success(token)) {
+                    graph.record(node, HealthState.HEALTHY, "verified-operation")
+                }
+            }
             return result
         } catch (error: Exception) {
             if (error is CancellationException && error !is TimeoutCancellationException) {
@@ -38,7 +46,8 @@ class RecoveryCoordinator(
                 throw error
             }
             val kind = classifier.classify(error)
-            if (circuit.failure(token)) {
+            synchronized(transitionLock) {
+              if (circuit.failure(token)) {
                 val isolate = kind == FailureKind.INVARIANT || kind == FailureKind.SECURITY
                 if (isolate) quarantine.isolate(node)
                 val state = when {
@@ -48,6 +57,7 @@ class RecoveryCoordinator(
                 }
                 graph.record(node, state, kind.name)
                 if (node.requiredForRuntime && isolate) safeMode.enter(node.id)
+              }
             }
             throw error
         }
