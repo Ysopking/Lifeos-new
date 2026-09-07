@@ -1,14 +1,15 @@
 package app.lifeos.core.scene
 
-import app.lifeos.core.image.ForwardSynthesisContext
-import app.lifeos.core.image.ForwardSynthesisPass
-import app.lifeos.core.image.HyperspectralExpansionPass
-import app.lifeos.core.image.IntrinsicMaterialSample
 import app.lifeos.core.image.ProceduralMmsiProfile
+import app.lifeos.core.image.ProceduralMmsiReferenceShading
 import app.lifeos.core.image.RgbSample
 import app.lifeos.core.image.Rgba8Image
 import app.lifeos.core.image.SurfaceNormal
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.round
 import kotlin.math.roundToInt
+import kotlin.math.tan
 
 interface ProceduralSceneImageRenderer {
     val rendererId: String
@@ -16,17 +17,16 @@ interface ProceduralSceneImageRenderer {
 }
 
 /**
- * Guaranteed offline/no-GPU reference renderer for already-intrinsic procedural scene buffers.
- * It deliberately skips inverse radiometry and applies the same spectral expansion + GGX forward
- * synthesis contract used by the hardware path.
+ * Guaranteed offline/no-GPU renderer for already-intrinsic procedural scene buffers.
+ * It uses the same six-coefficient spectral projection and GGX shading contract as Vulkan, while
+ * retaining deterministic CPU execution when no compatible GPU path exists.
  */
 class ReferenceCpuProceduralMmsiRenderer(
     private val profile: ProceduralMmsiProfile = ProceduralMmsiProfile(),
 ) : ProceduralSceneImageRenderer {
     override val rendererId: String = "mmsi-cpu-procedural-v1"
 
-    private val expansion = HyperspectralExpansionPass(profile.reconstructor)
-    private val forward = ForwardSynthesisPass(profile.reconstructor)
+    private val shading = ProceduralMmsiReferenceShading(profile)
 
     override fun render(buffers: MmsiSceneRasterBuffers): Rgba8Image {
         val pixels = buffers.size.pixelCount
@@ -45,38 +45,53 @@ class ReferenceCpuProceduralMmsiRenderer(
                 buffers.normalsXyz[normalBase + 2].toDouble(),
             ).normalized()
             val roughness = buffers.roughness[pixel].toDouble()
-            val material = IntrinsicMaterialSample(
-                linearDiffuseAlbedo = RgbSample(
+            val shadow = softShadow(pixel, buffers)
+            val ambientOcclusion = (0.35 + 0.65 * normal.z).coerceIn(0.0, 1.0)
+            val color = shading.shade(
+                intrinsicLinearAlbedo = RgbSample(
                     buffers.albedoLinearRgba[albedoBase].toDouble(),
                     buffers.albedoLinearRgba[albedoBase + 1].toDouble(),
                     buffers.albedoLinearRgba[albedoBase + 2].toDouble(),
                 ),
                 normal = normal,
                 roughness = roughness,
-                removedSpecular = 0.0,
-                effectiveLight = 1.0,
-            )
-            val spectral = expansion.execute(
-                material = material,
-                incident = profile.normalizedDaylight.curve,
-                pixelX = pixel % buffers.size.width,
-                pixelY = pixel / buffers.size.width,
-            )
-            val color = forward.execute(
-                pixel = spectral,
-                illuminant = profile.normalizedDaylight,
-                context = ForwardSynthesisContext(
-                    sunDirection = profile.sunDirection,
-                    sunColorLinear = profile.sunColorLinear,
-                    skyAmbientLinear = profile.skyAmbientLinear,
-                    roughness = roughness,
-                ),
+                shadowVisibility = shadow,
+                ambientOcclusion = ambientOcclusion,
             )
             rgba[out] = quantize(color.r)
             rgba[out + 1] = quantize(color.g)
             rgba[out + 2] = quantize(color.b)
         }
         return Rgba8Image(buffers.size.width, buffers.size.height, rgba)
+    }
+
+    private fun softShadow(pixelIndex: Int, buffers: MmsiSceneRasterBuffers): Double {
+        val width = buffers.size.width
+        val height = buffers.size.height
+        val x = pixelIndex % width
+        val y = pixelIndex / width
+        val sourceDepth = buffers.depth[pixelIndex].toDouble()
+        val light = profile.sunDirection.normalized()
+        var visibility = 1.0
+        val tangent = tan(max(profile.sunSolidAngleRad.toDouble(), 1e-4))
+
+        for (step in 1..24) {
+            val t = step * 0.015
+            val offsetX = round(light.x * t * width).toInt()
+            val offsetY = round(light.y * t * height).toInt()
+            val sx = x + offsetX
+            val sy = y + offsetY
+            if (sx !in 0 until width || sy !in 0 until height) break
+            val sampleIndex = sy * width + sx
+            val expectedDepth = sourceDepth + light.z * t
+            val delta = expectedDepth - buffers.depth[sampleIndex]
+            if (delta > 0.001) {
+                val coneRadius = max(t * tangent, 1e-4)
+                val intersection = (delta / coneRadius).coerceIn(0.0, 1.0)
+                visibility = min(visibility, 1.0 - intersection)
+            }
+        }
+        return max(visibility, profile.shadowFloor.toDouble())
     }
 
     private fun quantize(value: Double): Byte =
