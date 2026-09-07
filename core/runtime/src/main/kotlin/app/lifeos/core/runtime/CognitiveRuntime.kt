@@ -1,6 +1,5 @@
 package app.lifeos.core.runtime
 
-import app.lifeos.core.model.FieldInfluence
 import app.lifeos.core.model.Photon
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -13,7 +12,20 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** Owned by one lifecycle scope; start/stop are called on its dispatcher. */
-class CognitiveRuntime(private val scope: CoroutineScope, private val fields: List<ForceField>) {
+class CognitiveRuntime(
+    private val scope: CoroutineScope,
+    private val fieldRegistry: FieldRegistry,
+    private val influenceExecutor: InfluenceExecutor,
+) {
+    constructor(
+        scope: CoroutineScope,
+        fields: List<ForceField>,
+    ) : this(
+        scope = scope,
+        fieldRegistry = StaticFieldRegistry(fields),
+        influenceExecutor = InfluenceExecutor(),
+    )
+
     private val queue = Channel<Photon>(Channel.BUFFERED)
     private var worker: Job? = null
     private val mutableState = MutableStateFlow(RuntimeState())
@@ -25,17 +37,11 @@ class CognitiveRuntime(private val scope: CoroutineScope, private val fields: Li
         val next = scope.launch {
             mutableState.update { it.copy(status = RuntimeStatus.RUNNING) }
             for (photon in queue) {
-                val influences = mutableListOf<FieldInfluence>()
-                var failures = 0
-                for (field in fields) {
-                    try {
-                        field.influence(photon)?.let(influences::add)
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
-                        failures++
-                    }
-                }
+                val result = influenceExecutor.execute(
+                    photon = photon,
+                    fields = fieldRegistry.activeFields(),
+                )
+                val failures = result.failures.size
                 mutableState.update { previous ->
                     previous.copy(
                         processed = previous.processed + if (failures == 0) 1 else 0,
@@ -51,7 +57,7 @@ class CognitiveRuntime(private val scope: CoroutineScope, private val fields: Li
                         } else {
                             previous.lastFailure
                         },
-                        recentInfluences = (previous.recentInfluences + influences).takeLast(100),
+                        recentInfluences = (previous.recentInfluences + result.influences).takeLast(100),
                     )
                 }
             }
