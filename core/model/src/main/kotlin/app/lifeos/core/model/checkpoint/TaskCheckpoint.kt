@@ -52,7 +52,7 @@ interface CheckpointRepository {
     suspend fun delete(id: CheckpointId): Boolean
 }
 
-/** Read-only boot/recovery snapshot boundary; ordinary checkpoint stores need not expose it. */
-interface CheckpointSnapshotRepository : CheckpointRepository {
+/** Read-only durable checkpoint snapshot boundary used by boot/integrity code. */
+fun interface CheckpointSnapshotRepository {
     suspend fun loadReport(): CheckpointLoadReport
 }
