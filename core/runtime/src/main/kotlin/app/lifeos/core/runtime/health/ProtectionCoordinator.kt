@@ -81,7 +81,7 @@ class ProtectionCoordinator(
         resumePolicy: ProtectionResumePolicy = ProtectionResumePolicy.AUTO_AFTER_VERIFICATION,
     ): RuntimeProtectionState {
         require(nodes.isNotEmpty()) { "Quarantine requires at least one health node" }
-        return mutate { base ->
+        val state = mutate { base ->
             val enteredAt = now()
             base.nextRevision(
                 mode = ProtectionMode.QUARANTINED,
@@ -94,7 +94,9 @@ class ProtectionCoordinator(
                 resumePolicy = resumePolicy,
                 advanceGeneration = true,
             )
-        }.also(::projectToRuntime)
+        }
+        projectToRuntime(state)
+        return state
     }
 
     suspend fun enterSafeMode(
@@ -103,20 +105,24 @@ class ProtectionCoordinator(
         actor: ProtectionActor,
         provenance: String,
         resumePolicy: ProtectionResumePolicy = ProtectionResumePolicy.USER_AFTER_VERIFICATION,
-    ): RuntimeProtectionState = mutate { base ->
-        val enteredAt = now()
-        base.nextRevision(
-            mode = ProtectionMode.SAFE_MODE,
-            reasons = reasons,
-            affectedNodes = affectedNodes.mapTo(linkedSetOf()) { ProtectionNodeRef(it.value) },
-            enteredAt = enteredAt,
-            lastVerifiedAt = null,
-            actor = actor,
-            provenance = provenance,
-            resumePolicy = resumePolicy,
-            advanceGeneration = true,
-        )
-    }.also(::projectToRuntime)
+    ): RuntimeProtectionState {
+        val state = mutate { base ->
+            val enteredAt = now()
+            base.nextRevision(
+                mode = ProtectionMode.SAFE_MODE,
+                reasons = reasons,
+                affectedNodes = affectedNodes.mapTo(linkedSetOf()) { ProtectionNodeRef(it.value) },
+                enteredAt = enteredAt,
+                lastVerifiedAt = null,
+                actor = actor,
+                provenance = provenance,
+                resumePolicy = resumePolicy,
+                advanceGeneration = true,
+            )
+        }
+        projectToRuntime(state)
+        return state
+    }
 
     suspend fun requestResume(
         actor: ProtectionActor,
