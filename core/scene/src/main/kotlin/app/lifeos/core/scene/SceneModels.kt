@@ -1,7 +1,5 @@
 package app.lifeos.core.scene
 
-import java.util.UUID
-
 @JvmInline
 value class SceneNodeId(val value: String) {
     init { require(value.isNotBlank()) }
@@ -87,7 +85,24 @@ data class SceneEnvironment(
     val timeText: String? = null,
     val lightingMode: LightingMode,
     val groundMaterial: String,
-)
+    val resolvedLatitudeDeg: Double? = null,
+    val resolvedLongitudeDeg: Double? = null,
+    val resolvedZoneId: String? = null,
+    val resolvedInstantUtc: String? = null,
+    val sunAzimuthDeg: Double? = null,
+    val sunElevationDeg: Double? = null,
+) {
+    init {
+        resolvedLatitudeDeg?.let { require(it in -90.0..90.0) }
+        resolvedLongitudeDeg?.let { require(it in -180.0..180.0) }
+        resolvedZoneId?.let { require(it.isNotBlank()) }
+        resolvedInstantUtc?.let { require(it.isNotBlank()) }
+        sunAzimuthDeg?.let { require(it.isFinite()) }
+        sunElevationDeg?.let { require(it.isFinite()) }
+        val geoComplete = (resolvedLatitudeDeg == null) == (resolvedLongitudeDeg == null)
+        require(geoComplete) { "Resolved latitude and longitude must be present together" }
+    }
+}
 
 data class SceneCamera(
     val presetId: String = "scene-medium-action-v1",
