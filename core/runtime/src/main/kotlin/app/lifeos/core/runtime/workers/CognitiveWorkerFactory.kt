@@ -6,6 +6,7 @@ import app.lifeos.core.model.task.TaskRepository
 import app.lifeos.core.model.worker.WorkerId
 import app.lifeos.core.runtime.FieldRegistry
 import app.lifeos.core.runtime.InfluenceExecutor
+import app.lifeos.core.runtime.field.FieldShadowProcessor
 import app.lifeos.core.runtime.tasks.RetryPolicy
 import java.time.Duration
 import java.time.Instant
@@ -38,6 +39,7 @@ class CognitiveWorkerFactory(
     private val fields: FieldRegistry,
     private val executor: InfluenceExecutor,
     private val checkpoints: CheckpointRepository? = null,
+    private val fieldShadowProcessor: FieldShadowProcessor? = null,
     private val retryPolicy: RetryPolicy = RetryPolicy(),
     private val config: CognitiveWorkerConfig = CognitiveWorkerConfig(),
     private val now: () -> Instant = Instant::now,
@@ -49,6 +51,7 @@ class CognitiveWorkerFactory(
         fields = fields,
         executor = executor,
         checkpoints = checkpoints,
+        fieldShadowProcessor = fieldShadowProcessor,
         retryPolicy = retryPolicy,
         leaseDuration = config.leaseDuration,
         heartbeatInterval = config.heartbeatInterval,
