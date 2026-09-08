@@ -31,14 +31,7 @@ value class BootGenerationId(val value: String) {
     }
 }
 
-enum class BootSnapshotSource {
-    PHOTON,
-    TASK,
-    CHECKPOINT,
-    CAPABILITY,
-    TOOL,
-    FIELD,
-}
+enum class BootSnapshotSource { PHOTON, TASK, CHECKPOINT, CAPABILITY, TOOL, FIELD }
 
 data class BootSnapshotReadFailure(
     val source: BootSnapshotSource,
@@ -52,31 +45,42 @@ data class BootSnapshotReadFailure(
     }
 }
 
-fun interface BootCapabilityStateSource {
-    suspend fun load(): List<CapabilityDescriptor>
+fun interface BootPhotonSource { suspend fun load(): PhotonLoadReport }
+fun interface BootTaskSource { suspend fun load(): TaskLoadReport }
+fun interface BootCheckpointSource { suspend fun load(): CheckpointLoadReport }
+fun interface BootCapabilityStateSource { suspend fun load(): List<CapabilityDescriptor> }
+fun interface BootToolStateSource { suspend fun load(): List<GeneratedToolRecord> }
+fun interface BootFieldSnapshotSource { suspend fun load(): FieldSnapshotLoadReport }
+
+class PhotonRepositoryBootSource(private val repository: PhotonRepository) : BootPhotonSource {
+    override suspend fun load(): PhotonLoadReport = repository.loadReport()
 }
 
-fun interface BootToolStateSource {
-    suspend fun load(): List<GeneratedToolRecord>
+class TaskRepositoryBootSource(private val repository: TaskSnapshotRepository) : BootTaskSource {
+    override suspend fun load(): TaskLoadReport = repository.loadReport()
 }
 
-class CapabilityRegistryBootSource(
-    private val registry: CapabilityRegistry,
-) : BootCapabilityStateSource {
+class CheckpointRepositoryBootSource(
+    private val repository: CheckpointSnapshotRepository,
+) : BootCheckpointSource {
+    override suspend fun load(): CheckpointLoadReport = repository.loadReport()
+}
+
+class CapabilityRegistryBootSource(private val registry: CapabilityRegistry) : BootCapabilityStateSource {
     override suspend fun load(): List<CapabilityDescriptor> = registry.all(includeUnavailable = true)
 }
 
-class GeneratedToolRegistryBootSource(
-    private val registry: GeneratedToolRegistry,
-) : BootToolStateSource {
+class GeneratedToolRegistryBootSource(private val registry: GeneratedToolRegistry) : BootToolStateSource {
     override suspend fun load(): List<GeneratedToolRecord> = registry.snapshot()
 }
 
-enum class BootContextKind {
-    CONVERSATION,
-    PROJECT,
-    GOAL,
+class FieldSnapshotRepositoryBootSource(
+    private val repository: FieldSnapshotRepository,
+) : BootFieldSnapshotSource {
+    override suspend fun load(): FieldSnapshotLoadReport = repository.loadReport()
 }
+
+enum class BootContextKind { CONVERSATION, PROJECT, GOAL }
 
 data class BootContextProjection(
     val kind: BootContextKind,
@@ -126,75 +130,63 @@ data class DurableBootSnapshot(
         require(readFailures == readFailures.sortedWith(readFailureComparator))
     }
 
-    val partial: Boolean
-        get() = readFailures.isNotEmpty()
-
+    val partial: Boolean get() = readFailures.isNotEmpty()
     val activeConversations: List<BootContextProjection>
         get() = contexts.filter { it.kind == BootContextKind.CONVERSATION && it.explicitlyActive }
-
     val activeProjects: List<BootContextProjection>
         get() = contexts.filter { it.kind == BootContextKind.PROJECT && it.explicitlyActive }
-
     val activeGoals: List<BootContextProjection>
         get() = contexts.filter { it.kind == BootContextKind.GOAL && it.explicitlyActive }
 }
 
+/**
+ * Read-only loader for durable boot truth. Source adapters may wrap encrypted repositories or
+ * process configuration registries, but no ViewModel/UI state is accepted by this contract.
+ */
 class BootSnapshotLoader(
-    private val photons: PhotonRepository,
-    private val tasks: TaskSnapshotRepository,
-    private val checkpoints: CheckpointSnapshotRepository,
+    private val photons: BootPhotonSource,
+    private val tasks: BootTaskSource,
+    private val checkpoints: BootCheckpointSource,
     private val capabilities: BootCapabilityStateSource,
     private val tools: BootToolStateSource,
-    private val fieldSnapshots: FieldSnapshotRepository,
+    private val fieldSnapshots: BootFieldSnapshotSource,
     private val now: () -> Instant = Instant::now,
 ) {
     suspend fun load(): DurableBootSnapshot {
         val failures = mutableListOf<BootSnapshotReadFailure>()
 
-        val photonReport = readSource(
-            source = BootSnapshotSource.PHOTON,
-            fallback = PhotonLoadReport(emptyList(), emptyList()),
-            failures = failures,
-        ) { photons.loadReport() }
+        val photonReport = readSource(BootSnapshotSource.PHOTON, PhotonLoadReport(emptyList(), emptyList()), failures) {
+            photons.load()
+        }
         failures += photonReport.unreadableFiles.map {
             BootSnapshotReadFailure(BootSnapshotSource.PHOTON, it, "unreadable-entry")
         }
 
-        val taskReport = readSource(
-            source = BootSnapshotSource.TASK,
-            fallback = TaskLoadReport(emptyList(), emptyList()),
-            failures = failures,
-        ) { tasks.loadReport() }
+        val taskReport = readSource(BootSnapshotSource.TASK, TaskLoadReport(emptyList(), emptyList()), failures) {
+            tasks.load()
+        }
         failures += taskReport.unreadableEntries.map {
             BootSnapshotReadFailure(BootSnapshotSource.TASK, it, "unreadable-entry")
         }
 
         val checkpointReport = readSource(
-            source = BootSnapshotSource.CHECKPOINT,
-            fallback = CheckpointLoadReport(emptyList(), emptyList()),
-            failures = failures,
-        ) { checkpoints.loadReport() }
+            BootSnapshotSource.CHECKPOINT,
+            CheckpointLoadReport(emptyList(), emptyList()),
+            failures,
+        ) { checkpoints.load() }
         failures += checkpointReport.unreadableEntries.map {
             BootSnapshotReadFailure(BootSnapshotSource.CHECKPOINT, it, "unreadable-entry")
         }
 
-        val capabilityState = readSource(
-            source = BootSnapshotSource.CAPABILITY,
-            fallback = emptyList(),
-            failures = failures,
-        ) { capabilities.load() }
-
-        val toolState = readSource(
-            source = BootSnapshotSource.TOOL,
-            fallback = emptyList(),
-            failures = failures,
-        ) { tools.load() }
-
+        val capabilityState = readSource(BootSnapshotSource.CAPABILITY, emptyList(), failures) {
+            capabilities.load()
+        }
+        val toolState = readSource(BootSnapshotSource.TOOL, emptyList(), failures) { tools.load() }
         val fieldReport = readSource(
-            source = BootSnapshotSource.FIELD,
-            fallback = FieldSnapshotLoadReport(emptyList(), emptyList()),
-            failures = failures,
-        ) { fieldSnapshots.loadReport() }
+            BootSnapshotSource.FIELD,
+            FieldSnapshotLoadReport(emptyList(), emptyList()),
+            failures,
+        ) { fieldSnapshots.load() }
         failures += fieldReport.unreadableEntries.map {
             BootSnapshotReadFailure(BootSnapshotSource.FIELD, it, "unreadable-entry")
         }
@@ -211,20 +203,18 @@ class BootSnapshotLoader(
         val canonicalFields = fieldReport.snapshots.sortedWith(fieldSnapshotComparator)
         val canonicalFailures = failures.distinct().sortedWith(readFailureComparator)
 
-        val generationId = fingerprintGeneration(
-            photons = canonicalPhotons,
-            tasks = canonicalTasks,
-            checkpoints = canonicalCheckpoints,
-            contexts = canonicalContexts,
-            capabilities = canonicalCapabilities,
-            workerLeases = canonicalWorkerLeases,
-            tools = canonicalTools,
-            fieldSnapshots = canonicalFields,
-            failures = canonicalFailures,
-        )
-
         return DurableBootSnapshot(
-            generationId = generationId,
+            generationId = fingerprintGeneration(
+                canonicalPhotons,
+                canonicalTasks,
+                canonicalCheckpoints,
+                canonicalContexts,
+                canonicalCapabilities,
+                canonicalWorkerLeases,
+                canonicalTools,
+                canonicalFields,
+                canonicalFailures,
+            ),
             capturedAt = now(),
             photons = canonicalPhotons,
             tasks = canonicalTasks,
@@ -277,10 +267,7 @@ private fun projectContexts(photons: List<Photon>): List<BootContextProjection> 
     }
 }.distinct().sortedWith(contextProjectionComparator)
 
-private data class ParsedContextTag(
-    val kind: BootContextKind,
-    val contextId: String,
-)
+private data class ParsedContextTag(val kind: BootContextKind, val contextId: String)
 
 private fun parseContextTag(tag: String): ParsedContextTag? {
     val parts = tag.split(':', limit = 3)
@@ -299,12 +286,7 @@ private fun parseContextTag(tag: String): ParsedContextTag? {
 private fun projectWorkerLeases(tasks: List<LifeTask>): List<BootWorkerLease> = tasks.mapNotNull { task ->
     val workerId = task.claimedBy ?: return@mapNotNull null
     val lease = task.leaseExpiresAt ?: return@mapNotNull null
-    BootWorkerLease(
-        workerId = workerId,
-        taskId = task.id.value,
-        taskState = task.state,
-        leaseExpiresAt = lease,
-    )
+    BootWorkerLease(workerId, task.id.value, task.state, lease)
 }.sortedWith(workerLeaseComparator)
 
 private fun fingerprintGeneration(
@@ -329,13 +311,11 @@ private fun fingerprintGeneration(
 
     part("lifeos-boot-generation/v1")
     photons.forEach { photon ->
-        part("photon")
-        part(photon.id.value); part(photon.revision.toString()); part(photon.phase.name)
+        part("photon"); part(photon.id.value); part(photon.revision.toString()); part(photon.phase.name)
         part(sha256(photon.content)); part(photon.mimeType)
-        part(java.lang.Double.toHexString(photon.semanticMass))
-        part(java.lang.Double.toHexString(photon.energy))
-        part(java.lang.Double.toHexString(photon.confidence))
-        part(photon.provenance.source); part(photon.provenance.actor); part(photon.provenance.createdAt.toString())
+        part(java.lang.Double.toHexString(photon.semanticMass)); part(java.lang.Double.toHexString(photon.energy))
+        part(java.lang.Double.toHexString(photon.confidence)); part(photon.provenance.source)
+        part(photon.provenance.actor); part(photon.provenance.createdAt.toString())
         photon.provenance.parentIds.map { it.value }.sorted().forEach(::part)
         photon.relations.sortedWith(compareBy({ it.target.value }, { it.type.name }, { it.weight })).forEach {
             part("relation:${it.target.value}:${it.type.name}:${java.lang.Double.toHexString(it.weight)}")
@@ -343,8 +323,7 @@ private fun fingerprintGeneration(
         photon.tags.sorted().forEach { part("tag:$it") }
     }
     tasks.forEach { task ->
-        part("task")
-        part(task.id.value); part(task.type.name); part(task.state.name); part(task.priority.name)
+        part("task"); part(task.id.value); part(task.type.name); part(task.state.name); part(task.priority.name)
         part(task.idempotencyKey); part(task.attempt.toString()); part(task.maxAttempts.toString())
         part(task.createdAt.toString()); part(task.updatedAt.toString()); part(task.scheduledAt?.toString() ?: "-")
         part(task.claimedBy?.value ?: "-"); part(task.leaseExpiresAt?.toString() ?: "-")
@@ -352,8 +331,7 @@ private fun fingerprintGeneration(
         task.inputPhotonRevisions.entries.sortedBy { it.key.value }.forEach { part("revision:${it.key.value}:${it.value}") }
     }
     checkpoints.forEach { checkpoint ->
-        part("checkpoint")
-        part(checkpoint.id.value); part(checkpoint.taskId.value); part(checkpoint.sequence.toString())
+        part("checkpoint"); part(checkpoint.id.value); part(checkpoint.taskId.value); part(checkpoint.sequence.toString())
         part(checkpoint.runtimeGeneration.toString()); part(checkpoint.createdAt.toString()); part(sha256(checkpoint.payload))
     }
     contexts.forEach { context ->
@@ -385,42 +363,22 @@ private fun fingerprintGeneration(
         part("failure:${failure.source.name}:${failure.entry ?: "-"}:${failure.reason}")
     }
 
-    return BootGenerationId(digest.digest().joinToString("") { "%02x".format(it) })
+    return BootGenerationId(digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) })
 }
 
 private fun sha256(value: String): String = sha256(value.toByteArray(StandardCharsets.UTF_8))
-
 private fun sha256(value: ByteArray): String = MessageDigest.getInstance("SHA-256")
     .digest(value)
-    .joinToString("") { "%02x".format(it) }
+    .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
 private val contextProjectionComparator = compareBy<BootContextProjection>(
-    { it.kind.name },
-    { it.contextId },
-    { it.sourceCreatedAt },
-    { it.sourcePhotonId.value },
-    { it.sourcePhotonRevision },
+    { it.kind.name }, { it.contextId }, { it.sourceCreatedAt }, { it.sourcePhotonId.value }, { it.sourcePhotonRevision },
 )
-
-private val capabilityComparator = compareBy<CapabilityDescriptor>(
-    { it.capabilityId.value },
-    { it.providerId },
-)
-
+private val capabilityComparator = compareBy<CapabilityDescriptor>({ it.capabilityId.value }, { it.providerId })
 private val workerLeaseComparator = compareBy<BootWorkerLease>(
-    { it.workerId.value },
-    { it.taskId },
-    { it.taskState.name },
-    { it.leaseExpiresAt },
+    { it.workerId.value }, { it.taskId }, { it.taskState.name }, { it.leaseExpiresAt },
 )
-
-private val fieldSnapshotComparator = compareBy<FieldSnapshot>(
-    { it.domainId.value },
-    { it.id.value },
-)
-
+private val fieldSnapshotComparator = compareBy<FieldSnapshot>({ it.domainId.value }, { it.id.value })
 private val readFailureComparator = compareBy<BootSnapshotReadFailure>(
-    { it.source.name },
-    { it.entry ?: "" },
-    { it.reason },
+    { it.source.name }, { it.entry ?: "" }, { it.reason },
 )
