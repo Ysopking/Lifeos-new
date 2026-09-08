@@ -21,6 +21,8 @@ data class RenderVec3(val x: Double, val y: Double, val z: Double) {
     fun asDirection(): SolarVector = SolarVector(x, y, z).normalized()
 }
 
+enum class MmsiLightSpace { WORLD_ENU, VIEW }
+
 data class MmsiDirectionalLight(
     val id: String,
     val direction: SolarVector,
@@ -28,6 +30,7 @@ data class MmsiDirectionalLight(
     val intensity: Double,
     val angularRadiusRad: Double,
     val castsShadow: Boolean = true,
+    val coordinateSpace: MmsiLightSpace = MmsiLightSpace.WORLD_ENU,
 ) {
     init {
         require(id.isNotBlank())
@@ -41,16 +44,16 @@ enum class MmsiLocalLightKind { POINT, SPOT }
 data class MmsiLocalLight(
     val id: String,
     val kind: MmsiLocalLightKind,
-    /** View-space position in metres. Surfaces in front of the camera have negative Z. */
-    val positionView: RenderVec3,
-    /** Direction in view space for SPOT; points from the emitter into the illuminated scene. */
-    val directionView: SolarVector? = null,
+    val position: RenderVec3,
+    /** For SPOT, points from the emitter into the illuminated scene. */
+    val direction: SolarVector? = null,
     val colorLinear: RgbSample,
     val intensity: Double,
     val rangeMeters: Double,
     val innerConeDeg: Double = 25.0,
     val outerConeDeg: Double = 40.0,
     val castsShadow: Boolean = false,
+    val coordinateSpace: MmsiLightSpace = MmsiLightSpace.WORLD_ENU,
 ) {
     init {
         require(id.isNotBlank())
@@ -58,7 +61,7 @@ data class MmsiLocalLight(
         require(rangeMeters.isFinite() && rangeMeters > 0.0)
         require(innerConeDeg in 0.0..90.0)
         require(outerConeDeg in innerConeDeg..90.0)
-        if (kind == MmsiLocalLightKind.SPOT) require(directionView != null)
+        if (kind == MmsiLocalLightKind.SPOT) require(direction != null)
     }
 }
 
