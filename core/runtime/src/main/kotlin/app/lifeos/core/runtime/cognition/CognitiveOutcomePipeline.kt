@@ -11,6 +11,7 @@ import app.lifeos.core.runtime.workers.CognitiveTaskExecutionResult
 import app.lifeos.core.runtime.workers.DurableTaskExecutionObserver
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -198,16 +199,40 @@ class OutcomeTriggerObserver(
     }
 }
 
+/**
+ * The first observer is authoritative. All later observers are telemetry/derived-state observers and
+ * run best-effort so a monitoring or journaling defect cannot rewrite an already completed task.
+ */
 class CompositeDurableTaskExecutionObserver(
     observers: List<DurableTaskExecutionObserver>,
 ) : DurableTaskExecutionObserver {
-    private val observers = observers.toList()
+    private val observers = observers.toList().also {
+        require(it.isNotEmpty()) { "Composite execution observer requires an authoritative observer" }
+    }
 
     override suspend fun onExecutionResult(result: CognitiveTaskExecutionResult) {
-        observers.forEach { it.onExecutionResult(result) }
+        observers.first().onExecutionResult(result)
+        observers.drop(1).forEach { observer ->
+            try {
+                observer.onExecutionResult(result)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Derived observations must never mutate durable task outcome semantics.
+            }
+        }
     }
 
     override suspend fun onDispatchFailure(task: LifeTask, error: Exception) {
-        observers.forEach { it.onDispatchFailure(task, error) }
+        observers.first().onDispatchFailure(task, error)
+        observers.drop(1).forEach { observer ->
+            try {
+                observer.onDispatchFailure(task, error)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Failure telemetry is best-effort after the authoritative observer is updated.
+            }
+        }
     }
 }
