@@ -1,6 +1,7 @@
 package app.lifeos.core.runtime.workers
 
 import app.lifeos.core.model.FieldInfluence
+import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.checkpoint.CheckpointRepository
@@ -16,6 +17,8 @@ import app.lifeos.core.runtime.RuntimeFailure
 import app.lifeos.core.runtime.RuntimeFailureCategory
 import app.lifeos.core.runtime.checkpoints.FieldCheckpointManager
 import app.lifeos.core.runtime.checkpoints.FieldCheckpointStorageException
+import app.lifeos.core.runtime.field.FieldShadowExecution
+import app.lifeos.core.runtime.field.FieldShadowProcessor
 import app.lifeos.core.runtime.tasks.ClaimedTaskDispatcher
 import app.lifeos.core.runtime.tasks.RetryPolicy
 import java.time.Duration
@@ -36,6 +39,7 @@ data class CognitiveTaskExecutionResult(
     val finalState: TaskState,
     val influences: List<FieldInfluence>,
     val failures: List<RuntimeFailure>,
+    val fieldShadow: FieldShadowExecution? = null,
 )
 
 class CognitiveTaskWorker(
@@ -45,6 +49,7 @@ class CognitiveTaskWorker(
     private val fields: FieldRegistry,
     private val executor: InfluenceExecutor,
     checkpoints: CheckpointRepository? = null,
+    private val fieldShadowProcessor: FieldShadowProcessor? = null,
     private val retryPolicy: RetryPolicy = RetryPolicy(),
     private val leaseDuration: Duration = Duration.ofSeconds(30),
     private val heartbeatInterval: Duration = Duration.ofSeconds(10),
@@ -215,18 +220,34 @@ class CognitiveTaskWorker(
             return checkpointFailure(photonId, error)
         }
 
+        val fieldShadow = processFieldShadow(photon)
         return if (execution.failures.isNotEmpty()) {
             WorkResult(
                 photonId = photon.id,
                 finalState = TaskState.FAILED,
                 influences = execution.influences,
                 failures = execution.failures,
+                fieldShadow = fieldShadow,
             )
         } else {
             WorkResult(
                 photonId = photon.id,
                 finalState = TaskState.COMPLETED,
                 influences = execution.influences,
+                fieldShadow = fieldShadow,
+            )
+        }
+    }
+
+    private suspend fun processFieldShadow(photon: Photon): FieldShadowExecution? {
+        val processor = fieldShadowProcessor ?: return null
+        return try {
+            processor.process(photon)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            FieldShadowExecution.failed(
+                message = error.message ?: error::class.simpleName ?: "universal-field-shadow-failed",
             )
         }
     }
@@ -261,6 +282,7 @@ class CognitiveTaskWorker(
             finalState = finalTask.state,
             influences = work.influences,
             failures = work.failures,
+            fieldShadow = work.fieldShadow,
         )
     }
 
@@ -378,6 +400,7 @@ class CognitiveTaskWorker(
         val finalState: TaskState,
         val influences: List<FieldInfluence> = emptyList(),
         val failures: List<RuntimeFailure> = emptyList(),
+        val fieldShadow: FieldShadowExecution? = null,
     )
 
     private class LeaseOwnershipLostException(
