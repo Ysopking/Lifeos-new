@@ -7,6 +7,7 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import java.time.Instant
+import kotlin.math.abs
 import kotlin.math.min
 
 class LanguageUnderstandingEngine(
@@ -205,6 +206,30 @@ class GoalPhotonFactory {
                     .append('|').append(escape(resolution.semanticTag))
                     .append('|').append(resolution.confidence).append('\n')
             }
+            it.graphemeTraces.take(MAX_SERIALIZED_FIELD_TRACES).forEachIndexed { index, trace ->
+                append("field.grapheme.").append(index).append('=')
+                    .append(escape(trace.observed)).append('>').append(escape(trace.expected))
+                    .append('|').append(trace.orthographicAffinity)
+                    .append('|').append(trace.phoneticAffinity).append('\n')
+            }
+            it.compoundBindings.take(MAX_SERIALIZED_FIELD_TRACES).forEach { binding ->
+                append("field.compound.").append(binding.tokenIndex).append('=')
+                    .append(binding.components.joinToString("+") { component -> escape(component.semanticTag) })
+                    .append('|').append(binding.confidence).append('\n')
+            }
+            it.topDownRevisions
+                .sortedByDescending { revision -> abs(revision.delta) }
+                .take(MAX_SERIALIZED_FIELD_TRACES)
+                .forEachIndexed { index, revision ->
+                    append("field.feedback.").append(index).append('=')
+                        .append(revision.tokenIndex).append('|').append(escape(revision.conceptId))
+                        .append('|').append(revision.bottomUpActivation)
+                        .append('|').append(revision.resolvedActivation)
+                        .append('|').append(revision.semanticForce)
+                        .append('|').append(revision.photonForce)
+                        .append('|').append(revision.intentForce)
+                        .append('|').append(revision.compositionForce).append('\n')
+                }
         }
         frame.constraints.sortedWith(compareBy<GoalConstraint> { it.key }.thenBy { it.value }).forEach {
             append("constraint.").append(escape(it.key)).append('=').append(escape(it.value)).append('|').append(it.confidence).append('\n')
@@ -224,4 +249,8 @@ class GoalPhotonFactory {
         .replace("\n", "\\n")
         .replace("=", "\\=")
         .replace("|", "\\|")
+
+    companion object {
+        private const val MAX_SERIALIZED_FIELD_TRACES = 32
+    }
 }
