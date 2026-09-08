@@ -79,6 +79,14 @@ enum class LightingMode {
     SYNTHETIC_NEUTRAL,
 }
 
+enum class AstronomicalLightPhase {
+    DAY,
+    CIVIL_TWILIGHT,
+    NAUTICAL_TWILIGHT,
+    ASTRONOMICAL_TWILIGHT,
+    NIGHT,
+}
+
 data class SceneEnvironment(
     val locationText: String? = null,
     val dateText: String? = null,
@@ -91,6 +99,7 @@ data class SceneEnvironment(
     val resolvedInstantUtc: String? = null,
     val sunAzimuthDeg: Double? = null,
     val sunElevationDeg: Double? = null,
+    val astronomicalPhase: AstronomicalLightPhase? = null,
 ) {
     init {
         resolvedLatitudeDeg?.let { require(it in -90.0..90.0) }
