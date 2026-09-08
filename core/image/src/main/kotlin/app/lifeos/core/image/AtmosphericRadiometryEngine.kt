@@ -2,7 +2,6 @@ package app.lifeos.core.image
 
 import kotlin.math.PI
 import kotlin.math.exp
-import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.sin
 
@@ -47,7 +46,9 @@ class AtmosphericRadiometryEngine(
             val extraterrestrial = normalizedSolarSpectrum(lambdaNm)
             val tauRayleigh = rayleighOpticalDepth(lambdaNm)
             val tauAerosol = atmosphere.aerosolOpticalDepth550 * (lambdaNm / 550.0).pow(-atmosphere.angstromExponent)
-            val transmission = if (solarPosition.elevationDeg <= -6.0) {
+            // Once the solar disc is below the geometric horizon there is no direct beam at the
+            // surface. Twilight remains represented by the diffuse term, not a fictitious sun ray.
+            val transmission = if (solarPosition.elevationDeg <= 0.0) {
                 0.0
             } else {
                 exp(-airMass * (tauRayleigh + tauAerosol))
