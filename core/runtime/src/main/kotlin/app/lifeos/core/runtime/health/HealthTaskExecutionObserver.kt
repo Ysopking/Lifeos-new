@@ -1,11 +1,11 @@
 package app.lifeos.core.runtime.health
 
-import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.runtime.RuntimeFailure
 import app.lifeos.core.runtime.RuntimeFailureCategory
 import app.lifeos.core.runtime.field.FieldShadowState
+import app.lifeos.core.runtime.field.universalFieldShadowHealthNodeId
 import app.lifeos.core.runtime.workers.CognitiveTaskExecutionResult
 import app.lifeos.core.runtime.workers.DurableTaskExecutionObserver
 import java.time.Instant
@@ -57,7 +57,7 @@ class HealthTaskExecutionObserver(
 
         val shadow = result.fieldShadow ?: return
         val domainId = shadow.domainId ?: return
-        val fieldNodeId = shadowNodeId(domainId.value)
+        val fieldNodeId = universalFieldShadowHealthNodeId(domainId)
         when (shadow.state) {
             FieldShadowState.COMPLETED -> {
                 graph.register(fieldNodeId, HealthScope.FIELD)
@@ -97,10 +97,6 @@ class HealthTaskExecutionObserver(
             observedAt = now(),
         )
     }
-
-    private fun shadowNodeId(domainValue: String): HealthNodeId = HealthNodeId(
-        "field-shadow:${StableFieldIds.fingerprint("health-shadow", domainValue)}",
-    )
 
     private fun nodeIdFor(failure: RuntimeFailure, scope: HealthScope): HealthNodeId {
         if (scope == HealthScope.WORKER) return workerNodeId
