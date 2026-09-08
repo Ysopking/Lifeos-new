@@ -1,8 +1,12 @@
 package app.lifeos.next
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -15,6 +19,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -24,10 +29,17 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
+    private lateinit var model: LifeOsViewModel
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val model = ViewModelProvider(this)[LifeOsViewModel::class.java]
+        model = ViewModelProvider(this)[LifeOsViewModel::class.java]
         setContent { LifeOsApp(model) }
+    }
+
+    override fun onStop() {
+        if (::model.isInitialized) model.stopVoiceCapture()
+        super.onStop()
     }
 }
 
@@ -36,8 +48,12 @@ private fun LifeOsApp(model: LifeOsViewModel) {
     val state by model.state.collectAsStateWithLifecycle()
     val runtime by model.runtimeState.collectAsStateWithLifecycle()
     val matrix by model.matrixState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) model.startVoiceCapture() else model.voicePermissionDenied()
+    }
     val visible = remember(state.photons, query) {
         val term = query.trim()
         state.photons.filter {
@@ -94,21 +110,57 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                         Text(if (state.loadFailed) "Erneut laden" else "Meldung schließen")
                     }
                 }
+                state.voiceStatus?.let { status ->
+                    Text(status, style = MaterialTheme.typography.bodySmall)
+                    if (state.voicePhase == VoiceCapturePhase.IDLE) {
+                        TextButton(onClick = model::dismissVoiceStatus) { Text("Sprachstatus schließen") }
+                    }
+                }
                 OutlinedTextField(
                     state.draft,
                     model::editDraft,
                     Modifier.fillMaxWidth(),
                     label = { Text("Neuer Gedanke") },
                     maxLines = 4,
-                    enabled = !state.saving,
+                    enabled = !state.saving && state.voicePhase != VoiceCapturePhase.PROCESSING,
                 )
+                when (state.voicePhase) {
+                    VoiceCapturePhase.IDLE -> {
+                        OutlinedButton(
+                            onClick = {
+                                if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                    model.startVoiceCapture()
+                                } else {
+                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !state.loading && !state.loadFailed && !state.saving,
+                        ) {
+                            Text("Sprache aufnehmen · lokal")
+                        }
+                    }
+                    VoiceCapturePhase.RECORDING -> {
+                        Button(
+                            onClick = model::stopVoiceCapture,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Aufnahme stoppen")
+                        }
+                    }
+                    VoiceCapturePhase.PROCESSING -> {
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                        Text("Akustik-, Wort- und Kontextfelder konvergieren lokal …", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 Button(
                     model::saveDraft,
                     Modifier.fillMaxWidth(),
                     enabled = state.draft.isNotBlank() &&
                         !state.loading &&
                         !state.loadFailed &&
-                        !state.saving,
+                        !state.saving &&
+                        state.voicePhase == VoiceCapturePhase.IDLE,
                 ) {
                     Text(if (state.saving) "Wird gespeichert …" else "Gedanken speichern")
                 }
@@ -131,6 +183,7 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                                     "Fehlgeschlagen: ${runtime.failed}\n" +
                                     "Feldeinflüsse im Verlauf: ${runtime.recentInfluences.size}\n" +
                                     "Feldenergie: ${"%.1f".format(matrix.totalEnergy)}\n" +
+                                    "Sprachaufnahme: ${state.voicePhase.name.lowercase()}\n" +
                                     (runtime.lastError ?: "Kein Runtime-Fehler"),
                             )
                         },

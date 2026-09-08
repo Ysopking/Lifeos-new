@@ -9,10 +9,13 @@ import androidx.lifecycle.viewModelScope
 import app.lifeos.core.image.ImageAssetDescriptor
 import app.lifeos.core.image.ImagePhotonFactory
 import app.lifeos.core.language.GoalFrame
+import app.lifeos.core.language.LanguageContext
+import app.lifeos.core.language.LanguageContextItem
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +24,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+enum class VoiceCapturePhase { IDLE, RECORDING, PROCESSING }
 
 data class LifeOsState(
     val photons: List<Photon> = emptyList(),
@@ -31,6 +36,8 @@ data class LifeOsState(
     val unreadable: Int = 0,
     val error: String? = null,
     val lastGoal: GoalFrame? = null,
+    val voicePhase: VoiceCapturePhase = VoiceCapturePhase.IDLE,
+    val voiceStatus: String? = null,
 )
 
 data class ImagePreview(
@@ -48,6 +55,8 @@ sealed interface ImagePreviewState {
 
 class LifeOsViewModel(application: Application) : AndroidViewModel(application) {
     private val kernel = (application as LifeOsApplication).kernel
+    private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
+    private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
     private val previewCache = object : LruCache<String, Bitmap>(IMAGE_PREVIEW_CACHE_KIB) {
         override fun sizeOf(key: String, value: Bitmap): Int =
@@ -63,7 +72,10 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun editDraft(text: String) {
-        if (!mutableState.value.saving) mutableState.update { it.copy(draft = text) }
+        val current = mutableState.value
+        if (!current.saving && current.voicePhase != VoiceCapturePhase.PROCESSING) {
+            mutableState.update { it.copy(draft = text) }
+        }
     }
 
     fun retryLoad() {
@@ -84,9 +96,57 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         mutableState.update { it.copy(error = null) }
     }
 
+    fun voicePermissionDenied() {
+        mutableState.update {
+            it.copy(
+                voicePhase = VoiceCapturePhase.IDLE,
+                voiceStatus = "Mikrofonberechtigung wurde nicht erteilt.",
+            )
+        }
+    }
+
+    fun startVoiceCapture() {
+        val current = mutableState.value
+        if (current.loading || current.loadFailed || current.saving || current.voicePhase != VoiceCapturePhase.IDLE) return
+        if (!voiceCapture.hasPermission()) {
+            voicePermissionDenied()
+            return
+        }
+
+        voiceStopRequested.set(false)
+        val context = buildLanguageContext(current.photons)
+        mutableState.update {
+            it.copy(
+                voicePhase = VoiceCapturePhase.RECORDING,
+                voiceStatus = "Lokale Sprachaufnahme läuft …",
+                error = null,
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = voiceCapture.capture(voiceStopRequested, context)
+            mutableState.update { state -> applyVoiceResult(state, result) }
+        }
+    }
+
+    fun stopVoiceCapture() {
+        if (mutableState.value.voicePhase != VoiceCapturePhase.RECORDING) return
+        voiceStopRequested.set(true)
+        mutableState.update {
+            it.copy(
+                voicePhase = VoiceCapturePhase.PROCESSING,
+                voiceStatus = "Sprachfeld wird lokal ausgewertet …",
+            )
+        }
+    }
+
+    fun dismissVoiceStatus() {
+        mutableState.update { it.copy(voiceStatus = null) }
+    }
+
     fun saveDraft() {
         val current = mutableState.value
-        if (current.loading || current.loadFailed || current.saving || current.draft.isBlank()) return
+        if (current.loading || current.loadFailed || current.saving || current.voicePhase != VoiceCapturePhase.IDLE || current.draft.isBlank()) return
 
         val photon = Photon(
             content = current.draft.trim(),
@@ -172,6 +232,59 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun applyVoiceResult(state: LifeOsState, result: LocalVoiceCaptureResult): LifeOsState = when (result) {
+        is LocalVoiceCaptureResult.Success -> {
+            val transcript = result.transcript.trim()
+            val combinedDraft = when {
+                transcript.isBlank() -> state.draft
+                state.draft.isBlank() -> transcript
+                else -> "${state.draft.trimEnd()} $transcript"
+            }
+            val confidence = result.words.map { it.confidence }.average()
+            state.copy(
+                draft = combinedDraft,
+                voicePhase = VoiceCapturePhase.IDLE,
+                voiceStatus = buildString {
+                    append("Lokales Sprachfeld: ")
+                    append(result.words.size).append(" Wortkandidat(en), ")
+                    append(result.segmentCount).append(" Sprachsegment(e), ")
+                    append("Konfidenz ").append("%.0f".format(confidence * 100.0)).append(" %")
+                    if (result.stoppedByLimit) append(" · 20-s-Limit erreicht")
+                },
+            )
+        }
+        LocalVoiceCaptureResult.NoSpeech -> state.copy(
+            voicePhase = VoiceCapturePhase.IDLE,
+            voiceStatus = "Keine ausreichend stabile Sprache im lokalen Akustikfeld erkannt.",
+        )
+        LocalVoiceCaptureResult.PermissionMissing -> state.copy(
+            voicePhase = VoiceCapturePhase.IDLE,
+            voiceStatus = "Mikrofonberechtigung fehlt.",
+        )
+        is LocalVoiceCaptureResult.Failed -> state.copy(
+            voicePhase = VoiceCapturePhase.IDLE,
+            voiceStatus = result.message,
+        )
+    }
+
+    private fun buildLanguageContext(photons: List<Photon>): LanguageContext = LanguageContext(
+        items = photons.take(MAX_VOICE_CONTEXT_PHOTONS).mapIndexed { index, photon ->
+            LanguageContextItem(
+                photonId = photon.id,
+                kind = photon.mimeType,
+                tags = photon.tags,
+                createdAt = photon.provenance.createdAt,
+                active = index < ACTIVE_VOICE_CONTEXT_PHOTONS,
+                contentTerms = CONTEXT_TERM_REGEX.findAll(photon.content)
+                    .map { it.value.lowercase() }
+                    .filter { it.length >= 2 }
+                    .take(MAX_TERMS_PER_PHOTON)
+                    .toSet(),
+                confidence = photon.confidence,
+            )
+        },
+    )
+
     private fun observeKernel() {
         viewModelScope.launch {
             kernel.bootstrapState.collect { bootstrap ->
@@ -197,6 +310,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        voiceStopRequested.set(true)
         previewCache.evictAll()
         super.onCleared()
     }
@@ -207,5 +321,9 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private companion object {
         const val LOAD_ERROR_MESSAGE = "Speicher konnte nicht geladen werden. Bitte erneut versuchen."
         const val IMAGE_PREVIEW_CACHE_KIB = 16 * 1024
+        const val MAX_VOICE_CONTEXT_PHOTONS = 24
+        const val ACTIVE_VOICE_CONTEXT_PHOTONS = 6
+        const val MAX_TERMS_PER_PHOTON = 32
+        val CONTEXT_TERM_REGEX = Regex("[\\p{L}\\p{N}]+")
     }
 }
