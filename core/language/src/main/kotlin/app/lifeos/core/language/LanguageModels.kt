@@ -181,4 +181,5 @@ data class LanguageUnderstandingResult(
     val utterance: NormalizedUtterance,
     val intentEvidence: List<IntentEvidence>,
     val goal: GoalFrame,
+    val linguisticField: LinguisticFieldResult? = null,
 )
