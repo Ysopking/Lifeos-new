@@ -39,7 +39,9 @@ class RepairProbeTest {
     @Test
     fun allComponentProbeKindsRemainExplicitInEvidence() = runTest {
         val node = HealthNodeId("runtime:test")
-        val healthy = { RepairProbeObservation(RepairProbeStatus.HEALTHY) }
+        val healthy: suspend () -> RepairProbeObservation = {
+            RepairProbeObservation(RepairProbeStatus.HEALTHY)
+        }
         val probes = listOf(
             StoreRepairProbe("store", HealthNodeId("store:test"), healthy),
             WorkerRepairProbe("worker", HealthNodeId("worker:test"), healthy),
