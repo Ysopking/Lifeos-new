@@ -94,14 +94,10 @@ class FieldConvergenceEngine(
             )
         }
         val seedHypothesisEnergy = seedHypothesisBreakdowns.associate { it.hypothesisId to it.total }
-        val inputFingerprint = StableFieldIds.fingerprint(
-            request.domainId.value,
-            request.context.fingerprint(),
-            fieldSetFingerprint,
-            *request.graph.stableNodes().map { it.id.value }.toTypedArray(),
-            *request.graph.stableRelations().map { it.id.value }.toTypedArray(),
-            *request.evidence.stableEvidenceOrder().map { it.sourceFingerprint }.toTypedArray(),
-            *request.hypotheses.map { it.id.value }.sorted().toTypedArray(),
+        val inputFingerprint = request.physicsFingerprint(
+            config = config,
+            forceCalculatorFingerprint = forceCalculator.fingerprint(),
+            resolvedFields = fields,
         )
         val initialEnergy = FieldEnergySnapshot(seedData.energy, seedHypothesisEnergy)
         val seedTrace = FieldSeedTrace(
