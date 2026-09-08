@@ -93,6 +93,7 @@ data class SceneEnvironment(
     val timeText: String? = null,
     val lightingMode: LightingMode,
     val groundMaterial: String,
+    val requestedLightSources: Set<String> = emptySet(),
     val resolvedLatitudeDeg: Double? = null,
     val resolvedLongitudeDeg: Double? = null,
     val resolvedZoneId: String? = null,
@@ -100,16 +101,36 @@ data class SceneEnvironment(
     val sunAzimuthDeg: Double? = null,
     val sunElevationDeg: Double? = null,
     val astronomicalPhase: AstronomicalLightPhase? = null,
+    val moonAzimuthDeg: Double? = null,
+    val moonElevationDeg: Double? = null,
+    val moonIlluminatedFraction: Double? = null,
+    val moonModelId: String? = null,
+    val exposureFNumber: Double? = null,
+    val exposureShutterSeconds: Double? = null,
+    val exposureIso: Double? = null,
+    val exposureEv100: Double? = null,
 ) {
     init {
+        require(requestedLightSources.none { it.isBlank() })
         resolvedLatitudeDeg?.let { require(it in -90.0..90.0) }
         resolvedLongitudeDeg?.let { require(it in -180.0..180.0) }
         resolvedZoneId?.let { require(it.isNotBlank()) }
         resolvedInstantUtc?.let { require(it.isNotBlank()) }
         sunAzimuthDeg?.let { require(it.isFinite()) }
         sunElevationDeg?.let { require(it.isFinite()) }
+        moonAzimuthDeg?.let { require(it.isFinite()) }
+        moonElevationDeg?.let { require(it.isFinite()) }
+        moonIlluminatedFraction?.let { require(it in 0.0..1.0) }
+        moonModelId?.let { require(it.isNotBlank()) }
+        exposureFNumber?.let { require(it > 0.0 && it.isFinite()) }
+        exposureShutterSeconds?.let { require(it > 0.0 && it.isFinite()) }
+        exposureIso?.let { require(it > 0.0 && it.isFinite()) }
+        exposureEv100?.let { require(it.isFinite()) }
         val geoComplete = (resolvedLatitudeDeg == null) == (resolvedLongitudeDeg == null)
         require(geoComplete) { "Resolved latitude and longitude must be present together" }
+        val exposureComplete = listOf(exposureFNumber, exposureShutterSeconds, exposureIso, exposureEv100)
+            .all { it != null } || listOf(exposureFNumber, exposureShutterSeconds, exposureIso, exposureEv100).all { it == null }
+        require(exposureComplete) { "Exposure metadata must be either complete or absent" }
     }
 }
 
