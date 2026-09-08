@@ -4,6 +4,7 @@ import android.content.Context
 import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
+import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
@@ -52,6 +53,7 @@ import app.lifeos.core.runtime.cognition.InMemoryCognitiveTriggerSink
 import app.lifeos.core.runtime.cognition.InMemoryPhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.OutcomeTriggerObserver
 import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
+import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
@@ -158,6 +160,10 @@ class LifeOsKernelFactory(
 
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
+        val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
+        val universalFieldShadow = UniversalFieldRuntimeAdapter(
+            snapshotRepository = fieldSnapshotRepository,
+        )
         val schedulerSignal = ConflatedTaskSchedulerSignal()
         val taskEngine = DurableTaskEngine(taskRepository, schedulerSignal)
 
@@ -183,6 +189,7 @@ class LifeOsKernelFactory(
             fields = registry,
             executor = executor,
             checkpoints = checkpointRepository,
+            fieldShadowProcessor = universalFieldShadow,
             config = CognitiveWorkerConfig(
                 leaseDuration = TASK_LEASE_DURATION,
                 heartbeatInterval = HEARTBEAT_INTERVAL,
@@ -270,6 +277,26 @@ class LifeOsKernelFactory(
                             taskRepository.listRunnable(now, limit = 1)
                             taskRepository.listExpiredLeases(now, limit = 1)
                             return StoreStatus(storeId, StoreState.HEALTHY)
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "field-snapshot-store"
+
+                        override suspend fun probe(): StoreStatus {
+                            val report = fieldSnapshotRepository.loadReport()
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.unreadableEntries.isEmpty()) {
+                                    StoreState.HEALTHY
+                                } else {
+                                    StoreState.PARTIALLY_RECOVERABLE
+                                },
+                                message = if (report.unreadableEntries.isEmpty()) {
+                                    null
+                                } else {
+                                    "unreadable:${report.unreadableEntries.size}"
+                                },
+                            )
                         }
                     },
                 )
