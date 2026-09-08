@@ -8,7 +8,8 @@ import app.lifeos.core.model.task.CreateTaskResult
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskCodec
 import app.lifeos.core.model.task.TaskId
-import app.lifeos.core.model.task.TaskRepository
+import app.lifeos.core.model.task.TaskLoadReport
+import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskStateMachine
 import app.lifeos.core.model.worker.WorkerId
@@ -35,10 +36,18 @@ import kotlinx.coroutines.withContext
  * execution transitions use explicit owner/lease CAS methods instead of the generic
  * transition path.
  */
-class EncryptedTaskRepository(context: Context) : TaskRepository {
+class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
     private val directory = context.filesDir.resolve("task-vault")
     private val key: SecretKey by lazy { loadOrCreateKey() }
     private val mutex = Mutex()
+
+    override suspend fun loadReport(): TaskLoadReport = ioLocked {
+        val report = loadReportInternal()
+        TaskLoadReport(
+            tasks = report.tasks.sortedBy { it.id.value },
+            unreadableEntries = report.unreadableFiles.sorted(),
+        )
+    }
 
     override suspend fun create(task: LifeTask): CreateTaskResult = ioLocked {
         require(task.state == TaskState.CREATED) { "New repository task must be CREATED" }

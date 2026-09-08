@@ -30,10 +30,29 @@ sealed interface SaveCheckpointResult {
     data class Existing(override val checkpoint: TaskCheckpoint) : SaveCheckpointResult
 }
 
+data class CheckpointLoadReport(
+    val checkpoints: List<TaskCheckpoint>,
+    val unreadableEntries: List<String>,
+) {
+    init {
+        require(checkpoints.map { it.id }.distinct().size == checkpoints.size) {
+            "Checkpoint load report must not contain duplicate ids"
+        }
+        require(unreadableEntries.distinct().size == unreadableEntries.size) {
+            "Unreadable checkpoint entries must be unique"
+        }
+    }
+}
+
 interface CheckpointRepository {
     suspend fun save(checkpoint: TaskCheckpoint): SaveCheckpointResult
     suspend fun get(id: CheckpointId): TaskCheckpoint?
     suspend fun latest(taskId: TaskId): TaskCheckpoint?
     suspend fun list(taskId: TaskId, limit: Int = 20): List<TaskCheckpoint>
     suspend fun delete(id: CheckpointId): Boolean
+}
+
+/** Read-only durable checkpoint snapshot boundary used by boot/integrity code. */
+fun interface CheckpointSnapshotRepository {
+    suspend fun loadReport(): CheckpointLoadReport
 }
