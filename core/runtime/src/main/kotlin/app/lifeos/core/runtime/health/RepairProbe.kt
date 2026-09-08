@@ -71,7 +71,7 @@ data class RepairProbeResult(
         get() = status == RepairProbeStatus.HEALTHY
 }
 
-private abstract class ComponentRepairProbe(
+abstract class ComponentRepairProbe(
     final override val id: String,
     final override val kind: RepairProbeKind,
     final override val nodeId: HealthNodeId,
@@ -128,7 +128,7 @@ data class CompositeRepairEvidence(
         get() = results.all(RepairProbeResult::verifiedHealthy)
 
     val worstStatus: RepairProbeStatus
-        get() = results.maxBy(::repairProbeSeverity).status
+        get() = requireNotNull(results.maxByOrNull(::repairProbeSeverity)).status
 
     fun summary(): String = results.joinToString(separator = ";") {
         "${it.probeId}:${it.status.name.lowercase()}"
