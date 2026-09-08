@@ -33,6 +33,10 @@ class RuleBasedEntityExtractor {
     // A bare dot-separated HH.MM is intentionally not accepted because it is ambiguous with DD.MM dates.
     private val timeRegex = Regex("(?i)(?<![\\d./-])(?:[01]?\\d|2[0-3]):[0-5]\\d(?![\\d./-])|\\b(?:[01]?\\d|2[0-3])\\s*(?:uhr|am|pm)\\b")
     private val dateRegex = Regex("\\b(?:0?[1-9]|[12]\\d|3[01])[./-](?:0?[1-9]|1[0-2])(?:[./-](?:19|20)\\d{2})?\\b")
+    // Require decimal precision so ordinary counts/dates are not mistaken for coordinates.
+    private val coordinateLocationRegex = Regex(
+        "(?i)(?:lat(?:itude)?\\s*[=:]?\\s*[-+]?\\d{1,2}\\.\\d{3,}\\s*[,; ]+\\s*(?:lon|lng|longitude)\\s*[=:]?\\s*[-+]?\\d{1,3}\\.\\d{3,}|(?<![\\d.])[-+]?\\d{1,2}\\.\\d{3,}\\s*[,;]\\s*[-+]?\\d{1,3}\\.\\d{3,}(?![\\d.]))",
+    )
 
     fun extract(utterance: NormalizedUtterance): List<SemanticEntity> {
         val entities = mutableListOf<SemanticEntity>()
@@ -54,6 +58,7 @@ class RuleBasedEntityExtractor {
         addRegexEntities(utterance, fileRegex, EntityType.FILE, 0.99, entities) { it.trim().lowercase(Locale.ROOT) }
         addRegexEntities(utterance, dateRegex, EntityType.DATE, 0.99, entities) { it }
         addRegexEntities(utterance, timeRegex, EntityType.TIME, 0.97, entities) { it.lowercase(Locale.ROOT).replace(" ", "") }
+        addRegexEntities(utterance, coordinateLocationRegex, EntityType.LOCATION, 0.995, entities) { it.trim().lowercase(Locale.ROOT) }
         entities += extractLocations(utterance)
 
         return entities
@@ -73,8 +78,7 @@ class RuleBasedEntityExtractor {
                 val next = utterance.tokens[cursor]
                 if (next.kind != TokenKind.WORD) break
                 val looksNamed = next.original.firstOrNull()?.isUpperCase() == true || next.normalized in KNOWN_LOCATIONS
-                if (!looksNamed && collected.isEmpty()) break
-                if (!looksNamed && collected.isNotEmpty()) break
+                if (!looksNamed) break
                 collected += next
                 cursor++
             }
@@ -127,6 +131,10 @@ class RuleBasedEntityExtractor {
     )
 
     private companion object {
-        val KNOWN_LOCATIONS = setOf("berlin", "hamburg", "muenchen", "münchen", "koeln", "köln", "frankfurt", "london", "paris", "tokyo")
+        val KNOWN_LOCATIONS = setOf(
+            "berlin", "hamburg", "muenchen", "münchen", "koeln", "köln", "frankfurt", "stuttgart", "düsseldorf", "duesseldorf",
+            "leipzig", "dresden", "hannover", "bremen", "nürnberg", "nuernberg", "london", "paris", "tokyo",
+            "brandenburger", "tor",
+        )
     }
 }

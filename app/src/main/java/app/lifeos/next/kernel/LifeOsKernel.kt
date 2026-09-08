@@ -137,6 +137,7 @@ class LifeOsKernel internal constructor(
                     goal = understanding.goal,
                     sourcePhotonId = photon.id,
                     goalPhotonId = goalPhoton.photon.id,
+                    referenceInstant = photon.provenance.createdAt,
                 )
             }
             LanguageSubmissionResult(
@@ -218,9 +219,10 @@ class LifeOsKernel internal constructor(
         goal: GoalFrame,
         sourcePhotonId: PhotonId,
         goalPhotonId: PhotonId,
+        referenceInstant: Instant,
     ): ImageGenerationResult {
         return try {
-            when (val rendered = proceduralImageGenerator.render(goal)) {
+            when (val rendered = proceduralImageGenerator.render(goal, referenceInstant)) {
                 is ProceduralImageRenderResult.Blocked -> ImageGenerationResult.Blocked(rendered.reasons)
                 is ProceduralImageRenderResult.Rendered -> {
                     val createdAt = Instant.now()
