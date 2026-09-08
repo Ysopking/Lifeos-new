@@ -8,10 +8,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
+fun interface RuntimeExecutionGuard {
+    fun allowsNormalExecution(): Boolean
+}
+
 class DurableLifeOsRuntime(
     private val scope: CoroutineScope,
     private val pipeline: DurableProcessingPipeline,
     private val stateBridge: DurableRuntimeStateBridge,
+    private val executionGuard: RuntimeExecutionGuard = RuntimeExecutionGuard { true },
 ) : LifeOsRuntime {
     override val state: StateFlow<RuntimeState> = stateBridge.state
 
@@ -29,6 +34,18 @@ class DurableLifeOsRuntime(
 
         if (stopJob?.isActive == true) return@synchronized
         stopJob = null
+        if (!executionGuard.allowsNormalExecution()) {
+            stateBridge.markDegraded(
+                RuntimeFailure(
+                    category = RuntimeFailureCategory.INVARIANT,
+                    source = "runtime-protection",
+                    message = "Normal runtime execution is blocked by durable protection state",
+                    recoverable = true,
+                ),
+            )
+            return@synchronized
+        }
+
         stateBridge.markStarting()
         try {
             pipeline.start()
@@ -63,6 +80,7 @@ class DurableLifeOsRuntime(
     }
 
     override suspend fun ingest(photon: Photon) {
+        if (!executionGuard.allowsNormalExecution()) return
         pipeline.submitPhoton(photon)
     }
 }

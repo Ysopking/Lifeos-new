@@ -5,15 +5,19 @@ import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
+import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.language.PhotonLanguageContextBuilder
+import app.lifeos.core.model.health.ProtectionMode
+import app.lifeos.core.model.health.ProtectionStateLoadResult
 import app.lifeos.core.model.worker.WorkerId
 import app.lifeos.core.runtime.DurableLifeOsRuntime
 import app.lifeos.core.runtime.DurableRuntimeStateBridge
 import app.lifeos.core.runtime.InfluenceExecutor
+import app.lifeos.core.runtime.RuntimeExecutionGuard
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.StaticFieldRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
@@ -57,8 +61,10 @@ import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.health.CircuitBreaker
 import app.lifeos.core.runtime.health.HealthGate
 import app.lifeos.core.runtime.health.HealthGraph
+import app.lifeos.core.runtime.health.HealthGraphProtectionResumeVerifier
 import app.lifeos.core.runtime.health.HealthNodeId
 import app.lifeos.core.runtime.health.HealthTaskExecutionObserver
+import app.lifeos.core.runtime.health.ProtectionCoordinator
 import app.lifeos.core.runtime.health.QuarantineRegistry
 import app.lifeos.core.runtime.health.RuntimeHealthMonitor
 import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
@@ -97,7 +103,18 @@ class LifeOsKernelFactory(
         val healthGraph = HealthGraph()
         val circuitBreaker = CircuitBreaker()
         val quarantineRegistry = QuarantineRegistry()
-        val healthGate = HealthGate(circuitBreaker, quarantineRegistry)
+        val protectionRepository = EncryptedProtectionStateRepository(appContext)
+        val protectionCoordinator = ProtectionCoordinator(
+            repository = protectionRepository,
+            quarantineRegistry = quarantineRegistry,
+            verifier = HealthGraphProtectionResumeVerifier(healthGraph),
+            healthGraph = healthGraph,
+        )
+        val healthGate = HealthGate(
+            circuitBreaker = circuitBreaker,
+            quarantineRegistry = quarantineRegistry,
+            protectionAdmission = protectionCoordinator,
+        )
         val mmsiRuntime = MmsiRuntimeBackendProbe(appContext)
         val languageUnderstanding = LanguageUnderstandingEngine()
         val goalPhotonFactory = GoalPhotonFactory()
@@ -257,6 +274,9 @@ class LifeOsKernelFactory(
             scope = scope,
             pipeline = durablePipeline,
             stateBridge = durableStateBridge,
+            executionGuard = RuntimeExecutionGuard {
+                protectionCoordinator.snapshot().mode != ProtectionMode.SAFE_MODE
+            },
         )
         RuntimeHealthMonitor(
             scope = scope,
@@ -302,6 +322,34 @@ class LifeOsKernelFactory(
                         }
                     },
                     object : StoreProbe {
+                        override val storeId: String = "runtime-protection-store"
+
+                        override suspend fun probe(): StoreStatus = when (
+                            val protection = protectionRepository.load()
+                        ) {
+                            ProtectionStateLoadResult.Missing -> StoreStatus(
+                                storeId = storeId,
+                                state = StoreState.HEALTHY,
+                            )
+                            is ProtectionStateLoadResult.Loaded -> StoreStatus(
+                                storeId = storeId,
+                                state = if (protection.state.protected) {
+                                    StoreState.LOCKED
+                                } else {
+                                    StoreState.HEALTHY
+                                },
+                                message = protection.state
+                                    .takeIf { it.protected }
+                                    ?.let { "active:${it.mode.name.lowercase()}:generation-${it.generation}" },
+                            )
+                            is ProtectionStateLoadResult.Unreadable -> StoreStatus(
+                                storeId = storeId,
+                                state = StoreState.CORRUPTED,
+                                message = protection.message,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
                         override val storeId: String = "field-snapshot-store"
 
                         override suspend fun probe(): StoreStatus {
@@ -325,6 +373,7 @@ class LifeOsKernelFactory(
             ),
             stateRehydrator = object : StateRehydrator {
                 override suspend fun rehydrate(): RehydratedRuntimeState {
+                    protectionCoordinator.rehydrate()
                     recoverExpiredLeases(leaseRecovery)
                     return RehydratedRuntimeState()
                 }
