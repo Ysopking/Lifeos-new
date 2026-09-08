@@ -22,6 +22,8 @@ class LanguageUnderstandingEngineTest {
         assertTrue(result.goal.entities.any { it.type == EntityType.NUMBER && it.normalizedValue == "2" })
         assertTrue(result.goal.entities.any { it.type == EntityType.OBJECT && it.normalizedValue == "fussball" })
         assertTrue(result.goal.entities.any { it.type == EntityType.ACTION && it.normalizedValue == "spielen" })
+        assertNotNull(result.linguisticField)
+        assertTrue(result.linguisticField!!.semanticActivation("FOOTBALL") > 0.5)
         assertTrue(result.goal.confidence > 0.65)
     }
 
@@ -98,7 +100,7 @@ class LanguageUnderstandingEngineTest {
     }
 
     @Test
-    fun `goal photon preserves provenance and structured intent`() {
+    fun `goal photon preserves provenance field trace and structured intent`() {
         val source = PhotonId("chat-photon")
         val result = engine.understand("Suche Bilder aus Berlin")
         val goalPhoton = GoalPhotonFactory().create(
@@ -115,7 +117,8 @@ class LanguageUnderstandingEngineTest {
         val relation = assertNotNull(goalPhoton.photon.relations.singleOrNull())
         assertEquals(source, relation.target)
         assertEquals(RelationType.DERIVED_FROM, relation.type)
-        assertTrue(goalPhoton.photon.content.startsWith("goal/v1\nintent=SEARCH"))
+        assertTrue(goalPhoton.photon.content.startsWith("goal/v2\nintent=SEARCH"))
+        assertTrue(goalPhoton.photon.content.contains("field.iterations="))
     }
 
     @Test
