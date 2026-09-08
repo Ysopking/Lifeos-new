@@ -16,12 +16,22 @@ data class RecoveryPlan(
     val nodeId: HealthNodeId,
     val source: String,
     val actions: List<RecoveryAction>,
+    val verificationProbes: List<RepairProbe>,
     val quarantineOnFailure: Boolean = true,
 ) {
     init {
         require(source.isNotBlank()) { "Recovery source must not be blank" }
         require(actions.isNotEmpty()) { "Recovery plan must contain at least one action" }
         require(actions.all { it.id.isNotBlank() }) { "Recovery action ids must not be blank" }
+        require(actions.map { it.id }.distinct().size == actions.size) {
+            "Recovery action ids must be unique"
+        }
+        require(verificationProbes.isNotEmpty()) {
+            "Recovery plan must contain verification probes"
+        }
+        require(verificationProbes.map { it.id }.distinct().size == verificationProbes.size) {
+            "Recovery verification probe ids must be unique"
+        }
     }
 }
 
@@ -29,6 +39,7 @@ sealed interface RecoveryResult {
     data class Recovered(
         val nodeId: HealthNodeId,
         val actionId: String,
+        val evidence: CompositeRepairEvidence,
     ) : RecoveryResult
 
     data class Exhausted(
@@ -36,6 +47,7 @@ sealed interface RecoveryResult {
         val attemptedActionIds: List<String>,
         val quarantined: Boolean,
         val lastFailure: String,
+        val evidence: CompositeRepairEvidence? = null,
     ) : RecoveryResult
 }
 
@@ -55,21 +67,32 @@ class RecoveryCoordinator(
             )
         )
 
+        val verifier = CompositeRepairProbe(plan.verificationProbes, now)
         val attempted = mutableListOf<String>()
         var lastFailure = "recovery-exhausted"
+        var lastEvidence: CompositeRepairEvidence? = null
 
         for (action in plan.actions) {
             attempted += action.id
             when (val result = action.execute()) {
                 is RecoveryActionResult.Success -> {
-                    quarantineRegistry.release(plan.nodeId)
-                    healthGraph.recordHealthy(
-                        id = plan.nodeId,
-                        source = "${plan.source}:${action.id}",
-                        message = result.message ?: "recovery-succeeded",
-                        observedAt = now(),
-                    )
-                    return RecoveryResult.Recovered(plan.nodeId, action.id)
+                    val evidence = verifier.collect(plan.nodeId)
+                    lastEvidence = evidence
+                    if (evidence.verifiedHealthy) {
+                        quarantineRegistry.release(plan.nodeId)
+                        healthGraph.recordHealthy(
+                            id = plan.nodeId,
+                            source = "${plan.source}:${action.id}",
+                            message = result.message ?: "recovery-verified",
+                            observedAt = evidence.capturedAt,
+                        )
+                        return RecoveryResult.Recovered(
+                            nodeId = plan.nodeId,
+                            actionId = action.id,
+                            evidence = evidence,
+                        )
+                    }
+                    lastFailure = "verification-failed:${evidence.summary()}"
                 }
 
                 is RecoveryActionResult.Failure -> {
@@ -116,6 +139,7 @@ class RecoveryCoordinator(
             attemptedActionIds = attempted,
             quarantined = quarantined,
             lastFailure = lastFailure,
+            evidence = lastEvidence,
         )
     }
 }
