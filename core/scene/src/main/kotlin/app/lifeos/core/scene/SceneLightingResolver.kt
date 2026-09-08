@@ -11,7 +11,6 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
-import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import kotlin.math.exp
@@ -156,16 +155,25 @@ class SceneLightingResolver(
         }
 
         val solar = ephemeris.position(anchor.latitudeDeg, anchor.longitudeDeg, instant)
+        val phase = astronomicalPhase(solar.elevationDeg)
         val atmosphere = AtmosphericRadiometryEngine(fallbackProfile.grid)
         val illumination = atmosphere.illumination(solar)
-        val directRgb = spectrumToLinearRgb(illumination.direct)
-        val twilight = twilightScale(solar.elevationDeg)
+        val directRgb = if (phase == AstronomicalLightPhase.DAY) {
+            spectrumToLinearRgb(illumination.direct)
+        } else {
+            RgbSample(0.0, 0.0, 0.0)
+        }
         val diffuseBase = spectrumToLinearRgb(illumination.diffuse)
+        val skyScale = skyRadianceScale(phase, solar.elevationDeg)
+        val skyTint = nightSkyTint(phase)
         val diffuseRgb = RgbSample(
-            (diffuseBase.r * 0.45 * twilight).coerceIn(0.0, 1.0),
-            (diffuseBase.g * 0.45 * twilight).coerceIn(0.0, 1.0),
-            (diffuseBase.b * 0.45 * twilight).coerceIn(0.0, 1.0),
+            (diffuseBase.r * skyScale * skyTint.r).coerceIn(0.0, 1.0),
+            (diffuseBase.g * skyScale * skyTint.g).coerceIn(0.0, 1.0),
+            (diffuseBase.b * skyScale * skyTint.b).coerceIn(0.0, 1.0),
         )
+        if (phase == AstronomicalLightPhase.NIGHT) {
+            warnings += "direct solar term disabled; deep-night sky only until lunar/local-light resolver is available"
+        }
         val resolvedProfile = ProceduralMmsiProfile(
             grid = fallbackProfile.grid,
             sunDirection = solar.vector,
@@ -181,6 +189,7 @@ class SceneLightingResolver(
             resolvedInstantUtc = instant.toString(),
             sunAzimuthDeg = solar.azimuthDeg,
             sunElevationDeg = solar.elevationDeg,
+            astronomicalPhase = phase,
         )
         return SceneLightingResolution(
             profile = resolvedProfile,
@@ -267,11 +276,27 @@ class SceneLightingResolver(
         )
     }
 
-    private fun twilightScale(elevationDeg: Double): Double = when {
-        elevationDeg >= 0.0 -> 1.0
-        elevationDeg >= -6.0 -> 0.35 + 0.65 * ((elevationDeg + 6.0) / 6.0)
-        elevationDeg >= -12.0 -> 0.08 + 0.27 * ((elevationDeg + 12.0) / 6.0)
-        elevationDeg >= -18.0 -> 0.02 + 0.06 * ((elevationDeg + 18.0) / 6.0)
-        else -> 0.01
+    private fun astronomicalPhase(elevationDeg: Double): AstronomicalLightPhase = when {
+        elevationDeg >= 0.0 -> AstronomicalLightPhase.DAY
+        elevationDeg >= -6.0 -> AstronomicalLightPhase.CIVIL_TWILIGHT
+        elevationDeg >= -12.0 -> AstronomicalLightPhase.NAUTICAL_TWILIGHT
+        elevationDeg >= -18.0 -> AstronomicalLightPhase.ASTRONOMICAL_TWILIGHT
+        else -> AstronomicalLightPhase.NIGHT
+    }
+
+    private fun skyRadianceScale(phase: AstronomicalLightPhase, elevationDeg: Double): Double = when (phase) {
+        AstronomicalLightPhase.DAY -> 0.45
+        AstronomicalLightPhase.CIVIL_TWILIGHT -> 0.10 + 0.35 * ((elevationDeg + 6.0) / 6.0).coerceIn(0.0, 1.0)
+        AstronomicalLightPhase.NAUTICAL_TWILIGHT -> 0.035 + 0.065 * ((elevationDeg + 12.0) / 6.0).coerceIn(0.0, 1.0)
+        AstronomicalLightPhase.ASTRONOMICAL_TWILIGHT -> 0.012 + 0.023 * ((elevationDeg + 18.0) / 6.0).coerceIn(0.0, 1.0)
+        AstronomicalLightPhase.NIGHT -> 0.008
+    }
+
+    private fun nightSkyTint(phase: AstronomicalLightPhase): RgbSample = when (phase) {
+        AstronomicalLightPhase.DAY -> RgbSample(1.0, 1.0, 1.0)
+        AstronomicalLightPhase.CIVIL_TWILIGHT -> RgbSample(1.0, 0.86, 0.78)
+        AstronomicalLightPhase.NAUTICAL_TWILIGHT -> RgbSample(0.70, 0.78, 1.0)
+        AstronomicalLightPhase.ASTRONOMICAL_TWILIGHT -> RgbSample(0.46, 0.58, 1.0)
+        AstronomicalLightPhase.NIGHT -> RgbSample(0.32, 0.45, 1.0)
     }
 }
