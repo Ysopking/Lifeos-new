@@ -4,17 +4,36 @@ class FieldLanguageAdapter {
     fun entities(
         utterance: NormalizedUtterance,
         field: LinguisticFieldResult,
-    ): List<SemanticEntity> = field.resolutions.mapNotNull { resolution ->
-        val type = resolution.entityType ?: return@mapNotNull null
-        val token = utterance.tokens.getOrNull(resolution.tokenIndex) ?: return@mapNotNull null
-        SemanticEntity(
-            type = type,
-            rawText = token.original,
-            normalizedValue = resolution.canonical,
-            tokenStart = resolution.tokenIndex,
-            tokenEndExclusive = resolution.tokenIndex + 1,
-            confidence = resolution.confidence,
-        )
+    ): List<SemanticEntity> {
+        val direct = field.resolutions.mapNotNull { resolution ->
+            val type = resolution.entityType ?: return@mapNotNull null
+            val token = utterance.tokens.getOrNull(resolution.tokenIndex) ?: return@mapNotNull null
+            SemanticEntity(
+                type = type,
+                rawText = token.original,
+                normalizedValue = resolution.canonical,
+                tokenStart = resolution.tokenIndex,
+                tokenEndExclusive = resolution.tokenIndex + 1,
+                confidence = resolution.confidence,
+            )
+        }
+        val compound = field.compoundBindings.flatMap { binding ->
+            val token = utterance.tokens.getOrNull(binding.tokenIndex) ?: return@flatMap emptyList()
+            binding.components.mapNotNull { component ->
+                val type = component.entityType ?: return@mapNotNull null
+                SemanticEntity(
+                    type = type,
+                    rawText = token.original,
+                    normalizedValue = component.canonical,
+                    tokenStart = binding.tokenIndex,
+                    tokenEndExclusive = binding.tokenIndex + 1,
+                    confidence = (binding.confidence * component.confidence).coerceIn(0.0, 1.0),
+                )
+            }
+        }
+        return (direct + compound)
+            .distinctBy { Triple(it.type, it.tokenStart, it.normalizedValue) }
+            .sortedWith(compareBy<SemanticEntity> { it.tokenStart }.thenBy { it.type.name }.thenBy { it.normalizedValue })
     }
 
     fun intentEvidence(field: LinguisticFieldResult): List<IntentEvidence> {
@@ -33,6 +52,7 @@ class FieldLanguageAdapter {
                 reasons = listOf(
                     "linguistic-field:${intent.contributingConcepts.joinToString(",")}",
                     "field-converged=${field.converged}",
+                    "field-compounds=${field.compoundBindings.size}",
                 ),
             )
         }
@@ -48,7 +68,7 @@ class FieldLanguageAdapter {
             val existing = merged[key]
             if (existing == null || entity.confidence > existing.confidence) merged[key] = entity
         }
-        return merged.values.sortedWith(compareBy<SemanticEntity> { it.tokenStart }.thenBy { it.type.name })
+        return merged.values.sortedWith(compareBy<SemanticEntity> { it.tokenStart }.thenBy { it.type.name }.thenBy { it.normalizedValue })
     }
 
     fun mergeIntentEvidence(
