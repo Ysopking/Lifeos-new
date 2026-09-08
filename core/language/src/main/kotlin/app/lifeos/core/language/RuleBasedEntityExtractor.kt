@@ -25,6 +25,16 @@ class RuleBasedEntityExtractor {
     private val styleWords = setOf(
         "fotorealistisch", "realistisch", "cinematisch", "comic", "vektor", "aquarell", "photorealistic", "realistic", "cinematic", "vector", "watercolor",
     )
+    private val lightSourceWords = mapOf(
+        "mond" to "moon", "mondlicht" to "moon", "vollmond" to "full-moon",
+        "moon" to "moon", "moonlight" to "moon", "fullmoon" to "full-moon",
+        "flutlicht" to "floodlight", "stadionlicht" to "floodlight", "stadionbeleuchtung" to "floodlight",
+        "floodlight" to "floodlight", "floodlights" to "floodlight", "stadiumlight" to "floodlight", "stadiumlights" to "floodlight",
+        "straßenlaterne" to "street-lamp", "strassenlaterne" to "street-lamp", "laterne" to "street-lamp",
+        "streetlight" to "street-lamp", "streetlamp" to "street-lamp",
+        "scheinwerfer" to "headlights", "autoscheinwerfer" to "headlights", "headlight" to "headlights", "headlights" to "headlights",
+        "fensterlicht" to "window-light", "windowlight" to "window-light",
+    )
     private val relativeDates = mapOf(
         "heute" to "relative:today", "gestern" to "relative:yesterday", "morgen" to "relative:tomorrow",
         "today" to "relative:today", "yesterday" to "relative:yesterday", "tomorrow" to "relative:tomorrow",
@@ -52,6 +62,7 @@ class RuleBasedEntityExtractor {
             if (word in actionWords) entities += entity(EntityType.ACTION, token.original, word, index, 0.90)
             if (word in objectWords) entities += entity(EntityType.OBJECT, token.original, word, index, 0.92)
             if (word in styleWords) entities += entity(EntityType.STYLE, token.original, word, index, 0.96)
+            lightSourceWords[word]?.let { entities += entity(EntityType.LIGHT_SOURCE, token.original, it, index, 0.97) }
             relativeDates[word]?.let { entities += entity(EntityType.DATE, token.original, it, index, 0.98) }
         }
 
