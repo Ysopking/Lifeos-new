@@ -30,6 +30,7 @@ class SceneLightingResolverTest {
         assertEquals("2026-09-08T10:00:00Z", result.environment.resolvedInstantUtc)
         assertNotNull(result.environment.sunAzimuthDeg)
         assertTrue(result.environment.sunElevationDeg!! > 35.0)
+        assertEquals(AstronomicalLightPhase.DAY, result.environment.astronomicalPhase)
         assertTrue(result.profile.sunColorLinear.r > 0.0)
     }
 
@@ -111,7 +112,7 @@ class SceneLightingResolverTest {
     }
 
     @Test
-    fun `night scene suppresses direct solar color`() {
+    fun `deep night suppresses sun but preserves low blue sky radiance`() {
         val result = resolver.resolve(
             SceneEnvironment(
                 locationText = "Berlin",
@@ -124,9 +125,34 @@ class SceneLightingResolverTest {
         )
 
         assertTrue(result.astronomical)
-        assertTrue(result.environment.sunElevationDeg!! < -6.0)
+        assertTrue(result.environment.sunElevationDeg!! < -18.0)
+        assertEquals(AstronomicalLightPhase.NIGHT, result.environment.astronomicalPhase)
         assertEquals(0.0, result.profile.sunColorLinear.r)
         assertEquals(0.0, result.profile.sunColorLinear.g)
         assertEquals(0.0, result.profile.sunColorLinear.b)
+        assertTrue(result.profile.skyAmbientLinear.b > result.profile.skyAmbientLinear.r)
+        assertTrue(result.profile.skyAmbientLinear.b > 0.0)
+        assertTrue(result.warnings.any { it.contains("lunar/local-light") })
+    }
+
+    @Test
+    fun `sun below horizon never contributes a direct beam`() {
+        // This hour is close enough to sunset that it can exercise twilight rather than deep night.
+        val twilight = resolver.resolve(
+            SceneEnvironment(
+                locationText = "Berlin",
+                dateText = "08.09.2026",
+                timeText = "20:00",
+                lightingMode = LightingMode.ASTRONOMICAL_IF_RESOLVED,
+                groundMaterial = "neutral-ground",
+            ),
+            Instant.parse("2026-09-08T00:00:00Z"),
+        )
+        if (twilight.environment.sunElevationDeg!! < 0.0) {
+            assertEquals(0.0, twilight.profile.sunColorLinear.r)
+            assertEquals(0.0, twilight.profile.sunColorLinear.g)
+            assertEquals(0.0, twilight.profile.sunColorLinear.b)
+            assertTrue(twilight.environment.astronomicalPhase != AstronomicalLightPhase.DAY)
+        }
     }
 }
