@@ -1,0 +1,1 @@
+C03 branch scope: structured repair probes, composite evidence, and evidence-gated RecoveryCoordinator verification.
