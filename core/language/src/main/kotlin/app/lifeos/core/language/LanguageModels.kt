@@ -64,6 +64,7 @@ enum class EntityType {
     OBJECT,
     ACTION,
     STYLE,
+    LIGHT_SOURCE,
 }
 
 data class SemanticEntity(
