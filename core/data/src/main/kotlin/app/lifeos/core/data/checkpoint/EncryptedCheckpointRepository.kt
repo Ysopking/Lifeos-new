@@ -7,6 +7,7 @@ import android.util.AtomicFile
 import app.lifeos.core.model.checkpoint.CheckpointCodec
 import app.lifeos.core.model.checkpoint.CheckpointId
 import app.lifeos.core.model.checkpoint.CheckpointLoadReport
+import app.lifeos.core.model.checkpoint.CheckpointRepository
 import app.lifeos.core.model.checkpoint.CheckpointSnapshotRepository
 import app.lifeos.core.model.checkpoint.SaveCheckpointResult
 import app.lifeos.core.model.checkpoint.TaskCheckpoint
@@ -33,7 +34,7 @@ import kotlinx.coroutines.withContext
  * identifies one logical checkpoint; duplicate saves resolve to the existing
  * checkpoint instead of creating competing recovery anchors.
  */
-class EncryptedCheckpointRepository(context: Context) : CheckpointSnapshotRepository {
+class EncryptedCheckpointRepository(context: Context) : CheckpointRepository, CheckpointSnapshotRepository {
     private val directory = context.filesDir.resolve("checkpoint-vault")
     private val key: SecretKey by lazy { loadOrCreateKey() }
     private val mutex = Mutex()
