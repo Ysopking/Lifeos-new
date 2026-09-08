@@ -1,0 +1,1 @@
+C03 is diagnostic and verification-only. It does not activate self-modification, mutation, hot-swap, or generated builds. Those remain gated by later master-plan blocks.
