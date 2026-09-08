@@ -23,6 +23,17 @@ data class FieldWeights(
 
     val positiveWeightSum: Double
         get() = confidence + reliability + authority + temporalValidity + contextCoherence + semanticMass
+
+    fun fingerprint(): String = StableFieldIds.fingerprint(
+        "field-weights/v1",
+        fieldDouble(confidence),
+        fieldDouble(reliability),
+        fieldDouble(authority),
+        fieldDouble(temporalValidity),
+        fieldDouble(contextCoherence),
+        fieldDouble(semanticMass),
+        fieldDouble(contradictionPenalty),
+    )
 }
 
 data class EvidenceForceBreakdown(
@@ -67,6 +78,13 @@ class FieldForceCalculator(
     private val staleHalfLife: Duration = Duration.ofDays(3650),
 ) {
     init { require(!staleHalfLife.isZero && !staleHalfLife.isNegative) }
+
+    fun fingerprint(): String = StableFieldIds.fingerprint(
+        "force-calculator/v1",
+        weights.fingerprint(),
+        staleHalfLife.seconds.toString(),
+        staleHalfLife.nano.toString(),
+    )
 
     fun evidenceForce(
         evidence: FieldEvidence,
