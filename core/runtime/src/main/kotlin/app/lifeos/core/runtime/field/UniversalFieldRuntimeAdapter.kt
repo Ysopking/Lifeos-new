@@ -6,7 +6,6 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.health.HealthGate
 import app.lifeos.core.runtime.health.HealthGatePermit
 import app.lifeos.core.runtime.health.HealthGateResult
-import app.lifeos.core.runtime.health.HealthNodeId
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 
@@ -37,7 +36,7 @@ class UniversalFieldRuntimeAdapter(
 
         var permit: HealthGatePermit? = null
         if (healthGate != null) {
-            when (val admission = healthGate.acquire(nodeId(request.domainId.value), now())) {
+            when (val admission = healthGate.acquire(universalFieldShadowHealthNodeId(request.domainId), now())) {
                 is HealthGateResult.Granted -> permit = admission.permit
                 is HealthGateResult.BlockedByQuarantine -> return FieldShadowExecution.blocked(
                     domainId = request.domainId,
@@ -82,10 +81,5 @@ class UniversalFieldRuntimeAdapter(
                 message = error.message ?: error::class.simpleName ?: "universal-field-shadow-failed",
             )
         }
-    }
-
-    private fun nodeId(domainValue: String): HealthNodeId {
-        val digest = app.lifeos.core.field.StableFieldIds.fingerprint("runtime-shadow", domainValue)
-        return HealthNodeId("field-shadow:$digest")
     }
 }
