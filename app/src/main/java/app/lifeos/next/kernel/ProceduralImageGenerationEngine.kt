@@ -18,6 +18,7 @@ import app.lifeos.core.scene.SceneRasterResult
 import app.lifeos.core.scene.SceneRasterSize
 import app.lifeos.core.scene.SceneRasterizer
 import app.lifeos.core.scene.toDirectMmsiInputs
+import app.lifeos.core.scene.toMmsiViewSpace
 import java.time.Instant
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
@@ -64,12 +65,13 @@ class ProceduralImageGenerationEngine(
             environment = lighting.environment,
             warnings = (compiledGraph.warnings + lighting.warnings).distinct(),
         )
+        val renderProfile = lighting.profile.toMmsiViewSpace(graph.camera)
         val rasterized = when (val raster = sceneRasterizer.rasterize(graph, outputSize)) {
             is SceneRasterResult.Rasterized -> raster
             is SceneRasterResult.Blocked -> return@withContext ProceduralImageRenderResult.Blocked(raster.reasons)
         }
 
-        val hardware = renderHardware(rasterized.buffers, lighting.profile)
+        val hardware = renderHardware(rasterized.buffers, renderProfile)
         if (hardware != null) {
             return@withContext ProceduralImageRenderResult.Rendered(
                 graph = graph,
@@ -77,7 +79,7 @@ class ProceduralImageGenerationEngine(
                 rendererId = if (lighting.astronomical) "$HARDWARE_RENDERER_ID-astro" else HARDWARE_RENDERER_ID,
             )
         }
-        val cpuRenderer = ReferenceCpuProceduralMmsiRenderer(lighting.profile)
+        val cpuRenderer = ReferenceCpuProceduralMmsiRenderer(renderProfile)
         ProceduralImageRenderResult.Rendered(
             graph = graph,
             image = cpuRenderer.render(rasterized.buffers),
