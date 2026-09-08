@@ -137,7 +137,12 @@ class BootContextRehydrator(
                 photon.id in source.provenance.parentIds ||
                 photon.relations.any { it.target == source.id } ||
                 source.relations.any { it.target == photon.id }
-        }.distinctBy { it.id to it.revision }
+        }.groupBy { it.id }
+            .mapNotNull { (_, revisions) ->
+                revisions.maxWithOrNull(
+                    compareBy<Photon>({ it.revision }, { it.provenance.createdAt })
+                )
+            }
             .sortedWith(
                 compareByDescending<Photon> { it.provenance.createdAt }
                     .thenByDescending { it.revision }
