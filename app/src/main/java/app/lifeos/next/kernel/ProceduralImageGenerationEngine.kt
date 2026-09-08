@@ -13,10 +13,12 @@ import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.ProceduralSceneGraph
 import app.lifeos.core.scene.ReferenceCpuProceduralMmsiRenderer
 import app.lifeos.core.scene.SceneCompileResult
+import app.lifeos.core.scene.SceneLightingResolver
 import app.lifeos.core.scene.SceneRasterResult
 import app.lifeos.core.scene.SceneRasterSize
 import app.lifeos.core.scene.SceneRasterizer
 import app.lifeos.core.scene.toDirectMmsiInputs
+import java.time.Instant
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 
@@ -39,38 +41,54 @@ class ProceduralImageGenerationEngine(
     private val sceneCompiler: ProceduralSceneCompiler,
     private val sceneRasterizer: SceneRasterizer,
     private val computeDispatcher: CoroutineDispatcher,
-    private val profile: ProceduralMmsiProfile = ProceduralMmsiProfile(),
-    private val cpuRenderer: ReferenceCpuProceduralMmsiRenderer = ReferenceCpuProceduralMmsiRenderer(profile),
+    private val baseProfile: ProceduralMmsiProfile = ProceduralMmsiProfile(),
+    private val sceneLightingResolver: SceneLightingResolver = SceneLightingResolver(),
     private val outputSize: SceneRasterSize = SceneRasterSize(512, 288),
 ) {
     private val appContext = context.applicationContext
 
-    suspend fun render(goal: GoalFrame): ProceduralImageRenderResult = withContext(computeDispatcher) {
-        val graph = when (val compiled = sceneCompiler.compile(goal)) {
+    suspend fun render(
+        goal: GoalFrame,
+        referenceInstant: Instant,
+    ): ProceduralImageRenderResult = withContext(computeDispatcher) {
+        val compiledGraph = when (val compiled = sceneCompiler.compile(goal)) {
             is SceneCompileResult.Compiled -> compiled.graph
             is SceneCompileResult.Blocked -> return@withContext ProceduralImageRenderResult.Blocked(compiled.reasons)
         }
+        val lighting = sceneLightingResolver.resolve(
+            environment = compiledGraph.environment,
+            referenceInstant = referenceInstant,
+            fallbackProfile = baseProfile,
+        )
+        val graph = compiledGraph.copy(
+            environment = lighting.environment,
+            warnings = (compiledGraph.warnings + lighting.warnings).distinct(),
+        )
         val rasterized = when (val raster = sceneRasterizer.rasterize(graph, outputSize)) {
             is SceneRasterResult.Rasterized -> raster
             is SceneRasterResult.Blocked -> return@withContext ProceduralImageRenderResult.Blocked(raster.reasons)
         }
 
-        val hardware = renderHardware(rasterized.buffers)
+        val hardware = renderHardware(rasterized.buffers, lighting.profile)
         if (hardware != null) {
             return@withContext ProceduralImageRenderResult.Rendered(
                 graph = graph,
                 image = hardware,
-                rendererId = HARDWARE_RENDERER_ID,
+                rendererId = if (lighting.astronomical) "$HARDWARE_RENDERER_ID-astro" else HARDWARE_RENDERER_ID,
             )
         }
+        val cpuRenderer = ReferenceCpuProceduralMmsiRenderer(lighting.profile)
         ProceduralImageRenderResult.Rendered(
             graph = graph,
             image = cpuRenderer.render(rasterized.buffers),
-            rendererId = cpuRenderer.rendererId,
+            rendererId = if (lighting.astronomical) "${cpuRenderer.rendererId}-astro" else cpuRenderer.rendererId,
         )
     }
 
-    private fun renderHardware(buffers: app.lifeos.core.scene.MmsiSceneRasterBuffers): Rgba8Image? {
+    private fun renderHardware(
+        buffers: app.lifeos.core.scene.MmsiSceneRasterBuffers,
+        profile: ProceduralMmsiProfile,
+    ): Rgba8Image? {
         if (!runtimeProbe.snapshot().capabilities.spectralAhbSyncFd) return null
         return runCatching {
             val pipeline = MmsiProceduralSpectralHardwarePipeline.create(appContext) ?: return@runCatching null
