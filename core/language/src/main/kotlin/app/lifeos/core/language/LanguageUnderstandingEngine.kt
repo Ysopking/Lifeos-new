@@ -16,16 +16,21 @@ class LanguageUnderstandingEngine(
     private val constraintExtractor: RuleBasedConstraintExtractor = RuleBasedConstraintExtractor(),
     private val referenceExtractor: ReferenceExpressionExtractor = ReferenceExpressionExtractor(),
     private val referenceResolver: ReferenceResolver = ReferenceResolver(),
+    private val linguisticFieldEngine: LinguisticFieldEngine = LinguisticFieldEngine(),
+    private val fieldAdapter: FieldLanguageAdapter = FieldLanguageAdapter(),
 ) {
     fun understand(text: String, context: LanguageContext = LanguageContext()): LanguageUnderstandingResult {
         val utterance = normalizer.normalize(text)
-        val evidence = intentClassifier.classify(utterance)
+        val linguisticField = linguisticFieldEngine.converge(utterance, context)
+        val ruleEvidence = intentClassifier.classify(utterance)
+        val evidence = fieldAdapter.mergeIntentEvidence(ruleEvidence, fieldAdapter.intentEvidence(linguisticField))
         val topIntent = evidence.first().intent
-        val entities = entityExtractor.extract(utterance)
+        val ruleEntities = entityExtractor.extract(utterance)
+        val entities = fieldAdapter.mergeEntities(ruleEntities, fieldAdapter.entities(utterance, linguisticField))
         val references = referenceExtractor.extract(utterance, topIntent).map { referenceResolver.resolve(it, context) }
-        val ambiguities = buildAmbiguities(evidence, references, topIntent)
-        val constraints = buildConstraints(utterance, entities, references)
-        val confidence = calculateConfidence(evidence.first().score, entities, references, ambiguities)
+        val ambiguities = buildAmbiguities(evidence, references, topIntent, linguisticField)
+        val constraints = buildConstraints(utterance, entities, references, linguisticField)
+        val confidence = calculateConfidence(evidence.first().score, entities, references, ambiguities, linguisticField)
         val goal = GoalFrame(
             intent = topIntent,
             objective = canonicalObjective(utterance, topIntent),
@@ -36,7 +41,7 @@ class LanguageUnderstandingEngine(
             confidence = confidence,
             language = utterance.language,
         )
-        return LanguageUnderstandingResult(utterance, evidence, goal)
+        return LanguageUnderstandingResult(utterance, evidence, goal, linguisticField)
     }
 
     private fun canonicalObjective(utterance: NormalizedUtterance, intent: IntentType): String =
@@ -46,6 +51,7 @@ class LanguageUnderstandingEngine(
         utterance: NormalizedUtterance,
         entities: List<SemanticEntity>,
         references: List<ResolvedReference>,
+        linguisticField: LinguisticFieldResult,
     ): List<GoalConstraint> {
         val constraints = mutableListOf<GoalConstraint>()
         entities.forEach { entity ->
@@ -57,6 +63,16 @@ class LanguageUnderstandingEngine(
             )
         }
         constraints += constraintExtractor.extract(utterance)
+        linguisticField.resolutions
+            .filter { it.entityType == null }
+            .forEach { resolution ->
+                constraints += GoalConstraint(
+                    key = "field.semantic.${resolution.semanticTag.lowercase()}",
+                    value = resolution.canonical,
+                    confidence = resolution.confidence,
+                    source = "linguistic-field:${resolution.rawToken}",
+                )
+            }
         references.filter { it.targetPhotonId != null }.forEach { reference ->
             constraints += GoalConstraint(
                 key = "reference.${reference.expression.kind.name.lowercase()}",
@@ -72,6 +88,7 @@ class LanguageUnderstandingEngine(
         evidence: List<IntentEvidence>,
         references: List<ResolvedReference>,
         topIntent: IntentType,
+        linguisticField: LinguisticFieldResult,
     ): List<Ambiguity> {
         val result = mutableListOf<Ambiguity>()
         if (evidence.size > 1 && evidence[0].score - evidence[1].score < 0.12) {
@@ -80,6 +97,14 @@ class LanguageUnderstandingEngine(
                 message = "Multiple intents have similar deterministic evidence",
                 alternatives = evidence.take(3).map { "${it.intent.name}:${"%.2f".format(java.util.Locale.ROOT, it.score)}" },
                 severity = (1.0 - (evidence[0].score - evidence[1].score) / 0.12).coerceIn(0.0, 1.0),
+            )
+        }
+        if (!linguisticField.converged && linguisticField.iterations > 0) {
+            result += Ambiguity(
+                code = "linguistic_field_not_converged",
+                message = "Linguistic field reached its deterministic iteration budget before convergence",
+                alternatives = linguisticField.resolutions.take(5).map { "${it.rawToken}->${it.canonical}" },
+                severity = 0.30,
             )
         }
         references.forEach { reference ->
@@ -118,11 +143,13 @@ class LanguageUnderstandingEngine(
         entities: List<SemanticEntity>,
         references: List<ResolvedReference>,
         ambiguities: List<Ambiguity>,
+        linguisticField: LinguisticFieldResult,
     ): Double {
         val entitySupport = if (entities.isEmpty()) 0.55 else entities.map { it.confidence }.average()
         val referenceSupport = if (references.isEmpty()) 0.80 else references.map { it.score }.average()
+        val fieldSupport = if (linguisticField.resolutions.isEmpty()) 0.60 else linguisticField.resolutions.map { it.confidence }.average()
         val ambiguityPenalty = min(0.45, ambiguities.sumOf { it.severity } * 0.16)
-        return (intentScore * 0.60 + entitySupport * 0.20 + referenceSupport * 0.20 - ambiguityPenalty)
+        return (intentScore * 0.54 + entitySupport * 0.18 + referenceSupport * 0.18 + fieldSupport * 0.10 - ambiguityPenalty)
             .coerceIn(0.0, 1.0)
     }
 }
@@ -144,7 +171,7 @@ class GoalPhotonFactory {
             setOf(PhotonRelation(it, RelationType.DERIVED_FROM, frame.confidence))
         }.orEmpty()
         val photon = Photon(
-            content = serialize(frame),
+            content = serialize(frame, result.linguisticField),
             mimeType = "application/vnd.lifeos.goal+text",
             phase = PhotonPhase.CREATED,
             semanticMass = 1.0 + frame.constraints.size * 0.08 + frame.references.size * 0.12,
@@ -162,12 +189,23 @@ class GoalPhotonFactory {
         return GoalPhoton(photon, frame)
     }
 
-    private fun serialize(frame: GoalFrame): String = buildString {
-        append("goal/v1\n")
+    private fun serialize(frame: GoalFrame, field: LinguisticFieldResult?): String = buildString {
+        append("goal/v2\n")
         append("intent=").append(frame.intent.name).append('\n')
         append("language=").append(frame.language.name).append('\n')
         append("confidence=").append(frame.confidence).append('\n')
         append("objective=").append(escape(frame.objective)).append('\n')
+        field?.let {
+            append("field.converged=").append(it.converged).append('\n')
+            append("field.iterations=").append(it.iterations).append('\n')
+            append("field.energy=").append(it.totalEnergy).append('\n')
+            it.resolutions.sortedBy { resolution -> resolution.tokenIndex }.forEach { resolution ->
+                append("field.token.").append(resolution.tokenIndex)
+                    .append('=').append(escape(resolution.canonical))
+                    .append('|').append(escape(resolution.semanticTag))
+                    .append('|').append(resolution.confidence).append('\n')
+            }
+        }
         frame.constraints.sortedWith(compareBy<GoalConstraint> { it.key }.thenBy { it.value }).forEach {
             append("constraint.").append(escape(it.key)).append('=').append(escape(it.value)).append('|').append(it.confidence).append('\n')
         }
