@@ -1,0 +1,152 @@
+package app.lifeos.core.language
+
+/** Small deterministic seed lexicon. It is intentionally data-driven so later photon-learned
+ * lexicon entries can be added without changing the convergence algorithm. */
+class DeterministicLinguisticFieldLexicon(
+    val concepts: List<LinguisticConcept> = defaultConcepts(),
+) {
+    init {
+        require(concepts.isNotEmpty())
+        require(concepts.map { it.id }.distinct().size == concepts.size)
+    }
+
+    fun byId(id: String): LinguisticConcept? = concepts.firstOrNull { it.id == id }
+
+    companion object {
+        private fun defaultConcepts(): List<LinguisticConcept> = listOf(
+            LinguisticConcept(
+                id = "person",
+                canonical = "person",
+                variants = setOf("mensch", "menschen", "leute", "leuten", "mann", "frau", "people", "persons", "man", "woman"),
+                semanticTag = "PERSON",
+                entityType = EntityType.PERSON,
+                attractsTags = setOf("ACTION_PLAY", "ACTION_RUN", "FOOTBALL", "IMAGE"),
+                semanticMass = 1.1,
+            ),
+            LinguisticConcept(
+                id = "football",
+                canonical = "fussball",
+                variants = setOf("fußball", "fussbal", "fusball", "football", "soccer"),
+                semanticTag = "FOOTBALL",
+                entityType = EntityType.OBJECT,
+                attractsTags = setOf("PERSON", "ACTION_PLAY", "IMAGE"),
+                semanticMass = 1.3,
+            ),
+            LinguisticConcept(
+                id = "ball",
+                canonical = "ball",
+                variants = setOf("baelle", "bälle", "balls"),
+                semanticTag = "BALL",
+                entityType = EntityType.OBJECT,
+                attractsTags = setOf("PERSON", "ACTION_PLAY"),
+                semanticMass = 0.8,
+            ),
+            LinguisticConcept(
+                id = "action.play",
+                canonical = "spielen",
+                variants = setOf("spiele", "spielt", "spiel", "playing", "play", "plays"),
+                semanticTag = "ACTION_PLAY",
+                entityType = EntityType.ACTION,
+                attractsTags = setOf("PERSON", "FOOTBALL", "BALL"),
+                semanticMass = 1.2,
+            ),
+            LinguisticConcept(
+                id = "action.run",
+                canonical = "laufen",
+                variants = setOf("laufe", "laeuft", "läuft", "laufend", "running", "run", "runs"),
+                semanticTag = "ACTION_RUN",
+                entityType = EntityType.ACTION,
+                attractsTags = setOf("PERSON"),
+            ),
+            LinguisticConcept(
+                id = "image",
+                canonical = "bild",
+                variants = setOf("bilder", "foto", "fotos", "grafik", "image", "images", "photo", "photos", "picture", "pictures"),
+                semanticTag = "IMAGE",
+                entityType = EntityType.IMAGE,
+                attractsTags = setOf("CREATE", "TRANSFORM", "PERSON", "FOOTBALL"),
+                intentBias = mapOf(IntentType.CREATE_IMAGE to 0.35, IntentType.TRANSFORM_IMAGE to 0.20),
+                semanticMass = 1.4,
+            ),
+            LinguisticConcept(
+                id = "create",
+                canonical = "erzeugen",
+                variants = setOf("erzeuge", "generiere", "generieren", "erstelle", "machen", "mach", "create", "generate", "make", "render"),
+                semanticTag = "CREATE",
+                attractsTags = setOf("IMAGE"),
+                intentBias = mapOf(IntentType.CREATE_IMAGE to 0.90),
+                semanticMass = 1.2,
+            ),
+            LinguisticConcept(
+                id = "transform",
+                canonical = "veraendern",
+                variants = setOf("verändern", "aendern", "ändern", "bearbeiten", "anpassen", "transform", "edit", "change", "modify"),
+                semanticTag = "TRANSFORM",
+                attractsTags = setOf("IMAGE"),
+                intentBias = mapOf(IntentType.TRANSFORM_IMAGE to 0.90),
+            ),
+            LinguisticConcept(
+                id = "search",
+                canonical = "suchen",
+                variants = setOf("suche", "finden", "finde", "recherchiere", "search", "find", "lookup"),
+                semanticTag = "SEARCH",
+                intentBias = mapOf(IntentType.SEARCH to 0.92),
+            ),
+            LinguisticConcept(
+                id = "continue",
+                canonical = "weiter",
+                variants = setOf("weitermachen", "fortsetzen", "continue", "proceed"),
+                semanticTag = "CONTINUE",
+                intentBias = mapOf(IntentType.CONTINUE to 0.95),
+            ),
+            LinguisticConcept(
+                id = "implement",
+                canonical = "implementieren",
+                variants = setOf("implementiere", "umsetzen", "baue", "bauen", "code", "implement", "build"),
+                semanticTag = "IMPLEMENT",
+                intentBias = mapOf(IntentType.BUILD_OR_IMPLEMENT to 0.92),
+            ),
+            LinguisticConcept(
+                id = "night",
+                canonical = "nacht",
+                variants = setOf("nachts", "nachtlich", "nächtlich", "night", "nighttime"),
+                semanticTag = "NIGHT",
+                attractsTags = setOf("FLOODLIGHT", "STREETLIGHT", "MOON"),
+                semanticMass = 1.2,
+            ),
+            LinguisticConcept(
+                id = "floodlight",
+                canonical = "flutlicht",
+                variants = setOf("flutlichter", "flutlichtanlage", "stadionlicht", "stadionbeleuchtung", "floodlight", "floodlights"),
+                semanticTag = "FLOODLIGHT",
+                entityType = EntityType.OBJECT,
+                attractsTags = setOf("NIGHT", "FOOTBALL"),
+                semanticMass = 1.25,
+            ),
+            LinguisticConcept(
+                id = "streetlight",
+                canonical = "strassenlaterne",
+                variants = setOf("straßenlaterne", "strassenlaternen", "straßenlaternen", "laterne", "laternen", "streetlight", "streetlights"),
+                semanticTag = "STREETLIGHT",
+                entityType = EntityType.OBJECT,
+                attractsTags = setOf("NIGHT"),
+            ),
+            LinguisticConcept(
+                id = "moon",
+                canonical = "mond",
+                variants = setOf("mondlicht", "vollmond", "moon", "moonlight", "fullmoon"),
+                semanticTag = "MOON",
+                entityType = EntityType.OBJECT,
+                attractsTags = setOf("NIGHT"),
+            ),
+            LinguisticConcept(
+                id = "berlin",
+                canonical = "berlin",
+                variants = emptySet(),
+                semanticTag = "LOCATION_BERLIN",
+                entityType = EntityType.LOCATION,
+                semanticMass = 1.15,
+            ),
+        )
+    }
+}
