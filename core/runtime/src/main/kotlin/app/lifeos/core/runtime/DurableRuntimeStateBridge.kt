@@ -21,6 +21,15 @@ class DurableRuntimeStateBridge : DurableTaskExecutionObserver {
         mutableState.update { it.copy(status = RuntimeStatus.RUNNING) }
     }
 
+    fun markDegraded(failure: RuntimeFailure) {
+        mutableState.update {
+            it.copy(
+                status = RuntimeStatus.DEGRADED,
+                lastFailure = failure,
+            )
+        }
+    }
+
     fun markStopping() {
         mutableState.update { it.copy(status = RuntimeStatus.STOPPING) }
     }
