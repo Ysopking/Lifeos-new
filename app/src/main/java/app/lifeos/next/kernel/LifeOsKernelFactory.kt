@@ -54,6 +54,13 @@ import app.lifeos.core.runtime.cognition.InMemoryPhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.OutcomeTriggerObserver
 import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
 import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
+import app.lifeos.core.runtime.health.CircuitBreaker
+import app.lifeos.core.runtime.health.HealthGate
+import app.lifeos.core.runtime.health.HealthGraph
+import app.lifeos.core.runtime.health.HealthNodeId
+import app.lifeos.core.runtime.health.HealthTaskExecutionObserver
+import app.lifeos.core.runtime.health.QuarantineRegistry
+import app.lifeos.core.runtime.health.RuntimeHealthMonitor
 import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
@@ -87,6 +94,10 @@ class LifeOsKernelFactory(
         val matrix = ThoughtMatrix()
         val registry = StaticFieldRegistry(listOf(matrix))
         val executor = InfluenceExecutor()
+        val healthGraph = HealthGraph()
+        val circuitBreaker = CircuitBreaker()
+        val quarantineRegistry = QuarantineRegistry()
+        val healthGate = HealthGate(circuitBreaker, quarantineRegistry)
         val mmsiRuntime = MmsiRuntimeBackendProbe(appContext)
         val languageUnderstanding = LanguageUnderstandingEngine()
         val goalPhotonFactory = GoalPhotonFactory()
@@ -163,6 +174,7 @@ class LifeOsKernelFactory(
         val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
             snapshotRepository = fieldSnapshotRepository,
+            healthGate = healthGate,
         )
         val schedulerSignal = ConflatedTaskSchedulerSignal()
         val taskEngine = DurableTaskEngine(taskRepository, schedulerSignal)
@@ -197,6 +209,10 @@ class LifeOsKernelFactory(
         )
         val cognitiveWorker = workerFactory.create(durableWorkerId)
         val durableStateBridge = DurableRuntimeStateBridge()
+        val healthTaskObserver = HealthTaskExecutionObserver(
+            workerNodeId = HealthNodeId("worker:${durableWorkerId.value}"),
+            graph = healthGraph,
+        )
         val reportingDispatcher = ReportingCognitiveTaskDispatcher(
             worker = cognitiveWorker,
             observer = CompositeDurableTaskExecutionObserver(
@@ -207,6 +223,7 @@ class LifeOsKernelFactory(
                         outcomes = cognitiveOutcomes,
                         triggers = cognitiveTriggers,
                     ),
+                    healthTaskObserver,
                 )
             ),
         )
@@ -241,6 +258,11 @@ class LifeOsKernelFactory(
             pipeline = durablePipeline,
             stateBridge = durableStateBridge,
         )
+        RuntimeHealthMonitor(
+            scope = scope,
+            runtime = durableRuntime,
+            graph = healthGraph,
+        ).start()
         val supervisor = RuntimeSupervisor(durableRuntime)
 
         val bootCoordinator = BootCoordinator(
