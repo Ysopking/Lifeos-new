@@ -5,7 +5,9 @@ import app.lifeos.core.field.FieldConvergenceRequest
 import app.lifeos.core.field.FieldDomainId
 import app.lifeos.core.field.FieldRunId
 import app.lifeos.core.field.FieldSnapshotId
+import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.model.Photon
+import app.lifeos.core.runtime.health.HealthNodeId
 
 enum class FieldShadowState {
     COMPLETED,
@@ -54,6 +56,10 @@ data class FieldShadowExecution(
             )
     }
 }
+
+fun universalFieldShadowHealthNodeId(domainId: FieldDomainId): HealthNodeId = HealthNodeId(
+    "field-shadow:${StableFieldIds.fingerprint("universal-field-shadow/v1", domainId.value)}",
+)
 
 fun interface FieldShadowProcessor {
     suspend fun process(photon: Photon): FieldShadowExecution
