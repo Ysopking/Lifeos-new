@@ -1,6 +1,7 @@
 package app.lifeos.next
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioFormat
@@ -46,6 +47,11 @@ class AndroidVoiceCaptureEngine(
     fun hasPermission(): Boolean =
         context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
+    /**
+     * Lint cannot follow the custom hasPermission() helper. The suppression is scoped to this method;
+     * the runtime permission check above and SecurityException handling below remain mandatory.
+     */
+    @SuppressLint("MissingPermission")
     fun capture(
         stopRequested: AtomicBoolean,
         languageContext: LanguageContext,
