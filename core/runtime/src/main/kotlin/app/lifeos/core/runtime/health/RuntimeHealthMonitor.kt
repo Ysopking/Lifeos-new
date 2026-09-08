@@ -73,7 +73,19 @@ class RuntimeHealthMonitor(
                     message = "Runtime entered FAILED without structured failure",
                     recoverable = false,
                 )
-                graph.recordFailure(nodeId, failure, now())
+                // FAILED is a terminal runtime state. Preserve failure classification metadata, but
+                // never down-project a terminal runtime failure to merely DEGRADED because the
+                // underlying cause may itself be recoverable.
+                graph.record(
+                    HealthObservation(
+                        nodeId = nodeId,
+                        state = HealthState.UNHEALTHY,
+                        observedAt = now(),
+                        source = failure.source,
+                        message = failure.message,
+                        classification = classifier.classify(failure),
+                    ),
+                )
             }
             RuntimeStatus.CREATED,
             RuntimeStatus.STARTING,
