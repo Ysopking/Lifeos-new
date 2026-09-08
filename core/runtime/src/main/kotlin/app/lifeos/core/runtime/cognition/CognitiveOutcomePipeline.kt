@@ -6,6 +6,7 @@ import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskId
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.runtime.RuntimeFailure
+import app.lifeos.core.runtime.field.FieldShadowExecution
 import app.lifeos.core.runtime.workers.CognitiveTaskExecutionResult
 import app.lifeos.core.runtime.workers.DurableTaskExecutionObserver
 import java.time.Instant
@@ -20,6 +21,7 @@ data class CognitiveOutcome(
     val influences: List<FieldInfluence>,
     val failures: List<RuntimeFailure>,
     val recordedAt: Instant,
+    val fieldShadow: FieldShadowExecution? = null,
 ) {
     val averageConfidence: Double = influences
         .map { it.confidence }
@@ -189,6 +191,7 @@ class OutcomeTriggerObserver(
             influences = result.influences,
             failures = result.failures,
             recordedAt = now(),
+            fieldShadow = result.fieldShadow,
         )
         outcomes.record(outcome)
         policy.evaluate(outcome).forEach { trigger -> triggers.emit(trigger) }
