@@ -8,6 +8,20 @@ sealed interface CreateTaskResult {
     data class Existing(val task: LifeTask) : CreateTaskResult
 }
 
+data class TaskLoadReport(
+    val tasks: List<LifeTask>,
+    val unreadableEntries: List<String>,
+) {
+    init {
+        require(tasks.map { it.id }.distinct().size == tasks.size) {
+            "Task load report must not contain duplicate task ids"
+        }
+        require(unreadableEntries.distinct().size == unreadableEntries.size) {
+            "Unreadable task entries must be unique"
+        }
+    }
+}
+
 interface TaskRepository {
     suspend fun create(task: LifeTask): CreateTaskResult
 
@@ -73,4 +87,9 @@ interface TaskRepository {
         expectedLeaseExpiresAt: Instant,
         at: Instant,
     ): LifeTask?
+}
+
+/** Read-only boot/recovery snapshot boundary; ordinary task implementations need not expose it. */
+interface TaskSnapshotRepository : TaskRepository {
+    suspend fun loadReport(): TaskLoadReport
 }
