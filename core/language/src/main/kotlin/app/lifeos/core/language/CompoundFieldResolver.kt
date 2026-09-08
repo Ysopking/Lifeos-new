@@ -90,7 +90,7 @@ class CompoundFieldResolver(
                             search(
                                 linkerEnd,
                                 components + component,
-                                linkers + (end until linkerEnd),
+                                linkers + listOf(end until linkerEnd),
                             )
                         }
                     }
