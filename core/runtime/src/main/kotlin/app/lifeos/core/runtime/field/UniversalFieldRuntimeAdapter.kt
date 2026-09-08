@@ -1,0 +1,91 @@
+package app.lifeos.core.runtime.field
+
+import app.lifeos.core.field.FieldConvergenceEngine
+import app.lifeos.core.field.FieldSnapshotRepository
+import app.lifeos.core.model.Photon
+import app.lifeos.core.runtime.health.HealthGate
+import app.lifeos.core.runtime.health.HealthGatePermit
+import app.lifeos.core.runtime.health.HealthGateResult
+import app.lifeos.core.runtime.health.HealthNodeId
+import java.time.Instant
+import kotlinx.coroutines.CancellationException
+
+/**
+ * Executes the universal field engine as an observational shadow stage.
+ *
+ * A regular convergence/persistence/health error is represented in [FieldShadowExecution] and is
+ * never promoted to a durable task failure by this adapter. Cancellation still propagates so task
+ * lease/lifecycle cancellation remains authoritative.
+ */
+class UniversalFieldRuntimeAdapter(
+    private val snapshotRepository: FieldSnapshotRepository,
+    private val requestFactory: PhotonFieldRequestFactory = DefaultPhotonFieldRequestFactory(),
+    private val engine: FieldConvergenceEngine = FieldConvergenceEngine(),
+    private val healthGate: HealthGate? = null,
+    private val now: () -> Instant = Instant::now,
+) : FieldShadowProcessor {
+    override suspend fun process(photon: Photon): FieldShadowExecution {
+        val request = try {
+            requestFactory.create(photon)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return FieldShadowExecution.failed(
+                message = error.message ?: "universal-field-request-projection-failed",
+            )
+        }
+
+        var permit: HealthGatePermit? = null
+        if (healthGate != null) {
+            when (val admission = healthGate.acquire(nodeId(request.domainId.value), now())) {
+                is HealthGateResult.Granted -> permit = admission.permit
+                is HealthGateResult.BlockedByQuarantine -> return FieldShadowExecution.blocked(
+                    domainId = request.domainId,
+                    message = "quarantined:${admission.entry.nodeId.value}",
+                )
+                is HealthGateResult.BlockedByCircuit -> return FieldShadowExecution.blocked(
+                    domainId = request.domainId,
+                    message = "circuit:${admission.state.name.lowercase()}",
+                )
+            }
+        }
+
+        return try {
+            val result = engine.converge(request)
+            snapshotRepository.save(result.snapshot)
+            if (permit != null && healthGate != null) {
+                try {
+                    healthGate.onSuccess(permit)
+                } catch (_: Exception) {
+                    // Health reporting cannot invalidate an already persisted observational snapshot.
+                }
+            }
+            FieldShadowExecution(
+                state = FieldShadowState.COMPLETED,
+                domainId = request.domainId,
+                runId = result.state.runId,
+                snapshotId = result.snapshot.id,
+                convergenceStatus = result.status,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            if (permit != null && healthGate != null) {
+                try {
+                    healthGate.onFailure(permit, now())
+                } catch (_: Exception) {
+                    // Shadow health reporting remains best-effort and cannot hide the root failure.
+                }
+            }
+            FieldShadowExecution.failed(
+                domainId = request.domainId,
+                message = error.message ?: error::class.simpleName ?: "universal-field-shadow-failed",
+            )
+        }
+    }
+
+    private fun nodeId(domainValue: String): HealthNodeId {
+        val digest = app.lifeos.core.field.StableFieldIds.fingerprint("runtime-shadow", domainValue)
+        return HealthNodeId("field-shadow:$digest")
+    }
+}
