@@ -89,7 +89,7 @@ interface TaskRepository {
     ): LifeTask?
 }
 
-/** Read-only boot/recovery snapshot boundary; ordinary task implementations need not expose it. */
-interface TaskSnapshotRepository : TaskRepository {
+/** Read-only durable task snapshot boundary used by boot/integrity code. */
+fun interface TaskSnapshotRepository {
     suspend fun loadReport(): TaskLoadReport
 }
