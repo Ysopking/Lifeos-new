@@ -8,6 +8,12 @@ class ProceduralMmsiProfile(
     val skyAmbientLinear: RgbSample = RgbSample(0.18, 0.22, 0.30),
     val sunSolidAngleRad: Float = 0.00465f,
     val shadowFloor: Float = 0.05f,
+    val secondaryDirectionalLights: List<MmsiDirectionalLight> = emptyList(),
+    val localLights: List<MmsiLocalLight> = emptyList(),
+    val cameraExposure: CameraExposureSettings = CameraExposureSettings.DAY,
+    val cameraFocalLengthMm: Double = 42.0,
+    val nearMeters: Double = 0.10,
+    val farMeters: Double = 50.0,
 ) {
     val reconstructor = SpectralReconstructor(grid)
     val normalizedDaylight: IlluminantSpectrum = normalizedDaylight(grid)
@@ -16,10 +22,20 @@ class ProceduralMmsiProfile(
     val rgbProjection: SpectralReconstructor.RgbProjection =
         reconstructor.rgbProjection(normalizedDaylight.curve)
 
+    /** Vulkan v1 understands only the primary directional light and sky ambient. */
+    val requiresExtendedLighting: Boolean
+        get() = secondaryDirectionalLights.isNotEmpty() ||
+            localLights.isNotEmpty() ||
+            kotlin.math.abs(cameraExposure.linearGain - CameraExposureSettings.DAY.linearGain) > 1e-9
+
     init {
         require(grid.bandCount == 31) { "Procedural MMSI mobile profile requires 31 spectral bands" }
         require(sunSolidAngleRad >= 0f)
         require(shadowFloor in 0f..1f)
+        require(secondaryDirectionalLights.size <= 4)
+        require(localLights.size <= 8)
+        require(cameraFocalLengthMm.isFinite() && cameraFocalLengthMm > 0.0)
+        require(nearMeters > 0.0 && farMeters > nearMeters)
     }
 
     companion object {
