@@ -7,14 +7,16 @@ import app.lifeos.core.runtime.RuntimeFailureCategory
 import app.lifeos.core.runtime.RuntimeState
 import app.lifeos.core.runtime.RuntimeStatus
 import java.time.Instant
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class RuntimeHealthMonitorTest {
     private val observedAt = Instant.parse("2026-09-08T03:46:00Z")
     private val nodeId = HealthNodeId("runtime:test")
@@ -32,7 +34,7 @@ class RuntimeHealthMonitorTest {
         )
 
         monitor.start()
-        advanceUntilIdle()
+        runCurrent()
 
         val node = assertNotNull(graph.node(nodeId))
         assertEquals(HealthScope.RUNTIME, node.scope)
@@ -52,7 +54,7 @@ class RuntimeHealthMonitorTest {
             now = { observedAt },
         )
         monitor.start()
-        advanceUntilIdle()
+        runCurrent()
 
         runtime.emit(
             RuntimeState(
@@ -65,7 +67,7 @@ class RuntimeHealthMonitorTest {
                 ),
             ),
         )
-        advanceUntilIdle()
+        runCurrent()
 
         val node = assertNotNull(graph.node(nodeId))
         assertEquals(HealthState.DEGRADED, node.state)
@@ -85,7 +87,7 @@ class RuntimeHealthMonitorTest {
             now = { observedAt },
         )
         monitor.start()
-        advanceUntilIdle()
+        runCurrent()
 
         runtime.emit(
             RuntimeState(
@@ -98,7 +100,7 @@ class RuntimeHealthMonitorTest {
                 ),
             ),
         )
-        advanceUntilIdle()
+        runCurrent()
 
         val node = assertNotNull(graph.node(nodeId))
         assertEquals(HealthState.UNHEALTHY, node.state)
@@ -127,9 +129,9 @@ class RuntimeHealthMonitorTest {
             now = { observedAt },
         )
         monitor.start()
-        advanceUntilIdle()
+        runCurrent()
         runtime.emit(RuntimeState(status = RuntimeStatus.STOPPED))
-        advanceUntilIdle()
+        runCurrent()
 
         val node = assertNotNull(graph.node(nodeId))
         assertEquals(HealthState.HEALTHY, node.state)
