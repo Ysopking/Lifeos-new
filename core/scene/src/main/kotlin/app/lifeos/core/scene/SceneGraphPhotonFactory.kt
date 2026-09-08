@@ -39,7 +39,7 @@ class SceneGraphPhotonFactory {
     }
 
     private fun serialize(graph: ProceduralSceneGraph): String = buildString {
-        append("scene/v1\n")
+        append("scene/v2\n")
         append("id=").append(graph.sceneId).append('\n')
         append("confidence=").append(graph.confidence).append('\n')
         append("objective=").append(escape(graph.sourceObjective)).append('\n')
@@ -47,6 +47,12 @@ class SceneGraphPhotonFactory {
         graph.environment.locationText?.let { append("location=").append(escape(it)).append('\n') }
         graph.environment.dateText?.let { append("date=").append(escape(it)).append('\n') }
         graph.environment.timeText?.let { append("time=").append(escape(it)).append('\n') }
+        graph.environment.resolvedLatitudeDeg?.let { append("resolvedLatitudeDeg=").append(it).append('\n') }
+        graph.environment.resolvedLongitudeDeg?.let { append("resolvedLongitudeDeg=").append(it).append('\n') }
+        graph.environment.resolvedZoneId?.let { append("resolvedZoneId=").append(escape(it)).append('\n') }
+        graph.environment.resolvedInstantUtc?.let { append("resolvedInstantUtc=").append(escape(it)).append('\n') }
+        graph.environment.sunAzimuthDeg?.let { append("sunAzimuthDeg=").append(it).append('\n') }
+        graph.environment.sunElevationDeg?.let { append("sunElevationDeg=").append(it).append('\n') }
         append("camera=").append(graph.camera.presetId).append('|').append(graph.camera.focalLengthMm).append('\n')
         graph.nodes.sortedBy { it.id.value }.forEach { node ->
             append("node.").append(node.id.value).append('=')
