@@ -2,23 +2,40 @@ package app.lifeos.core.language
 
 enum class LinguisticFieldLayer {
     GRAPHEME,
+    PHONEME,
+    MORPHOLOGY,
     LEXEME,
+    COMPOSITION,
     SEMANTIC,
     INTENT,
     CONTEXT,
 }
 
 data class LinguisticFieldWeights(
-    val grapheme: Double = 0.34,
-    val morphology: Double = 0.20,
-    val lexical: Double = 0.18,
+    val grapheme: Double = 0.30,
+    val phonetic: Double = 0.10,
+    val morphology: Double = 0.18,
+    val lexical: Double = 0.17,
+    val compositionContext: Double = 0.10,
     val sentenceContext: Double = 0.16,
     val photonContext: Double = 0.08,
     val intentCoherence: Double = 0.08,
     val competitionRepulsion: Double = 0.12,
 ) {
     init {
-        require(listOf(grapheme, morphology, lexical, sentenceContext, photonContext, intentCoherence, competitionRepulsion).all { it >= 0.0 && it.isFinite() })
+        require(
+            listOf(
+                grapheme,
+                phonetic,
+                morphology,
+                lexical,
+                compositionContext,
+                sentenceContext,
+                photonContext,
+                intentCoherence,
+                competitionRepulsion,
+            ).all { it >= 0.0 && it.isFinite() }
+        )
     }
 }
 
@@ -53,7 +70,9 @@ data class LinguisticFieldCandidate(
     val entityType: EntityType?,
     val activation: Double,
     val graphemeAffinity: Double,
+    val phoneticAffinity: Double,
     val morphologyAffinity: Double,
+    val compositionAttraction: Double,
     val sentenceAttraction: Double,
     val photonAttraction: Double,
     val intentAttraction: Double,
@@ -64,6 +83,8 @@ data class LinguisticFieldCandidate(
         require(token.isNotBlank())
         require(conceptId.isNotBlank())
         require(activation in 0.0..1.0)
+        require(graphemeAffinity in 0.0..1.0)
+        require(phoneticAffinity in 0.0..1.0)
     }
 }
 
@@ -107,6 +128,30 @@ data class LinguisticIntentField(
     init { require(activation in 0.0..1.0) }
 }
 
+/** Explicit record of semantics/context feeding back into a lexical candidate. */
+data class TopDownFieldRevision(
+    val iteration: Int,
+    val tokenIndex: Int,
+    val conceptId: String,
+    val bottomUpActivation: Double,
+    val resolvedActivation: Double,
+    val semanticForce: Double,
+    val photonForce: Double,
+    val intentForce: Double,
+    val compositionForce: Double,
+) {
+    init {
+        require(iteration > 0)
+        require(tokenIndex >= 0)
+        require(conceptId.isNotBlank())
+        require(bottomUpActivation in 0.0..1.0)
+        require(resolvedActivation in 0.0..1.0)
+        require(listOf(semanticForce, photonForce, intentForce, compositionForce).all { it.isFinite() })
+    }
+
+    val delta: Double get() = resolvedActivation - bottomUpActivation
+}
+
 data class LinguisticFieldResult(
     val resolutions: List<LinguisticFieldResolution>,
     val intentField: List<LinguisticIntentField>,
@@ -114,6 +159,9 @@ data class LinguisticFieldResult(
     val converged: Boolean,
     val iterations: Int,
     val totalEnergy: Double,
+    val graphemeTraces: List<GraphemeFieldTrace> = emptyList(),
+    val compoundBindings: List<CompoundFieldBinding> = emptyList(),
+    val topDownRevisions: List<TopDownFieldRevision> = emptyList(),
 ) {
     init {
         require(iterations >= 0)
@@ -123,13 +171,17 @@ data class LinguisticFieldResult(
     fun semanticActivation(tag: String): Double = resolutions
         .filter { it.semanticTag == tag }
         .maxOfOrNull { it.confidence }
+        ?: compoundBindings
+            .flatMap { it.components }
+            .filter { it.semanticTag == tag }
+            .maxOfOrNull { it.confidence }
         ?: 0.0
 }
 
 internal fun normalizeFieldText(value: String): String = value
     .lowercase()
+    .replace("ß", "ss")
     .replace('ä', 'a')
     .replace('ö', 'o')
     .replace('ü', 'u')
-    .replace('ß', 's')
     .replace(Regex("[^a-z0-9]+"), "")
