@@ -38,6 +38,10 @@ class UniversalFieldRuntimeAdapter(
         if (healthGate != null) {
             when (val admission = healthGate.acquire(universalFieldShadowHealthNodeId(request.domainId), now())) {
                 is HealthGateResult.Granted -> permit = admission.permit
+                is HealthGateResult.BlockedByProtection -> return FieldShadowExecution.blocked(
+                    domainId = request.domainId,
+                    message = "protection:${admission.state.mode.name.lowercase()}:generation-${admission.state.generation}",
+                )
                 is HealthGateResult.BlockedByQuarantine -> return FieldShadowExecution.blocked(
                     domainId = request.domainId,
                     message = "quarantined:${admission.entry.nodeId.value}",
