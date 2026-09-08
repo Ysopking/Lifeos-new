@@ -29,10 +29,17 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
+    private lateinit var model: LifeOsViewModel
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val model = ViewModelProvider(this)[LifeOsViewModel::class.java]
+        model = ViewModelProvider(this)[LifeOsViewModel::class.java]
         setContent { LifeOsApp(model) }
+    }
+
+    override fun onStop() {
+        if (::model.isInitialized) model.stopVoiceCapture()
+        super.onStop()
     }
 }
 
