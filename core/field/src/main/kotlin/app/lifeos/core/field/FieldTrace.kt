@@ -58,7 +58,9 @@ data class FieldTrace(
         require(iterations.map { it.iteration.index } == (1..iterations.size).toList()) {
             "Trace iterations must be contiguous and one-based"
         }
-        require(iterations.lastOrNull()?.afterEnergy?.fingerprint() ?: seed.initialEnergyFingerprint == finalEnergyFingerprint) {
+        val tracedFinalFingerprint = iterations.lastOrNull()?.afterEnergy?.fingerprint()
+            ?: seed.initialEnergyFingerprint
+        require(tracedFinalFingerprint == finalEnergyFingerprint) {
             "Final energy fingerprint must match the final trace state"
         }
     }
@@ -151,9 +153,9 @@ data class FieldTrace(
     private fun MutableList<String>.addConflict(conflict: FieldConflict) {
         add("conflict")
         add(conflict.key)
-        add(conflict.leftNodeId.value)
-        add(conflict.rightNodeId.value)
+        conflict.nodeIds.sortedBy { it.value }.forEach { add(it.value) }
         add(traceDouble(conflict.severity))
+        conflict.evidenceIds.sortedBy { it.value }.forEach { add(it.value) }
         add(conflict.explanation)
     }
 }
