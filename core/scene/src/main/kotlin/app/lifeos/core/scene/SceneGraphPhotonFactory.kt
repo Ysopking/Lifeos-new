@@ -53,6 +53,7 @@ class SceneGraphPhotonFactory {
         graph.environment.resolvedInstantUtc?.let { append("resolvedInstantUtc=").append(escape(it)).append('\n') }
         graph.environment.sunAzimuthDeg?.let { append("sunAzimuthDeg=").append(it).append('\n') }
         graph.environment.sunElevationDeg?.let { append("sunElevationDeg=").append(it).append('\n') }
+        graph.environment.astronomicalPhase?.let { append("astronomicalPhase=").append(it.name).append('\n') }
         append("camera=").append(graph.camera.presetId).append('|').append(graph.camera.focalLengthMm).append('\n')
         graph.nodes.sortedBy { it.id.value }.forEach { node ->
             append("node.").append(node.id.value).append('=')
