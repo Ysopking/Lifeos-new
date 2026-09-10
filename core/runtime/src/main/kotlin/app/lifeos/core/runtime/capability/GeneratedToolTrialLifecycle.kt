@@ -153,11 +153,6 @@ sealed interface GeneratedToolPromotionEvaluation {
     data class Blocked(val state: GeneratedToolState, val reason: String) : GeneratedToolPromotionEvaluation
 }
 
-/**
- * Explicit lifecycle gate after workshop verification. Nothing here executes a
- * generated artifact. It controls sandbox trial admission, per-invocation
- * permission permits, trial evidence, explicit promotion and evidence-bound rollback.
- */
 class GeneratedToolLifecycleCoordinator(
     private val tools: GeneratedToolRegistry,
     private val sandboxAdmission: GeneratedToolSandboxAdmission = GeneratedToolSandboxAdmission(),
@@ -169,26 +164,14 @@ class GeneratedToolLifecycleCoordinator(
 
     suspend fun admitToTrial(toolId: String): GeneratedToolTrialAdmissionResult {
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
-        require(record.state == GeneratedToolState.VERIFIED) {
-            "Only VERIFIED tools may enter sandbox trial"
-        }
-
+        require(record.state == GeneratedToolState.VERIFIED) { "Only VERIFIED tools may enter sandbox trial" }
         return when (val admission = sandboxAdmission.evaluate(record)) {
             is GeneratedToolSandboxDecision.Admitted -> {
-                val trial = tools.transition(
-                    toolId = toolId,
-                    to = GeneratedToolState.TRIAL,
-                    message = "sandbox-admitted:${admission.profileId}",
-                )
+                val trial = tools.transition(toolId, GeneratedToolState.TRIAL, message = "sandbox-admitted:${admission.profileId}")
                 GeneratedToolTrialAdmissionResult.TrialStarted(trial, admission)
             }
-
             is GeneratedToolSandboxDecision.Denied -> {
-                val rejected = tools.transition(
-                    toolId = toolId,
-                    to = GeneratedToolState.REJECTED,
-                    message = admission.reasons.joinToString(";"),
-                )
+                val rejected = tools.transition(toolId, GeneratedToolState.REJECTED, message = admission.reasons.joinToString(";"))
                 GeneratedToolTrialAdmissionResult.Rejected(rejected, admission.reasons)
             }
         }
@@ -200,183 +183,103 @@ class GeneratedToolLifecycleCoordinator(
         requestedPermissions: Set<ToolPermission>,
     ): GeneratedToolInvocationDecision {
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
-        val decision = sandboxAdmission.authorizeTrialInvocation(
-            record = record,
-            invocationId = invocationId,
-            requestedPermissions = requestedPermissions,
-        )
+        val decision = sandboxAdmission.authorizeTrialInvocation(record, invocationId, requestedPermissions)
         if (decision is GeneratedToolInvocationDecision.Denied) {
             tools.transition(
-                toolId = toolId,
-                to = GeneratedToolState.QUARANTINED,
+                toolId,
+                GeneratedToolState.QUARANTINED,
                 message = "sandbox-invocation-denied:${decision.reasons.joinToString(";")}",
             )
         }
         return decision
     }
 
-    suspend fun recordTrial(
-        toolId: String,
-        result: GeneratedToolTrialResult,
-    ): GeneratedToolTrialRecordResult {
+    suspend fun recordTrial(toolId: String, result: GeneratedToolTrialResult): GeneratedToolTrialRecordResult {
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
-        require(record.state == GeneratedToolState.TRIAL) {
-            "Trial results may only be recorded for TRIAL tools"
-        }
-
+        require(record.state == GeneratedToolState.TRIAL) { "Trial results may only be recorded for TRIAL tools" }
         trialLedger.record(toolId, result)
         val stats = trialLedger.stats(toolId)
         if (result.safetyViolation) {
             val reason = "sandbox-safety-violation:${result.invocationId}"
-            val quarantined = tools.transition(
-                toolId = toolId,
-                to = GeneratedToolState.QUARANTINED,
-                message = reason,
-            )
+            val quarantined = tools.transition(toolId, GeneratedToolState.QUARANTINED, message = reason)
             return GeneratedToolTrialRecordResult.Quarantined(quarantined, stats, reason)
         }
-
         return GeneratedToolTrialRecordResult.Recorded(record, stats)
     }
 
     suspend fun evaluatePromotion(toolId: String): GeneratedToolPromotionEvaluation {
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
         if (record.state != GeneratedToolState.TRIAL) {
-            return GeneratedToolPromotionEvaluation.Blocked(
-                state = record.state,
-                reason = "tool-not-in-trial",
-            )
+            return GeneratedToolPromotionEvaluation.Blocked(record.state, "tool-not-in-trial")
         }
-
         val stats = trialLedger.stats(toolId)
         val reasons = buildList {
-            if (stats.trials < promotionPolicy.minimumTrials) {
-                add("insufficient-trials:${stats.trials}<${promotionPolicy.minimumTrials}")
-            }
-            if (stats.successRate < promotionPolicy.minimumSuccessRate) {
-                add("success-rate:${stats.successRate}<${promotionPolicy.minimumSuccessRate}")
-            }
-            if (stats.expectedOutputRate < promotionPolicy.minimumExpectedOutputRate) {
-                add("expected-output-rate:${stats.expectedOutputRate}<${promotionPolicy.minimumExpectedOutputRate}")
-            }
-            if (stats.safetyViolations > 0) {
-                add("safety-violations:${stats.safetyViolations}")
-            }
+            if (stats.trials < promotionPolicy.minimumTrials) add("insufficient-trials:${stats.trials}<${promotionPolicy.minimumTrials}")
+            if (stats.successRate < promotionPolicy.minimumSuccessRate) add("success-rate:${stats.successRate}<${promotionPolicy.minimumSuccessRate}")
+            if (stats.expectedOutputRate < promotionPolicy.minimumExpectedOutputRate) add("expected-output-rate:${stats.expectedOutputRate}<${promotionPolicy.minimumExpectedOutputRate}")
+            if (stats.safetyViolations > 0) add("safety-violations:${stats.safetyViolations}")
             if (record.verificationConfidence < promotionPolicy.minimumVerificationConfidence) {
-                add(
-                    "verification-confidence:${record.verificationConfidence}<" +
-                        promotionPolicy.minimumVerificationConfidence
-                )
+                add("verification-confidence:${record.verificationConfidence}<${promotionPolicy.minimumVerificationConfidence}")
             }
         }
-
-        return if (reasons.isEmpty()) {
-            GeneratedToolPromotionEvaluation.Eligible(stats)
-        } else {
-            GeneratedToolPromotionEvaluation.NotReady(stats, reasons)
-        }
+        return if (reasons.isEmpty()) GeneratedToolPromotionEvaluation.Eligible(stats)
+        else GeneratedToolPromotionEvaluation.NotReady(stats, reasons)
     }
 
-    /**
-     * Creates immutable evidence for the current exact TRIAL snapshot. The evidence remains
-     * non-activating and is invalidated by any later trial result, tool mutation or policy change.
-     */
-    suspend fun preparePromotionEvidence(
-        toolId: String,
-        artifact: CandidateArtifact,
-    ): GeneratedToolPromotionEvidence {
+    suspend fun preparePromotionEvidence(toolId: String, artifact: CandidateArtifact): GeneratedToolPromotionEvidence {
         val evaluation = evaluatePromotion(toolId)
         require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
             "Generated tool is not eligible for promotion evidence: $evaluation"
         }
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
         val trialEvidence = trialLedger.evidence(toolId)
-        require(trialEvidence.stats == evaluation.stats) {
-            "Trial evidence changed while promotion was being prepared"
-        }
-        return GeneratedToolPromotionEvidence.create(
-            artifact = artifact,
-            record = record,
-            trialEvidence = trialEvidence,
-            policy = promotionPolicy,
-        )
+        require(trialEvidence.stats == evaluation.stats) { "Trial evidence changed while promotion was being prepared" }
+        return GeneratedToolPromotionEvidence.create(artifact, record, trialEvidence, promotionPolicy)
     }
 
-    /** Legacy activation without J03 build evidence is deliberately disabled. */
     @Deprecated("J03 requires CandidateArtifact-backed promotion evidence")
     suspend fun promote(toolId: String): GeneratedToolRecord {
         error("J03 CandidateArtifact-backed promotion evidence is required for $toolId")
     }
 
-    suspend fun promote(
-        toolId: String,
-        evidence: GeneratedToolPromotionEvidence,
-    ): GeneratedToolRecord = activationMutex.withLock {
-        val evaluation = evaluatePromotion(toolId)
-        require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
-            "Generated tool is not eligible for promotion: $evaluation"
+    suspend fun promote(toolId: String, evidence: GeneratedToolPromotionEvidence): GeneratedToolRecord =
+        activationMutex.withLock {
+            val evaluation = evaluatePromotion(toolId)
+            require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
+                "Generated tool is not eligible for promotion: $evaluation"
+            }
+            val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+            val exactTrials = trialLedger.evidence(toolId)
+            require(exactTrials.stats == evaluation.stats) { "Trial evidence changed while promotion was being evaluated" }
+            require(evidence.matches(record, exactTrials, promotionPolicy)) {
+                "J03 promotion evidence is stale or belongs to another candidate/tool/policy"
+            }
+            val active = tools.promote(toolId, evidence)
+            capabilityRegistry?.registerGenerated(active.toCapabilityDescriptor(exactTrials.stats), active, evidence)
+            active
         }
 
-        val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
-        val exactTrials = trialLedger.evidence(toolId)
-        require(exactTrials.stats == evaluation.stats) {
-            "Trial evidence changed while promotion was being evaluated"
-        }
-        require(evidence.matches(record, exactTrials, promotionPolicy)) {
-            "J03 promotion evidence is stale or belongs to another candidate/tool/policy"
-        }
-
-        val active = tools.promote(
-            toolId = toolId,
-            evidence = evidence,
-        )
-        capabilityRegistry?.registerGenerated(
-            descriptor = active.toCapabilityDescriptor(exactTrials.stats),
-            activeRecord = active,
-            evidence = evidence,
-        )
-        active
-    }
-
-    /**
-     * Reproducibly undoes the exact active promotion named by [request]. The generated capability
-     * is removed and the tool is left QUARANTINED; no automatic re-trial or re-promotion occurs.
-     */
     suspend fun rollback(request: GeneratedToolRollbackRequest): GeneratedToolRollbackResult =
         activationMutex.withLock {
-            val current = requireNotNull(tools.get(request.toolId)) {
-                "Unknown generated tool ${request.toolId}"
-            }
-            require(current.state == GeneratedToolState.ACTIVE) {
-                "Only ACTIVE generated tools can be rolled back"
-            }
+            val current = requireNotNull(tools.get(request.toolId)) { "Unknown generated tool ${request.toolId}" }
+            require(current.state == GeneratedToolState.ACTIVE) { "Only ACTIVE generated tools can be rolled back" }
             require(current.promotionEvidenceId == request.expectedPromotionEvidenceId) {
                 "Rollback request does not match current promotion evidence"
             }
 
-            val mutation = tools.rollback(request)
             val removed = capabilityRegistry?.unregister(
                 capabilityId = current.manifest.sourceCapability,
                 providerId = current.manifest.toolId,
             )
-            GeneratedToolRollbackResult(
-                record = mutation.record,
-                request = request,
-                removedCapabilityProvider = removed,
-                auditEntry = mutation.auditEntry,
-            )
+            val mutation = tools.rollback(request)
+            GeneratedToolRollbackResult(mutation.record, request, removed, mutation.auditEntry)
         }
 
-    private fun GeneratedToolRecord.toCapabilityDescriptor(
-        stats: GeneratedToolTrialStats,
-    ) = CapabilityDescriptor(
+    private fun GeneratedToolRecord.toCapabilityDescriptor(stats: GeneratedToolTrialStats) = CapabilityDescriptor(
         capabilityId = manifest.sourceCapability,
         providerId = manifest.toolId,
         providerType = ProviderType.GENERATED_TOOL,
-        contract = CapabilityContract(
-            requiredInputs = manifest.requiredInputs,
-            outputs = manifest.requiredOutputs,
-        ),
+        contract = CapabilityContract(manifest.requiredInputs, manifest.requiredOutputs),
         state = ProviderState.ACTIVE,
         trustLevel = TrustLevel.LOW,
         reliability = stats.successRate,
