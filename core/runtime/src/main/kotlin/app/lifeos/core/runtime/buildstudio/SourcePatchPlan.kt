@@ -168,6 +168,7 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/ToolWorkshopCoordinator.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolRegistry.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolTrialLifecycle.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolPromotionEvidence.kt",
         )
         private val PROTECTED_NAME_TOKENS = setOf(
             "crypto",
