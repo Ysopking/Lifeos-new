@@ -34,7 +34,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -177,7 +176,7 @@ class EvolutionCanaryRouterTest {
         val router = EvolutionCanaryRouter(InMemoryEvolutionCanaryBudgetStore())
         val key = candidateAssignmentKey(router, forged.id)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgument {
             router.route(fixture.bundle.copy(adoptionEvidence = forged), context(key, "forged"))
         }
     }
@@ -189,7 +188,7 @@ class EvolutionCanaryRouterTest {
         val router = EvolutionCanaryRouter(store)
         val key = candidateAssignmentKey(router, fixture.bundle.adoptionEvidence.id)
 
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgument {
             router.route(
                 fixture.bundle.copy(
                     currentCandidate = fixture.bundle.currentCandidate.copy(lastMessage = "mutated")
@@ -197,7 +196,7 @@ class EvolutionCanaryRouterTest {
                 context(key, "candidate-stale"),
             )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgument {
             router.route(
                 fixture.bundle.copy(
                     currentBaseline = fixture.bundle.currentBaseline.copy(reliability = 0.25)
@@ -217,6 +216,16 @@ class EvolutionCanaryRouterTest {
 
         assertEquals(first, second)
         assertTrue(first in 0..999)
+    }
+
+    private suspend fun assertIllegalArgument(block: suspend () -> Unit) {
+        var failedClosed = false
+        try {
+            block()
+        } catch (_: IllegalArgumentException) {
+            failedClosed = true
+        }
+        assertTrue(failedClosed, "Expected IllegalArgumentException")
     }
 
     private fun assertBaselineReason(route: EvolutionCanaryRoute, expected: String) {
