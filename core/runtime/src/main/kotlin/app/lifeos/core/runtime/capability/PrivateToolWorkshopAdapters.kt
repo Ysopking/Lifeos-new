@@ -131,9 +131,9 @@ class PrivateToolBuildRunner(
         val program = runCatching { GeneratedToolProgramCodec.decode(source.source) }
             .getOrElse { error("Bounded tool source failed strict decode") }
         require(program.toolId == source.toolId) { "Bounded tool build changed tool identity" }
-        val sourceHash = sha256(source.source.toByteArray(StandardCharsets.UTF_8))
+        val sourceHash = GeneratedToolArtifact.typedSourceHash(source.source)
         val buildHash = sha256(
-            ("lifeos-bounded-tool-build/v1\n" + source.source).toByteArray(StandardCharsets.UTF_8)
+            (GeneratedToolArtifact.BUILD_DOMAIN + source.source).toByteArray(StandardCharsets.UTF_8)
         )
         catalog.put(
             PrivateBuiltToolProgram(
