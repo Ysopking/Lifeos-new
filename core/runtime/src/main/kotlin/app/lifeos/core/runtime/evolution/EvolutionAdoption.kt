@@ -68,7 +68,7 @@ data class EvolutionAdoptionPolicy(
     val trustedEvaluationPolicy: EvolutionEvaluationPolicy = EvolutionEvaluationPolicy(),
     val maximumInitialAssignmentPermille: Int = 100,
     val maximumInitialInvocations: Int = 100,
-    val maximumInitialDurationSeconds: Long = 24 * 60 * 60,
+    val maximumInitialDurationSeconds: Long = 24L * 60 * 60,
     val maximumTaskTags: Int = 8,
     val forbiddenCanaryPermissions: Set<ToolPermission> = DEFAULT_FORBIDDEN_CANARY_PERMISSIONS,
 ) {
@@ -104,7 +104,7 @@ data class EvolutionAdoptionPolicy(
 }
 
 /** Immutable J05 decision evidence. Approval is not activation authority. */
-data class EvolutionAdoptionEvidence(
+class EvolutionAdoptionEvidence private constructor(
     val subjectId: String,
     val evaluationReportId: String,
     val datasetId: String,
@@ -147,6 +147,46 @@ data class EvolutionAdoptionEvidence(
 
     /** J05 approval is evidence for a later canary router, never direct activation. */
     val activationAllowed: Boolean = false
+
+    internal fun matches(
+        subject: EvolutionSubject,
+        request: EvolutionAdoptionRequest,
+        candidate: GeneratedToolRecord,
+        baseline: CapabilityDescriptor,
+    ): Boolean =
+        subjectId == subject.id &&
+            adoptionRequestId == request.id &&
+            canaryScopeId == request.scope.id &&
+            candidateRecordFingerprint == candidate.evolutionFingerprint() &&
+            baselineDescriptorFingerprint == baseline.evolutionFingerprint()
+
+    companion object {
+        internal fun create(
+            subjectId: String,
+            evaluationReportId: String,
+            datasetId: String,
+            policyId: String,
+            candidateRecordFingerprint: String,
+            baselineDescriptorFingerprint: String,
+            adoptionRequestId: String,
+            actorId: String,
+            canaryScopeId: String,
+            decision: EvolutionAdoptionDecision,
+            reasons: List<String>,
+        ): EvolutionAdoptionEvidence = EvolutionAdoptionEvidence(
+            subjectId = subjectId,
+            evaluationReportId = evaluationReportId,
+            datasetId = datasetId,
+            policyId = policyId,
+            candidateRecordFingerprint = candidateRecordFingerprint,
+            baselineDescriptorFingerprint = baselineDescriptorFingerprint,
+            adoptionRequestId = adoptionRequestId,
+            actorId = actorId,
+            canaryScopeId = canaryScopeId,
+            decision = decision,
+            reasons = reasons,
+        )
+    }
 }
 
 /**
@@ -240,7 +280,7 @@ class EvolutionAdoptionGate(
             EvolutionAdoptionDecision.REJECTED
         }
 
-        return EvolutionAdoptionEvidence(
+        return EvolutionAdoptionEvidence.create(
             subjectId = subject.id,
             evaluationReportId = report.id,
             datasetId = dataset.id,
