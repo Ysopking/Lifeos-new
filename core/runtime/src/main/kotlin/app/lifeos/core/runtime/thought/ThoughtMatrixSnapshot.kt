@@ -56,6 +56,7 @@ data class ThoughtMatrixSnapshot(
                 add("node")
                 add(node.photonId.value)
                 add(node.sourceRevision.toString())
+                add(node.provenance.sourceFingerprint)
                 add(node.fieldDomainId.value)
                 add(node.semanticKey)
                 add(node.summary)
