@@ -23,6 +23,7 @@ data class GoalActionDispatchResult(
     val localImageTransform: LocalImageTransformExecutionResult? = null,
     val localKnowledge: LocalKnowledgeExecutionResult? = null,
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
+    val localSchedule: LocalScheduleExecutionResult? = null,
     val localCommunication: LocalCommunicationExecutionResult? = null,
 )
 
@@ -31,6 +32,7 @@ class GoalActionDispatcher(
     private val executeDeepSearch: suspend (GoalActionContext) -> LocalDeepSearchExecutionResult,
     private val executeImageGeneration: suspend (GoalActionContext) -> ImageGenerationResult,
     private val executeImageTransform: suspend (GoalActionContext) -> LocalImageTransformExecutionResult,
+    private val executeSchedule: suspend (GoalActionContext) -> LocalScheduleExecutionResult,
     private val prepareCommunication: suspend (GoalActionContext) -> LocalCommunicationExecutionResult,
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
@@ -44,6 +46,9 @@ class GoalActionDispatcher(
                 )
                 IntentType.TRANSFORM_IMAGE -> GoalActionDispatchResult(
                     localImageTransform = LocalImageTransformExecutionResult.Blocked(gapReason)
+                )
+                IntentType.SCHEDULE -> GoalActionDispatchResult(
+                    localSchedule = LocalScheduleExecutionResult.Blocked(gapReason)
                 )
                 else -> GoalActionDispatchResult()
             }
@@ -65,6 +70,10 @@ class GoalActionDispatcher(
 
             IntentType.TRANSFORM_IMAGE -> GoalActionDispatchResult(
                 localImageTransform = executeImageTransform(context),
+            )
+
+            IntentType.SCHEDULE -> GoalActionDispatchResult(
+                localSchedule = executeSchedule(context),
             )
 
             IntentType.COMMUNICATE -> GoalActionDispatchResult(
