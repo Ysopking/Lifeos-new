@@ -108,12 +108,16 @@ data class GeneratedToolManifest(
     val generatedAt: Instant,
     val requiredInputs: Set<String> = emptySet(),
     val requiredOutputs: Set<String> = emptySet(),
+    val sourceContentFingerprint: String? = null,
 ) {
     init {
         require(toolId.isNotBlank()) { "Tool id must not be blank" }
         require(sourceHash.isNotBlank()) { "Source hash must not be blank" }
         require(requiredInputs.none { it.isBlank() }) { "Generated tool inputs must not be blank" }
         require(requiredOutputs.none { it.isBlank() }) { "Generated tool outputs must not be blank" }
+        sourceContentFingerprint?.let { fingerprint ->
+            require(fingerprint.isNotBlank()) { "Generated source content fingerprint must not be blank" }
+        }
     }
 }
 
