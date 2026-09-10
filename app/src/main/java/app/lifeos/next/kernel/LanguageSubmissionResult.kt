@@ -17,6 +17,7 @@ data class LanguageSubmissionResult(
     val localKnowledge: LocalKnowledgeExecutionResult? = null,
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
     val localSchedule: LocalScheduleExecutionResult? = null,
+    val localCommunication: LocalCommunicationExecutionResult? = null,
     val languageFailure: String? = null,
 ) {
     val sourceStored: Boolean get() = true
