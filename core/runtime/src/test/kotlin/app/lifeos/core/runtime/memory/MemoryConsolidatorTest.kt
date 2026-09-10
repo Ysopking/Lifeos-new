@@ -125,6 +125,37 @@ class MemoryConsolidatorTest {
         assertTrue(result.snapshot.conflicts.isEmpty())
     }
 
+    @Test
+    fun `upstream thought conflict survives consolidation unchanged`() = runTest {
+        val source = photon("source-conflict", "Version A")
+        val matrix = ThoughtMatrixV2 { at }
+        matrix.project(
+            ThoughtProjectionInput(
+                source,
+                domain,
+                "conflicted.claim",
+                verification = ThoughtVerificationStatus.OBSERVED,
+            )
+        )
+        matrix.project(
+            ThoughtProjectionInput(
+                source.copy(content = "Version B"),
+                domain,
+                "conflicted.claim",
+                verification = ThoughtVerificationStatus.OBSERVED,
+            )
+        )
+        val thought = matrix.snapshot(at)
+        val report = MemoryProjector().project(thought)
+
+        val result = MemoryConsolidator().consolidate(report, thought.revision, at)
+
+        assertTrue(result.snapshot.items.isEmpty())
+        assertTrue(result.snapshot.conflicts.isEmpty())
+        assertEquals(report.sourceConflicts, result.snapshot.sourceConflicts)
+        assertEquals(1, result.snapshot.sourceConflicts.size)
+    }
+
     private suspend fun thoughtSnapshot(vararg photons: Photon) = ThoughtMatrixV2 { at }.let { matrix ->
         photons.forEach { photon ->
             matrix.project(
