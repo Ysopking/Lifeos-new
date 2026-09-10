@@ -165,6 +165,7 @@ class BuildPathPolicy(
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernel.kt",
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernelFactory.kt",
             "app/src/main/java/app/lifeos/next/kernel/EvolutionRuntimeResources.kt",
+            "app/src/main/java/app/lifeos/next/kernel/GoalActionDispatcher.kt",
             "app/src/main/java/app/lifeos/next/kernel/LocalReminderScheduler.kt",
             "app/src/main/java/app/lifeos/next/kernel/LocalScheduleActionExecutor.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/LanguageModels.kt",
