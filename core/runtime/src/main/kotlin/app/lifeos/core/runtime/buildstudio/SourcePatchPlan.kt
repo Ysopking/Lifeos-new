@@ -170,6 +170,9 @@ class BuildPathPolicy(
             "app/src/main/java/app/lifeos/next/kernel/LocalReminderScheduler.kt",
             "app/src/main/java/app/lifeos/next/kernel/LocalScheduleActionExecutor.kt",
             "app/src/main/java/app/lifeos/next/kernel/LocalShareIntentFactory.kt",
+            "app/src/main/java/app/lifeos/next/kernel/LocalImageTransformActionExecutor.kt",
+            "core/image/src/main/kotlin/app/lifeos/core/image/LocalImageTransformEngine.kt",
+            "core/image/src/main/kotlin/app/lifeos/core/image/TransformedImagePhotonFactory.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/LanguageModels.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/LanguageUnderstandingEngine.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/PhotonLanguageContextBuilder.kt",
@@ -199,6 +202,7 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalDeepSearchGoalEngine.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalScheduleGoalEngine.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalCommunicationGoalEngine.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalImageTransformGoalEngine.kt",
         )
         private val PROTECTED_NAME_TOKENS = setOf(
             "crypto",
