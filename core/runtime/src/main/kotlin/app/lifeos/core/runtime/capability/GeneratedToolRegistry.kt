@@ -11,6 +11,9 @@ class GeneratedToolRegistry {
         require(record.manifest.toolId !in records) {
             "Generated tool ${record.manifest.toolId} already registered"
         }
+        require(record.state != GeneratedToolState.ACTIVE) {
+            "ACTIVE generated tools must be promoted from TRIAL with J03 evidence"
+        }
         records[record.manifest.toolId] = record
         record
     }
@@ -22,6 +25,9 @@ class GeneratedToolRegistry {
         message: String? = null,
     ): GeneratedToolRecord = mutex.withLock {
         val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
+        require(to != GeneratedToolState.ACTIVE) {
+            "ACTIVE transition requires J03 promotion evidence"
+        }
         require(to in allowedTransitions.getValue(current.state)) {
             "Invalid generated tool transition ${current.state} -> $to"
         }
@@ -29,9 +35,31 @@ class GeneratedToolRegistry {
             state = to,
             verificationConfidence = confidence ?: current.verificationConfidence,
             lastMessage = message,
+            promotionEvidenceId = if (to == GeneratedToolState.TRIAL) null else current.promotionEvidenceId,
         )
         records[toolId] = updated
         updated
+    }
+
+    suspend fun promote(
+        toolId: String,
+        evidence: GeneratedToolPromotionEvidence,
+        message: String = "trial-promoted:${evidence.id}",
+    ): GeneratedToolRecord = mutex.withLock {
+        val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
+        require(current.state == GeneratedToolState.TRIAL) {
+            "Only TRIAL generated tools can be promoted"
+        }
+        require(evidence.matchesRecord(current)) {
+            "J03 promotion evidence does not match current generated tool record"
+        }
+        val active = current.copy(
+            state = GeneratedToolState.ACTIVE,
+            lastMessage = message,
+            promotionEvidenceId = evidence.id,
+        )
+        records[toolId] = active
+        active
     }
 
     suspend fun get(toolId: String): GeneratedToolRecord? = mutex.withLock { records[toolId] }
@@ -47,7 +75,6 @@ class GeneratedToolRegistry {
             GeneratedToolState.TESTED to setOf(GeneratedToolState.VERIFIED, GeneratedToolState.REJECTED),
             GeneratedToolState.VERIFIED to setOf(GeneratedToolState.TRIAL, GeneratedToolState.REJECTED),
             GeneratedToolState.TRIAL to setOf(
-                GeneratedToolState.ACTIVE,
                 GeneratedToolState.QUARANTINED,
                 GeneratedToolState.REJECTED,
             ),

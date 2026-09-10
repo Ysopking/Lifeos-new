@@ -4,6 +4,7 @@ import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -89,7 +90,7 @@ class GeneratedToolSandboxLifecycleTest {
     }
 
     @Test
-    fun threeCleanTrialsRequireExplicitPromotionAndRegisterCapability() = runTest {
+    fun eligibleTrialRequiresBuildBackedEvidenceAndDoesNotRegisterCapability() = runTest {
         val tools = GeneratedToolRegistry()
         val capabilities = CapabilityRegistry()
         tools.register(
@@ -124,14 +125,11 @@ class GeneratedToolSandboxLifecycleTest {
         assertEquals(3, evaluation.stats.trials)
         assertEquals(GeneratedToolState.TRIAL, tools.get("tool-1")?.state)
 
-        val promoted = lifecycle.promote("tool-1")
-        assertEquals(GeneratedToolState.ACTIVE, promoted.state)
-        val provider = capabilities.providersFor(CapabilityId("text.normalize")).single()
-        assertEquals(ProviderType.GENERATED_TOOL, provider.providerType)
-        assertEquals(TrustLevel.LOW, provider.trustLevel)
-        assertEquals(setOf("text"), provider.contract.requiredInputs)
-        assertEquals(setOf("normalized-text"), provider.contract.outputs)
-        assertEquals(1.0, provider.reliability)
+        assertFailsWith<IllegalStateException> {
+            lifecycle.promote("tool-1")
+        }
+        assertEquals(GeneratedToolState.TRIAL, tools.get("tool-1")?.state)
+        assertTrue(capabilities.providersFor(CapabilityId("text.normalize")).isEmpty())
     }
 
     @Test
