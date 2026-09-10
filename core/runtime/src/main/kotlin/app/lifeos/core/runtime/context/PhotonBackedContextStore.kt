@@ -32,19 +32,29 @@ internal class PhotonBackedContextStore(
         require(target.mimeType != ContextRecordCodec.MIME_TYPE) {
             "Context records cannot recursively become context targets"
         }
-        val recordId = ContextRecordCodec.recordId(scope, scopeId, target.id)
+        val durableTarget = requireNotNull(repository.load(target.id)) {
+            "Context target ${target.id.value} must be durably stored before it can be referenced"
+        }
+        require(durableTarget.revision == target.revision) {
+            "Context target revision must match durable Photon truth"
+        }
+        require(ContextRecordCodec.targetFingerprint(durableTarget) == ContextRecordCodec.targetFingerprint(target)) {
+            "Context target content must match durable Photon truth"
+        }
+
+        val recordId = ContextRecordCodec.recordId(scope, scopeId, durableTarget.id)
         val previousPhoton = repository.load(recordId)
         val previous = previousPhoton?.let { ContextRecordCodec.decode(it) }
         if (previous != null) {
             require(previous.scope == scope && previous.scopeId == scopeId) {
                 "Context record scope mismatch"
             }
-            if (target.revision < previous.targetRevision) {
-                return@withLock ContextWriteResult.Stale(previous, target.revision)
+            if (durableTarget.revision < previous.targetRevision) {
+                return@withLock ContextWriteResult.Stale(previous, durableTarget.revision)
             }
-            val incomingFingerprint = ContextRecordCodec.targetFingerprint(target)
+            val incomingFingerprint = ContextRecordCodec.targetFingerprint(durableTarget)
             if (
-                target.revision == previous.targetRevision &&
+                durableTarget.revision == previous.targetRevision &&
                 incomingFingerprint != previous.targetFingerprint
             ) {
                 return@withLock ContextWriteResult.Conflict(previous, incomingFingerprint)
@@ -52,7 +62,7 @@ internal class PhotonBackedContextStore(
             val canonicalTags = tags.filter { it.isNotBlank() }.toSortedSet()
             val canonicalTerms = contentTerms.filter { it.isNotBlank() }.toSortedSet()
             if (
-                target.revision == previous.targetRevision &&
+                durableTarget.revision == previous.targetRevision &&
                 incomingFingerprint == previous.targetFingerprint &&
                 previous.kind == kind &&
                 previous.tags == canonicalTags &&
@@ -68,7 +78,7 @@ internal class PhotonBackedContextStore(
             previous = previousPhoton,
             scope = scope,
             scopeId = scopeId,
-            target = target,
+            target = durableTarget,
             kind = kind,
             tags = tags,
             contentTerms = contentTerms,
