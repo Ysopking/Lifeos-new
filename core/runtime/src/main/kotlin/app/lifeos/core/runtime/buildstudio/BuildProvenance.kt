@@ -2,6 +2,7 @@ package app.lifeos.core.runtime.buildstudio
 
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.capability.CapabilityId
+import app.lifeos.core.runtime.capability.CapabilityRequirement
 import app.lifeos.core.runtime.capability.ToolPermission
 import java.time.Instant
 
@@ -130,6 +131,7 @@ data class BuildActorEvidence(
  */
 data class BuildProvenance(
     val sourceCommit: String,
+    val sourceRequirement: CapabilityRequirement,
     val buildSpecId: String,
     val designSpecId: String,
     val patchPlanId: String,
@@ -164,6 +166,19 @@ data class BuildProvenance(
         require(capabilityChanges.map { it.capabilityId to it.type }.distinct().size == capabilityChanges.size) {
             "Build provenance cannot duplicate a capability change"
         }
+        val matchingChange = capabilityChanges.singleOrNull { change ->
+            change.capabilityId == sourceRequirement.capabilityId &&
+                change.type != BuildCapabilityChangeType.REMOVED
+        }
+        require(matchingChange != null) {
+            "Build provenance capability delta must address source capability requirement"
+        }
+        require(matchingChange.requiredInputs.containsAll(sourceRequirement.requiredInputs)) {
+            "Build provenance capability delta misses required inputs"
+        }
+        require(matchingChange.outputs.containsAll(sourceRequirement.requiredOutputs)) {
+            "Build provenance capability delta misses required outputs"
+        }
         require(actors.map { Triple(it.actorId, it.role, it.action) }.distinct().size == actors.size) {
             "Build provenance cannot duplicate actor actions"
         }
@@ -172,6 +187,7 @@ data class BuildProvenance(
     val id: String = StableFieldIds.fingerprint(
         "build-provenance/v1",
         sourceCommit.lowercase(),
+        sourceRequirement.fingerprint(),
         buildSpecId,
         designSpecId,
         patchPlanId,
@@ -214,23 +230,11 @@ data class BuildProvenance(
             require(candidate.branchHeadCommit.equals(verification.evidence.branchHeadCommit, ignoreCase = true))
             require(verification.evidence.patchPlanId == patch.id)
             require(design.buildSpecId == spec.id)
+            require(design.capability == spec.gap.requirement)
             require(patch.designSpecId == design.id)
-            val gapCapability = spec.gap.requirement
-            val matchingChange = capabilityChanges.singleOrNull { change ->
-                change.capabilityId == gapCapability.capabilityId &&
-                    change.type != BuildCapabilityChangeType.REMOVED
-            }
-            require(matchingChange != null) {
-                "Build provenance capability delta must address source capability gap"
-            }
-            require(matchingChange.requiredInputs.containsAll(gapCapability.requiredInputs)) {
-                "Build provenance capability delta misses required inputs"
-            }
-            require(matchingChange.outputs.containsAll(gapCapability.requiredOutputs)) {
-                "Build provenance capability delta misses required outputs"
-            }
             return BuildProvenance(
                 sourceCommit = spec.sourceCommit,
+                sourceRequirement = spec.gap.requirement,
                 buildSpecId = spec.id,
                 designSpecId = design.id,
                 patchPlanId = patch.id,
