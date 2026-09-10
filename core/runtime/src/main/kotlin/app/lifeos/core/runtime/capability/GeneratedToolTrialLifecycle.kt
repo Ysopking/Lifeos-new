@@ -156,7 +156,7 @@ sealed interface GeneratedToolPromotionEvaluation {
 /**
  * Explicit lifecycle gate after workshop verification. Nothing here executes a
  * generated artifact. It controls sandbox trial admission, per-invocation
- * permission permits, trial evidence and explicit promotion to ACTIVE.
+ * permission permits, trial evidence, explicit promotion and evidence-bound rollback.
  */
 class GeneratedToolLifecycleCoordinator(
     private val tools: GeneratedToolRegistry,
@@ -165,6 +165,8 @@ class GeneratedToolLifecycleCoordinator(
     private val capabilityRegistry: CapabilityRegistry? = null,
     private val promotionPolicy: GeneratedToolPromotionPolicy = GeneratedToolPromotionPolicy(),
 ) {
+    private val activationMutex = Mutex()
+
     suspend fun admitToTrial(toolId: String): GeneratedToolTrialAdmissionResult {
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
         require(record.state == GeneratedToolState.VERIFIED) {
@@ -309,7 +311,7 @@ class GeneratedToolLifecycleCoordinator(
     suspend fun promote(
         toolId: String,
         evidence: GeneratedToolPromotionEvidence,
-    ): GeneratedToolRecord {
+    ): GeneratedToolRecord = activationMutex.withLock {
         val evaluation = evaluatePromotion(toolId)
         require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
             "Generated tool is not eligible for promotion: $evaluation"
@@ -328,9 +330,42 @@ class GeneratedToolLifecycleCoordinator(
             toolId = toolId,
             evidence = evidence,
         )
-        capabilityRegistry?.register(active.toCapabilityDescriptor(exactTrials.stats))
-        return active
+        capabilityRegistry?.registerGenerated(
+            descriptor = active.toCapabilityDescriptor(exactTrials.stats),
+            activeRecord = active,
+            evidence = evidence,
+        )
+        active
     }
+
+    /**
+     * Reproducibly undoes the exact active promotion named by [request]. The generated capability
+     * is removed and the tool is left QUARANTINED; no automatic re-trial or re-promotion occurs.
+     */
+    suspend fun rollback(request: GeneratedToolRollbackRequest): GeneratedToolRollbackResult =
+        activationMutex.withLock {
+            val current = requireNotNull(tools.get(request.toolId)) {
+                "Unknown generated tool ${request.toolId}"
+            }
+            require(current.state == GeneratedToolState.ACTIVE) {
+                "Only ACTIVE generated tools can be rolled back"
+            }
+            require(current.promotionEvidenceId == request.expectedPromotionEvidenceId) {
+                "Rollback request does not match current promotion evidence"
+            }
+
+            val mutation = tools.rollback(request)
+            val removed = capabilityRegistry?.unregister(
+                capabilityId = current.manifest.sourceCapability,
+                providerId = current.manifest.toolId,
+            )
+            GeneratedToolRollbackResult(
+                record = mutation.record,
+                request = request,
+                removedCapabilityProvider = removed,
+                auditEntry = mutation.auditEntry,
+            )
+        }
 
     private fun GeneratedToolRecord.toCapabilityDescriptor(
         stats: GeneratedToolTrialStats,
