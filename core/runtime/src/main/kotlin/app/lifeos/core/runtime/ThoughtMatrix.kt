@@ -81,14 +81,24 @@ class ThoughtMatrix(
                 )
             }
 
-            is ThoughtProjectionResult.Conflict -> FieldInfluence(
-                module = "Gedankenmatrix",
-                photonId = photon.id,
-                type = "INDEX_CONFLICT",
-                deltaEnergy = 0.0,
-                confidence = 0.0,
-                explanation = "Equal Photon revision produced conflicting thought projections; existing projection was not overwritten",
-            )
+            is ThoughtProjectionResult.Conflict -> {
+                val previous = mutableState.value
+                val removed = previous.nodes[photon.id]
+                if (removed != null) {
+                    mutableState.value = MatrixState(
+                        nodes = previous.nodes - photon.id,
+                        totalEnergy = previous.totalEnergy - removed.energy,
+                    )
+                }
+                FieldInfluence(
+                    module = "Gedankenmatrix",
+                    photonId = photon.id,
+                    type = "INDEX_CONFLICT",
+                    deltaEnergy = 0.0,
+                    confidence = 0.0,
+                    explanation = "Equal Photon revision produced conflicting thought projections; no variant remains authoritative in the matrix",
+                )
+            }
 
             is ThoughtProjectionResult.Stale,
             is ThoughtProjectionResult.Unchanged -> null
