@@ -144,8 +144,9 @@ data class EvolutionCanaryEvidenceBundle(
  */
 class EvolutionCanaryRouter(
     private val budgetStore: EvolutionCanaryBudgetStore,
-    private val trustedAdoptionGate: EvolutionAdoptionGate = EvolutionAdoptionGate(),
 ) {
+    private val trustedAdoptionGate = EvolutionAdoptionGate()
+
     suspend fun route(
         evidence: EvolutionCanaryEvidenceBundle,
         context: EvolutionCanaryRoutingContext,
