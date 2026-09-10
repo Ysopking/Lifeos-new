@@ -1,7 +1,9 @@
 package app.lifeos.next
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -25,6 +27,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.core.image.ImagePhotonFactory
 import app.lifeos.core.model.Photon
+import app.lifeos.core.runtime.goal.LocalReminderRecord
+import app.lifeos.core.runtime.goal.LocalScheduleGoalEngine
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -51,8 +55,11 @@ private fun LifeOsApp(model: LifeOsViewModel) {
     val context = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    val microphonePermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) model.startVoiceCapture() else model.voicePermissionDenied()
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) model.saveDraft() else model.notificationPermissionDenied()
     }
     val visible = remember(state.photons, query) {
         val term = query.trim()
@@ -173,7 +180,7 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                                 if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                                     model.startVoiceCapture()
                                 } else {
-                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -196,8 +203,14 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                     }
                 }
                 Button(
-                    model::saveDraft,
-                    Modifier.fillMaxWidth(),
+                    onClick = {
+                        if (requiresReminderNotificationPermission(context, state.draft)) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            model.saveDraft()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
                     enabled = state.draft.isNotBlank() &&
                         !state.loading &&
                         !state.loadFailed &&
@@ -286,10 +299,10 @@ private fun PhotonCard(
             Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            if (photon.mimeType == ImagePhotonFactory.IMAGE_REFERENCE_MIME) {
-                GeneratedImageContent(photon, model)
-            } else {
-                SelectionContainer { Text(photon.content) }
+            when (photon.mimeType) {
+                ImagePhotonFactory.IMAGE_REFERENCE_MIME -> GeneratedImageContent(photon, model)
+                LocalScheduleGoalEngine.REMINDER_MIME -> ReminderContent(photon, dateFormat)
+                else -> SelectionContainer { Text(photon.content) }
             }
             Text(
                 dateFormat.format(photon.provenance.createdAt),
@@ -297,6 +310,31 @@ private fun PhotonCard(
             )
         }
     }
+}
+
+@Composable
+private fun ReminderContent(
+    photon: Photon,
+    dateFormat: DateTimeFormatter,
+) {
+    val record = remember(photon.id.value, photon.revision) {
+        runCatching { LocalReminderRecord.decode(photon) }.getOrNull()
+    }
+    if (record == null) {
+        Text("Erinnerung beschädigt", color = MaterialTheme.colorScheme.error)
+        return
+    }
+    val failed = "schedule-failed" in photon.tags
+    Text(
+        if (failed) "Erinnerung nicht aktiv" else "Erinnerung geplant",
+        style = MaterialTheme.typography.titleSmall,
+        color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+    )
+    SelectionContainer { Text(record.message) }
+    Text(
+        "Auslösung: ${dateFormat.format(record.triggerAt)}",
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 @Composable
@@ -340,3 +378,14 @@ private fun GeneratedImageContent(
         }
     }
 }
+
+private fun requiresReminderNotificationPermission(context: Context, draft: String): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+    if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return false
+    return REMINDER_DRAFT_REGEX.containsMatchIn(draft)
+}
+
+private val REMINDER_DRAFT_REGEX = Regex(
+    "\\b(erinnere|termin|plane|planen|schedule|remind|appointment|calendar)\\b",
+    RegexOption.IGNORE_CASE,
+)
