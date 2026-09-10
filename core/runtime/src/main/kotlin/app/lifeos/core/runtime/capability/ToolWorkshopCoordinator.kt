@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.capability
 
+import app.lifeos.core.field.FieldSnapshotId
 import java.time.Instant
 import java.util.UUID
 
@@ -34,8 +35,16 @@ interface GeneratedCapabilityVerifier {
     ): CapabilityVerificationResult
 }
 
+fun interface ToolWorkshopFieldEvidenceProvider {
+    suspend fun snapshotsFor(gap: CapabilityGap): Set<FieldSnapshotId>
+}
+
 sealed interface ToolWorkshopResult {
-    data class Verified(val record: GeneratedToolRecord) : ToolWorkshopResult
+    data class Verified(
+        val record: GeneratedToolRecord,
+        val designFieldSnapshotIds: Set<FieldSnapshotId> = emptySet(),
+    ) : ToolWorkshopResult
+
     data class Rejected(val record: GeneratedToolRecord, val reason: String) : ToolWorkshopResult
 }
 
@@ -48,10 +57,18 @@ class ToolWorkshopCoordinator(
     private val securityValidator: ToolSecurityValidator,
     private val capabilityVerifier: GeneratedCapabilityVerifier,
     private val registry: GeneratedToolRegistry,
+    private val promotionEvidenceLedger: GeneratedToolPromotionEvidenceLedger? = null,
+    private val fieldEvidenceProvider: ToolWorkshopFieldEvidenceProvider =
+        ToolWorkshopFieldEvidenceProvider { emptySet() },
     private val now: () -> Instant = Instant::now,
     private val newToolId: () -> String = { "generated-${UUID.randomUUID()}" },
 ) {
     suspend fun generate(gap: CapabilityGap): ToolWorkshopResult {
+        val designFieldSnapshotIds = fieldEvidenceProvider.snapshotsFor(gap).toSet()
+        require(designFieldSnapshotIds.isEmpty() || promotionEvidenceLedger != null) {
+            "Field design evidence requires a promotion evidence ledger"
+        }
+
         val specification = specificationBuilder.build(gap)
         val toolId = newToolId()
         val design = designer.design(toolId, specification)
@@ -85,6 +102,9 @@ class ToolWorkshopCoordinator(
             state = GeneratedToolState.GENERATED,
         )
         registry.register(initial)
+        if (designFieldSnapshotIds.isNotEmpty()) {
+            promotionEvidenceLedger?.recordDesignFieldSnapshots(toolId, designFieldSnapshotIds)
+        }
 
         if (!build.success || build.artifactRef.isNullOrBlank()) {
             val reason = build.diagnostics.joinToString(";").ifBlank { "build-failed" }
@@ -119,7 +139,7 @@ class ToolWorkshopCoordinator(
             confidence = verification.confidence,
             message = "capability-verified",
         )
-        return ToolWorkshopResult.Verified(verified)
+        return ToolWorkshopResult.Verified(verified, designFieldSnapshotIds)
     }
 
     private suspend fun registerRejectedWithoutBuild(
