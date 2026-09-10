@@ -11,6 +11,7 @@ import app.lifeos.core.runtime.evolution.EvolutionCanaryOutcomeWriteResult
 import app.lifeos.core.runtime.evolution.EvolutionCanaryPromotionSealEvidence
 import app.lifeos.core.runtime.evolution.EvolutionCanaryReservation
 import app.lifeos.core.runtime.evolution.EvolutionCanaryReserveResult
+import app.lifeos.core.runtime.evolution.EvolutionCanaryStopReason
 import app.lifeos.core.runtime.evolution.EvolutionPromotionRuntimeStore
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -176,7 +177,20 @@ class EncryptedEvolutionStore(context: Context) : EvolutionPromotionRuntimeStore
             "Canary outcome candidate conflicts with persisted outcomes"
         }
 
-        val updated = bucket.copy(outcomes = bucket.outcomes + outcome)
+        val hardFailureStop = outcome.takeIf { it.hardFailures.isNotEmpty() }?.let {
+            EvolutionCanaryKillSwitchEvidence(
+                adoptionEvidenceId = it.adoptionEvidenceId,
+                candidateToolId = it.candidateToolId,
+                reason = EvolutionCanaryStopReason.HARD_FAILURE,
+                triggerOutcomeId = it.id,
+                hardFailures = it.hardFailures,
+                trippedAt = it.recordedAt,
+            )
+        }
+        val updated = bucket.copy(
+            outcomes = bucket.outcomes + outcome,
+            killSwitch = hardFailureStop,
+        )
         writeSnapshotLocked(snapshot.withBucket(updated))
         EvolutionCanaryOutcomeWriteResult.Recorded(outcome)
     }
