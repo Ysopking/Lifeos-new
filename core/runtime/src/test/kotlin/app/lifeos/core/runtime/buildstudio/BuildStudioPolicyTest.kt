@@ -103,9 +103,8 @@ class BuildStudioPolicyTest {
 
     @Test
     fun `verification requires test lint assemble and apk`() {
-        val branch = "buildstudio/candidate-test"
         val evidence = BuildVerificationEvidence(
-            branchName = branch,
+            branchName = "buildstudio/candidate-test",
             branchHeadCommit = "b".repeat(40),
             patchPlanId = "patch",
             commandResults = listOf(success(BuildGateCommand.TEST)),
@@ -123,6 +122,19 @@ class BuildStudioPolicyTest {
             ),
             verification.failures,
         )
+    }
+
+    @Test
+    fun `verification evidence rejects non candidate branch`() {
+        assertFailsWith<IllegalArgumentException> {
+            BuildVerificationEvidence(
+                branchName = "feature/generated-module",
+                branchHeadCommit = "b".repeat(40),
+                patchPlanId = "patch",
+                commandResults = BuildGateCommand.entries.map(::success),
+                artifact = BuildArtifactEvidence("artifact://debug.apk", "a".repeat(64)),
+            )
+        }
     }
 
     @Test
