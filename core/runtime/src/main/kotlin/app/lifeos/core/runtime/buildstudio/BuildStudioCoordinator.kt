@@ -9,7 +9,7 @@ data class BuildWorkspaceBranch(
     val headCommit: String,
 ) {
     init {
-        require(name.isSafeBuildBranchName()) { "BuildStudio branch must be isolated from protected branches" }
+        require(name.isSafeBuildStudioBranchName()) { "BuildStudio branch must be isolated from protected branches" }
         require(baseCommit.matches(Regex("[0-9a-fA-F]{40}")))
         require(headCommit.matches(Regex("[0-9a-fA-F]{40}")))
     }
@@ -41,7 +41,6 @@ fun interface BuildArtifactCollector {
 }
 
 data class BuildStudioCandidate(
-    val id: String,
     val buildSpecId: String,
     val designSpecId: String,
     val patchPlanId: String,
@@ -50,12 +49,21 @@ data class BuildStudioCandidate(
     val verificationId: String,
 ) {
     init {
-        require(id.isNotBlank())
         require(buildSpecId.isNotBlank() && designSpecId.isNotBlank() && patchPlanId.isNotBlank())
-        require(branchName.isSafeBuildBranchName())
+        require(branchName.isSafeBuildStudioBranchName())
         require(branchHeadCommit.matches(Regex("[0-9a-fA-F]{40}")))
         require(verificationId.isNotBlank())
     }
+
+    val id: String = StableFieldIds.fingerprint(
+        "buildstudio-candidate/v1",
+        buildSpecId,
+        designSpecId,
+        patchPlanId,
+        branchName,
+        branchHeadCommit.lowercase(),
+        verificationId,
+    )
 
     /** J01 creates a candidate only. Promotion/activation belongs to later gated blocks. */
     val activationAllowed: Boolean = false
@@ -68,6 +76,10 @@ sealed interface BuildStudioResult {
     ) : BuildStudioResult {
         init {
             require(verification.status == BuildVerificationStatus.VERIFIED)
+            require(candidate.verificationId == verification.id)
+            require(candidate.branchName == verification.evidence.branchName)
+            require(candidate.branchHeadCommit.equals(verification.evidence.branchHeadCommit, ignoreCase = true))
+            require(candidate.patchPlanId == verification.evidence.patchPlanId)
             require(!candidate.activationAllowed)
         }
     }
@@ -156,18 +168,8 @@ class BuildStudioCoordinator(
                 )
             }
 
-            val candidateId = StableFieldIds.fingerprint(
-                "buildstudio-candidate/v1",
-                spec.id,
-                design.id,
-                patch.id,
-                applied.branch.name,
-                applied.branch.headCommit,
-                verification.id,
-            )
             BuildStudioResult.CandidateReady(
                 candidate = BuildStudioCandidate(
-                    id = candidateId,
                     buildSpecId = spec.id,
                     designSpecId = design.id,
                     patchPlanId = patch.id,
@@ -193,7 +195,7 @@ class BuildStudioCoordinator(
         patch: SourcePatchPlan,
     ): String = "buildstudio/candidate-${StableFieldIds.fingerprint(
         "buildstudio-branch/v1",
-        spec.sourceCommit,
+        spec.sourceCommit.lowercase(),
         spec.id,
         design.id,
         patch.id,
@@ -236,14 +238,4 @@ class BuildStudioCoordinator(
             BuildGateCommand.ASSEMBLE_DEBUG,
         )
     }
-}
-
-private fun String.isSafeBuildBranchName(): Boolean {
-    val normalized = trim().lowercase()
-    return normalized.startsWith("buildstudio/") &&
-        normalized != "buildstudio/main" &&
-        normalized != "buildstudio/master" &&
-        !normalized.contains("..") &&
-        !normalized.contains(' ') &&
-        !normalized.contains('\\')
 }
