@@ -6,8 +6,10 @@ import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.capability.GeneratedToolTrialResult
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 data class EvolutionCanaryOutcomeInput(
     val reservationId: String,
@@ -290,23 +292,29 @@ class EvolutionCanaryOutcomeCoordinator(
                 )
             )
         } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) { tripLedgerSyncFailure(outcome, now) }
             throw cancelled
         } catch (failure: Exception) {
-            killSwitch = runtimeStore.trip(
-                EvolutionCanaryKillSwitchEvidence(
-                    adoptionEvidenceId = outcome.adoptionEvidenceId,
-                    candidateToolId = outcome.candidateToolId,
-                    reason = EvolutionCanaryStopReason.TRIAL_LEDGER_SYNC_FAILED,
-                    triggerOutcomeId = outcome.id,
-                    hardFailures = outcome.hardFailures,
-                    trippedAt = now,
-                )
-            )
+            tripLedgerSyncFailure(outcome, now)
             throw failure
         }
 
         EvolutionCanaryOutcomeRecordResult(outcome, duplicate = false, killSwitch = killSwitch)
     }
+
+    private suspend fun tripLedgerSyncFailure(
+        outcome: EvolutionCanaryOutcome,
+        occurredAt: Instant,
+    ): EvolutionCanaryKillSwitchEvidence = runtimeStore.trip(
+        EvolutionCanaryKillSwitchEvidence(
+            adoptionEvidenceId = outcome.adoptionEvidenceId,
+            candidateToolId = outcome.candidateToolId,
+            reason = EvolutionCanaryStopReason.TRIAL_LEDGER_SYNC_FAILED,
+            triggerOutcomeId = outcome.id,
+            hardFailures = outcome.hardFailures,
+            trippedAt = occurredAt,
+        )
+    )
 }
 
 enum class EvolutionCanaryReadinessDecision {
@@ -396,9 +404,9 @@ data class EvolutionCanaryReadinessEvidence(
 class EvolutionCanaryReadinessGate(
     private val runtimeStore: EvolutionCanaryRuntimeStore,
     private val outcomeStore: EvolutionCanaryOutcomeStore,
-    private val policy: EvolutionCanaryReadinessPolicy = EvolutionCanaryReadinessPolicy(),
 ) {
     private val trustedAdoptionGate = EvolutionAdoptionGate()
+    private val policy = EvolutionCanaryReadinessPolicy()
 
     suspend fun evaluate(evidence: EvolutionCanaryEvidenceBundle): EvolutionCanaryReadinessEvidence {
         val replayed = trustedAdoptionGate.evaluate(
