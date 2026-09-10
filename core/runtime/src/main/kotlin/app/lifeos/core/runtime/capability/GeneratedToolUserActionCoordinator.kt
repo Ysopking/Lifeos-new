@@ -10,12 +10,14 @@ import java.time.Instant
  * The request and approval are persisted and read back as exact immutable Photons before Genesis
  * is allowed to run. A request Photon, tag or provenance marker alone never grants build,
  * execution or promotion authority. The approval created here authorizes exactly one bounded
- * Genesis request and remains non-activating.
+ * Genesis request and remains non-activating. An optional private trial suite may execute only
+ * after Genesis has admitted the exact tool to TRIAL; it still cannot activate a provider.
  */
 class GeneratedToolUserActionCoordinator(
     private val requests: GeneratedToolRequestCoordinator,
     private val persist: suspend (Photon) -> Unit,
     private val load: suspend (PhotonId) -> Photon?,
+    private val trialSuite: PrivateGeneratedToolTrialSuite? = null,
     private val now: () -> Instant = Instant::now,
 ) {
     suspend fun generateExplicitlyApproved(gap: CapabilityGap): GeneratedToolUserActionResult {
@@ -64,10 +66,18 @@ class GeneratedToolUserActionCoordinator(
             approval = approval,
             gap = gap,
         )
+        val trials = when (execution) {
+            is GeneratedToolRequestExecutionResult.Blocked -> null
+            is GeneratedToolRequestExecutionResult.Completed -> when (val genesis = execution.genesis) {
+                is GeneratedToolGenesisResult.Rejected -> null
+                is GeneratedToolGenesisResult.TrialReady -> trialSuite?.execute(genesis.record)
+            }
+        }
         return GeneratedToolUserActionResult(
             requestPhoton = storedRequestPhoton,
             approvalPhoton = storedApprovalPhoton,
             execution = execution,
+            trials = trials,
         )
     }
 
@@ -82,4 +92,5 @@ data class GeneratedToolUserActionResult(
     val requestPhoton: Photon,
     val approvalPhoton: Photon,
     val execution: GeneratedToolRequestExecutionResult,
+    val trials: PrivateGeneratedToolTrialSuiteResult?,
 )
