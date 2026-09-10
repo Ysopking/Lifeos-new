@@ -43,23 +43,28 @@ data class MemoryProjectionReport(
         require(candidates == candidates.sortedBy { it.id.value }) {
             "Memory candidates must be deterministically ordered"
         }
-        require(rejected == rejected.sortedWith(
-            compareBy<MemoryProjectionRejection> { it.thoughtNodeId.value }
-                .thenBy { it.kind.name }
-                .thenBy { it.reason }
-        )) { "Memory projection rejections must be deterministically ordered" }
+        require(rejected == rejected.sortedWith(rejectionOrdering())) {
+            "Memory projection rejections must be deterministically ordered"
+        }
         require(sourceConflicts == sourceConflicts.sortedBy { it.id }) {
             "Memory source conflicts must be deterministically ordered"
         }
+    }
+
+    companion object {
+        internal fun rejectionOrdering(): Comparator<MemoryProjectionRejection> =
+            compareBy<MemoryProjectionRejection> { it.thoughtNodeId.value }
+                .thenBy { it.kind.name }
+                .thenBy { it.reason }
     }
 }
 
 /**
  * Converts the rebuildable ThoughtMatrix projection into typed memory candidates.
  *
- * Every active thought becomes episodic memory. Semantic/procedural memory requires an explicit
- * directive; preference memory additionally requires USER_CONFIRMED evidence. Repetition alone
- * therefore cannot create a preference.
+ * Every non-conflicted active thought becomes episodic memory. Semantic/procedural memory requires
+ * an explicit directive; preference memory additionally requires USER_CONFIRMED evidence.
+ * Repetition alone therefore cannot create a preference.
  */
 class MemoryProjector {
     fun project(
@@ -71,12 +76,20 @@ class MemoryProjector {
         val rejected = mutableListOf<MemoryProjectionRejection>()
 
         snapshot.nodes.forEach { node ->
-            candidates += node.toMemoryItem(
-                kind = MemoryKind.EPISODIC,
-                semanticKind = null,
-                evidenceKind = MemoryEvidenceKind.OBSERVATION,
-                semanticKey = node.semanticKey,
-            )
+            if (node.verification == ThoughtVerificationStatus.CONFLICTED) {
+                rejected += MemoryProjectionRejection(
+                    thoughtNodeId = node.id,
+                    kind = MemoryKind.EPISODIC,
+                    reason = "conflicted-thought-node-not-projectable",
+                )
+            } else {
+                candidates += node.toMemoryItem(
+                    kind = MemoryKind.EPISODIC,
+                    semanticKind = null,
+                    evidenceKind = MemoryEvidenceKind.OBSERVATION,
+                    semanticKey = node.semanticKey,
+                )
+            }
         }
 
         directives
@@ -95,6 +108,14 @@ class MemoryProjector {
                         thoughtNodeId = directive.thoughtNodeId,
                         kind = directive.kind,
                         reason = "thought-node-not-active-or-conflicted",
+                    )
+                    return@forEach
+                }
+                if (node.verification == ThoughtVerificationStatus.CONFLICTED) {
+                    rejected += MemoryProjectionRejection(
+                        thoughtNodeId = directive.thoughtNodeId,
+                        kind = directive.kind,
+                        reason = "conflicted-thought-node-not-projectable",
                     )
                     return@forEach
                 }
@@ -135,11 +156,7 @@ class MemoryProjector {
 
         return MemoryProjectionReport(
             candidates = candidates.distinctBy { it.id }.sortedBy { it.id.value },
-            rejected = rejected.sortedWith(
-                compareBy<MemoryProjectionRejection> { it.thoughtNodeId.value }
-                    .thenBy { it.kind.name }
-                    .thenBy { it.reason }
-            ),
+            rejected = rejected.sortedWith(MemoryProjectionReport.rejectionOrdering()),
             sourceConflicts = sourceConflicts,
         )
     }
@@ -187,9 +204,7 @@ class MemoryProjector {
             node.fieldDomainId.value,
             semanticKey,
         )
-        if (kind == MemoryKind.EPISODIC) {
-            parts += node.id.value
-        }
+        if (kind == MemoryKind.EPISODIC) parts += node.id.value
         return MemoryKey("memory-key:" + StableFieldIds.fingerprint(*parts.toTypedArray()))
     }
 
@@ -200,7 +215,6 @@ class MemoryProjector {
             evidenceKind == MemoryEvidenceKind.VERIFIED_OUTCOME -> MemoryVerificationStatus.VERIFIED
         this == ThoughtVerificationStatus.VERIFIED -> MemoryVerificationStatus.VERIFIED
         this == ThoughtVerificationStatus.OBSERVED -> MemoryVerificationStatus.OBSERVED
-        this == ThoughtVerificationStatus.CONFLICTED -> MemoryVerificationStatus.CONFLICTED
         else -> MemoryVerificationStatus.UNVERIFIED
     }
 }
