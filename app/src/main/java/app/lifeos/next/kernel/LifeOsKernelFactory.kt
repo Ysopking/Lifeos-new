@@ -207,6 +207,12 @@ class LifeOsKernelFactory(
             trialLedger = generatedToolTrials,
             capabilityRegistry = capabilityRegistry,
         )
+        val privateGeneratedToolRuntime = PrivateGeneratedToolRuntimeResources.create(
+            context = appContext,
+            stateRepository = generatedToolStateRepository,
+            tools = generatedTools,
+            lifecycle = generatedToolLifecycle,
+        )
         val generatedToolBootRehydrator = GeneratedToolBootStateRehydrator(
             repository = generatedToolStateRepository,
             tools = generatedTools,
@@ -229,6 +235,7 @@ class LifeOsKernelFactory(
                 outcomeStore = evolutionStore,
                 lifecycle = generatedToolLifecycle,
             ),
+            artifactRepository = privateGeneratedToolRuntime.artifactRepository,
         )
         val goalCapabilityRouter = LanguageGoalCapabilityRouter(capabilityRegistry)
 
@@ -350,6 +357,10 @@ class LifeOsKernelFactory(
                 RuntimeStateRehydrationStep {
                     // Preflight J10 before mutating the in-memory generated-tool registry.
                     generatedToolStateRepository.loadAll()
+                },
+                RuntimeStateRehydrationStep {
+                    // Bounded executable material must exactly match durable lifecycle state.
+                    privateGeneratedToolRuntime.artifactBootVerifier.verify()
                 },
                 RuntimeStateRehydrationStep {
                     generatedToolBootRehydrator.rehydrateOrVerify()
@@ -474,6 +485,14 @@ class LifeOsKernelFactory(
 
                         override suspend fun probe(): StoreStatus {
                             generatedToolStateRepository.loadAll()
+                            return StoreStatus(storeId, StoreState.HEALTHY)
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "generated-tool-artifact-store"
+
+                        override suspend fun probe(): StoreStatus {
+                            privateGeneratedToolRuntime.artifactBootVerifier.verify()
                             return StoreStatus(storeId, StoreState.HEALTHY)
                         }
                     },
