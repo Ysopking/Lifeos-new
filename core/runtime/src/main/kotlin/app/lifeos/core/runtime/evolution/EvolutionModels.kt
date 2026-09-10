@@ -76,7 +76,7 @@ data class EvolutionTestCase(
 
 /**
  * Exact baseline/candidate comparison subject. Creation binds the current TRIAL tool to the exact
- * verified CandidateArtifact and an already usable baseline provider for the same capability.
+ * verified CandidateArtifact and exact usable baseline descriptor for the same capability.
  */
 data class EvolutionSubject private constructor(
     val candidateToolId: String,
@@ -85,6 +85,7 @@ data class EvolutionSubject private constructor(
     val candidateBuildHash: String,
     val capabilityId: String,
     val baselineProviderId: String,
+    val baselineDescriptorFingerprint: String,
     val baselineReliability: Double,
 ) {
     val id: String = StableFieldIds.fingerprint(
@@ -95,6 +96,7 @@ data class EvolutionSubject private constructor(
         candidateBuildHash,
         capabilityId,
         baselineProviderId,
+        baselineDescriptorFingerprint,
         baselineReliability.toString(),
     )
 
@@ -152,6 +154,7 @@ data class EvolutionSubject private constructor(
                 candidateBuildHash = buildHash.lowercase(),
                 capabilityId = candidate.manifest.sourceCapability.value,
                 baselineProviderId = baseline.providerId,
+                baselineDescriptorFingerprint = baseline.evolutionFingerprint(),
                 baselineReliability = baseline.reliability,
             )
         }
@@ -301,27 +304,43 @@ internal fun GeneratedToolRecord.evolutionFingerprint(): String = StableFieldIds
     manifest.sourceCapability.value,
     manifest.sourceHash,
     manifest.buildHash.orEmpty(),
+    manifest.generatedAt.toString(),
     state.name,
     verificationConfidence.toString(),
+    lastMessage.orEmpty(),
     promotionEvidenceId.orEmpty(),
     *manifest.permissions.sortedBy { it.name }.map { "permission:${it.name}" }.toTypedArray(),
     *manifest.requiredInputs.sorted().map { "input:$it" }.toTypedArray(),
     *manifest.requiredOutputs.sorted().map { "output:$it" }.toTypedArray(),
 )
 
+internal fun CapabilityDescriptor.evolutionFingerprint(): String = StableFieldIds.fingerprint(
+    "evolution-baseline-descriptor/v1",
+    capabilityId.value,
+    providerId,
+    providerType.name,
+    state.name,
+    trustLevel.name,
+    reliability.toString(),
+    cost.toString(),
+    *contract.requiredInputs.sorted().map { "input:$it" }.toTypedArray(),
+    *contract.outputs.sorted().map { "output:$it" }.toTypedArray(),
+)
+
 internal fun evaluationStats(observations: List<EvolutionShadowObservation>): EvolutionEvaluationStats {
     if (observations.isEmpty()) {
         return EvolutionEvaluationStats(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
     }
-    val qualities = observations.map { it.qualityScore }
+    val ordered = observations.sortedBy { it.caseId }
+    val qualities = ordered.map { it.qualityScore }
     val meanQuality = qualities.average()
     val variance = if (qualities.size <= 1) 0.0 else qualities.sumOf { score ->
         val delta = score - meanQuality
         delta * delta
     } / (qualities.size - 1)
     val standardError = sqrt(variance / qualities.size)
-    val successes = observations.count { it.success }
-    val n = observations.size.toDouble()
+    val successes = ordered.count { it.success }
+    val n = ordered.size.toDouble()
     val p = successes / n
     val z = 1.959963984540054
     val denominator = 1.0 + z * z / n
@@ -329,11 +348,11 @@ internal fun evaluationStats(observations: List<EvolutionShadowObservation>): Ev
     val margin = z * sqrt((p * (1.0 - p) + z * z / (4.0 * n)) / n)
     val wilsonLower = ((center - margin) / denominator).coerceIn(0.0, 1.0)
     return EvolutionEvaluationStats(
-        cases = observations.size,
+        cases = ordered.size,
         successes = successes,
         meanQuality = meanQuality,
-        meanLatencyMs = observations.map { it.latencyMs.toDouble() }.average(),
-        meanPeakMemoryBytes = observations.map { it.peakMemoryBytes.toDouble() }.average(),
+        meanLatencyMs = ordered.map { it.latencyMs.toDouble() }.average(),
+        meanPeakMemoryBytes = ordered.map { it.peakMemoryBytes.toDouble() }.average(),
         qualityStandardError = standardError,
         successWilsonLower95 = wilsonLower,
     )
