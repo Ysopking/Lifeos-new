@@ -11,6 +11,7 @@ import app.lifeos.core.language.ResolvedReference
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
+import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import java.time.Instant
@@ -80,6 +81,33 @@ class GoalResumeEngineTest {
     }
 
     @Test
+    fun `archived resumed node cannot reactivate its original goal`() {
+        val source = source("source-1", "Was weißt du über Balkonbank?")
+        val original = goalPhoton(source)
+        val archivedResume = Photon(
+            id = PhotonId("archived-resume"),
+            content = original.content,
+            mimeType = original.mimeType,
+            phase = PhotonPhase.ARCHIVED,
+            provenance = Provenance("goal-resume", "GoalResumeEngine", now.minusSeconds(30), setOf(original.id)),
+            relations = setOf(PhotonRelation(original.id, RelationType.DERIVED_FROM)),
+            tags = original.tags + "goal-resumed",
+        )
+
+        val result = assertIs<GoalResumeResult.Blocked>(
+            engine.resume(
+                request = continueGoal(archivedResume.id),
+                requestSource = source("continue-source", "Weiter", now),
+                requestGoalPhotonId = PhotonId("continue-goal"),
+                photons = listOf(source, original, archivedResume),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(GoalResumeBlockReason.TARGET_ARCHIVED, result.reason)
+    }
+
+    @Test
     fun `malformed persisted goal is fail closed`() {
         val source = source("source-1", "alte Aufgabe")
         val target = Photon(
@@ -88,6 +116,28 @@ class GoalResumeEngineTest {
             mimeType = "application/vnd.lifeos.goal+text",
             provenance = Provenance("test", "test", now.minusSeconds(60), setOf(source.id)),
             tags = setOf("goal", "intent:query"),
+        )
+
+        val result = assertIs<GoalResumeResult.Blocked>(
+            engine.resume(
+                request = continueGoal(target.id),
+                requestSource = source("continue-source", "Weiter", now),
+                requestGoalPhotonId = PhotonId("continue-goal"),
+                photons = listOf(source, target),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(GoalResumeBlockReason.TARGET_UNDECODABLE, result.reason)
+    }
+
+    @Test
+    fun `duplicate persisted goal header is fail closed`() {
+        val source = source("source-1", "Was weißt du über Balkonbank?")
+        val valid = goalPhoton(source)
+        val target = valid.copy(
+            id = PhotonId("goal-duplicate-header"),
+            content = valid.content + "\nintent=CREATE_IMAGE",
         )
 
         val result = assertIs<GoalResumeResult.Blocked>(
