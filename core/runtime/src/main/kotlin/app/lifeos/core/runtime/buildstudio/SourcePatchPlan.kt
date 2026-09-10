@@ -147,6 +147,7 @@ class BuildPathPolicy(
             "core/data/src/main/kotlin/app/lifeos/core/data/task/",
             "core/data/src/main/kotlin/app/lifeos/core/data/checkpoint/",
             "core/data/src/main/kotlin/app/lifeos/core/data/health/",
+            "core/data/src/main/kotlin/app/lifeos/core/data/evolution/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/tasks/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/checkpoints/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/health/",
