@@ -557,6 +557,7 @@ class LifeOsKernelFactory(
             goalPhotonFactory = goalPhotonFactory,
             languageContextBuilder = languageContextBuilder,
             goalCapabilityRouter = goalCapabilityRouter,
+            privateGeneratedToolRuntime = privateGeneratedToolRuntime,
             localReminderScheduler = AndroidLocalReminderScheduler(appContext),
             sceneCompiler = sceneCompiler,
             sceneRasterizer = sceneRasterizer,
