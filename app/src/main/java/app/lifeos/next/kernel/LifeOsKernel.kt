@@ -93,6 +93,12 @@ class LifeOsKernel internal constructor(
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
     val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
 
+    private val localImageTransformExecutor = LocalImageTransformActionExecutor(
+        photons = photonStore,
+        assets = imageAssets,
+        persistAndIngest = ::persistAndIngest,
+    )
+
     private val goalActionDispatcher = GoalActionDispatcher(
         executeKnowledge = { context ->
             executeLocalKnowledge(
@@ -116,6 +122,7 @@ class LifeOsKernel internal constructor(
                 referenceInstant = context.sourcePhoton.provenance.createdAt,
             )
         },
+        executeImageTransform = localImageTransformExecutor::execute,
         prepareCommunication = { context ->
             executeLocalCommunication(
                 goal = context.goal,
@@ -203,6 +210,7 @@ class LifeOsKernel internal constructor(
                 routing = routing,
                 goalResume = goalResume,
                 imageGeneration = actions.imageGeneration,
+                localImageTransform = actions.localImageTransform,
                 localKnowledge = actions.localKnowledge,
                 localDeepSearch = actions.localDeepSearch,
                 localCommunication = actions.localCommunication,
