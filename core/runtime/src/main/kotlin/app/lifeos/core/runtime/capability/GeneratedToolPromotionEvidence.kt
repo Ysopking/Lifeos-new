@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.capability
 import app.lifeos.core.field.FieldSnapshotId
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.buildstudio.CandidateArtifact
+import app.lifeos.core.runtime.buildstudio.SourcePatchOperationType
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -177,6 +178,17 @@ class GeneratedToolPromotionEvidenceLedger {
         }
         require(artifact.provenance.permissionDelta.added == record.manifest.permissions) {
             "Build artifact permission delta does not match generated tool manifest"
+        }
+        val sourceContentFingerprint = requireNotNull(record.manifest.sourceContentFingerprint) {
+            "Generated tool requires exact source content fingerprint before build provenance binding"
+        }
+        require(
+            artifact.provenance.files.any { file ->
+                file.operation != SourcePatchOperationType.DELETE &&
+                    file.contentFingerprint == sourceContentFingerprint
+            }
+        ) {
+            "Build artifact does not contain exact generated source content"
         }
 
         val bound = GeneratedToolBuildEvidence(
