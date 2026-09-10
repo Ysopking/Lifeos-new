@@ -48,9 +48,9 @@ class LearningWatermarkTest {
             "2".repeat(64),
         )
 
-        assertEquals(1, first.revision)
-        assertEquals(2, second.revision)
-        assertEquals(2, second.forSource(LearningSourceId("events"))?.sequence)
+        assertEquals(1L, first.revision)
+        assertEquals(2L, second.revision)
+        assertEquals(2L, second.forSource(LearningSourceId("events"))?.sequence)
     }
 
     @Test
