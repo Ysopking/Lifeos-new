@@ -20,7 +20,7 @@ class LocalScheduleGoalEngineTest {
     private val sourceAt = Instant.parse("2026-09-10T10:00:00Z") // 12:00 local
 
     @Test
-    fun `tomorrow and explicit time create persistent reminder photon`() {
+    fun `tomorrow and explicit time create persistent decodable reminder photon`() {
         val result = LocalScheduleGoalEngine().execute(
             goal = goal(date("relative:tomorrow", "morgen"), time("16:30", "16:30")),
             sourcePhoton = source(),
@@ -30,10 +30,11 @@ class LocalScheduleGoalEngineTest {
         )
 
         val scheduled = assertIs<LocalScheduleGoalResult.Scheduled>(result)
-        assertEquals(Instant.parse("2026-09-11T14:30:00Z"), scheduled.triggerAt)
+        assertEquals(Instant.parse("2026-09-11T14:30:00Z"), scheduled.record.triggerAt)
         assertEquals(LocalScheduleGoalEngine.REMINDER_MIME, scheduled.photon.mimeType)
         assertTrue("reminder" in scheduled.photon.tags)
-        assertTrue(source().content in scheduled.photon.content)
+        assertEquals(source().content, scheduled.record.message)
+        assertEquals(scheduled.record, LocalReminderRecord.decode(scheduled.photon))
         assertEquals(setOf(source().id, PhotonId("goal-1")), scheduled.photon.provenance.parentIds)
     }
 
@@ -48,7 +49,7 @@ class LocalScheduleGoalEngineTest {
         )
 
         val scheduled = assertIs<LocalScheduleGoalResult.Scheduled>(result)
-        assertEquals(Instant.parse("2026-09-10T16:00:00Z"), scheduled.triggerAt)
+        assertEquals(Instant.parse("2026-09-10T16:00:00Z"), scheduled.record.triggerAt)
     }
 
     @Test
@@ -62,7 +63,7 @@ class LocalScheduleGoalEngineTest {
         )
 
         val scheduled = assertIs<LocalScheduleGoalResult.Scheduled>(result)
-        assertEquals(Instant.parse("2026-09-11T07:00:00Z"), scheduled.triggerAt)
+        assertEquals(Instant.parse("2026-09-11T07:00:00Z"), scheduled.record.triggerAt)
     }
 
     @Test
@@ -106,8 +107,8 @@ class LocalScheduleGoalEngineTest {
             zoneId = zone,
         )
 
-        assertEquals(Instant.parse("2026-09-10T22:00:00Z"), assertIs<LocalScheduleGoalResult.Scheduled>(midnight).triggerAt)
-        assertEquals(Instant.parse("2026-09-11T10:00:00Z"), assertIs<LocalScheduleGoalResult.Scheduled>(noon).triggerAt)
+        assertEquals(Instant.parse("2026-09-10T22:00:00Z"), assertIs<LocalScheduleGoalResult.Scheduled>(midnight).record.triggerAt)
+        assertEquals(Instant.parse("2026-09-11T10:00:00Z"), assertIs<LocalScheduleGoalResult.Scheduled>(noon).record.triggerAt)
     }
 
     private fun source() = Photon(
