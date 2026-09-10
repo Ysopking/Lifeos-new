@@ -189,6 +189,30 @@ class LanguageGoalCapabilityRouterTest {
     }
 
     @Test
+    fun `schedule uses local reminder provider from shared registry`() = runTest {
+        val registry = registryWithLocalSystemProviders()
+
+        val result = LanguageGoalCapabilityRouter(registry).route(goal(IntentType.SCHEDULE))
+
+        assertTrue(result.ready)
+        assertTrue(result.gaps.isEmpty())
+        val provider = result.selectedProviders[CapabilityId("planner.schedule")]
+        assertEquals("local-reminder-core", provider?.providerId)
+        assertEquals(TrustLevel.SYSTEM, provider?.trustLevel)
+    }
+
+    @Test
+    fun `schedule stays an honest gap when local reminder executor is absent`() = runTest {
+        val result = LanguageGoalCapabilityRouter(CapabilityRegistry()).route(goal(IntentType.SCHEDULE))
+
+        assertFalse(result.ready)
+        assertEquals(
+            listOf(CapabilityId("planner.schedule")),
+            result.blockingGaps.map { it.requirement.capabilityId },
+        )
+    }
+
+    @Test
     fun `memory uses local memory provider from shared registry`() = runTest {
         val result = LanguageGoalCapabilityRouter(registryWithLocalSystemProviders())
             .route(goal(IntentType.STORE_OR_REMEMBER))
