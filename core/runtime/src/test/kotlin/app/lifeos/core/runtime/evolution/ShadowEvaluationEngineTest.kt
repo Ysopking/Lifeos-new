@@ -119,6 +119,23 @@ class ShadowEvaluationEngineTest {
     }
 
     @Test
+    fun `exact expected output mismatch is a hard rejection regardless of supplied quality`() {
+        val cases = cases(5)
+        val observations = pairedObservations(cases, baselineQuality = 0.80, candidateQuality = 1.0).toMutableList()
+        val index = observations.indexOfFirst {
+            it.side == EvolutionObservationSide.CANDIDATE && it.caseId == "case-3"
+        }
+        observations[index] = observations[index].copy(outputFingerprint = "wrong-output")
+
+        val report = ShadowEvaluationEngine().evaluate(
+            subject(), dataset(), EVALUATOR_ID, cases, observations,
+        )
+
+        assertEquals(EvolutionEvaluationDecision.REJECTED, report.decision)
+        assertEquals(listOf("expected-output-mismatch:case-3"), report.reasons)
+    }
+
+    @Test
     fun `too few holdout cases is explicit insufficient evidence`() {
         val cases = cases(3)
         val report = ShadowEvaluationEngine().evaluate(
@@ -295,7 +312,7 @@ class ShadowEvaluationEngineTest {
                 side = EvolutionObservationSide.CANDIDATE,
                 providerId = TOOL_ID,
                 success = true,
-                outputFingerprint = "candidate-output-$index",
+                outputFingerprint = case.expectedOutputFingerprint ?: "candidate-output-$index",
                 qualityScore = candidateQuality,
                 latencyMs = candidateLatencyMs,
                 peakMemoryBytes = candidateMemoryBytes,
