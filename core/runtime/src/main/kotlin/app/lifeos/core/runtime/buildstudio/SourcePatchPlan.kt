@@ -72,6 +72,11 @@ fun interface SourcePatchPlanner {
     suspend fun plan(design: BuildDesignSpec): SourcePatchPlan
 }
 
+/**
+ * Mandatory trust-root barrier for generated BuildStudio candidates. Callers may only add more
+ * protected paths; the built-in ownership, recovery, protection, crypto and activation roots cannot
+ * be removed or weakened by configuration.
+ */
 class BuildPathPolicy(
     additionalProtectedPrefixes: Set<String> = emptySet(),
     additionalProtectedExactPaths: Set<String> = emptySet(),
@@ -136,19 +141,39 @@ class BuildPathPolicy(
         val MANDATORY_PROTECTED_PREFIXES = setOf(
             ".github/",
             ".git/",
-            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/tasks/",
-            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/health/",
+            "core/model/src/main/kotlin/app/lifeos/core/model/task/",
+            "core/model/src/main/kotlin/app/lifeos/core/model/checkpoint/",
+            "core/model/src/main/kotlin/app/lifeos/core/model/health/",
+            "core/data/src/main/kotlin/app/lifeos/core/data/task/",
+            "core/data/src/main/kotlin/app/lifeos/core/data/checkpoint/",
             "core/data/src/main/kotlin/app/lifeos/core/data/health/",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/tasks/",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/checkpoints/",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/health/",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/recovery/",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/escalation/",
         )
         val MANDATORY_PROTECTED_EXACT_PATHS = setOf(
             "gradle.properties",
             "settings.gradle.kts",
             "app/src/main/AndroidManifest.xml",
+            "app/src/main/java/app/lifeos/next/kernel/LifeOsKernel.kt",
+            "app/src/main/java/app/lifeos/next/kernel/LifeOsKernelFactory.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildSpec.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/SourcePatchPlan.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildStudioCoordinator.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildVerification.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/ToolWorkshopCoordinator.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolRegistry.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolTrialLifecycle.kt",
         )
         private val PROTECTED_NAME_TOKENS = setOf(
+            "crypto",
+            "cipher",
             "encrypted",
             "keystore",
             "signing",
+            "vault",
             "cryptoroot",
             "updatetrust",
         )
