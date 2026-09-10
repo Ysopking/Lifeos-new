@@ -101,6 +101,18 @@ class DurableContextStoreTest {
             unreadableFiles = unreadableFiles,
         )
 
+        override suspend fun loadAll(): List<Photon> {
+            val report = loadReport()
+            check(report.unreadableFiles.isEmpty()) {
+                "Unreadable photons: ${report.unreadableFiles.size}"
+            }
+            return report.photons
+        }
+
+        override suspend fun delete(id: PhotonId) {
+            values.remove(id)
+        }
+
         fun snapshot(): Map<PhotonId, Photon> = values.toMap()
     }
 
