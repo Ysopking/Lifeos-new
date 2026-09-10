@@ -40,8 +40,14 @@ class GeneratedToolRegistry(
         message: String? = null,
     ): GeneratedToolRecord = mutex.withLock {
         val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
+        require(current.state != GeneratedToolState.ACTIVE) {
+            "ACTIVE generated tool state changes require coordinated J03 rollback"
+        }
         require(to != GeneratedToolState.ACTIVE) {
             "ACTIVE transition requires J03 promotion evidence"
+        }
+        require(message == null || message.isNotBlank()) {
+            "Generated tool transition message must not be blank"
         }
         require(to in allowedTransitions.getValue(current.state)) {
             "Invalid generated tool transition ${current.state} -> $to"
@@ -68,6 +74,7 @@ class GeneratedToolRegistry(
         evidence: GeneratedToolPromotionEvidence,
         message: String = "trial-promoted:${evidence.id}",
     ): GeneratedToolRecord = mutex.withLock {
+        require(message.isNotBlank()) { "Promotion message must not be blank" }
         val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
         require(current.state == GeneratedToolState.TRIAL) {
             "Only TRIAL generated tools can be promoted"
@@ -97,7 +104,7 @@ class GeneratedToolRegistry(
      * retained on the quarantined record for traceability and is cleared only if a later explicit
      * QUARANTINED -> TRIAL transition begins a new trial cycle.
      */
-    suspend fun rollback(request: GeneratedToolRollbackRequest): RollbackMutation = mutex.withLock {
+    internal suspend fun rollback(request: GeneratedToolRollbackRequest): RollbackMutation = mutex.withLock {
         val current = requireNotNull(records[request.toolId]) {
             "Unknown generated tool ${request.toolId}"
         }
@@ -216,10 +223,7 @@ class GeneratedToolRegistry(
                 GeneratedToolState.QUARANTINED,
                 GeneratedToolState.REJECTED,
             ),
-            GeneratedToolState.ACTIVE to setOf(
-                GeneratedToolState.QUARANTINED,
-                GeneratedToolState.RETIRED,
-            ),
+            GeneratedToolState.ACTIVE to emptySet(),
             GeneratedToolState.QUARANTINED to setOf(
                 GeneratedToolState.TRIAL,
                 GeneratedToolState.RETIRED,
