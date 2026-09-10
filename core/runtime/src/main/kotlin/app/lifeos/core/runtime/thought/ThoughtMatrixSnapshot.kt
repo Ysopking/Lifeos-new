@@ -46,6 +46,16 @@ data class ThoughtMatrixSnapshot(
         require(conflicts == conflicts.sortedWith(conflictOrdering())) {
             "Thought conflicts must be deterministically ordered"
         }
+        require(conflicts.map { it.photonId }.distinct().size == conflicts.size) {
+            "Thought matrix cannot contain duplicate conflict records"
+        }
+        val conflictedIds = conflicts.mapTo(mutableSetOf()) { it.photonId }
+        require(nodes.none { it.photonId in conflictedIds }) {
+            "Conflicted photons cannot remain active thought nodes"
+        }
+        require(relations.none { it.sourcePhotonId in conflictedIds }) {
+            "Conflicted photons cannot retain active source relations"
+        }
     }
 
     val totalEnergy: Double = nodes.sumOf { it.energy }
