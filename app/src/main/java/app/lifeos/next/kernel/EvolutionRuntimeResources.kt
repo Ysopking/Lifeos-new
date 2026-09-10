@@ -1,5 +1,6 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.runtime.capability.GeneratedToolArtifactRepository
 import app.lifeos.core.runtime.capability.GeneratedToolLifecycleCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolTrialLedger
@@ -15,6 +16,7 @@ internal data class EvolutionRuntimeResources(
     val generatedTools: GeneratedToolRegistry,
     val trialLedger: GeneratedToolTrialLedger,
     val lifecycle: GeneratedToolLifecycleCoordinator,
+    val artifactRepository: GeneratedToolArtifactRepository,
     val canaryRouter: EvolutionCanaryRouter,
     val outcomeCoordinator: EvolutionCanaryOutcomeCoordinator,
     val promotionBridge: EvolutionPromotionBridge,
