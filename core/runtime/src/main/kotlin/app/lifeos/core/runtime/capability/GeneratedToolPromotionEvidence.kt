@@ -20,19 +20,35 @@ data class GeneratedToolHealthIncident(
     val messageFingerprint: String,
     val occurredAt: Instant,
     val resolved: Boolean = false,
+    val resolutionEvidenceRef: String? = null,
 ) {
     init {
         require(sourceNodeId.isNotBlank()) { "Health incident requires source node" }
         require(messageFingerprint.isNotBlank()) { "Health incident requires message fingerprint" }
+        if (resolved) {
+            require(!resolutionEvidenceRef.isNullOrBlank()) {
+                "Resolved health incident requires resolution evidence"
+            }
+        } else {
+            require(resolutionEvidenceRef == null) {
+                "Unresolved health incident cannot carry resolution evidence"
+            }
+        }
     }
 
-    val id: String = StableFieldIds.fingerprint(
-        "generated-tool-health-incident/v1",
+    val incidentKey: String = StableFieldIds.fingerprint(
+        "generated-tool-health-incident-key/v1",
         sourceNodeId,
         severity.name,
         messageFingerprint,
         occurredAt.toString(),
+    )
+
+    val id: String = StableFieldIds.fingerprint(
+        "generated-tool-health-incident/v1",
+        incidentKey,
         resolved.toString(),
+        resolutionEvidenceRef.orEmpty(),
     )
 }
 
@@ -198,6 +214,19 @@ class GeneratedToolPromotionEvidenceLedger {
         state.healthIncidents.putIfAbsent(incident.id, incident) == null
     }
 
+    suspend fun resolveHealthIncident(
+        toolId: String,
+        incident: GeneratedToolHealthIncident,
+        resolutionEvidenceRef: String,
+    ): Boolean {
+        require(!incident.resolved) { "Only unresolved incidents can be resolved" }
+        require(resolutionEvidenceRef.isNotBlank())
+        return recordHealthIncident(
+            toolId,
+            incident.copy(resolved = true, resolutionEvidenceRef = resolutionEvidenceRef),
+        )
+    }
+
     suspend fun recordRollback(
         toolId: String,
         rollback: GeneratedToolRollbackEvidence,
@@ -242,9 +271,13 @@ data class GeneratedToolPromotionEvidencePolicy(
         if (evidence.trialOutcomes.size != stats.trials) {
             add("trial-evidence-count:${evidence.trialOutcomes.size}!=${stats.trials}")
         }
-        val blockingIncidents = evidence.healthIncidents.count { incident ->
-            !incident.resolved && incident.severity.ordinal >= blockingHealthSeverity.ordinal
-        }
+        val blockingIncidents = evidence.healthIncidents
+            .groupBy { it.incidentKey }
+            .values
+            .count { events ->
+                val severity = events.first().severity
+                severity.ordinal >= blockingHealthSeverity.ordinal && events.none { it.resolved }
+            }
         if (blockingIncidents > 0) add("unresolved-health-incidents:$blockingIncidents")
         if (evidence.rollbackCount > maxRollbackCount) {
             add("rollback-count:${evidence.rollbackCount}>$maxRollbackCount")
