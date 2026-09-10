@@ -104,7 +104,7 @@ class EvolutionPromotionBridgeTest {
     fun `pending canary outcome cannot be sealed or promoted`() = runTest {
         val fixture = fixture()
         fixture.reserve("pending-0")
-        repeat(4) { index ->
+        repeat(5) { index ->
             val invocationId = "done-$index"
             val reservation = fixture.reserve(invocationId)
             fixture.recordCleanOutcome(invocationId, reservation)
