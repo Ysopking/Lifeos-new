@@ -1,11 +1,20 @@
 package app.lifeos.core.runtime.capability
 
+import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class GeneratedToolRegistry {
+class GeneratedToolRegistry(
+    private val now: () -> Instant = Instant::now,
+) {
+    data class RollbackMutation(
+        val record: GeneratedToolRecord,
+        val auditEntry: GeneratedToolAuditEntry,
+    )
+
     private val mutex = Mutex()
     private val records = linkedMapOf<String, GeneratedToolRecord>()
+    private val auditEntries = linkedMapOf<String, MutableList<GeneratedToolAuditEntry>>()
 
     suspend fun register(record: GeneratedToolRecord): GeneratedToolRecord = mutex.withLock {
         require(record.manifest.toolId !in records) {
@@ -15,6 +24,12 @@ class GeneratedToolRegistry {
             "ACTIVE generated tools must be promoted from TRIAL with J03 evidence"
         }
         records[record.manifest.toolId] = record
+        appendAuditLocked(
+            before = null,
+            after = record,
+            action = GeneratedToolAuditAction.REGISTERED,
+            occurredAt = now(),
+        )
         record
     }
 
@@ -38,6 +53,13 @@ class GeneratedToolRegistry {
             promotionEvidenceId = if (to == GeneratedToolState.TRIAL) null else current.promotionEvidenceId,
         )
         records[toolId] = updated
+        appendAuditLocked(
+            before = current,
+            after = updated,
+            action = auditActionFor(to),
+            reason = message,
+            occurredAt = now(),
+        )
         updated
     }
 
@@ -59,13 +81,129 @@ class GeneratedToolRegistry {
             promotionEvidenceId = evidence.id,
         )
         records[toolId] = active
+        appendAuditLocked(
+            before = current,
+            after = active,
+            action = GeneratedToolAuditAction.PROMOTED,
+            evidenceRef = evidence.id,
+            reason = "promotion-evidence-accepted",
+            occurredAt = now(),
+        )
         active
+    }
+
+    /**
+     * Reverses one exact active promotion into QUARANTINED. The previous promotion evidence id is
+     * retained on the quarantined record for traceability and is cleared only if a later explicit
+     * QUARANTINED -> TRIAL transition begins a new trial cycle.
+     */
+    suspend fun rollback(request: GeneratedToolRollbackRequest): RollbackMutation = mutex.withLock {
+        val current = requireNotNull(records[request.toolId]) {
+            "Unknown generated tool ${request.toolId}"
+        }
+        require(current.state == GeneratedToolState.ACTIVE) {
+            "Only ACTIVE generated tools can be rolled back"
+        }
+        require(current.promotionEvidenceId == request.expectedPromotionEvidenceId) {
+            "Rollback request does not target the active promotion evidence"
+        }
+
+        val quarantined = current.copy(
+            state = GeneratedToolState.QUARANTINED,
+            lastMessage = "rollback:${request.id}:${request.reason}",
+        )
+        records[request.toolId] = quarantined
+        val audit = appendAuditLocked(
+            before = current,
+            after = quarantined,
+            action = GeneratedToolAuditAction.ROLLED_BACK,
+            actorId = request.actorId,
+            evidenceRef = request.evidenceRef,
+            reason = "${request.id}:${request.reason}",
+            occurredAt = request.occurredAt,
+        )
+        RollbackMutation(quarantined, audit)
     }
 
     suspend fun get(toolId: String): GeneratedToolRecord? = mutex.withLock { records[toolId] }
 
     suspend fun snapshot(): List<GeneratedToolRecord> = mutex.withLock {
         records.values.sortedBy { it.manifest.toolId }
+    }
+
+    suspend fun auditSnapshot(toolId: String): List<GeneratedToolAuditEntry> = mutex.withLock {
+        auditEntries[toolId]?.toList().orEmpty()
+    }
+
+    /** Verifies hash-chain ordering, state continuity and the final record binding. */
+    suspend fun verifyAuditChain(toolId: String): Boolean = mutex.withLock {
+        val entries = auditEntries[toolId].orEmpty()
+        val record = records[toolId]
+        if (entries.isEmpty()) return@withLock record == null
+        if (record == null) return@withLock false
+
+        entries.forEachIndexed { index, entry ->
+            if (index == 0) {
+                if (entry.action != GeneratedToolAuditAction.REGISTERED) return@withLock false
+                if (entry.fromState != null || entry.beforeRecordFingerprint != null) return@withLock false
+                if (entry.previousEntryId != null) return@withLock false
+            } else {
+                val previous = entries[index - 1]
+                if (entry.previousEntryId != previous.id) return@withLock false
+                if (entry.fromState != previous.toState) return@withLock false
+                if (entry.beforeRecordFingerprint != previous.afterRecordFingerprint) return@withLock false
+            }
+        }
+        entries.last().afterRecordFingerprint == record.auditFingerprint()
+    }
+
+    private fun appendAuditLocked(
+        before: GeneratedToolRecord?,
+        after: GeneratedToolRecord,
+        action: GeneratedToolAuditAction,
+        actorId: String? = null,
+        evidenceRef: String? = null,
+        reason: String? = null,
+        occurredAt: Instant,
+    ): GeneratedToolAuditEntry {
+        val toolId = after.manifest.toolId
+        require(before == null || before.manifest.toolId == toolId) {
+            "Audit mutation cannot change generated tool identity"
+        }
+        val entries = auditEntries.getOrPut(toolId) { mutableListOf() }
+        val previous = entries.lastOrNull()
+        val entry = GeneratedToolAuditEntry(
+            toolId = toolId,
+            action = action,
+            fromState = before?.state,
+            toState = after.state,
+            beforeRecordFingerprint = before?.auditFingerprint(),
+            afterRecordFingerprint = after.auditFingerprint(),
+            actorId = actorId,
+            evidenceRef = evidenceRef,
+            reason = reason,
+            occurredAt = occurredAt,
+            previousEntryId = previous?.id,
+        )
+        if (previous == null) {
+            require(action == GeneratedToolAuditAction.REGISTERED)
+        } else {
+            require(entry.beforeRecordFingerprint == previous.afterRecordFingerprint) {
+                "Generated-tool audit chain record continuity was broken"
+            }
+            require(entry.fromState == previous.toState) {
+                "Generated-tool audit chain state continuity was broken"
+            }
+        }
+        entries += entry
+        return entry
+    }
+
+    private fun auditActionFor(to: GeneratedToolState): GeneratedToolAuditAction = when (to) {
+        GeneratedToolState.REJECTED -> GeneratedToolAuditAction.REJECTED
+        GeneratedToolState.QUARANTINED -> GeneratedToolAuditAction.QUARANTINED
+        GeneratedToolState.RETIRED -> GeneratedToolAuditAction.RETIRED
+        else -> GeneratedToolAuditAction.TRANSITIONED
     }
 
     private companion object {
