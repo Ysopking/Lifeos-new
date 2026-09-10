@@ -94,10 +94,23 @@ class BuildPathPolicy(
         if (patch.designSpecId != design.id) failures += "patch-design-spec-mismatch"
 
         val plannedPaths = design.plannedSourcePaths + design.plannedTestPaths
-        val touched = patch.operations.mapTo(linkedSetOf()) { it.path }
+        val operationsByPath = patch.operations.associateBy { it.path }
+        val touched = operationsByPath.keys
         (touched - plannedPaths).sorted().forEach { failures += "unplanned-path:$it" }
         (plannedPaths - touched).sorted().forEach { failures += "missing-planned-patch:$it" }
         (spec.requiredTestPaths - design.plannedTestPaths).sorted().forEach { failures += "missing-required-test-plan:$it" }
+
+        val materializedSource = design.plannedSourcePaths.any { path ->
+            operationsByPath[path]?.type == SourcePatchOperationType.CREATE ||
+                operationsByPath[path]?.type == SourcePatchOperationType.UPDATE
+        }
+        if (!materializedSource) failures += "missing-materialized-source-patch"
+
+        design.plannedTestPaths.sorted().forEach { path ->
+            if (operationsByPath[path]?.type == SourcePatchOperationType.DELETE) {
+                failures += "test-delete-forbidden:$path"
+            }
+        }
 
         plannedPaths.sorted().forEach { path ->
             if (!path.isSafeRepositoryPath()) failures += "unsafe-planned-path:$path"
