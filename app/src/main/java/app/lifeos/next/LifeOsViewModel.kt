@@ -1,6 +1,7 @@
 package app.lifeos.next
 
 import android.app.Application
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
@@ -15,14 +16,17 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
+import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.next.kernel.AndroidLocalReminderScheduler
 import app.lifeos.next.kernel.GoalResumeExecutionResult
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.kernel.LocalCommunicationExecutionResult
 import app.lifeos.next.kernel.LocalDeepSearchExecutionResult
 import app.lifeos.next.kernel.LocalKnowledgeExecutionResult
 import app.lifeos.next.kernel.LocalScheduleActionExecutor
 import app.lifeos.next.kernel.LocalScheduleExecutionResult
+import app.lifeos.next.kernel.LocalShareIntentFactory
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +54,8 @@ data class LifeOsState(
     val generatedToolStatus: GeneratedToolRuntimeStatus? = null,
     val generatedToolStatusLoading: Boolean = false,
     val generatedToolStatusError: String? = null,
+    val pendingShare: LocalSharePreparation? = null,
+    val shareStatus: String? = null,
     val voicePhase: VoiceCapturePhase = VoiceCapturePhase.IDLE,
     val voiceStatus: String? = null,
 )
@@ -75,6 +81,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private val localScheduleExecutor = LocalScheduleActionExecutor(
         AndroidLocalReminderScheduler(application.applicationContext)
     )
+    private val localShareIntentFactory = LocalShareIntentFactory(application.applicationContext, kernel)
     private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
     private val previewCache = object : LruCache<String, Bitmap>(IMAGE_PREVIEW_CACHE_KIB) {
@@ -227,6 +234,36 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         mutableState.update { it.copy(voiceStatus = null) }
     }
 
+    suspend fun createShareIntent(share: LocalSharePreparation): Intent =
+        localShareIntentFactory.create(share)
+
+    fun communicationShareOpened(share: LocalSharePreparation) {
+        if (mutableState.value.pendingShare != share) return
+        mutableState.update { it.copy(pendingShare = null, shareStatus = "Android-Teilen wurde geöffnet.") }
+        viewModelScope.launch {
+            val receipt = kernel.recordCommunicationHandoff(share)
+            if (!receipt.processingQueued) {
+                mutableState.update {
+                    it.copy(shareStatus = "Android-Teilen wurde geöffnet; der lokale Handoff-Beleg konnte aber nicht vollständig eingereiht werden.")
+                }
+            }
+        }
+    }
+
+    fun communicationShareFailed(share: LocalSharePreparation) {
+        if (mutableState.value.pendingShare != share) return
+        mutableState.update {
+            it.copy(
+                pendingShare = null,
+                error = "Das Android-Teilen konnte nicht geöffnet werden.",
+            )
+        }
+    }
+
+    fun dismissShareStatus() {
+        mutableState.update { it.copy(shareStatus = null) }
+    }
+
     fun saveDraft() {
         val current = mutableState.value
         if (current.loading || current.loadFailed || current.saving || current.voicePhase != VoiceCapturePhase.IDLE || current.draft.isBlank()) return
@@ -250,6 +287,8 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                         lastGoal = result.effectiveGoal ?: it.lastGoal,
                         lastCapabilityGaps = result.effectiveRouting?.blockingGaps.orEmpty(),
                         capabilityRequestStatus = null,
+                        pendingShare = (result.localCommunication as? LocalCommunicationExecutionResult.Prepared)?.share,
+                        shareStatus = null,
                         error = when {
                             result.languageFailure != null ->
                                 "Gedanke wurde gespeichert, aber das lokale Sprachverständnis ist fehlgeschlagen."
@@ -286,6 +325,10 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                             result.localSchedule is LocalScheduleExecutionResult.Scheduled &&
                                 !result.localSchedule.output.processingQueued ->
                                 "Die Erinnerung wurde lokal geplant, ihr Photon konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
+                            result.localCommunication is LocalCommunicationExecutionResult.Blocked ->
+                                "Es gibt kein eindeutig teilbares lokales Ergebnis."
+                            result.localCommunication is LocalCommunicationExecutionResult.Failed ->
+                                "Das lokale Teilen konnte nicht vorbereitet werden: ${result.localCommunication.message}"
                             result.imageGeneration is ImageGenerationResult.Blocked ->
                                 "Das Bildziel wurde verstanden, kann mit den lokalen Fähigkeiten aber noch nicht vollständig ausgeführt werden."
                             result.imageGeneration is ImageGenerationResult.Failed ->
@@ -296,7 +339,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (error: Exception) {
+            } catch (_: Exception) {
                 mutableState.update {
                     it.copy(
                         error = "Gedanke konnte nicht gespeichert werden. Die Eingabe bleibt im Textfeld.",
