@@ -159,18 +159,18 @@ internal object EvolutionVaultCodec {
         require(bucket.reservations.size <= MAX_ENTRIES_PER_BUCKET)
         val reservations = bucket.reservations.sortedBy { it.sequence }
         writeInt(reservations.size)
-        reservations.forEach(::writeReservation)
+        reservations.forEach { writeReservation(it) }
 
         writeBoolean(bucket.killSwitch != null)
-        bucket.killSwitch?.let(::writeKillSwitch)
+        bucket.killSwitch?.let { writeKillSwitch(it) }
 
         writeBoolean(bucket.promotionSeal != null)
-        bucket.promotionSeal?.let(::writePromotionSeal)
+        bucket.promotionSeal?.let { writePromotionSeal(it) }
 
         require(bucket.outcomes.size <= MAX_ENTRIES_PER_BUCKET)
         val outcomes = bucket.outcomes.sortedBy { it.invocationId }
         writeInt(outcomes.size)
-        outcomes.forEach(::writeOutcome)
+        outcomes.forEach { writeOutcome(it) }
     }
 
     private fun DataInputStream.readBucket(): EvolutionVaultBucket {
