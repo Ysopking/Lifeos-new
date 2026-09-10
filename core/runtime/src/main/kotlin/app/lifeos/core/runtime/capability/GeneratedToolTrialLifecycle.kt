@@ -189,6 +189,19 @@ class GeneratedToolLifecycleCoordinator(
         return promotionEvidenceLedger.recordHealthIncident(toolId, incident)
     }
 
+    suspend fun resolveHealthIncident(
+        toolId: String,
+        incident: GeneratedToolHealthIncident,
+        resolutionEvidenceRef: String,
+    ): Boolean {
+        requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        return promotionEvidenceLedger.resolveHealthIncident(
+            toolId = toolId,
+            incident = incident,
+            resolutionEvidenceRef = resolutionEvidenceRef,
+        )
+    }
+
     suspend fun recordRollback(
         toolId: String,
         rollback: GeneratedToolRollbackEvidence,
