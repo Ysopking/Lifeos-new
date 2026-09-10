@@ -139,6 +139,19 @@ class LanguageGoalCapabilityRouter(
                 cost = 0.0,
             ),
             CapabilityDescriptor(
+                capabilityId = CapabilityId("planner.schedule"),
+                providerId = "local-reminder-core",
+                providerType = ProviderType.MODULE,
+                contract = CapabilityContract(
+                    requiredInputs = setOf("goal-photon"),
+                    outputs = setOf("scheduled-action"),
+                ),
+                state = ProviderState.ACTIVE,
+                trustLevel = TrustLevel.SYSTEM,
+                reliability = 1.0,
+                cost = 0.0,
+            ),
+            CapabilityDescriptor(
                 capabilityId = CapabilityId("memory.store"),
                 providerId = "local-memory-core",
                 providerType = ProviderType.MODULE,
