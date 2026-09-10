@@ -236,11 +236,11 @@ class GeneratedToolStateRehydrator(
         // Preflight every state before mutating any in-process registry.
         states.forEach { state ->
             GeneratedToolStateIntegrity.requireValidAudit(state.record, state.auditEntries)
-            val receipt = state.promotionReceipt
-            if (receipt != null) {
-                require(!receipt.activationAllowed)
+            state.promotionReceipt?.let { require(!it.activationAllowed) }
+            if (state.record.state == GeneratedToolState.ACTIVE) {
+                val receipt = requireNotNull(state.promotionReceipt)
                 require(receipt.promotionPolicyFingerprint == promotionPolicy.fingerprint()) {
-                    "Persisted promotion receipt uses another promotion policy"
+                    "ACTIVE persisted promotion receipt uses another promotion policy"
                 }
                 requirePromotionEligible(state.record, state.trialEvidence.stats)
             }
