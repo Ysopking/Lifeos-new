@@ -108,8 +108,28 @@ data class CrossDomainConvergenceRequest(
                 input.request.domainId.value,
                 input.request.context.fingerprint(),
             ) + input.boundary.allowedContextScopes.map { "scope:${it.name}" }.sorted() +
-                input.request.evidence.map { "evidence:${it.id.value}" }.sorted() +
-                input.request.hypotheses.map { "hypothesis:${it.id.value}" }.sorted()
+                input.request.evidence.map { evidence ->
+                    listOf(
+                        "evidence:${evidence.id.value}",
+                        "source:${evidence.sourceFingerprint}",
+                        "confidence:${java.lang.Double.toHexString(evidence.confidence)}",
+                        "reliability:${java.lang.Double.toHexString(evidence.reliability.score)}",
+                        "authority:${evidence.authority.name}",
+                    ).joinToString("|")
+                }.sorted() +
+                input.request.hypotheses.map { hypothesis ->
+                    listOf(
+                        "hypothesis:${hypothesis.id.value}",
+                        "semantic:${hypothesis.semanticKey}",
+                        "scope:${hypothesis.scope.name}",
+                        "state:${hypothesis.state.name}",
+                        *hypothesis.nodeIds.map { "node:${it.value}" }.sorted().toTypedArray(),
+                        *hypothesis.evidenceLinks
+                            .map { "link:${it.evidenceId.value}:${it.relation.name}:${java.lang.Double.toHexString(it.weight)}" }
+                            .sorted()
+                            .toTypedArray(),
+                    ).joinToString("|")
+                }.sorted()
         }.toTypedArray(),
         *bridges.sortedBy { it.id }.map { it.fingerprint() }.toTypedArray(),
     )
@@ -139,6 +159,10 @@ data class CrossDomainBridgeTrace(
         if (status == CrossDomainBridgeStatus.APPLIED) {
             require(sourceRunId != null && sourceSnapshotId != null)
             require(derivedEvidenceIds.isNotEmpty())
+        } else {
+            require(derivedEvidenceIds.isEmpty()) {
+                "Non-applied cross-domain bridges cannot expose derived evidence ids"
+            }
         }
     }
 }
@@ -180,10 +204,9 @@ data class CrossDomainConvergenceResult(
             require(domainResults.isNotEmpty())
             require(domainResults.all { it.status == ConvergenceStatus.CONVERGED })
             require(conflicts.isEmpty())
-            require(bridgeTrace.none {
-                it.status == CrossDomainBridgeStatus.SOURCE_UNRESOLVED ||
-                    it.status == CrossDomainBridgeStatus.SOURCE_HYPOTHESIS_NOT_CONVERGED
-            })
+            require(bridgeTrace.all { it.status == CrossDomainBridgeStatus.APPLIED }) {
+                "Cross-domain convergence requires every configured bridge to be applied"
+            }
         }
     }
 }
@@ -226,7 +249,6 @@ class ConvergenceCoordinator(
         )
 
         val completed = linkedMapOf<FieldDomainId, FieldConvergenceResult>()
-        val effectiveRequests = linkedMapOf<FieldDomainId, FieldConvergenceRequest>()
         val traces = mutableListOf<CrossDomainBridgeTrace>()
         val preserved = mutableListOf<PreservedDomainConflict>()
 
@@ -248,7 +270,6 @@ class ConvergenceCoordinator(
                 traces += projection.trace
                 effective = projection.request
             }
-            effectiveRequests[domainId] = effective
 
             val result = try {
                 runner.converge(effective)
@@ -256,7 +277,7 @@ class ConvergenceCoordinator(
                 return CrossDomainConvergenceResult(
                     requestId = request.id,
                     status = CrossDomainConvergenceStatus.DOMAIN_FAILURE,
-                    domainResults = completed.values.toList(),
+                    domainResults = order.mapNotNull(completed::get),
                     bridgeTrace = traces.toList(),
                     conflicts = preserved.sortedConflictOrder(),
                     failures = listOf(
@@ -269,11 +290,9 @@ class ConvergenceCoordinator(
         }
 
         val allConverged = completed.values.all { it.status == ConvergenceStatus.CONVERGED }
-        val bridgeUncertainty = traces.any {
-            it.status == CrossDomainBridgeStatus.SOURCE_UNRESOLVED ||
-                it.status == CrossDomainBridgeStatus.SOURCE_HYPOTHESIS_NOT_CONVERGED
-        }
-        val status = if (allConverged && preserved.isEmpty() && !bridgeUncertainty) {
+        val everyBridgeApplied = traces.size == request.bridges.size &&
+            traces.all { it.status == CrossDomainBridgeStatus.APPLIED }
+        val status = if (allConverged && preserved.isEmpty() && everyBridgeApplied) {
             CrossDomainConvergenceStatus.CONVERGED
         } else {
             CrossDomainConvergenceStatus.UNRESOLVED
@@ -290,6 +309,11 @@ class ConvergenceCoordinator(
     private data class BridgeProjection(
         val request: FieldConvergenceRequest,
         val trace: CrossDomainBridgeTrace,
+    )
+
+    private data class ExportableEvidence(
+        val evidence: FieldEvidence,
+        val sourceLink: HypothesisEvidenceLink,
     )
 
     private fun projectBridge(
@@ -320,20 +344,39 @@ class ConvergenceCoordinator(
 
         val originalEvidence = sourceRequest.evidence.associateBy { it.id }
         val exportable = sourceHypothesis.evidenceLinks
-            .sortedBy { it.evidenceId.value }
-            .mapNotNull { link -> originalEvidence[link.evidenceId] }
+            .asSequence()
+            .filter { link -> link.relation.isExportableCrossDomainSourceRelation() }
+            .sortedWith(
+                compareBy<HypothesisEvidenceLink> { it.evidenceId.value }
+                    .thenBy { it.relation.name }
+            )
+            .mapNotNull { link ->
+                originalEvidence[link.evidenceId]?.let { evidence ->
+                    ExportableEvidence(evidence = evidence, sourceLink = link)
+                }
+            }
+            .toList()
         if (exportable.isEmpty()) {
             return BridgeProjection(
                 targetRequest,
-                trace(rule, sourceResult, CrossDomainBridgeStatus.NO_EXPORTABLE_EVIDENCE, emptyList(), "source-hypothesis-has-no-original-evidence"),
+                trace(
+                    rule,
+                    sourceResult,
+                    CrossDomainBridgeStatus.NO_EXPORTABLE_EVIDENCE,
+                    emptyList(),
+                    "source-hypothesis-has-no-positive-original-evidence",
+                ),
             )
         }
 
-        val derived = exportable.mapIndexed { ordinal, evidence ->
+        val derived = exportable.mapIndexed { ordinal, export ->
+            val evidence = export.evidence
+            val sourceLink = export.sourceLink
             val confidence = (
                 evidence.confidence *
                     evidence.reliability.score *
                     sourceHypothesis.score.total *
+                    sourceLink.weight *
                     rule.confidenceMultiplier
                 ).coerceIn(0.0, 1.0)
             FieldEvidence.create(
@@ -357,6 +400,8 @@ class ConvergenceCoordinator(
                         "sourceDomainId" to rule.sourceDomainId.value,
                         "sourceHypothesisId" to rule.sourceHypothesisId.value,
                         "sourceEvidenceId" to evidence.id.value,
+                        "sourceEvidenceRelation" to sourceLink.relation.name,
+                        "sourceEvidenceWeight" to java.lang.Double.toHexString(sourceLink.weight),
                         "sourceSnapshotId" to sourceResult.snapshot.id.value,
                         "sourcePayloadFingerprint" to evidence.payload.stableFingerprint(),
                     ),
@@ -411,6 +456,17 @@ class ConvergenceCoordinator(
                 "derived:${derived.size}",
             ),
         )
+    }
+
+    private fun EvidenceRelationType.isExportableCrossDomainSourceRelation(): Boolean = when (this) {
+        EvidenceRelationType.SUPPORTS,
+        EvidenceRelationType.REFINES,
+        EvidenceRelationType.DERIVED_FROM,
+        -> true
+
+        EvidenceRelationType.CONTRADICTS,
+        EvidenceRelationType.DUPLICATES,
+        -> false
     }
 
     private fun sanitize(input: ConvergenceDomainInput): FieldConvergenceRequest {
