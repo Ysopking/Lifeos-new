@@ -7,6 +7,7 @@ import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
+import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.LanguageUnderstandingEngine
@@ -190,6 +191,7 @@ class LifeOsKernelFactory(
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
         val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
+        val worldFormulaSnapshotRepository = EncryptedWorldFormulaSnapshotRepository(appContext)
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
             snapshotRepository = fieldSnapshotRepository,
             requestEnricher = DurableContextFieldEnricher(store),
@@ -356,6 +358,26 @@ class LifeOsKernelFactory(
 
                         override suspend fun probe(): StoreStatus {
                             val report = fieldSnapshotRepository.loadReport()
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.unreadableEntries.isEmpty()) {
+                                    StoreState.HEALTHY
+                                } else {
+                                    StoreState.PARTIALLY_RECOVERABLE
+                                },
+                                message = if (report.unreadableEntries.isEmpty()) {
+                                    null
+                                } else {
+                                    "unreadable:${report.unreadableEntries.size}"
+                                },
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "world-formula-snapshot-store"
+
+                        override suspend fun probe(): StoreStatus {
+                            val report = worldFormulaSnapshotRepository.loadReport()
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) {
