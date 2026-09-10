@@ -377,16 +377,17 @@ private fun GeneratedImageContent(
 
         is ImagePreviewState.Ready -> {
             val preview = current.preview
+            val transformed = "transformed" in photon.tags
             Image(
                 bitmap = preview.bitmap.asImageBitmap(),
-                contentDescription = "Lokal erzeugtes Bild",
+                contentDescription = if (transformed) "Lokal bearbeitetes Bild" else "Lokal erzeugtes Bild",
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(preview.width.toFloat() / preview.height.toFloat()),
                 contentScale = ContentScale.Fit,
             )
             Text(
-                "Offline erzeugt · ${preview.width}×${preview.height} · ${preview.rendererId}",
+                "${if (transformed) "Offline bearbeitet" else "Offline erzeugt"} · ${preview.width}×${preview.height} · ${preview.rendererId}",
                 style = MaterialTheme.typography.labelSmall,
             )
         }
