@@ -19,6 +19,9 @@ import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootContext
 import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootRunResult
+import app.lifeos.core.runtime.capability.CapabilityGap
+import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
+import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.cognition.CognitiveOutcomeJournal
 import app.lifeos.core.runtime.cognition.CognitivePriority
@@ -75,6 +78,7 @@ class LifeOsKernel internal constructor(
     private val goalPhotonFactory: GoalPhotonFactory,
     private val languageContextBuilder: PhotonLanguageContextBuilder,
     private val goalCapabilityRouter: LanguageGoalCapabilityRouter,
+    private val privateGeneratedToolRuntime: PrivateGeneratedToolRuntimeResources,
     private val localReminderScheduler: LocalReminderScheduler,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
@@ -93,6 +97,15 @@ class LifeOsKernel internal constructor(
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
     val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
+
+    private val generatedToolUserActions = GeneratedToolUserActionCoordinator(
+        requests = privateGeneratedToolRuntime.requests,
+        persist = { photon ->
+            persistAndIngest(photon)
+            Unit
+        },
+        load = photonStore::load,
+    )
 
     private val localImageTransformExecutor = LocalImageTransformActionExecutor(
         photons = photonStore,
@@ -231,6 +244,19 @@ class LifeOsKernel internal constructor(
                 languageFailure = error.message ?: error::class.simpleName,
             )
         }
+    }
+
+    /**
+     * Explicit private-user action for one blocking gap. It persists a typed request and a separate
+     * exact approval before bounded Genesis runs. The result can only become TRIAL or REJECTED here;
+     * ACTIVE still requires the independent evolution/canary promotion path.
+     */
+    suspend fun generateExplicitlyApprovedTool(gap: CapabilityGap): GeneratedToolUserActionResult {
+        require(
+            mutableBootstrapState.value.status == KernelBootstrapStatus.READY ||
+                mutableBootstrapState.value.status == KernelBootstrapStatus.DEGRADED
+        ) { "Generated-tool action requires a completed kernel boot" }
+        return generatedToolUserActions.generateExplicitlyApproved(gap)
     }
 
     /** Records only local handoff to Android's chooser; it never claims external delivery. */
