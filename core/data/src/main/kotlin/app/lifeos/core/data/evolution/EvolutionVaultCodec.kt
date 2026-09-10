@@ -97,6 +97,26 @@ internal data class EvolutionVaultBucket(
         require(candidateIds.size <= 1) {
             "Evolution adoption bucket cannot mix candidate tool identities"
         }
+
+        val hardFailureOutcomes = outcomes.filter { it.hardFailures.isNotEmpty() }
+        if (hardFailureOutcomes.isNotEmpty()) {
+            require(hardFailureOutcomes.size == 1) {
+                "Evolution vault cannot contain outcomes after the first hard failure"
+            }
+            val hardFailure = hardFailureOutcomes.single()
+            require(killSwitch != null) {
+                "Persisted hard failure requires an atomic kill switch"
+            }
+            require(killSwitch.reason == EvolutionCanaryStopReason.HARD_FAILURE) {
+                "Persisted hard failure requires HARD_FAILURE stop reason"
+            }
+            require(killSwitch.triggerOutcomeId == hardFailure.id) {
+                "Hard-failure kill switch must reference the persisted failing outcome"
+            }
+            require(killSwitch.hardFailures == hardFailure.hardFailures) {
+                "Hard-failure kill switch evidence differs from failing outcome"
+            }
+        }
     }
 }
 
