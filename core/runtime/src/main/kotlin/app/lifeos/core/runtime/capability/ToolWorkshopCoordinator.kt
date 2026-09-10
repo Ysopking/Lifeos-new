@@ -57,7 +57,6 @@ class ToolWorkshopCoordinator(
     private val securityValidator: ToolSecurityValidator,
     private val capabilityVerifier: GeneratedCapabilityVerifier,
     private val registry: GeneratedToolRegistry,
-    private val promotionEvidenceLedger: GeneratedToolPromotionEvidenceLedger? = null,
     private val fieldEvidenceProvider: ToolWorkshopFieldEvidenceProvider =
         ToolWorkshopFieldEvidenceProvider { emptySet() },
     private val now: () -> Instant = Instant::now,
@@ -65,9 +64,6 @@ class ToolWorkshopCoordinator(
 ) {
     suspend fun generate(gap: CapabilityGap): ToolWorkshopResult {
         val designFieldSnapshotIds = fieldEvidenceProvider.snapshotsFor(gap).toSet()
-        require(designFieldSnapshotIds.isEmpty() || promotionEvidenceLedger != null) {
-            "Field design evidence requires a promotion evidence ledger"
-        }
 
         val specification = specificationBuilder.build(gap)
         val toolId = newToolId()
@@ -102,9 +98,6 @@ class ToolWorkshopCoordinator(
             state = GeneratedToolState.GENERATED,
         )
         registry.register(initial)
-        if (designFieldSnapshotIds.isNotEmpty()) {
-            promotionEvidenceLedger?.recordDesignFieldSnapshots(toolId, designFieldSnapshotIds)
-        }
 
         if (!build.success || build.artifactRef.isNullOrBlank()) {
             val reason = build.diagnostics.joinToString(";").ifBlank { "build-failed" }
