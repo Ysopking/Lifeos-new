@@ -163,10 +163,16 @@ class WorldFormulaCoordinator(
             val right = after[nodeId]
             val dimensions = left.orEmptyDimensions() + right.orEmptyDimensions()
             dimensions.maxOfOrNull { dimension ->
-                kotlin.math.abs(
-                    (left?.get(dimension)?.value ?: 0.0) -
-                        (right?.get(dimension)?.value ?: 0.0)
-                )
+                val leftValue = left?.get(dimension)
+                val rightValue = right?.get(dimension)
+                if ((leftValue == null) != (rightValue == null)) {
+                    1.0
+                } else {
+                    maxOf(
+                        kotlin.math.abs((leftValue?.value ?: 0.0) - (rightValue?.value ?: 0.0)),
+                        kotlin.math.abs((leftValue?.confidence ?: 0.0) - (rightValue?.confidence ?: 0.0)),
+                    )
+                }
             } ?: 0.0
         } ?: 0.0
     }
