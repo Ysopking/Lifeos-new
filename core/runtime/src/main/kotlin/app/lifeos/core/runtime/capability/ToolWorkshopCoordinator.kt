@@ -1,6 +1,7 @@
 package app.lifeos.core.runtime.capability
 
 import app.lifeos.core.field.FieldSnapshotId
+import app.lifeos.core.field.StableFieldIds
 import java.time.Instant
 import java.util.UUID
 
@@ -74,6 +75,10 @@ class ToolWorkshopCoordinator(
         require(source.source.toByteArray(Charsets.UTF_8).size <= specification.maxSourceBytes) {
             "Generated source exceeds specification size limit"
         }
+        val sourceContentFingerprint = StableFieldIds.fingerprint(
+            "source-patch-content/v1",
+            source.source,
+        )
 
         val security = securityValidator.validate(specification, source)
         if (!security.accepted) {
@@ -81,6 +86,7 @@ class ToolWorkshopCoordinator(
                 toolId = toolId,
                 specification = specification,
                 sourceHash = "security-rejected",
+                sourceContentFingerprint = sourceContentFingerprint,
                 reason = security.violations.joinToString(";").ifBlank { "security-rejected" },
             )
             return ToolWorkshopResult.Rejected(record, record.lastMessage ?: "security-rejected")
@@ -94,6 +100,7 @@ class ToolWorkshopCoordinator(
                 specification = specification,
                 sourceHash = build.sourceHash,
                 buildHash = build.buildHash,
+                sourceContentFingerprint = sourceContentFingerprint,
             ),
             state = GeneratedToolState.GENERATED,
         )
@@ -139,6 +146,7 @@ class ToolWorkshopCoordinator(
         toolId: String,
         specification: ToolSpecification,
         sourceHash: String,
+        sourceContentFingerprint: String,
         reason: String,
     ): GeneratedToolRecord {
         registry.register(
@@ -148,6 +156,7 @@ class ToolWorkshopCoordinator(
                     specification = specification,
                     sourceHash = sourceHash,
                     buildHash = null,
+                    sourceContentFingerprint = sourceContentFingerprint,
                 ),
                 state = GeneratedToolState.GENERATED,
             )
@@ -160,6 +169,7 @@ class ToolWorkshopCoordinator(
         specification: ToolSpecification,
         sourceHash: String,
         buildHash: String?,
+        sourceContentFingerprint: String,
     ) = GeneratedToolManifest(
         toolId = toolId,
         sourceCapability = specification.requiredCapability.capabilityId,
@@ -169,5 +179,6 @@ class ToolWorkshopCoordinator(
         generatedAt = now(),
         requiredInputs = specification.requiredCapability.requiredInputs,
         requiredOutputs = specification.requiredCapability.requiredOutputs,
+        sourceContentFingerprint = sourceContentFingerprint,
     )
 }
