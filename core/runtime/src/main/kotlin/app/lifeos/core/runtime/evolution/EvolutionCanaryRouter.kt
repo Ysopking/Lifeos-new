@@ -50,12 +50,9 @@ sealed interface EvolutionCanaryReserveResult {
     ) : EvolutionCanaryReserveResult
 
     data class Exhausted(val usedInvocations: Int) : EvolutionCanaryReserveResult
+    data class Stopped(val killSwitch: EvolutionCanaryKillSwitchEvidence) : EvolutionCanaryReserveResult
 }
 
-/**
- * Storage contract for atomic canary-budget claims. Production adapters must persist this state if
- * the canary is expected to survive process death. The router deliberately has no in-memory default.
- */
 interface EvolutionCanaryBudgetStore {
     suspend fun reserve(
         adoptionEvidenceId: String,
@@ -64,13 +61,14 @@ interface EvolutionCanaryBudgetStore {
         reservedAt: Instant,
     ): EvolutionCanaryReserveResult
 
+    suspend fun reservation(adoptionEvidenceId: String, invocationId: String): EvolutionCanaryReservation?
     suspend fun usedInvocations(adoptionEvidenceId: String): Int
 }
 
-/** In-memory implementation for deterministic tests and explicitly ephemeral callers only. */
-internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryBudgetStore {
+internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryRuntimeStore {
     private val mutex = Mutex()
     private val reservations = mutableMapOf<String, LinkedHashMap<String, EvolutionCanaryReservation>>()
+    private val switches = mutableMapOf<String, EvolutionCanaryKillSwitchEvidence>()
 
     override suspend fun reserve(
         adoptionEvidenceId: String,
@@ -81,6 +79,9 @@ internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryBudgetStore {
         require(adoptionEvidenceId.isNotBlank())
         require(invocationId.isNotBlank())
         require(maxInvocations > 0)
+        switches[adoptionEvidenceId]?.let { stop ->
+            return@withLock EvolutionCanaryReserveResult.Stopped(stop)
+        }
         val ledger = reservations.getOrPut(adoptionEvidenceId) { linkedMapOf() }
         ledger[invocationId]?.let { existing ->
             return@withLock EvolutionCanaryReserveResult.Reserved(existing, duplicate = true)
@@ -98,9 +99,22 @@ internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryBudgetStore {
         EvolutionCanaryReserveResult.Reserved(reservation, duplicate = false)
     }
 
+    override suspend fun reservation(
+        adoptionEvidenceId: String,
+        invocationId: String,
+    ): EvolutionCanaryReservation? = mutex.withLock {
+        reservations[adoptionEvidenceId]?.get(invocationId)
+    }
+
     override suspend fun usedInvocations(adoptionEvidenceId: String): Int = mutex.withLock {
         reservations[adoptionEvidenceId]?.size ?: 0
     }
+
+    override suspend fun trip(evidence: EvolutionCanaryKillSwitchEvidence): EvolutionCanaryKillSwitchEvidence =
+        mutex.withLock { switches.getOrPut(evidence.adoptionEvidenceId) { evidence } }
+
+    override suspend fun killSwitch(adoptionEvidenceId: String): EvolutionCanaryKillSwitchEvidence? =
+        mutex.withLock { switches[adoptionEvidenceId] }
 }
 
 sealed interface EvolutionCanaryRoute {
@@ -117,10 +131,6 @@ sealed interface EvolutionCanaryRoute {
     ) : EvolutionCanaryRoute
 }
 
-/**
- * Full immutable proof bundle needed to replay J04 and J05 before a canary route can be granted.
- * J06 therefore never trusts a caller-supplied adoption result in isolation.
- */
 data class EvolutionCanaryEvidenceBundle(
     val subject: EvolutionSubject,
     val dataset: EvolutionDatasetRef,
@@ -134,15 +144,12 @@ data class EvolutionCanaryEvidenceBundle(
 )
 
 /**
- * J06 enforces J05 scope before a TRIAL candidate can be selected for bounded canary use. It never
- * registers the candidate in CapabilityRegistry and never changes GeneratedToolState.
- *
- * Before every candidate route, the router deterministically replays the trusted default J05 gate
- * from the original J04 evidence and requires an exact content-id match with the supplied adoption
- * evidence. Canary time is read directly from the system clock and is never caller-controlled.
+ * J06/J07 enforce the J05 scope and persistent kill switch before a TRIAL candidate can be selected.
+ * A tripped canary returns the exact validated baseline even if the live candidate is already
+ * QUARANTINED; candidate replay is only required when candidate routing remains possible.
  */
 class EvolutionCanaryRouter(
-    private val budgetStore: EvolutionCanaryBudgetStore,
+    private val runtimeStore: EvolutionCanaryRuntimeStore,
 ) {
     private val trustedAdoptionGate = EvolutionAdoptionGate()
 
@@ -155,6 +162,22 @@ class EvolutionCanaryRouter(
         val adoptionRequest = evidence.adoptionRequest
         val currentCandidate = evidence.currentCandidate
         val currentBaseline = evidence.currentBaseline
+
+        require(currentBaseline.providerId == subject.baselineProviderId) {
+            "Canary baseline provider differs from evolution subject"
+        }
+        require(currentBaseline.evolutionFingerprint() == subject.baselineDescriptorFingerprint) {
+            "Canary baseline changed after independent evaluation"
+        }
+        require(currentBaseline.state == ProviderState.ACTIVE || currentBaseline.state == ProviderState.DEGRADED) {
+            "Canary baseline must remain usable"
+        }
+
+        runtimeStore.killSwitch(adoptionEvidence.id)?.let { stop ->
+            require(stop.adoptionEvidenceId == adoptionEvidence.id)
+            require(stop.candidateToolId == subject.candidateToolId)
+            return EvolutionCanaryRoute.Baseline(currentBaseline, "canary-kill-switch:${stop.reason.name}")
+        }
 
         val replayedAdoption = trustedAdoptionGate.evaluate(
             subject = subject,
@@ -181,10 +204,6 @@ class EvolutionCanaryRouter(
         require(currentCandidate.state == GeneratedToolState.TRIAL) {
             "Canary candidate must remain TRIAL"
         }
-        require(currentBaseline.providerId == subject.baselineProviderId)
-        require(currentBaseline.state == ProviderState.ACTIVE || currentBaseline.state == ProviderState.DEGRADED) {
-            "Canary baseline must remain usable"
-        }
         require(!adoptionRequest.scope.productiveEffectsAllowed) {
             "Initial canary cannot permit productive effects"
         }
@@ -192,10 +211,7 @@ class EvolutionCanaryRouter(
         if (context.critical) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "critical-context")
         }
-        if (
-            context.taskTags.isEmpty() ||
-            !adoptionRequest.scope.allowedTaskTags.containsAll(context.taskTags)
-        ) {
+        if (context.taskTags.isEmpty() || !adoptionRequest.scope.allowedTaskTags.containsAll(context.taskTags)) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "task-outside-canary-scope")
         }
 
@@ -214,7 +230,7 @@ class EvolutionCanaryRouter(
         }
 
         return when (
-            val reservation = budgetStore.reserve(
+            val reservation = runtimeStore.reserve(
                 adoptionEvidenceId = adoptionEvidence.id,
                 invocationId = context.invocationId,
                 maxInvocations = adoptionRequest.scope.maxInvocations,
@@ -223,6 +239,14 @@ class EvolutionCanaryRouter(
         ) {
             is EvolutionCanaryReserveResult.Exhausted ->
                 EvolutionCanaryRoute.Baseline(currentBaseline, "invocation-budget-exhausted")
+
+            is EvolutionCanaryReserveResult.Stopped -> {
+                require(reservation.killSwitch.candidateToolId == subject.candidateToolId)
+                EvolutionCanaryRoute.Baseline(
+                    currentBaseline,
+                    "canary-kill-switch:${reservation.killSwitch.reason.name}",
+                )
+            }
 
             is EvolutionCanaryReserveResult.Reserved ->
                 EvolutionCanaryRoute.Candidate(
