@@ -22,12 +22,14 @@ enum class ThoughtVerificationStatus {
 data class ThoughtProvenance(
     val sourcePhotonId: PhotonId,
     val sourceRevision: Long,
+    val sourceFingerprint: String,
     val source: String,
     val actor: String,
     val createdAt: Instant,
 ) {
     init {
         require(sourceRevision > 0) { "Thought source revision must be positive" }
+        require(sourceFingerprint.isNotBlank()) { "Thought source fingerprint must not be blank" }
         require(source.isNotBlank()) { "Thought provenance source must not be blank" }
         require(actor.isNotBlank()) { "Thought provenance actor must not be blank" }
     }
