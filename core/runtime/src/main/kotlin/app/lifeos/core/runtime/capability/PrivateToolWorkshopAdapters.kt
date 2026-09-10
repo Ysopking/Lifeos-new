@@ -87,6 +87,7 @@ class PrivateToolSecurityValidator : ToolSecurityValidator {
         if (specification.allowedPermissions.isNotEmpty()) {
             violations += "bounded-runtime-permissions-must-be-empty"
         }
+        if (program.instructions.size != 1) violations += "instruction-count-unsupported"
         if (!program.executable) violations += "unsupported-tool-archetype"
         if (source.source.toByteArray(StandardCharsets.UTF_8).size > specification.maxSourceBytes) {
             violations += "source-budget-exceeded"
