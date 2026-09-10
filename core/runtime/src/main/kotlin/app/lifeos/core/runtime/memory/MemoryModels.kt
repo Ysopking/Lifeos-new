@@ -89,6 +89,9 @@ data class MemoryItem(
         require(content.isNotBlank()) { "Memory content must not be blank" }
         require(normalizedClaim.isNotBlank()) { "Memory normalized claim must not be blank" }
         require(confidence in 0.0..1.0) { "Memory confidence must be in 0..1" }
+        require(verification != MemoryVerificationStatus.CONFLICTED) {
+            "Conflicted memory must be represented by MemoryConflict, not active MemoryItem"
+        }
         require(evidence.isNotEmpty()) { "Every memory item must link to source evidence" }
         require(evidence == evidence.distinctBy { it.stableKey }.sortedBy { it.stableKey }) {
             "Memory evidence must be unique and deterministically ordered"
@@ -112,6 +115,9 @@ data class MemoryItem(
         if (semanticKind == SemanticMemoryKind.PREFERENCE) {
             require(evidence.any { it.kind == MemoryEvidenceKind.USER_CONFIRMED }) {
                 "Preference memory requires explicit user-confirmed evidence"
+            }
+            require(verification == MemoryVerificationStatus.VERIFIED) {
+                "User-confirmed preference memory must be verified"
             }
         }
     }
