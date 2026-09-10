@@ -15,10 +15,14 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
+import app.lifeos.next.kernel.AndroidLocalReminderScheduler
 import app.lifeos.next.kernel.GoalResumeExecutionResult
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.kernel.LocalDeepSearchExecutionResult
 import app.lifeos.next.kernel.LocalKnowledgeExecutionResult
+import app.lifeos.next.kernel.LocalScheduleActionExecutor
+import app.lifeos.next.kernel.LocalScheduleExecutionResult
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +72,9 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private val kernel = owner.kernel
     private val generatedToolStatusReader = owner.generatedToolStatusReader
     private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
+    private val localScheduleExecutor = LocalScheduleActionExecutor(
+        AndroidLocalReminderScheduler(application.applicationContext)
+    )
     private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
     private val previewCache = object : LruCache<String, Bitmap>(IMAGE_PREVIEW_CACHE_KIB) {
@@ -106,6 +113,12 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
 
     fun dismissError() {
         mutableState.update { it.copy(error = null) }
+    }
+
+    fun notificationPermissionDenied() {
+        mutableState.update {
+            it.copy(error = "Benachrichtigungsberechtigung fehlt. Ohne sie kann LIFEOS keine lokale Erinnerung anzeigen.")
+        }
     }
 
     fun refreshGeneratedToolStatus() {
@@ -227,10 +240,13 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                val result = kernel.persistUserUtterance(photon)
+                val baseResult = kernel.persistUserUtterance(photon)
+                val schedule = localScheduleExecutor.execute(kernel, baseResult)
+                val result = if (schedule == null) baseResult else baseResult.copy(localSchedule = schedule)
+                val retainDraft = result.localSchedule is LocalScheduleExecutionResult.Blocked
                 mutableState.update {
                     it.copy(
-                        draft = "",
+                        draft = if (retainDraft) photon.content else "",
                         lastGoal = result.effectiveGoal ?: it.lastGoal,
                         lastCapabilityGaps = result.effectiveRouting?.blockingGaps.orEmpty(),
                         capabilityRequestStatus = null,
@@ -253,6 +269,23 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                             result.localKnowledge is LocalKnowledgeExecutionResult.Produced &&
                                 !result.localKnowledge.output.processingQueued ->
                                 "Die lokale Wissensantwort wurde gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
+                            result.localDeepSearch is LocalDeepSearchExecutionResult.Failed ->
+                                "Die lokale DeepSearch-Suche ist fehlgeschlagen: ${result.localDeepSearch.message}"
+                            result.localDeepSearch is LocalDeepSearchExecutionResult.Produced &&
+                                !result.localDeepSearch.output.processingQueued ->
+                                "Das lokale DeepSearch-Ergebnis wurde gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
+                            result.localSchedule is LocalScheduleExecutionResult.Blocked -> when (result.localSchedule.reason) {
+                                "notification-permission-required" ->
+                                    "Für lokale Erinnerungen muss die Benachrichtigungsberechtigung erteilt werden."
+                                "reminder-time-missing" ->
+                                    "Für die Erinnerung fehlt eine Uhrzeit. Der Entwurf bleibt zum Ergänzen erhalten."
+                                else -> "Die lokale Erinnerung konnte nicht geplant werden: ${result.localSchedule.reason}"
+                            }
+                            result.localSchedule is LocalScheduleExecutionResult.Failed ->
+                                "Die lokale Erinnerung ist fehlgeschlagen: ${result.localSchedule.message}"
+                            result.localSchedule is LocalScheduleExecutionResult.Scheduled &&
+                                !result.localSchedule.output.processingQueued ->
+                                "Die Erinnerung wurde lokal geplant, ihr Photon konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.imageGeneration is ImageGenerationResult.Blocked ->
                                 "Das Bildziel wurde verstanden, kann mit den lokalen Fähigkeiten aber noch nicht vollständig ausgeführt werden."
                             result.imageGeneration is ImageGenerationResult.Failed ->
