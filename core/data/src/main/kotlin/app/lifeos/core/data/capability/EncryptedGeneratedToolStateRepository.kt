@@ -95,6 +95,9 @@ class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolSta
         val existing = requireNotNull(
             states.firstOrNull { it.record.manifest.toolId == evidence.toolId }
         ) { "Trial evidence requires a durably registered generated tool" }
+        require(existing.promotionReceipt == null) {
+            "Promoted generated-tool trial evidence is sealed and cannot change"
+        }
 
         val oldResults = existing.trialEvidence.orderedResults.associateBy { it.invocationId }
         val newResults = evidence.orderedResults.associateBy { it.invocationId }
@@ -106,17 +109,12 @@ class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolSta
                 "Durable generated-tool trial history cannot be rewritten"
             }
         }
-        if (existing.promotionReceipt != null) {
-            require(evidence.id == existing.trialEvidence.id) {
-                "Promoted generated-tool trial evidence is sealed and cannot change"
-            }
-        }
 
         val updated = GeneratedToolPersistentState(
             record = existing.record,
             auditEntries = existing.auditEntries,
             trialEvidence = evidence,
-            promotionReceipt = existing.promotionReceipt,
+            promotionReceipt = null,
         )
         writeStatesLocked(replace(states, updated))
     }
