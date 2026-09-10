@@ -51,9 +51,11 @@ class GeneratedToolBootStateRehydrator(
             .filter { it.record.state == GeneratedToolState.ACTIVE }
             .map { it.record.manifest.toolId }
             .toSet()
-        val providerIds = generatedProviders.map { it.providerId }.toSet()
-        require(providerIds == activeIds) {
-            "Generated-tool boot retry found generated providers different from ACTIVE durable tools"
+        if (capabilityRegistry != null) {
+            val providerIds = generatedProviders.map { it.providerId }.toSet()
+            require(providerIds == activeIds) {
+                "Generated-tool boot retry found generated providers different from ACTIVE durable tools"
+            }
         }
 
         GeneratedToolRehydrationReport(
