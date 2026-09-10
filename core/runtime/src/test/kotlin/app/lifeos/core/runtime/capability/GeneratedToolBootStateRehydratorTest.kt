@@ -3,7 +3,7 @@ package app.lifeos.core.runtime.capability
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlinx.coroutines.test.runTest
 
 class GeneratedToolBootStateRehydratorTest {
@@ -36,7 +36,13 @@ class GeneratedToolBootStateRehydratorTest {
         rehydrator.rehydrateOrVerify()
         tools.transition("tool-drift", GeneratedToolState.REJECTED, message = "runtime-drift")
 
-        assertFailsWith<IllegalArgumentException> { rehydrator.rehydrateOrVerify() }
+        val failure = try {
+            rehydrator.rehydrateOrVerify()
+            null
+        } catch (error: IllegalArgumentException) {
+            error
+        }
+        assertNotNull(failure)
     }
 
     private suspend fun registeredState(toolId: String): GeneratedToolPersistentState {
