@@ -132,6 +132,7 @@ class GeneratedToolPromotionEvidenceLedger {
         val trialOutcomes: LinkedHashMap<String, String> = linkedMapOf(),
         val healthIncidents: LinkedHashMap<String, GeneratedToolHealthIncident> = linkedMapOf(),
         val rollbacks: LinkedHashMap<String, GeneratedToolRollbackEvidence> = linkedMapOf(),
+        var frozenSnapshotId: String? = null,
     )
 
     private val mutex = Mutex()
@@ -144,6 +145,7 @@ class GeneratedToolPromotionEvidenceLedger {
         require(toolId.isNotBlank())
         require(snapshotIds.isNotEmpty()) { "Design evidence requires at least one field snapshot" }
         val state = evidence.getOrPut(toolId) { MutableEvidence() }
+        requireMutable(toolId, state)
         val existing = state.fieldSnapshotIds
         if (existing != null) {
             require(existing == snapshotIds) { "Conflicting field snapshot evidence for $toolId" }
@@ -183,6 +185,7 @@ class GeneratedToolPromotionEvidenceLedger {
             debugApkSha256 = artifact.debugApkSha256,
         )
         val state = evidence.getOrPut(toolId) { MutableEvidence() }
+        requireMutable(toolId, state)
         val existing = state.buildEvidence
         if (existing != null) {
             require(existing == bound) { "Conflicting build evidence for $toolId" }
@@ -195,6 +198,7 @@ class GeneratedToolPromotionEvidenceLedger {
     suspend fun recordTrial(toolId: String, result: GeneratedToolTrialResult): Boolean = mutex.withLock {
         require(toolId.isNotBlank())
         val state = evidence.getOrPut(toolId) { MutableEvidence() }
+        requireMutable(toolId, state)
         val fingerprint = result.promotionEvidenceFingerprint()
         val existing = state.trialOutcomes[result.invocationId]
         if (existing != null) {
@@ -211,6 +215,7 @@ class GeneratedToolPromotionEvidenceLedger {
     ): Boolean = mutex.withLock {
         require(toolId.isNotBlank())
         val state = evidence.getOrPut(toolId) { MutableEvidence() }
+        requireMutable(toolId, state)
         state.healthIncidents.putIfAbsent(incident.id, incident) == null
     }
 
@@ -233,21 +238,51 @@ class GeneratedToolPromotionEvidenceLedger {
     ): Boolean = mutex.withLock {
         require(toolId.isNotBlank())
         val state = evidence.getOrPut(toolId) { MutableEvidence() }
+        requireMutable(toolId, state)
         state.rollbacks.putIfAbsent(rollback.id, rollback) == null
     }
 
     suspend fun snapshot(toolId: String): GeneratedToolPromotionEvidenceSnapshot = mutex.withLock {
         require(toolId.isNotBlank())
-        val state = evidence[toolId]
-        GeneratedToolPromotionEvidenceSnapshot(
-            toolId = toolId,
-            fieldSnapshotIds = state?.fieldSnapshotIds.orEmpty(),
-            buildEvidence = state?.buildEvidence,
-            trialOutcomes = state?.trialOutcomes?.toMap().orEmpty(),
-            healthIncidents = state?.healthIncidents?.values?.sortedBy { it.id }.orEmpty(),
-            rollbacks = state?.rollbacks?.values?.sortedBy { it.id }.orEmpty(),
-        )
+        snapshotUnsafe(toolId, evidence[toolId])
     }
+
+    suspend fun freezeForPromotion(
+        toolId: String,
+        expectedSnapshotId: String,
+    ): GeneratedToolPromotionEvidenceSnapshot = mutex.withLock {
+        require(toolId.isNotBlank())
+        require(expectedSnapshotId.isNotBlank())
+        val state = evidence.getOrPut(toolId) { MutableEvidence() }
+        val existingFreeze = state.frozenSnapshotId
+        if (existingFreeze != null) {
+            require(existingFreeze == expectedSnapshotId) { "Promotion evidence already frozen differently" }
+        }
+        val snapshot = snapshotUnsafe(toolId, state)
+        require(snapshot.id == expectedSnapshotId) {
+            "Promotion evidence changed after eligibility evaluation"
+        }
+        state.frozenSnapshotId = expectedSnapshotId
+        snapshot
+    }
+
+    private fun requireMutable(toolId: String, state: MutableEvidence) {
+        require(state.frozenSnapshotId == null) {
+            "Promotion evidence for $toolId is frozen"
+        }
+    }
+
+    private fun snapshotUnsafe(
+        toolId: String,
+        state: MutableEvidence?,
+    ) = GeneratedToolPromotionEvidenceSnapshot(
+        toolId = toolId,
+        fieldSnapshotIds = state?.fieldSnapshotIds.orEmpty(),
+        buildEvidence = state?.buildEvidence,
+        trialOutcomes = state?.trialOutcomes?.toMap().orEmpty(),
+        healthIncidents = state?.healthIncidents?.values?.sortedBy { it.id }.orEmpty(),
+        rollbacks = state?.rollbacks?.values?.sortedBy { it.id }.orEmpty(),
+    )
 }
 
 data class GeneratedToolPromotionEvidencePolicy(
