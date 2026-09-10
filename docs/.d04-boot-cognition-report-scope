@@ -1,0 +1,5 @@
+D04 implements a deterministic, content-addressed BootCognitionReport Photon over D01/D02/D03 evidence.
+
+The report remains derived evidence, never a source of boot truth. The recorder reads through BootSnapshotLoader, scans integrity, rehydrates context, analyzes deltas, publishes idempotently, and preserves cancellation semantics.
+
+Productive activation is intentionally constrained to the recorder boundary so boot/report failures cannot silently become authoritative runtime state changes.
