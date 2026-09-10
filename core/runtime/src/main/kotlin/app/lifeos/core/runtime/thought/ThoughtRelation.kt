@@ -24,6 +24,7 @@ data class ThoughtRelationSource(
 
 data class ThoughtRelation(
     val id: String,
+    val sourceNodeId: ThoughtNodeId,
     val sourcePhotonId: PhotonId,
     val targetPhotonId: PhotonId,
     val type: ThoughtRelationType,
@@ -40,6 +41,7 @@ data class ThoughtRelation(
 
     companion object {
         fun create(
+            sourceNodeId: ThoughtNodeId,
             sourcePhotonId: PhotonId,
             targetPhotonId: PhotonId,
             type: ThoughtRelationType,
@@ -48,6 +50,7 @@ data class ThoughtRelation(
             origin: String,
         ): ThoughtRelation = ThoughtRelation(
             id = "thought-rel:" + StableFieldIds.fingerprint(
+                sourceNodeId.value,
                 sourcePhotonId.value,
                 sourceRevision.toString(),
                 targetPhotonId.value,
@@ -55,6 +58,7 @@ data class ThoughtRelation(
                 weight.toString(),
                 origin,
             ),
+            sourceNodeId = sourceNodeId,
             sourcePhotonId = sourcePhotonId,
             targetPhotonId = targetPhotonId,
             type = type,
