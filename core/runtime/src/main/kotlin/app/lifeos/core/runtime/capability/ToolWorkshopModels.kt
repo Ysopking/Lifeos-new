@@ -122,10 +122,14 @@ data class GeneratedToolRecord(
     val state: GeneratedToolState,
     val verificationConfidence: Double = 0.0,
     val lastMessage: String? = null,
+    val promotionEvidenceId: String? = null,
 ) {
     init {
         require(verificationConfidence in 0.0..1.0) {
             "Tool verification confidence must be between zero and one"
+        }
+        require(promotionEvidenceId == null || promotionEvidenceId.isNotBlank()) {
+            "Promotion evidence id must not be blank"
         }
     }
 }
