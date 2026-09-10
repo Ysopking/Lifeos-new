@@ -53,11 +53,9 @@ object GeneratedToolStateCodec {
     private fun DataOutputStream.writeState(state: GeneratedToolPersistentState) {
         writeText(state.id)
         writeRecord(state.record)
-
         require(state.auditEntries.size <= MAX_AUDIT_ENTRIES)
         writeInt(state.auditEntries.size)
         state.auditEntries.forEach { writeAudit(it) }
-
         writeTrialEvidence(state.trialEvidence)
         writeBoolean(state.promotionReceipt != null)
         state.promotionReceipt?.let { writePromotionReceipt(it) }
@@ -230,8 +228,8 @@ object GeneratedToolStateCodec {
             apkSha256 = readText(),
             capabilityChangeFingerprint = readText(),
             permissionDeltaFingerprint = readText(),
-            reviewerEvidenceFingerprints = readTexts("reviewer evidence"),
-            promotionActorEvidenceFingerprints = readTexts("promotion actor evidence"),
+            reviewerEvidenceFingerprints = readTexts("reviewer evidence", requireUnique = false),
+            promotionActorEvidenceFingerprints = readTexts("promotion actor evidence", requireUnique = false),
         )
         require(receipt.id == expectedReceiptId) {
             "Generated-tool promotion receipt id integrity check failed"
@@ -249,9 +247,11 @@ object GeneratedToolStateCodec {
         values.forEach { writeText(it) }
     }
 
-    private fun DataInputStream.readTexts(label: String): List<String> {
+    private fun DataInputStream.readTexts(label: String, requireUnique: Boolean = true): List<String> {
         val values = List(readBoundedCount(MAX_LIST_ENTRIES, label)) { readText() }
-        require(values.distinct().size == values.size) { "Generated-tool $label contains duplicates" }
+        if (requireUnique) {
+            require(values.distinct().size == values.size) { "Generated-tool $label contains duplicates" }
+        }
         return values
     }
 
