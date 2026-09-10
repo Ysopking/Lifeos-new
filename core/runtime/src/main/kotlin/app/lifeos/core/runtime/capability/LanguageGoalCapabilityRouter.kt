@@ -56,6 +56,11 @@ class LanguageGoalCapabilityMapper {
     )
 }
 
+/**
+ * Routes every language goal through the single mutable runtime CapabilityRegistry. Local system
+ * executors are composed into that registry by the kernel just like other APK-shipped modules;
+ * this router never keeps a second provider catalog and therefore cannot bypass registry state.
+ */
 class LanguageGoalCapabilityRouter(
     private val registry: CapabilityRegistry,
     private val mapper: LanguageGoalCapabilityMapper = LanguageGoalCapabilityMapper(),
@@ -72,12 +77,54 @@ class LanguageGoalCapabilityRouter(
                 continue
             }
             registry.providersFor(requirement.capabilityId)
-                .firstOrNull { provider ->
-                    requirement.requiredInputs.containsAll(provider.contract.requiredInputs) &&
-                        provider.contract.outputs.containsAll(requirement.requiredOutputs)
-                }
+                .firstOrNull { provider -> providerSatisfies(requirement, provider) }
                 ?.let { selected[requirement.capabilityId] = it }
+                ?: gaps.add(
+                    CapabilityGap(
+                        requirement = requirement,
+                        type = CapabilityGapType.CONTRACT_MISMATCH,
+                    )
+                )
         }
         return GoalCapabilityResolution(plan, selected, gaps)
+    }
+
+    private fun providerSatisfies(
+        requirement: CapabilityRequirement,
+        provider: CapabilityDescriptor,
+    ): Boolean =
+        requirement.requiredInputs.containsAll(provider.contract.requiredInputs) &&
+            provider.contract.outputs.containsAll(requirement.requiredOutputs)
+
+    companion object {
+        /** APK-shipped local executors. The kernel installs these into the shared registry. */
+        val LOCAL_SYSTEM_PROVIDERS: List<CapabilityDescriptor> = listOf(
+            CapabilityDescriptor(
+                capabilityId = CapabilityId("knowledge.resolve"),
+                providerId = "local-knowledge-core",
+                providerType = ProviderType.MODULE,
+                contract = CapabilityContract(
+                    requiredInputs = setOf("goal-photon"),
+                    outputs = setOf("answer-photon"),
+                ),
+                state = ProviderState.ACTIVE,
+                trustLevel = TrustLevel.SYSTEM,
+                reliability = 1.0,
+                cost = 0.0,
+            ),
+            CapabilityDescriptor(
+                capabilityId = CapabilityId("memory.store"),
+                providerId = "local-memory-core",
+                providerType = ProviderType.MODULE,
+                contract = CapabilityContract(
+                    requiredInputs = setOf("goal-photon"),
+                    outputs = setOf("memory-photon"),
+                ),
+                state = ProviderState.ACTIVE,
+                trustLevel = TrustLevel.SYSTEM,
+                reliability = 1.0,
+                cost = 0.0,
+            ),
+        )
     }
 }

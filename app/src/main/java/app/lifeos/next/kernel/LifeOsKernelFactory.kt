@@ -196,7 +196,7 @@ class LifeOsKernelFactory(
                     reliability = 0.95,
                     cost = 0.0,
                 ),
-            )
+            ) + LanguageGoalCapabilityRouter.LOCAL_SYSTEM_PROVIDERS
         )
 
         val generatedToolStateRepository = EncryptedGeneratedToolStateRepository(appContext)

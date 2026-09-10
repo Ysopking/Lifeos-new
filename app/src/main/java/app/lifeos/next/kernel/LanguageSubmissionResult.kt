@@ -11,6 +11,7 @@ data class LanguageSubmissionResult(
     val goal: PhotonSubmissionResult? = null,
     val routing: GoalCapabilityResolution? = null,
     val imageGeneration: ImageGenerationResult? = null,
+    val localKnowledge: LocalKnowledgeExecutionResult? = null,
     val languageFailure: String? = null,
 ) {
     val sourceStored: Boolean get() = true

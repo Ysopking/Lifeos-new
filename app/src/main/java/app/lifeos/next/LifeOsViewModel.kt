@@ -17,6 +17,7 @@ import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.kernel.LocalKnowledgeExecutionResult
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -239,6 +240,11 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                                 "Gedanke wurde gespeichert, konnte aber nicht zur Verarbeitung eingereiht werden."
                             result.goal?.processingQueued != true ->
                                 "Gedanke wurde verstanden und gespeichert, das abgeleitete Ziel konnte aber nicht zur Verarbeitung eingereiht werden."
+                            result.localKnowledge is LocalKnowledgeExecutionResult.Failed ->
+                                "Die lokale Wissensaktion ist fehlgeschlagen: ${result.localKnowledge.message}"
+                            result.localKnowledge is LocalKnowledgeExecutionResult.Produced &&
+                                !result.localKnowledge.output.processingQueued ->
+                                "Die lokale Wissensantwort wurde gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.imageGeneration is ImageGenerationResult.Blocked ->
                                 "Das Bildziel wurde verstanden, kann mit den lokalen Fähigkeiten aber noch nicht vollständig ausgeführt werden."
                             result.imageGeneration is ImageGenerationResult.Failed ->
