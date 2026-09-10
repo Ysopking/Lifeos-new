@@ -25,7 +25,8 @@ class GeneratedToolArtifactTest {
         )
 
         assertEquals(listOf(artifact), decoded)
-        assertTrue(artifact.sourceHash.matches(Regex("[0-9a-f]{64}")))
+        assertTrue(artifact.sourceHash.matches(Regex("bounded-v1:[0-9a-f]{64}")))
+        assertTrue(GeneratedToolArtifact.isBoundedSourceHash(artifact.sourceHash))
         assertTrue(artifact.buildHash.matches(Regex("[0-9a-f]{64}")))
     }
 
