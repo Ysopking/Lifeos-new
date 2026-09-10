@@ -15,14 +15,56 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
+import java.util.Base64
 import kotlin.math.min
+
+data class LocalReminderRecord(
+    val triggerAt: Instant,
+    val zoneId: String,
+    val message: String,
+) {
+    init {
+        require(zoneId.isNotBlank())
+        require(message.isNotBlank())
+    }
+
+    fun encode(): String = buildString {
+        appendLine("reminder/v1")
+        append("triggerAt=").appendLine(triggerAt.toString())
+        append("zoneId=").appendLine(zoneId)
+        append("messageBase64=").append(
+            Base64.getUrlEncoder().withoutPadding().encodeToString(message.toByteArray(Charsets.UTF_8))
+        )
+    }
+
+    companion object {
+        fun decode(photon: Photon): LocalReminderRecord {
+            require(photon.mimeType == LocalScheduleGoalEngine.REMINDER_MIME) { "Photon is not a LIFEOS reminder" }
+            val lines = photon.content.lineSequence().toList()
+            require(lines.firstOrNull() == "reminder/v1") { "Unsupported reminder format" }
+            val fields = lines.drop(1).associate { line ->
+                val split = line.indexOf('=')
+                require(split > 0) { "Malformed reminder field" }
+                line.substring(0, split) to line.substring(split + 1)
+            }
+            require(fields.keys == setOf("triggerAt", "zoneId", "messageBase64")) { "Reminder fields are incomplete" }
+            val message = String(
+                Base64.getUrlDecoder().decode(fields.getValue("messageBase64")),
+                Charsets.UTF_8,
+            )
+            return LocalReminderRecord(
+                triggerAt = Instant.parse(fields.getValue("triggerAt")),
+                zoneId = fields.getValue("zoneId"),
+                message = message,
+            )
+        }
+    }
+}
 
 sealed interface LocalScheduleGoalResult {
     data class Scheduled(
         val photon: Photon,
-        val triggerAt: Instant,
-        val zoneId: String,
-        val message: String,
+        val record: LocalReminderRecord,
     ) : LocalScheduleGoalResult
 
     data class Blocked(
@@ -74,9 +116,13 @@ class LocalScheduleGoalEngine {
         }
 
         val confidence = min(sourcePhoton.confidence, goal.confidence)
-        val message = sourcePhoton.content.trim()
+        val record = LocalReminderRecord(
+            triggerAt = triggerAt,
+            zoneId = zoneId.id,
+            message = sourcePhoton.content.trim(),
+        )
         val reminder = Photon(
-            content = encode(triggerAt, zoneId, message),
+            content = record.encode(),
             mimeType = REMINDER_MIME,
             phase = PhotonPhase.ACTIVE,
             semanticMass = maxOf(1.0, sourcePhoton.semanticMass + 0.20),
@@ -94,12 +140,7 @@ class LocalScheduleGoalEngine {
             ),
             tags = setOf("reminder", "scheduled", "intent:schedule"),
         )
-        return LocalScheduleGoalResult.Scheduled(
-            photon = reminder,
-            triggerAt = triggerAt,
-            zoneId = zoneId.id,
-            message = message,
-        )
+        return LocalScheduleGoalResult.Scheduled(photon = reminder, record = record)
     }
 
     private fun parseDate(entity: SemanticEntity, referenceDate: LocalDate): LocalDate? {
@@ -153,18 +194,6 @@ class LocalScheduleGoalEngine {
             else -> null
         }
     }
-
-    private fun encode(triggerAt: Instant, zoneId: ZoneId, message: String): String = buildString {
-        appendLine("reminder/v1")
-        append("triggerAt=").appendLine(triggerAt.toString())
-        append("zoneId=").appendLine(escape(zoneId.id))
-        append("message=").append(escape(message))
-    }
-
-    private fun escape(value: String): String = value
-        .replace("\\", "\\\\")
-        .replace("\n", "\\n")
-        .replace("=", "\\=")
 
     companion object {
         const val REMINDER_MIME = "application/vnd.lifeos.reminder+text"
