@@ -20,6 +20,7 @@ data class GoalActionContext(
  */
 data class GoalActionDispatchResult(
     val imageGeneration: ImageGenerationResult? = null,
+    val localImageTransform: LocalImageTransformExecutionResult? = null,
     val localKnowledge: LocalKnowledgeExecutionResult? = null,
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
     val localCommunication: LocalCommunicationExecutionResult? = null,
@@ -29,20 +30,22 @@ class GoalActionDispatcher(
     private val executeKnowledge: suspend (GoalActionContext) -> LocalKnowledgeExecutionResult,
     private val executeDeepSearch: suspend (GoalActionContext) -> LocalDeepSearchExecutionResult,
     private val executeImageGeneration: suspend (GoalActionContext) -> ImageGenerationResult,
+    private val executeImageTransform: suspend (GoalActionContext) -> LocalImageTransformExecutionResult,
     private val prepareCommunication: suspend (GoalActionContext) -> LocalCommunicationExecutionResult,
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
         if (!context.routing.ready) {
-            return if (context.goal.intent == IntentType.CREATE_IMAGE) {
-                GoalActionDispatchResult(
-                    imageGeneration = ImageGenerationResult.Blocked(
-                        context.routing.blockingGaps
-                            .map { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
-                            .ifEmpty { listOf("image goal is not action-ready") },
-                    )
+            val gapReason = context.routing.blockingGaps
+                .joinToString(",") { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
+                .ifBlank { "goal-is-not-action-ready" }
+            return when (context.goal.intent) {
+                IntentType.CREATE_IMAGE -> GoalActionDispatchResult(
+                    imageGeneration = ImageGenerationResult.Blocked(listOf(gapReason))
                 )
-            } else {
-                GoalActionDispatchResult()
+                IntentType.TRANSFORM_IMAGE -> GoalActionDispatchResult(
+                    localImageTransform = LocalImageTransformExecutionResult.Blocked(gapReason)
+                )
+                else -> GoalActionDispatchResult()
             }
         }
 
@@ -58,6 +61,10 @@ class GoalActionDispatcher(
 
             IntentType.CREATE_IMAGE -> GoalActionDispatchResult(
                 imageGeneration = executeImageGeneration(context),
+            )
+
+            IntentType.TRANSFORM_IMAGE -> GoalActionDispatchResult(
+                localImageTransform = executeImageTransform(context),
             )
 
             IntentType.COMMUNICATE -> GoalActionDispatchResult(
