@@ -22,11 +22,13 @@ data class GeneratedToolArtifact(
         require(canonicalProgram.toByteArray(StandardCharsets.UTF_8).size <= MAX_PROGRAM_BYTES) {
             "Generated-tool artifact program exceeds size limit"
         }
-        require(sourceHash.matches(SHA256)) { "Generated-tool artifact source hash must be SHA-256" }
+        require(sourceHash.matches(BOUNDED_SOURCE_HASH)) {
+            "Generated-tool artifact source hash must be typed bounded-v1 SHA-256"
+        }
         require(buildHash.matches(SHA256)) { "Generated-tool artifact build hash must be SHA-256" }
         val program = GeneratedToolProgramCodec.decode(canonicalProgram)
         require(program.toolId == toolId) { "Generated-tool artifact program belongs to another tool" }
-        require(sha256(canonicalProgram.toByteArray(StandardCharsets.UTF_8)) == sourceHash) {
+        require(typedSourceHash(canonicalProgram) == sourceHash) {
             "Generated-tool artifact source hash mismatch"
         }
         require(
@@ -52,18 +54,25 @@ data class GeneratedToolArtifact(
 
     companion object {
         const val MAX_PROGRAM_BYTES = 32_768
+        const val SOURCE_HASH_PREFIX = "bounded-v1:"
         internal const val BUILD_DOMAIN = "lifeos-bounded-tool-build/v1\n"
         private val SHA256 = Regex("[0-9a-f]{64}")
+        private val BOUNDED_SOURCE_HASH = Regex("bounded-v1:[0-9a-f]{64}")
 
         fun create(
             toolId: String,
             canonicalProgram: String,
             createdAt: Instant,
         ): GeneratedToolArtifact {
-            val sourceHash = sha256(canonicalProgram.toByteArray(StandardCharsets.UTF_8))
+            val sourceHash = typedSourceHash(canonicalProgram)
             val buildHash = sha256((BUILD_DOMAIN + canonicalProgram).toByteArray(StandardCharsets.UTF_8))
             return GeneratedToolArtifact(toolId, canonicalProgram, sourceHash, buildHash, createdAt)
         }
+
+        fun isBoundedSourceHash(value: String): Boolean = value.matches(BOUNDED_SOURCE_HASH)
+
+        internal fun typedSourceHash(canonicalProgram: String): String =
+            SOURCE_HASH_PREFIX + sha256(canonicalProgram.toByteArray(StandardCharsets.UTF_8))
     }
 }
 
