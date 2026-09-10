@@ -361,6 +361,14 @@ class GenesisCoordinator(
             requiredOutputs = request.requirement.requiredOutputs,
         ) ?: return null
         if (plan.steps.isEmpty()) return null
+        if (plan.steps.any { step ->
+                step.providerType == ProviderType.CONNECTOR ||
+                    step.providerType == ProviderType.EXTERNAL_TOOL
+            }
+        ) {
+            // External interaction must remain behind the explicit connector/permission handoff.
+            return null
+        }
         return GenesisSolutionCandidate(
             kind = GenesisSolutionKind.CAPABILITY_COMPOSITION,
             referenceId = compositionId(plan),
