@@ -95,6 +95,17 @@ class ShadowEvaluationEngine(
             return EvolutionEvaluationDecision.REJECTED
         }
 
+        val candidateByCase = candidate.associateBy { it.caseId }
+        val exactExpectationFailures = cases.mapNotNull { testCase ->
+            val expected = testCase.expectedOutputFingerprint ?: return@mapNotNull null
+            val observed = candidateByCase.getValue(testCase.caseId).outputFingerprint
+            if (observed == expected) null else testCase.caseId
+        }
+        if (exactExpectationFailures.isNotEmpty()) {
+            exactExpectationFailures.sorted().forEach { reasons += "expected-output-mismatch:$it" }
+            return EvolutionEvaluationDecision.REJECTED
+        }
+
         if (cases.size < policy.minimumCases) {
             reasons += "insufficient-cases:${cases.size}<${policy.minimumCases}"
             return EvolutionEvaluationDecision.INSUFFICIENT_EVIDENCE
