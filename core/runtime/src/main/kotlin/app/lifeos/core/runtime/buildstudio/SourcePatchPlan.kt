@@ -156,6 +156,7 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/recovery/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/escalation/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/deepsearch/",
         )
         val MANDATORY_PROTECTED_EXACT_PATHS = setOf(
             "gradle.properties",
@@ -190,6 +191,7 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolBootStateRehydrator.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/GoalResumeEngine.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalKnowledgeGoalEngine.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalDeepSearchGoalEngine.kt",
         )
         private val PROTECTED_NAME_TOKENS = setOf(
             "crypto",
