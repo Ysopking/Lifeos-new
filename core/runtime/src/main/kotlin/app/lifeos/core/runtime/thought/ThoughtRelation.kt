@@ -32,7 +32,6 @@ data class ThoughtRelation(
 ) {
     init {
         require(id.isNotBlank()) { "Thought relation id must not be blank" }
-        require(sourcePhotonId != targetPhotonId) { "Thought relation cannot point to itself" }
         require(weight in 0.0..1.0) { "Thought relation weight must be in 0..1" }
         require(source.sourcePhotonId == sourcePhotonId) {
             "Thought relation provenance must belong to the relation source photon"
