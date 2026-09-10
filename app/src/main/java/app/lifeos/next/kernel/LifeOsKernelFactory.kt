@@ -538,6 +538,7 @@ class LifeOsKernelFactory(
             goalPhotonFactory = goalPhotonFactory,
             languageContextBuilder = languageContextBuilder,
             goalCapabilityRouter = goalCapabilityRouter,
+            localReminderScheduler = AndroidLocalReminderScheduler(appContext),
             sceneCompiler = sceneCompiler,
             sceneRasterizer = sceneRasterizer,
             imageAssets = assetStore,
