@@ -19,7 +19,7 @@ class UniversalFieldRuntimeAdapterTest {
     private val fixedTime = Instant.parse("2026-09-08T12:00:00Z")
 
     @Test
-    fun `same immutable photon yields same run and snapshot ids`() = runTest {
+    fun `same immutable photon yields same run snapshot and source identity`() = runTest {
         val repository = MemorySnapshotRepository()
         val adapter = UniversalFieldRuntimeAdapter(snapshotRepository = repository)
         val photon = photon(content = "same input")
@@ -32,6 +32,10 @@ class UniversalFieldRuntimeAdapterTest {
         assertEquals(first.snapshotId, second.snapshotId)
         assertEquals(1, repository.snapshots.size)
         assertNotNull(first.convergenceStatus)
+        assertEquals(photon.id, first.sourcePhotonId)
+        assertEquals(photon.revision, first.sourceRevision)
+        assertEquals(runtimePhotonFingerprint(photon), first.sourceFingerprint)
+        assertEquals(first.sourceFingerprint, second.sourceFingerprint)
     }
 
     @Test
@@ -46,10 +50,12 @@ class UniversalFieldRuntimeAdapterTest {
         assertEquals(FieldShadowState.COMPLETED, second.state)
         assertNotEquals(first.runId, second.runId)
         assertNotEquals(first.snapshotId, second.snapshotId)
+        assertNotEquals(first.sourceFingerprint, second.sourceFingerprint)
     }
 
     @Test
-    fun `snapshot persistence failure is observational and does not throw`() = runTest {
+    fun `snapshot persistence failure is observational and retains source identity`() = runTest {
+        val source = photon(content = "persist me")
         val adapter = UniversalFieldRuntimeAdapter(
             snapshotRepository = object : FieldSnapshotRepository {
                 override suspend fun save(snapshot: FieldSnapshot) {
@@ -64,12 +70,15 @@ class UniversalFieldRuntimeAdapterTest {
             },
         )
 
-        val result = adapter.process(photon(content = "persist me"))
+        val result = adapter.process(source)
 
         assertEquals(FieldShadowState.FAILED, result.state)
         assertEquals("vault unavailable", result.message)
         assertEquals(null, result.runId)
         assertEquals(null, result.snapshotId)
+        assertEquals(source.id, result.sourcePhotonId)
+        assertEquals(source.revision, result.sourceRevision)
+        assertEquals(runtimePhotonFingerprint(source), result.sourceFingerprint)
     }
 
     @Test
