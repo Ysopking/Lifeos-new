@@ -57,6 +57,7 @@ import app.lifeos.core.runtime.cognition.InMemoryCognitiveTriggerSink
 import app.lifeos.core.runtime.cognition.InMemoryPhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.OutcomeTriggerObserver
 import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
+import app.lifeos.core.runtime.context.DurableContextFieldEnricher
 import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.health.CircuitBreaker
 import app.lifeos.core.runtime.health.HealthGate
@@ -191,6 +192,7 @@ class LifeOsKernelFactory(
         val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
             snapshotRepository = fieldSnapshotRepository,
+            requestEnricher = DurableContextFieldEnricher(store),
             healthGate = healthGate,
         )
         val schedulerSignal = ConflatedTaskSchedulerSignal()
