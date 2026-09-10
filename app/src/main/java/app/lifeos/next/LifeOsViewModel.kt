@@ -15,6 +15,8 @@ import app.lifeos.core.language.LanguageContextItem
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.capability.CapabilityGap
+import app.lifeos.core.runtime.capability.GeneratedToolGenesisResult
+import app.lifeos.core.runtime.capability.GeneratedToolRequestExecutionResult
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
 import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.next.kernel.GoalResumeExecutionResult
@@ -129,14 +131,19 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { loadGeneratedToolStatus() }
     }
 
+    /**
+     * One explicit button press approves exactly one currently blocking capability gap for bounded
+     * local Genesis. The generated tool can only become TRIAL or REJECTED on this path; it is never
+     * activated by the UI action.
+     */
     fun requestCapabilityGaps() {
         val current = mutableState.value
-        val gaps = current.lastCapabilityGaps
+        val gap = current.lastCapabilityGaps.firstOrNull()
         if (
             current.loading ||
             current.loadFailed ||
             current.capabilityRequestSaving ||
-            gaps.isEmpty()
+            gap == null
         ) return
 
         mutableState.update {
@@ -147,30 +154,29 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             try {
-                val results = gaps.map { gap ->
-                    kernel.persistAndIngest(
-                        Photon(
-                            content = gap.toToolRequestContent(),
-                            provenance = Provenance("local-capability-gap-request", "user"),
-                            tags = setOf("capability-gap", "tool-request", "user-approved"),
-                        )
-                    )
+                val result = kernel.generateExplicitlyApprovedTool(gap)
+                val status = when (val execution = result.execution) {
+                    is GeneratedToolRequestExecutionResult.Blocked ->
+                        "Tool-Erzeugung wurde vor Genesis blockiert: ${execution.reason}"
+
+                    is GeneratedToolRequestExecutionResult.Completed -> when (val genesis = execution.genesis) {
+                        is GeneratedToolGenesisResult.TrialReady ->
+                            "${genesis.record.manifest.toolId} wurde lokal erzeugt, gebaut, getestet und verifiziert. Das Tool ist jetzt isoliert in TRIAL und noch nicht aktiv."
+
+                        is GeneratedToolGenesisResult.Rejected ->
+                            "Der lokale ToolWorkshop hat ${genesis.record.manifest.toolId} sicher abgelehnt: ${genesis.reasons.joinToString("; ")}"
+                    }
                 }
-                val allQueued = results.all { it.processingQueued }
-                mutableState.update {
-                    it.copy(
-                        capabilityRequestStatus = if (allQueued) {
-                            "${gaps.size} Tool-Anforderung(en) wurden lokal gespeichert und dauerhaft zur Verarbeitung eingereiht."
-                        } else {
-                            "Die Tool-Anforderung wurde lokal gespeichert, konnte aber nicht vollständig zur Verarbeitung eingereiht werden."
-                        },
-                    )
-                }
+                mutableState.update { it.copy(capabilityRequestStatus = status) }
+                loadGeneratedToolStatus()
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 mutableState.update {
-                    it.copy(capabilityRequestStatus = "Tool-Anforderung konnte nicht gespeichert werden.")
+                    it.copy(
+                        capabilityRequestStatus =
+                            "Tool-Erzeugung konnte nicht sicher abgeschlossen werden: ${error.message ?: error::class.simpleName ?: "unbekannter Fehler"}"
+                    )
                 }
             } finally {
                 mutableState.update { it.copy(capabilityRequestSaving = false) }
@@ -427,16 +433,6 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun CapabilityGap.toToolRequestContent(): String = buildString {
-        appendLine("LIFEOS_CAPABILITY_GAP_REQUEST_V1")
-        append("capability=").appendLine(requirement.capabilityId.value)
-        append("severity=").appendLine(requirement.severity.name)
-        append("gapType=").appendLine(type.name)
-        append("requiredInputs=").appendLine(requirement.requiredInputs.sorted().joinToString(","))
-        append("requiredOutputs=").appendLine(requirement.requiredOutputs.sorted().joinToString(","))
-        append("candidateProviders=").append(candidateProviderIds.sorted().joinToString(","))
-    }
-
     private fun applyVoiceResult(state: LifeOsState, result: LocalVoiceCaptureResult): LifeOsState = when (result) {
         is LocalVoiceCaptureResult.Success -> {
             val transcript = result.transcript.trim()
@@ -527,7 +523,10 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun Photon.isUserVisiblePhoton(): Boolean =
-        "goal" !in tags && "scene-graph" !in tags
+        "goal" !in tags &&
+            "scene-graph" !in tags &&
+            "tool-request" !in tags &&
+            "tool-generation-approval" !in tags
 
     private companion object {
         const val LOAD_ERROR_MESSAGE = "Speicher konnte nicht geladen werden. Bitte erneut versuchen."
