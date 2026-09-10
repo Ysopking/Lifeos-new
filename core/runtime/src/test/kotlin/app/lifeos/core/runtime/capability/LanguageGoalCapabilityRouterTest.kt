@@ -137,6 +137,40 @@ class LanguageGoalCapabilityRouterTest {
     }
 
     @Test
+    fun `query uses immutable local knowledge provider without registry mutation`() = runTest {
+        val registry = CapabilityRegistry()
+
+        val result = LanguageGoalCapabilityRouter(registry).route(goal(IntentType.QUERY))
+
+        assertTrue(result.ready)
+        assertTrue(result.gaps.isEmpty())
+        val provider = result.selectedProviders[CapabilityId("knowledge.resolve")]
+        assertEquals("local-knowledge-core", provider?.providerId)
+        assertEquals(TrustLevel.SYSTEM, provider?.trustLevel)
+        assertTrue(registry.providersFor(CapabilityId("knowledge.resolve")).isEmpty())
+    }
+
+    @Test
+    fun `memory uses immutable local memory provider`() = runTest {
+        val result = LanguageGoalCapabilityRouter(CapabilityRegistry()).route(goal(IntentType.STORE_OR_REMEMBER))
+
+        assertTrue(result.ready)
+        assertTrue(result.gaps.isEmpty())
+        assertEquals(
+            "local-memory-core",
+            result.selectedProviders[CapabilityId("memory.store")]?.providerId,
+        )
+    }
+
+    @Test
+    fun `continue remains an honest blocking gap`() = runTest {
+        val result = LanguageGoalCapabilityRouter(CapabilityRegistry()).route(goal(IntentType.CONTINUE))
+
+        assertFalse(result.ready)
+        assertEquals(listOf(CapabilityId("goal.resume")), result.blockingGaps.map { it.requirement.capabilityId })
+    }
+
+    @Test
     fun `unknown language intent never becomes action ready`() = runTest {
         val result = LanguageGoalCapabilityRouter(CapabilityRegistry()).route(goal(IntentType.UNKNOWN))
         assertFalse(result.ready)
