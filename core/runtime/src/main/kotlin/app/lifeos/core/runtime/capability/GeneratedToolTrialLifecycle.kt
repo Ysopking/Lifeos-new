@@ -237,27 +237,42 @@ class GeneratedToolLifecycleCoordinator(
         return GeneratedToolPromotionEvidence.create(artifact, record, trialEvidence, promotionPolicy)
     }
 
-    @Deprecated("J03 requires CandidateArtifact-backed promotion evidence")
+    @Deprecated("J08 requires readiness-bound EvolutionPromotionBridge activation")
     suspend fun promote(toolId: String): GeneratedToolRecord {
-        error("J03 CandidateArtifact-backed promotion evidence is required for $toolId")
+        error("J08 EvolutionPromotionBridge activation is required for $toolId")
     }
 
-    suspend fun promote(toolId: String, evidence: GeneratedToolPromotionEvidence): GeneratedToolRecord =
-        activationMutex.withLock {
-            val evaluation = evaluatePromotion(toolId)
-            require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
-                "Generated tool is not eligible for promotion: $evaluation"
-            }
-            val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
-            val exactTrials = trialLedger.evidence(toolId)
-            require(exactTrials.stats == evaluation.stats) { "Trial evidence changed while promotion was being evaluated" }
-            require(evidence.matches(record, exactTrials, promotionPolicy)) {
-                "J03 promotion evidence is stale or belongs to another candidate/tool/policy"
-            }
-            val active = tools.promote(toolId, evidence)
-            capabilityRegistry?.registerGenerated(active.toCapabilityDescriptor(exactTrials.stats), active, evidence)
-            active
+    /**
+     * Internal activation primitive retained for same-module lifecycle tests and J08 only. External
+     * modules cannot bypass J04-J07 by invoking J03 evidence directly anymore.
+     */
+    internal suspend fun promote(
+        toolId: String,
+        evidence: GeneratedToolPromotionEvidence,
+        activationEvidenceRef: String = evidence.id,
+        actorId: String? = null,
+    ): GeneratedToolRecord = activationMutex.withLock {
+        require(activationEvidenceRef.isNotBlank()) { "Activation evidence reference must not be blank" }
+        require(actorId == null || actorId.isNotBlank()) { "Activation actor id must not be blank" }
+        val evaluation = evaluatePromotion(toolId)
+        require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
+            "Generated tool is not eligible for promotion: $evaluation"
         }
+        val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        val exactTrials = trialLedger.evidence(toolId)
+        require(exactTrials.stats == evaluation.stats) { "Trial evidence changed while promotion was being evaluated" }
+        require(evidence.matches(record, exactTrials, promotionPolicy)) {
+            "J03 promotion evidence is stale or belongs to another candidate/tool/policy"
+        }
+        val active = tools.promote(
+            toolId = toolId,
+            evidence = evidence,
+            activationEvidenceRef = activationEvidenceRef,
+            actorId = actorId,
+        )
+        capabilityRegistry?.registerGenerated(active.toCapabilityDescriptor(exactTrials.stats), active, evidence)
+        active
+    }
 
     suspend fun rollback(request: GeneratedToolRollbackRequest): GeneratedToolRollbackResult =
         activationMutex.withLock {

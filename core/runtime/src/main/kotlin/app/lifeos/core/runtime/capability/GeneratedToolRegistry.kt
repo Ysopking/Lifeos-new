@@ -21,7 +21,7 @@ class GeneratedToolRegistry(
             "Generated tool ${record.manifest.toolId} already registered"
         }
         require(record.state != GeneratedToolState.ACTIVE) {
-            "ACTIVE generated tools must be promoted from TRIAL with J03 evidence"
+            "ACTIVE generated tools must be promoted from TRIAL with guarded evidence"
         }
         records[record.manifest.toolId] = record
         appendAuditLocked(
@@ -41,10 +41,10 @@ class GeneratedToolRegistry(
     ): GeneratedToolRecord = mutex.withLock {
         val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
         require(current.state != GeneratedToolState.ACTIVE) {
-            "ACTIVE generated tool state changes require coordinated J03 rollback"
+            "ACTIVE generated tool state changes require coordinated rollback"
         }
         require(to != GeneratedToolState.ACTIVE) {
-            "ACTIVE transition requires J03 promotion evidence"
+            "ACTIVE transition requires guarded promotion"
         }
         require(message == null || message.isNotBlank()) {
             "Generated tool transition message must not be blank"
@@ -69,11 +69,16 @@ class GeneratedToolRegistry(
         updated
     }
 
-    suspend fun promote(
+    /** Internal mutation primitive. Public activation is owned by the J08 evolution bridge. */
+    internal suspend fun promote(
         toolId: String,
         evidence: GeneratedToolPromotionEvidence,
+        activationEvidenceRef: String = evidence.id,
+        actorId: String? = null,
         message: String = "trial-promoted:${evidence.id}",
     ): GeneratedToolRecord = mutex.withLock {
+        require(activationEvidenceRef.isNotBlank()) { "Promotion requires activation evidence reference" }
+        require(actorId == null || actorId.isNotBlank()) { "Promotion actor id must not be blank" }
         require(message.isNotBlank()) { "Promotion message must not be blank" }
         val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
         require(current.state == GeneratedToolState.TRIAL) {
@@ -92,8 +97,9 @@ class GeneratedToolRegistry(
             before = current,
             after = active,
             action = GeneratedToolAuditAction.PROMOTED,
-            evidenceRef = evidence.id,
-            reason = "promotion-evidence-accepted",
+            actorId = actorId,
+            evidenceRef = activationEvidenceRef,
+            reason = "j03-promotion-evidence:${evidence.id}",
             occurredAt = now(),
         )
         active

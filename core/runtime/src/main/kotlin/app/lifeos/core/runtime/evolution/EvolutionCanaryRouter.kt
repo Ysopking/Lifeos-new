@@ -51,6 +51,7 @@ sealed interface EvolutionCanaryReserveResult {
 
     data class Exhausted(val usedInvocations: Int) : EvolutionCanaryReserveResult
     data class Stopped(val killSwitch: EvolutionCanaryKillSwitchEvidence) : EvolutionCanaryReserveResult
+    data class Sealed(val seal: EvolutionCanaryPromotionSealEvidence) : EvolutionCanaryReserveResult
 }
 
 interface EvolutionCanaryBudgetStore {
@@ -65,10 +66,11 @@ interface EvolutionCanaryBudgetStore {
     suspend fun usedInvocations(adoptionEvidenceId: String): Int
 }
 
-internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryRuntimeStore {
+internal class InMemoryEvolutionCanaryBudgetStore : EvolutionPromotionRuntimeStore {
     private val mutex = Mutex()
     private val reservations = mutableMapOf<String, LinkedHashMap<String, EvolutionCanaryReservation>>()
     private val switches = mutableMapOf<String, EvolutionCanaryKillSwitchEvidence>()
+    private val promotionSeals = mutableMapOf<String, EvolutionCanaryPromotionSealEvidence>()
 
     override suspend fun reserve(
         adoptionEvidenceId: String,
@@ -81,6 +83,9 @@ internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryRuntimeStore 
         require(maxInvocations > 0)
         switches[adoptionEvidenceId]?.let { stop ->
             return@withLock EvolutionCanaryReserveResult.Stopped(stop)
+        }
+        promotionSeals[adoptionEvidenceId]?.let { seal ->
+            return@withLock EvolutionCanaryReserveResult.Sealed(seal)
         }
         val ledger = reservations.getOrPut(adoptionEvidenceId) { linkedMapOf() }
         ledger[invocationId]?.let { existing ->
@@ -115,6 +120,44 @@ internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryRuntimeStore 
 
     override suspend fun killSwitch(adoptionEvidenceId: String): EvolutionCanaryKillSwitchEvidence? =
         mutex.withLock { switches[adoptionEvidenceId] }
+
+    override suspend fun sealForPromotion(
+        adoptionEvidenceId: String,
+        candidateToolId: String,
+        readinessEvidenceId: String,
+        expectedReservedInvocations: Int,
+        sealedAt: Instant,
+    ): EvolutionCanaryPromotionSealEvidence = mutex.withLock {
+        require(adoptionEvidenceId.isNotBlank())
+        require(candidateToolId.isNotBlank())
+        require(readinessEvidenceId.isNotBlank())
+        require(expectedReservedInvocations >= 0)
+        require(switches[adoptionEvidenceId] == null) {
+            "Stopped canary cannot be sealed for promotion"
+        }
+        val used = reservations[adoptionEvidenceId]?.size ?: 0
+        require(used == expectedReservedInvocations) {
+            "Canary reservation count changed before promotion seal: $used != $expectedReservedInvocations"
+        }
+        promotionSeals[adoptionEvidenceId]?.let { existing ->
+            require(existing.candidateToolId == candidateToolId)
+            require(existing.readinessEvidenceId == readinessEvidenceId)
+            require(existing.expectedReservedInvocations == expectedReservedInvocations)
+            return@withLock existing
+        }
+        val seal = EvolutionCanaryPromotionSealEvidence(
+            adoptionEvidenceId = adoptionEvidenceId,
+            candidateToolId = candidateToolId,
+            readinessEvidenceId = readinessEvidenceId,
+            expectedReservedInvocations = expectedReservedInvocations,
+            sealedAt = sealedAt,
+        )
+        promotionSeals[adoptionEvidenceId] = seal
+        seal
+    }
+
+    override suspend fun promotionSeal(adoptionEvidenceId: String): EvolutionCanaryPromotionSealEvidence? =
+        mutex.withLock { promotionSeals[adoptionEvidenceId] }
 }
 
 sealed interface EvolutionCanaryRoute {
@@ -144,12 +187,11 @@ data class EvolutionCanaryEvidenceBundle(
 )
 
 /**
- * J06/J07 enforce the J05 scope and persistent kill switch before a TRIAL candidate can be selected.
- * A tripped canary returns the exact validated baseline even if the live candidate is already
- * QUARANTINED; candidate replay is only required when candidate routing remains possible.
+ * J06-J08 enforce bounded candidate routing. A tripped or promotion-sealed canary always returns the
+ * exact validated baseline, even if the live candidate has already changed state.
  */
 class EvolutionCanaryRouter(
-    private val runtimeStore: EvolutionCanaryRuntimeStore,
+    private val runtimeStore: EvolutionPromotionRuntimeStore,
 ) {
     private val trustedAdoptionGate = EvolutionAdoptionGate()
 
@@ -177,6 +219,11 @@ class EvolutionCanaryRouter(
             require(stop.adoptionEvidenceId == adoptionEvidence.id)
             require(stop.candidateToolId == subject.candidateToolId)
             return EvolutionCanaryRoute.Baseline(currentBaseline, "canary-kill-switch:${stop.reason.name}")
+        }
+        runtimeStore.promotionSeal(adoptionEvidence.id)?.let { seal ->
+            require(seal.adoptionEvidenceId == adoptionEvidence.id)
+            require(seal.candidateToolId == subject.candidateToolId)
+            return EvolutionCanaryRoute.Baseline(currentBaseline, "canary-promotion-sealed")
         }
 
         val replayedAdoption = trustedAdoptionGate.evaluate(
@@ -246,6 +293,11 @@ class EvolutionCanaryRouter(
                     currentBaseline,
                     "canary-kill-switch:${reservation.killSwitch.reason.name}",
                 )
+            }
+
+            is EvolutionCanaryReserveResult.Sealed -> {
+                require(reservation.seal.candidateToolId == subject.candidateToolId)
+                EvolutionCanaryRoute.Baseline(currentBaseline, "canary-promotion-sealed")
             }
 
             is EvolutionCanaryReserveResult.Reserved ->
