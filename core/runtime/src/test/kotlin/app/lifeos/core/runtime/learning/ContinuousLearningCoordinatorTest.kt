@@ -17,9 +17,10 @@ class ContinuousLearningCoordinatorTest {
 
     @Test
     fun newCoordinatorResumesAfterPersistedWatermarkWithoutReplayingCommittedEvents() = runTest {
+        val sourceId = LearningSourceId("durable-events")
         val source = ListLearningSource(
-            LearningSourceId("durable-events"),
-            listOf(event(1), event(2), event(3)),
+            sourceId,
+            listOf(event(1, sourceId), event(2, sourceId), event(3, sourceId)),
         )
         val watermarks = InMemoryWatermarkRepository()
         val firstSink = RecordingWorkSink()
