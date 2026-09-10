@@ -13,6 +13,8 @@ import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.LanguageContextItem
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.runtime.capability.CapabilityGap
+import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import java.util.concurrent.atomic.AtomicBoolean
@@ -36,6 +38,12 @@ data class LifeOsState(
     val unreadable: Int = 0,
     val error: String? = null,
     val lastGoal: GoalFrame? = null,
+    val lastCapabilityGaps: List<CapabilityGap> = emptyList(),
+    val capabilityRequestSaving: Boolean = false,
+    val capabilityRequestStatus: String? = null,
+    val generatedToolStatus: GeneratedToolRuntimeStatus? = null,
+    val generatedToolStatusLoading: Boolean = false,
+    val generatedToolStatusError: String? = null,
     val voicePhase: VoiceCapturePhase = VoiceCapturePhase.IDLE,
     val voiceStatus: String? = null,
 )
@@ -54,7 +62,9 @@ sealed interface ImagePreviewState {
 }
 
 class LifeOsViewModel(application: Application) : AndroidViewModel(application) {
-    private val kernel = (application as LifeOsApplication).kernel
+    private val owner = application as LifeOsApplication
+    private val kernel = owner.kernel
+    private val generatedToolStatusReader = owner.generatedToolStatusReader
     private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
     private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
@@ -94,6 +104,64 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
 
     fun dismissError() {
         mutableState.update { it.copy(error = null) }
+    }
+
+    fun refreshGeneratedToolStatus() {
+        if (mutableState.value.generatedToolStatusLoading) return
+        viewModelScope.launch { loadGeneratedToolStatus() }
+    }
+
+    fun requestCapabilityGaps() {
+        val current = mutableState.value
+        val gaps = current.lastCapabilityGaps
+        if (
+            current.loading ||
+            current.loadFailed ||
+            current.capabilityRequestSaving ||
+            gaps.isEmpty()
+        ) return
+
+        mutableState.update {
+            it.copy(
+                capabilityRequestSaving = true,
+                capabilityRequestStatus = null,
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val results = gaps.map { gap ->
+                    kernel.persistAndIngest(
+                        Photon(
+                            content = gap.toToolRequestContent(),
+                            provenance = Provenance("local-capability-gap-request", "user"),
+                            tags = setOf("capability-gap", "tool-request", "user-approved"),
+                        )
+                    )
+                }
+                val allQueued = results.all { it.processingQueued }
+                mutableState.update {
+                    it.copy(
+                        capabilityRequestStatus = if (allQueued) {
+                            "${gaps.size} Tool-Anforderung(en) wurden lokal gespeichert und dauerhaft zur Verarbeitung eingereiht."
+                        } else {
+                            "Die Tool-Anforderung wurde lokal gespeichert, konnte aber nicht vollständig zur Verarbeitung eingereiht werden."
+                        },
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                mutableState.update {
+                    it.copy(capabilityRequestStatus = "Tool-Anforderung konnte nicht gespeichert werden.")
+                }
+            } finally {
+                mutableState.update { it.copy(capabilityRequestSaving = false) }
+            }
+        }
+    }
+
+    fun dismissCapabilityRequestStatus() {
+        mutableState.update { it.copy(capabilityRequestStatus = null) }
     }
 
     fun voicePermissionDenied() {
@@ -162,6 +230,8 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                     it.copy(
                         draft = "",
                         lastGoal = result.understanding?.goal ?: it.lastGoal,
+                        lastCapabilityGaps = result.routing?.blockingGaps.orEmpty(),
+                        capabilityRequestStatus = null,
                         error = when {
                             result.languageFailure != null ->
                                 "Gedanke wurde gespeichert, aber das lokale Sprachverständnis ist fehlgeschlagen."
@@ -230,6 +300,37 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         } catch (_: Exception) {
             ImagePreviewState.Failed("Bild konnte nicht aus dem lokalen Asset-Vault geladen werden.")
         }
+    }
+
+    private suspend fun loadGeneratedToolStatus() {
+        mutableState.update { it.copy(generatedToolStatusLoading = true, generatedToolStatusError = null) }
+        try {
+            val status = withContext(Dispatchers.IO) { generatedToolStatusReader.snapshot() }
+            mutableState.update {
+                it.copy(
+                    generatedToolStatus = status,
+                    generatedToolStatusError = null,
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            mutableState.update {
+                it.copy(generatedToolStatusError = "Generated-Tool-Status konnte nicht gelesen werden.")
+            }
+        } finally {
+            mutableState.update { it.copy(generatedToolStatusLoading = false) }
+        }
+    }
+
+    private fun CapabilityGap.toToolRequestContent(): String = buildString {
+        appendLine("LIFEOS_CAPABILITY_GAP_REQUEST_V1")
+        append("capability=").appendLine(requirement.capabilityId.value)
+        append("severity=").appendLine(requirement.severity.name)
+        append("gapType=").appendLine(type.name)
+        append("requiredInputs=").appendLine(requirement.requiredInputs.sorted().joinToString(","))
+        append("requiredOutputs=").appendLine(requirement.requiredOutputs.sorted().joinToString(","))
+        append("candidateProviders=").append(candidateProviderIds.sorted().joinToString(","))
     }
 
     private fun applyVoiceResult(state: LifeOsState, result: LocalVoiceCaptureResult): LifeOsState = when (result) {
@@ -304,6 +405,12 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                             else -> current.error
                         },
                     )
+                }
+                if (
+                    bootstrap.status == KernelBootstrapStatus.READY ||
+                    bootstrap.status == KernelBootstrapStatus.DEGRADED
+                ) {
+                    loadGeneratedToolStatus()
                 }
             }
         }
