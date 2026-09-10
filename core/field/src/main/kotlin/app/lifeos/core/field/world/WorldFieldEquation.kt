@@ -1,7 +1,6 @@
 package app.lifeos.core.field.world
 
 import app.lifeos.core.field.StableFieldIds
-import kotlin.math.abs
 
 data class WorldTransferCoefficient(
     val id: WorldCoefficientId,
@@ -244,8 +243,6 @@ class WorldFieldEquation(
                 "edge:${edge.id.value}:source-dimension-mismatch"
             coefficient.targetDimension != edge.targetDimension ->
                 "edge:${edge.id.value}:target-dimension-mismatch"
-            abs(coefficient.multiplier) == 0.0 && edge.strength > 0.0 ->
-                "edge:${edge.id.value}:zero-transfer-coefficient"
             else -> null
         }
     }.sorted()
