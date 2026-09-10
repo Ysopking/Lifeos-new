@@ -73,9 +73,17 @@ fun interface SourcePatchPlanner {
 }
 
 class BuildPathPolicy(
-    private val protectedPrefixes: Set<String> = DEFAULT_PROTECTED_PREFIXES,
-    private val protectedExactPaths: Set<String> = DEFAULT_PROTECTED_EXACT_PATHS,
+    additionalProtectedPrefixes: Set<String> = emptySet(),
+    additionalProtectedExactPaths: Set<String> = emptySet(),
 ) {
+    private val protectedPrefixes = MANDATORY_PROTECTED_PREFIXES + additionalProtectedPrefixes
+    private val protectedExactPaths = MANDATORY_PROTECTED_EXACT_PATHS + additionalProtectedExactPaths
+
+    init {
+        require(additionalProtectedPrefixes.none { it.isBlank() })
+        require(additionalProtectedExactPaths.none { it.isBlank() })
+    }
+
     fun validate(
         spec: BuildSpec,
         design: BuildDesignSpec,
@@ -112,19 +120,20 @@ class BuildPathPolicy(
     }
 
     companion object {
-        val DEFAULT_PROTECTED_PREFIXES = setOf(
+        val MANDATORY_PROTECTED_PREFIXES = setOf(
             ".github/",
             ".git/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/tasks/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/health/",
             "core/data/src/main/kotlin/app/lifeos/core/data/health/",
         )
-        val DEFAULT_PROTECTED_EXACT_PATHS = setOf(
+        val MANDATORY_PROTECTED_EXACT_PATHS = setOf(
             "gradle.properties",
             "settings.gradle.kts",
             "app/src/main/AndroidManifest.xml",
         )
         private val PROTECTED_NAME_TOKENS = setOf(
+            "encrypted",
             "keystore",
             "signing",
             "cryptoroot",
