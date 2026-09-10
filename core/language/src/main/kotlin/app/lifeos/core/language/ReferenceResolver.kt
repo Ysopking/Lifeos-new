@@ -6,15 +6,36 @@ import java.time.Duration
 class ReferenceExpressionExtractor {
     private val explicitIdRegex = Regex("\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b")
 
+    private val imageNouns = setOf(
+        "bild", "bilder", "foto", "fotos", "image", "images", "photo", "photos", "picture", "pictures"
+    )
+    private val fileNouns = setOf(
+        "datei", "dateien", "file", "files", "dokument", "dokumente", "document", "documents"
+    )
+    private val apkNouns = setOf("apk", "apks", "paket", "package")
+    private val moduleNouns = setOf(
+        "modul", "module", "modules", "komponente", "komponenten", "component", "components"
+    )
+    private val goalNouns = setOf(
+        "ziel", "ziele", "goal", "goals", "plan", "aufgabe", "aufgaben", "task", "tasks"
+    )
+    private val preferredNouns = mapOf(
+        "image" to imageNouns,
+        "file" to fileNouns,
+        "apk" to apkNouns,
+        "module" to moduleNouns,
+        "goal" to goalNouns,
+    )
+
     fun extract(utterance: NormalizedUtterance, topIntent: IntentType): List<ReferenceExpression> {
         val words = utterance.tokens.filter { it.kind == TokenKind.WORD }.map { it.normalized }
         val wordSet = words.toSet()
         val preferred = buildSet {
-            if (wordSet.any { it in setOf("bild", "bilder", "foto", "fotos", "image", "images", "photo", "photos", "picture", "pictures") }) add("image")
-            if (wordSet.any { it in setOf("datei", "dateien", "file", "files", "dokument", "dokumente", "document", "documents") }) add("file")
-            if (wordSet.any { it in setOf("apk", "apks", "paket", "package") }) add("apk")
-            if (wordSet.any { it in setOf("modul", "module", "modules", "komponente", "komponenten", "component", "components") }) add("module")
-            if (wordSet.any { it in setOf("ziel", "ziele", "goal", "goals", "plan", "aufgabe", "aufgaben", "task", "tasks") }) add("goal")
+            if (wordSet.any { it in imageNouns }) add("image")
+            if (wordSet.any { it in fileNouns }) add("file")
+            if (wordSet.any { it in apkNouns }) add("apk")
+            if (wordSet.any { it in moduleNouns }) add("module")
+            if (wordSet.any { it in goalNouns }) add("goal")
         }
         val result = mutableListOf<ReferenceExpression>()
 
@@ -30,22 +51,36 @@ class ReferenceExpressionExtractor {
         if (wordSet.any { it in setOf("letzte", "letzten", "letztes", "letzter", "last") }) {
             result += ReferenceExpression(ReferenceKind.LAST_RESULT, utterance.original, preferred, 0.90)
         }
-        if (
-            preferred.isNotEmpty() &&
-            wordSet.any { it in setOf("andere", "anderen", "anderes", "anderer", "other", "another") }
-        ) {
+
+        val hasOther = hasNearbyPreferredNoun(
+            words = words,
+            preferredKinds = preferred,
+            markers = setOf("andere", "anderen", "anderes", "anderer", "other", "another"),
+            maxGap = 1,
+        )
+        if (hasOther) {
             result += ReferenceExpression(ReferenceKind.OTHER, utterance.original, preferred, 0.94)
         } else {
-            if (wordSet.any { it in setOf("dieses", "diese", "diesen", "dieser", "this", "these") } && preferred.isNotEmpty()) {
+            if (
+                hasNearbyPreferredNoun(
+                    words = words,
+                    preferredKinds = preferred,
+                    markers = setOf("dieses", "diese", "diesen", "dieser", "this", "these"),
+                    maxGap = 2,
+                )
+            ) {
                 result += ReferenceExpression(ReferenceKind.THIS, utterance.original, preferred, 0.88)
             }
             if (
-                wordSet.any {
-                    it in setOf(
+                hasNearbyPreferredNoun(
+                    words = words,
+                    preferredKinds = preferred,
+                    markers = setOf(
                         "das", "die", "der", "den", "dem",
                         "jene", "jener", "jenes", "that", "those", "the",
-                    )
-                } && preferred.isNotEmpty()
+                    ),
+                    maxGap = 2,
+                )
             ) {
                 result += ReferenceExpression(ReferenceKind.THAT, utterance.original, preferred, 0.82)
             }
@@ -54,6 +89,23 @@ class ReferenceExpressionExtractor {
             result += ReferenceExpression(ReferenceKind.PREVIOUS, utterance.original, setOf("goal"), 0.98)
         }
         return result.distinctBy { Triple(it.kind, it.rawText, it.preferredKinds) }
+    }
+
+    private fun hasNearbyPreferredNoun(
+        words: List<String>,
+        preferredKinds: Set<String>,
+        markers: Set<String>,
+        maxGap: Int,
+    ): Boolean {
+        if (preferredKinds.isEmpty()) return false
+        return words.indices.any { markerIndex ->
+            if (words[markerIndex] !in markers) return@any false
+            val end = minOf(words.lastIndex, markerIndex + maxGap + 1)
+            if (markerIndex + 1 > end) return@any false
+            (markerIndex + 1..end).any { nounIndex ->
+                preferredKinds.any { kind -> words[nounIndex] in preferredNouns[kind].orEmpty() }
+            }
+        }
     }
 }
 
