@@ -1,6 +1,5 @@
 package app.lifeos.core.runtime.context
 
-import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.language.LanguageContextItem
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
@@ -41,6 +40,7 @@ data class ContextEntry(
     val scopeId: String,
     val targetPhotonId: PhotonId,
     val targetRevision: Long,
+    val targetFingerprint: String,
     val kind: String,
     val tags: Set<String>,
     val contentTerms: Set<String>,
@@ -56,6 +56,7 @@ data class ContextEntry(
         require(recordRevision > 0) { "Context record revision must be positive" }
         require(scopeId.isNotBlank()) { "Context scope id must not be blank" }
         require(targetRevision > 0) { "Context target revision must be positive" }
+        require(targetFingerprint.isNotBlank()) { "Context target fingerprint must not be blank" }
         require(kind.isNotBlank()) { "Context kind must not be blank" }
         require(tags.none { it.isBlank() }) { "Context tags must not be blank" }
         require(contentTerms.none { it.isBlank() }) { "Context content terms must not be blank" }
@@ -88,6 +89,19 @@ data class ContextLoadReport(
 
     val complete: Boolean
         get() = unreadableFiles.isEmpty()
+}
+
+sealed interface ContextWriteResult {
+    data class Applied(val entry: ContextEntry) : ContextWriteResult
+    data class Unchanged(val entry: ContextEntry) : ContextWriteResult
+    data class Stale(
+        val entry: ContextEntry,
+        val rejectedTargetRevision: Long,
+    ) : ContextWriteResult
+    data class Conflict(
+        val entry: ContextEntry,
+        val rejectedTargetFingerprint: String,
+    ) : ContextWriteResult
 }
 
 data class ContextResolutionCandidate(
@@ -130,7 +144,6 @@ internal val ContextEntryOrdering: Comparator<ContextEntry> =
     compareBy<ContextEntry> { it.scope.name }
         .thenBy { it.scopeId }
         .thenBy { it.targetPhotonId.value }
-        .thenBy { it.kind }
         .thenByDescending { it.recordRevision }
 
 internal val ContextResolutionOrdering: Comparator<ContextResolutionCandidate> =
@@ -176,16 +189,35 @@ internal object ContextRecordCodec {
     const val ID_PREFIX = "ctx_"
     private const val FORMAT = "context/v1"
 
-    fun recordId(scope: ContextScope, scopeId: String, target: PhotonId, kind: String): PhotonId =
+    fun recordId(scope: ContextScope, scopeId: String, target: PhotonId): PhotonId =
         PhotonId(
             ID_PREFIX + ContextFingerprint.exact(
                 FORMAT,
                 scope.name,
                 scopeId,
                 target.value,
-                kind,
             )
         )
+
+    fun targetFingerprint(target: Photon): String = ContextFingerprint.exact(
+        "context-target/v1",
+        target.id.value,
+        target.revision.toString(),
+        target.content,
+        target.mimeType,
+        target.phase.name,
+        target.semanticMass.toString(),
+        target.energy.toString(),
+        target.confidence.toString(),
+        target.provenance.source,
+        target.provenance.actor,
+        target.provenance.createdAt.toString(),
+        *target.provenance.parentIds.map { "parent:${it.value}" }.sorted().toTypedArray(),
+        *target.tags.map { "tag:$it" }.sorted().toTypedArray(),
+        *target.relations.map {
+            "relation:${it.target.value}:${it.type.name}:${it.weight}"
+        }.sorted().toTypedArray(),
+    )
 
     fun encode(
         previous: Photon?,
@@ -204,17 +236,19 @@ internal object ContextRecordCodec {
         require(kind.isNotBlank()) { "Context kind must not be blank" }
         require(confidence in 0.0..1.0) { "Context confidence must be in 0..1" }
         require(actor.isNotBlank()) { "Context actor must not be blank" }
-        val id = recordId(scope, scopeId, target.id, kind)
+        val id = recordId(scope, scopeId, target.id)
         require(previous == null || previous.id == id) { "Context record identity mismatch" }
         val revision = (previous?.revision ?: 0L) + 1L
         val canonicalTags = tags.filter { it.isNotBlank() }.toSortedSet()
         val canonicalTerms = contentTerms.filter { it.isNotBlank() }.toSortedSet()
+        val fingerprint = targetFingerprint(target)
         val content = buildString {
             append(FORMAT).append('\n')
             append("scope=").append(scope.name).append('\n')
             append("scopeId=").append(enc(scopeId)).append('\n')
             append("targetId=").append(enc(target.id.value)).append('\n')
             append("targetRevision=").append(target.revision).append('\n')
+            append("targetFingerprint=").append(fingerprint).append('\n')
             append("kind=").append(enc(kind)).append('\n')
             append("targetCreatedAt=").append(target.provenance.createdAt).append('\n')
             append("active=").append(active).append('\n')
@@ -268,11 +302,12 @@ internal object ContextRecordCodec {
         val scopeId = dec(required(scalar, "scopeId"))
         val targetId = PhotonId(dec(required(scalar, "targetId")))
         val targetRevision = required(scalar, "targetRevision").toLong()
+        val targetFingerprint = required(scalar, "targetFingerprint")
         val kind = dec(required(scalar, "kind"))
         val targetCreatedAt = Instant.parse(required(scalar, "targetCreatedAt"))
         val active = required(scalar, "active").toBooleanStrict()
         val confidence = required(scalar, "confidence").toDouble()
-        require(photon.id == recordId(scope, scopeId, targetId, kind)) {
+        require(photon.id == recordId(scope, scopeId, targetId)) {
             "Context record content does not match photon identity"
         }
         require(photon.phase == if (active) PhotonPhase.ACTIVE else PhotonPhase.ARCHIVED) {
@@ -288,6 +323,7 @@ internal object ContextRecordCodec {
             scopeId = scopeId,
             targetPhotonId = targetId,
             targetRevision = targetRevision,
+            targetFingerprint = targetFingerprint,
             kind = kind,
             tags = tags.toSortedSet(),
             contentTerms = terms.toSortedSet(),
