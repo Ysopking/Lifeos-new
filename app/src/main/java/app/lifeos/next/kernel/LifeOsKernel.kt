@@ -23,6 +23,7 @@ import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
+import app.lifeos.core.runtime.capability.PrivateGeneratedToolTrialSuite
 import app.lifeos.core.runtime.cognition.CognitiveOutcomeJournal
 import app.lifeos.core.runtime.cognition.CognitivePriority
 import app.lifeos.core.runtime.cognition.CognitiveTriggerSink
@@ -105,6 +106,10 @@ class LifeOsKernel internal constructor(
             Unit
         },
         load = photonStore::load,
+        trialSuite = PrivateGeneratedToolTrialSuite(
+            runner = privateGeneratedToolRuntime.trialRunner,
+            artifacts = privateGeneratedToolRuntime.artifactRepository,
+        ),
     )
 
     private val localImageTransformExecutor = LocalImageTransformActionExecutor(
