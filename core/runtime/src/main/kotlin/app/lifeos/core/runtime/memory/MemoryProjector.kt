@@ -161,7 +161,7 @@ class MemoryProjector {
             observedAt = provenance.createdAt,
         )
         return MemoryItem.create(
-            key = memoryKey(this, kind, semanticKey),
+            key = memoryKey(this, kind, semanticKind, semanticKey),
             kind = kind,
             semanticKind = semanticKind,
             semanticKey = semanticKey,
@@ -177,11 +177,13 @@ class MemoryProjector {
     private fun memoryKey(
         node: ThoughtNode,
         kind: MemoryKind,
+        semanticKind: SemanticMemoryKind?,
         semanticKey: String,
     ): MemoryKey {
         val parts = mutableListOf(
-            "memory-key/v1",
+            "memory-key/v2",
             kind.name,
+            semanticKind?.name.orEmpty(),
             node.fieldDomainId.value,
             semanticKey,
         )
