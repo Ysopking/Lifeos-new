@@ -139,14 +139,11 @@ data class EvolutionCanaryEvidenceBundle(
  *
  * Before every candidate route, the router deterministically replays the trusted default J05 gate
  * from the original J04 evidence and requires an exact content-id match with the supplied adoption
- * evidence. Canary time comes from the router-owned clock, never from caller input.
+ * evidence. Canary time is read directly from the system clock and is never caller-controlled.
  */
-class EvolutionCanaryRouter private constructor(
+class EvolutionCanaryRouter(
     private val budgetStore: EvolutionCanaryBudgetStore,
-    private val clock: () -> Instant,
 ) {
-    constructor(budgetStore: EvolutionCanaryBudgetStore) : this(budgetStore, Instant::now)
-
     private val trustedAdoptionGate = EvolutionAdoptionGate()
 
     suspend fun route(
@@ -202,7 +199,7 @@ class EvolutionCanaryRouter private constructor(
             return EvolutionCanaryRoute.Baseline(currentBaseline, "task-outside-canary-scope")
         }
 
-        val routeTime = clock()
+        val routeTime = Instant.now()
         if (routeTime.isBefore(adoptionRequest.occurredAt)) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "canary-not-started")
         }
@@ -246,12 +243,5 @@ class EvolutionCanaryRouter private constructor(
             assignmentKey,
         )
         return (fingerprint.take(8).toLong(16) % 1000L).toInt()
-    }
-
-    companion object {
-        internal fun forTest(
-            budgetStore: EvolutionCanaryBudgetStore,
-            clock: () -> Instant,
-        ): EvolutionCanaryRouter = EvolutionCanaryRouter(budgetStore, clock)
     }
 }
