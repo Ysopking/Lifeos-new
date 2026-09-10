@@ -3,14 +3,113 @@ package app.lifeos.core.runtime.capability
 import app.lifeos.core.field.StableFieldIds
 
 /**
+ * Persisted receipt for one already accepted J03 promotion. It preserves every content-addressed
+ * J03 field but cannot be passed to the live promotion primitive, so rehydration never manufactures
+ * fresh promotion authority from disk.
+ */
+data class GeneratedToolPromotionReceipt(
+    val evidenceId: String,
+    val toolId: String,
+    val candidateArtifactId: String,
+    val candidateId: String,
+    val verificationId: String,
+    val provenanceId: String,
+    val recordFingerprint: String,
+    val trialEvidenceId: String,
+    val promotionPolicyFingerprint: String,
+    val apkSha256: String,
+    val capabilityChangeFingerprint: String,
+    val permissionDeltaFingerprint: String,
+    val reviewerEvidenceFingerprints: List<String>,
+    val promotionActorEvidenceFingerprints: List<String>,
+) {
+    init {
+        require(evidenceId.isNotBlank())
+        require(toolId.isNotBlank())
+        require(candidateArtifactId.isNotBlank())
+        require(candidateId.isNotBlank() && verificationId.isNotBlank() && provenanceId.isNotBlank())
+        require(recordFingerprint.isNotBlank() && trialEvidenceId.isNotBlank())
+        require(promotionPolicyFingerprint.isNotBlank())
+        require(apkSha256.matches(Regex("[0-9a-fA-F]{64}")))
+        require(capabilityChangeFingerprint.isNotBlank())
+        require(permissionDeltaFingerprint.isNotBlank())
+        require(reviewerEvidenceFingerprints.isNotEmpty())
+        require(promotionActorEvidenceFingerprints.isNotEmpty())
+        require(reviewerEvidenceFingerprints.none { it.isBlank() })
+        require(promotionActorEvidenceFingerprints.none { it.isBlank() })
+        require(evidenceId == computedEvidenceId()) {
+            "Persisted promotion receipt does not reproduce its J03 evidence id"
+        }
+    }
+
+    val id: String = StableFieldIds.fingerprint(
+        "generated-tool-promotion-receipt/v1",
+        evidenceId,
+        toolId,
+        candidateArtifactId,
+        candidateId,
+        verificationId,
+        provenanceId,
+        recordFingerprint,
+        trialEvidenceId,
+        promotionPolicyFingerprint,
+        apkSha256.lowercase(),
+        capabilityChangeFingerprint,
+        permissionDeltaFingerprint,
+        *reviewerEvidenceFingerprints.sorted().map { "reviewer:$it" }.toTypedArray(),
+        *promotionActorEvidenceFingerprints.sorted().map { "promotion:$it" }.toTypedArray(),
+    )
+
+    /** A persisted receipt is evidence only and is never accepted by the live promotion method. */
+    val activationAllowed: Boolean = false
+
+    private fun computedEvidenceId(): String = StableFieldIds.fingerprint(
+        "generated-tool-promotion-evidence/v1",
+        toolId,
+        candidateArtifactId,
+        candidateId,
+        verificationId,
+        provenanceId,
+        recordFingerprint,
+        trialEvidenceId,
+        promotionPolicyFingerprint,
+        apkSha256.lowercase(),
+        capabilityChangeFingerprint,
+        permissionDeltaFingerprint,
+        *reviewerEvidenceFingerprints.sorted().map { "reviewer:$it" }.toTypedArray(),
+        *promotionActorEvidenceFingerprints.sorted().map { "promotion:$it" }.toTypedArray(),
+    )
+
+    companion object {
+        fun from(evidence: GeneratedToolPromotionEvidence): GeneratedToolPromotionReceipt =
+            GeneratedToolPromotionReceipt(
+                evidenceId = evidence.id,
+                toolId = evidence.toolId,
+                candidateArtifactId = evidence.candidateArtifactId,
+                candidateId = evidence.candidateId,
+                verificationId = evidence.verificationId,
+                provenanceId = evidence.provenanceId,
+                recordFingerprint = evidence.recordFingerprint,
+                trialEvidenceId = evidence.trialEvidenceId,
+                promotionPolicyFingerprint = evidence.promotionPolicyFingerprint,
+                apkSha256 = evidence.apkSha256,
+                capabilityChangeFingerprint = evidence.capabilityChangeFingerprint,
+                permissionDeltaFingerprint = evidence.permissionDeltaFingerprint,
+                reviewerEvidenceFingerprints = evidence.reviewerEvidenceFingerprints,
+                promotionActorEvidenceFingerprints = evidence.promotionActorEvidenceFingerprints,
+            )
+    }
+}
+
+/**
  * J10 durable lifecycle state. Record, audit chain, trial evidence and accepted J03 promotion
- * evidence are restored as one verified unit; none of these fields grants activation authority.
+ * receipt are restored as one verified unit; none of these fields grants activation authority.
  */
 data class GeneratedToolPersistentState(
     val record: GeneratedToolRecord,
     val auditEntries: List<GeneratedToolAuditEntry>,
     val trialEvidence: GeneratedToolTrialEvidence,
-    val promotionEvidence: GeneratedToolPromotionEvidence? = null,
+    val promotionReceipt: GeneratedToolPromotionReceipt? = null,
 ) {
     init {
         val toolId = record.manifest.toolId
@@ -21,40 +120,40 @@ data class GeneratedToolPersistentState(
 
         val promotionId = record.promotionEvidenceId
         if (promotionId == null) {
-            require(promotionEvidence == null) {
-                "Persisted promotion evidence requires a record promotion evidence id"
+            require(promotionReceipt == null) {
+                "Persisted promotion receipt requires a record promotion evidence id"
             }
         } else {
-            val evidence = requireNotNull(promotionEvidence) {
-                "Persisted promoted lifecycle state requires full J03 promotion evidence"
+            val receipt = requireNotNull(promotionReceipt) {
+                "Persisted promoted lifecycle state requires the full J03 promotion receipt"
             }
-            require(evidence.id == promotionId) {
-                "Persisted promotion evidence id does not match generated tool record"
+            require(receipt.evidenceId == promotionId) {
+                "Persisted promotion receipt id does not match generated tool record"
             }
-            require(evidence.toolId == toolId) {
-                "Persisted promotion evidence belongs to another generated tool"
+            require(receipt.toolId == toolId) {
+                "Persisted promotion receipt belongs to another generated tool"
             }
-            require(evidence.trialEvidenceId == trialEvidence.id) {
-                "Persisted promotion evidence does not match exact trial evidence"
+            require(receipt.trialEvidenceId == trialEvidence.id) {
+                "Persisted promotion receipt does not match exact trial evidence"
             }
             val originalTrialRecord = record.copy(
                 state = GeneratedToolState.TRIAL,
                 promotionEvidenceId = null,
             )
-            require(evidence.recordFingerprint == originalTrialRecord.promotionRecordFingerprint()) {
-                "Persisted promotion evidence does not bind the original TRIAL record"
+            require(receipt.recordFingerprint == originalTrialRecord.promotionRecordFingerprint()) {
+                "Persisted promotion receipt does not bind the original TRIAL record"
             }
             val lastPromotion = auditEntries.lastOrNull { it.action == GeneratedToolAuditAction.PROMOTED }
             require(lastPromotion != null) {
-                "Persisted promotion evidence requires a PROMOTED audit entry"
+                "Persisted promotion receipt requires a PROMOTED audit entry"
             }
-            require(lastPromotion.reason == "j03-promotion-evidence:${evidence.id}") {
-                "Persisted promotion evidence does not match the last promotion audit"
+            require(lastPromotion.reason == "j03-promotion-evidence:${receipt.evidenceId}") {
+                "Persisted promotion receipt does not match the last promotion audit"
             }
         }
 
         if (record.state == GeneratedToolState.ACTIVE) {
-            require(promotionEvidence != null) { "ACTIVE restore requires full promotion evidence" }
+            require(promotionReceipt != null) { "ACTIVE restore requires a full promotion receipt" }
             require(auditEntries.last().action == GeneratedToolAuditAction.PROMOTED) {
                 "ACTIVE restore must end at the promotion audit entry"
             }
@@ -69,7 +168,7 @@ data class GeneratedToolPersistentState(
         record.auditFingerprint(),
         auditEntries.last().id,
         trialEvidence.id,
-        promotionEvidence?.id.orEmpty(),
+        promotionReceipt?.id.orEmpty(),
     )
 }
 
@@ -104,8 +203,8 @@ data class GeneratedToolRehydrationReport(
 
 /**
  * Restores an empty in-process generated-tool runtime from durable, already integrity-checked state.
- * ACTIVE providers are re-registered only with exact persisted J03 evidence and the same promotion
- * policy; all validation is completed before the first in-memory mutation.
+ * ACTIVE providers are re-registered only with an exact non-activating J03 receipt and the same
+ * promotion policy; all validation is completed before the first in-memory mutation.
  */
 class GeneratedToolStateRehydrator(
     private val repository: GeneratedToolStateRepository,
@@ -137,10 +236,11 @@ class GeneratedToolStateRehydrator(
         // Preflight every state before mutating any in-process registry.
         states.forEach { state ->
             GeneratedToolStateIntegrity.requireValidAudit(state.record, state.auditEntries)
-            val evidence = state.promotionEvidence
-            if (evidence != null) {
-                require(evidence.promotionPolicyFingerprint == promotionPolicy.fingerprint()) {
-                    "Persisted promotion evidence uses another promotion policy"
+            val receipt = state.promotionReceipt
+            if (receipt != null) {
+                require(!receipt.activationAllowed)
+                require(receipt.promotionPolicyFingerprint == promotionPolicy.fingerprint()) {
+                    "Persisted promotion receipt uses another promotion policy"
                 }
                 requirePromotionEligible(state.record, state.trialEvidence.stats)
             }
@@ -153,11 +253,11 @@ class GeneratedToolStateRehydrator(
 
         var activeProviders = 0
         states.filter { it.record.state == GeneratedToolState.ACTIVE }.forEach { state ->
-            val evidence = requireNotNull(state.promotionEvidence)
-            capabilityRegistry?.registerGenerated(
+            val receipt = requireNotNull(state.promotionReceipt)
+            capabilityRegistry?.registerGeneratedRestored(
                 descriptor = state.toCapabilityDescriptor(),
                 activeRecord = state.record,
-                evidence = evidence,
+                receipt = receipt,
             )
             if (capabilityRegistry != null) activeProviders += 1
         }
@@ -171,19 +271,19 @@ class GeneratedToolStateRehydrator(
 
     private fun requirePromotionEligible(record: GeneratedToolRecord, stats: GeneratedToolTrialStats) {
         require(stats.trials >= promotionPolicy.minimumTrials) {
-            "Persisted promotion evidence no longer satisfies minimum trials"
+            "Persisted promotion receipt no longer satisfies minimum trials"
         }
         require(stats.successRate >= promotionPolicy.minimumSuccessRate) {
-            "Persisted promotion evidence no longer satisfies success rate"
+            "Persisted promotion receipt no longer satisfies success rate"
         }
         require(stats.expectedOutputRate >= promotionPolicy.minimumExpectedOutputRate) {
-            "Persisted promotion evidence no longer satisfies expected-output rate"
+            "Persisted promotion receipt no longer satisfies expected-output rate"
         }
         require(stats.safetyViolations == 0) {
-            "Persisted promotion evidence contains safety violations"
+            "Persisted promotion receipt contains safety violations"
         }
         require(record.verificationConfidence >= promotionPolicy.minimumVerificationConfidence) {
-            "Persisted promotion evidence no longer satisfies verification confidence"
+            "Persisted promotion receipt no longer satisfies verification confidence"
         }
     }
 
