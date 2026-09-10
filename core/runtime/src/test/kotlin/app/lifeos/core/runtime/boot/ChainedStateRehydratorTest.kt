@@ -2,7 +2,7 @@ package app.lifeos.core.runtime.boot
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlinx.coroutines.test.runTest
 
 class ChainedStateRehydratorTest {
@@ -46,7 +46,13 @@ class ChainedStateRehydratorTest {
             ),
         )
 
-        val failure = assertFailsWith<IllegalStateException> { rehydrator.rehydrate() }
+        val failure = try {
+            rehydrator.rehydrate()
+            null
+        } catch (error: IllegalStateException) {
+            error
+        }
+        assertNotNull(failure)
         assertEquals("corrupt generated-tool vault", failure.message)
         assertEquals(listOf("primary", "generated-tools"), calls)
     }
@@ -64,7 +70,14 @@ class ChainedStateRehydratorTest {
             additionalSteps = listOf(RuntimeStateRehydrationStep { calls += "generated-tools" }),
         )
 
-        assertFailsWith<IllegalStateException> { rehydrator.rehydrate() }
+        val failure = try {
+            rehydrator.rehydrate()
+            null
+        } catch (error: IllegalStateException) {
+            error
+        }
+        assertNotNull(failure)
+        assertEquals("runtime restore failed", failure.message)
         assertEquals(listOf("primary"), calls)
     }
 }
