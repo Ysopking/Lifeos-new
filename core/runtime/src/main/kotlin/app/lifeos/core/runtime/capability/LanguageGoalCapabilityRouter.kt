@@ -56,28 +56,90 @@ class LanguageGoalCapabilityMapper {
     )
 }
 
+/**
+ * Routes language goals against the mutable runtime registry plus a very small immutable set of
+ * built-in local executors. These descriptors are declarations of code that ships in the APK; they
+ * are not generated-tool registrations and do not grant any mutation or promotion authority.
+ */
 class LanguageGoalCapabilityRouter(
     private val registry: CapabilityRegistry,
     private val mapper: LanguageGoalCapabilityMapper = LanguageGoalCapabilityMapper(),
     private val gapDetector: CapabilityGapDetector = CapabilityGapDetector(registry),
+    private val builtInProviders: List<CapabilityDescriptor> = LOCAL_KNOWLEDGE_PROVIDERS,
 ) {
+    init {
+        require(builtInProviders.none { it.providerType == ProviderType.GENERATED_TOOL })
+        require(builtInProviders.map { it.capabilityId to it.providerId }.distinct().size == builtInProviders.size)
+    }
+
     suspend fun route(goal: GoalFrame): GoalCapabilityResolution {
         val plan = mapper.plan(goal)
         val selected = linkedMapOf<CapabilityId, CapabilityDescriptor>()
         val gaps = mutableListOf<CapabilityGap>()
         for (requirement in plan.requirements) {
+            val builtIn = builtInProviders
+                .asSequence()
+                .filter { it.capabilityId == requirement.capabilityId }
+                .filter { it.state == ProviderState.ACTIVE || it.state == ProviderState.DEGRADED }
+                .filter { provider -> providerSatisfies(requirement, provider) }
+                .sortedWith(
+                    compareByDescending<CapabilityDescriptor> { it.reliability }
+                        .thenBy { it.cost }
+                        .thenBy { it.providerId }
+                )
+                .firstOrNull()
+            if (builtIn != null) {
+                selected[requirement.capabilityId] = builtIn
+                continue
+            }
+
             val gap = gapDetector.detect(requirement)
             if (gap != null) {
                 gaps += gap
                 continue
             }
             registry.providersFor(requirement.capabilityId)
-                .firstOrNull { provider ->
-                    requirement.requiredInputs.containsAll(provider.contract.requiredInputs) &&
-                        provider.contract.outputs.containsAll(requirement.requiredOutputs)
-                }
+                .firstOrNull { provider -> providerSatisfies(requirement, provider) }
                 ?.let { selected[requirement.capabilityId] = it }
         }
         return GoalCapabilityResolution(plan, selected, gaps)
+    }
+
+    private fun providerSatisfies(
+        requirement: CapabilityRequirement,
+        provider: CapabilityDescriptor,
+    ): Boolean =
+        requirement.requiredInputs.containsAll(provider.contract.requiredInputs) &&
+            provider.contract.outputs.containsAll(requirement.requiredOutputs)
+
+    companion object {
+        val LOCAL_KNOWLEDGE_PROVIDERS: List<CapabilityDescriptor> = listOf(
+            CapabilityDescriptor(
+                capabilityId = CapabilityId("knowledge.resolve"),
+                providerId = "local-knowledge-core",
+                providerType = ProviderType.MODULE,
+                contract = CapabilityContract(
+                    requiredInputs = setOf("goal-photon"),
+                    outputs = setOf("answer-photon"),
+                ),
+                state = ProviderState.ACTIVE,
+                trustLevel = TrustLevel.SYSTEM,
+                reliability = 1.0,
+                cost = 0.0,
+            ),
+            CapabilityDescriptor(
+                capabilityId = CapabilityId("memory.store"),
+                providerId = "local-memory-core",
+                providerType = ProviderType.MODULE,
+                contract = CapabilityContract(
+                    requiredInputs = setOf("goal-photon"),
+                    outputs = setOf("memory-photon"),
+                ),
+                state = ProviderState.ACTIVE,
+                trustLevel = TrustLevel.SYSTEM,
+                reliability = 1.0,
+                cost = 0.0,
+            ),
+        )
     }
 }
