@@ -38,3 +38,63 @@ jobs:
             **/build/reports/tests/
             app/build/reports/lint-results-debug.*
           retention-days: 14
+
+  device-smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+      - name: Private v1 cold-restart and generated-tool recovery smoke
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            mkdir -p device-smoke
+            gradle :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+
+            run_test() {
+              local test_name="$1"
+              local report="$2"
+              adb shell am instrument -w \
+                -e class "$test_name" \
+                app.lifeos.next.test/androidx.test.runner.AndroidJUnitRunner \
+                | tee "$report"
+              grep -q "OK (1 test)" "$report"
+            }
+
+            run_test \
+              'app.lifeos.next.PrivateV1DeviceSmokeTest#seedGeneratedToolAndAssertRuntime' \
+              device-smoke/seed.txt
+
+            adb shell am force-stop app.lifeos.next
+            adb shell am start -W -n app.lifeos.next/.MainActivity | tee device-smoke/cold-start.txt
+            pid="$(adb shell pidof app.lifeos.next | tr -d '\r')"
+            test -n "$pid"
+            adb shell dumpsys activity activities \
+              | grep -q 'app.lifeos.next/.MainActivity'
+
+            run_test \
+              'app.lifeos.next.PrivateV1DeviceSmokeTest#assertRecoveredRuntimeAndToolEvidence' \
+              device-smoke/recovery.txt
+      - name: Upload device smoke reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIFEOS-device-smoke
+          path: device-smoke/
+          if-no-files-found: warn
+          retention-days: 14
