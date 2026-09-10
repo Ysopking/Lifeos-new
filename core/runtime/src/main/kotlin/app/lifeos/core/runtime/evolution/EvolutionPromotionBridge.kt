@@ -160,7 +160,7 @@ data class EvolutionPromotionResult(
  * invokes the internal lifecycle activation primitive.
  */
 class EvolutionPromotionBridge(
-    private val runtimeStore: EvolutionCanaryRuntimeStore,
+    private val runtimeStore: EvolutionPromotionRuntimeStore,
     private val outcomeStore: EvolutionCanaryOutcomeStore,
     private val lifecycle: GeneratedToolLifecycleCoordinator,
 ) {
