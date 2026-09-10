@@ -1,7 +1,6 @@
 package app.lifeos.core.runtime.capability
 
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
 class PrivateToolSpecificationBuilder : ToolSpecificationBuilder {
@@ -117,7 +116,7 @@ class PrivateToolBuildCatalog {
     internal fun get(buildHash: String): PrivateBuiltToolProgram? = built[buildHash]
 
     internal fun markTested(buildHash: String) {
-        require(buildHash in built) { "Cannot mark unknown bounded tool build as tested" }
+        require(built.containsKey(buildHash)) { "Cannot mark unknown bounded tool build as tested" }
         tested += buildHash
     }
 
@@ -259,8 +258,3 @@ private fun opcodeFor(capabilityId: String): GeneratedToolOpcode {
         else -> GeneratedToolOpcode.UNSUPPORTED
     }
 }
-
-private fun sha256(bytes: ByteArray): String =
-    MessageDigest.getInstance("SHA-256")
-        .digest(bytes)
-        .joinToString("") { "%02x".format(it) }
