@@ -11,6 +11,10 @@ class RuleBasedIntentClassifier {
     )
 
     private val imageNouns = setOf("bild", "bilder", "foto", "fotos", "grafik", "grafiken", "image", "images", "picture", "pictures", "photo", "photos")
+    private val scheduleWords = setOf("termin", "plane", "planen", "schedule", "remind", "appointment", "calendar")
+    private val temporalCueRegex = Regex(
+        "(?i)(?:\\b(?:heute|morgen|today|tomorrow)\\b|\\b(?:[01]?\\d|2[0-3]):[0-5]\\d\\b|\\b(?:[01]?\\d|2[0-3])\\s*(?:uhr|am|pm)\\b|\\b(?:0?[1-9]|[12]\\d|3[01])[./-](?:0?[1-9]|1[0-2])(?:[./-](?:19|20)\\d{2})?\\b)"
+    )
 
     private val rules = listOf(
         Rule(IntentType.CREATE_IMAGE, 0.62, "image creation verb + image noun") { w, _, _ ->
@@ -34,14 +38,16 @@ class RuleBasedIntentClassifier {
         Rule(IntentType.BUILD_OR_IMPLEMENT, 0.72, "implementation/build verb") { w, _, _ ->
             w.any { it in setOf("implementiere", "implementieren", "baue", "bauen", "entwickle", "entwickeln", "programmiere", "build", "implement", "develop", "code") }
         },
-        Rule(IntentType.SCHEDULE, 0.78, "schedule/reminder vocabulary") { w, _, _ ->
-            w.any { it in setOf("erinnere", "termin", "plane", "planen", "schedule", "remind", "appointment", "calendar") }
+        Rule(IntentType.SCHEDULE, 0.88, "reminder target or temporal scheduling cue") { w, text, _ ->
+            w.any { it in scheduleWords } ||
+                ("erinnere" in w && ("mich" in w || temporalCueRegex.containsMatchIn(text)))
         },
         Rule(IntentType.COMMUNICATE, 0.72, "communication verb") { w, _, _ ->
             w.any { it in setOf("schreibe", "sende", "antworte", "mail", "email", "nachricht", "send", "reply", "message") }
         },
         Rule(IntentType.STORE_OR_REMEMBER, 0.80, "memory request vocabulary") { w, _, _ ->
-            w.any { it in setOf("merke", "speichere", "erinnere", "remember", "store", "save") }
+            w.any { it in setOf("merke", "speichere", "remember", "store", "save") } ||
+                ("erinnere" in w && "dich" in w && "mich" !in w)
         },
         Rule(IntentType.QUERY, 0.55, "question marker") { w, text, _ ->
             text.trimEnd().endsWith("?") || w.any { it in setOf("wie", "warum", "was", "wer", "wo", "wann", "wieso", "how", "why", "what", "who", "where", "when") }
