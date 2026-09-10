@@ -29,6 +29,8 @@ import app.lifeos.core.runtime.cognition.PhotonDelta
 import app.lifeos.core.runtime.cognition.PhotonDeltaType
 import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
+import app.lifeos.core.runtime.goal.GoalResumeEngine
+import app.lifeos.core.runtime.goal.GoalResumeResult
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
 import app.lifeos.core.scene.ProceduralSceneCompiler
@@ -72,6 +74,7 @@ class LifeOsKernel internal constructor(
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
     private val continuousCognition: ContinuousCognitionEngine,
+    private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
     private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
     private val imagePhotonFactory: ImagePhotonFactory = ImagePhotonFactory(),
@@ -111,6 +114,7 @@ class LifeOsKernel internal constructor(
     /**
      * Persists the user's exact utterance first, derives a GoalPhoton, resolves capabilities, and
      * executes supported action-ready goals entirely offline before returning to the caller.
+     * CONTINUE first resumes the exact persisted substantive goal and then re-routes that goal.
      */
     suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
         require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
@@ -129,27 +133,42 @@ class LifeOsKernel internal constructor(
                 createdAt = photon.provenance.createdAt,
             )
             val goal = persistAndIngest(goalPhoton.photon)
-            val localKnowledge = when {
+            val goalResume = when {
+                understanding.goal.intent != IntentType.CONTINUE -> null
                 !routing.ready -> null
-                !localKnowledgeGoalEngine.supports(understanding.goal.intent) -> null
+                else -> executeGoalResume(
+                    requestGoal = understanding.goal,
+                    requestSource = photon,
+                    requestGoalPhotonId = goalPhoton.photon.id,
+                )
+            }
+            val resumed = goalResume as? GoalResumeExecutionResult.Resumed
+            val effectiveGoal = resumed?.frame ?: understanding.goal
+            val effectiveRouting = resumed?.routing ?: routing
+            val effectiveSource = resumed?.sourcePhoton ?: photon
+            val effectiveGoalPhotonId = resumed?.resumedGoal?.photon?.id ?: goalPhoton.photon.id
+
+            val localKnowledge = when {
+                !effectiveRouting.ready -> null
+                !localKnowledgeGoalEngine.supports(effectiveGoal.intent) -> null
                 else -> executeLocalKnowledge(
-                    goal = understanding.goal,
-                    sourcePhoton = photon,
-                    goalPhotonId = goalPhoton.photon.id,
+                    goal = effectiveGoal,
+                    sourcePhoton = effectiveSource,
+                    goalPhotonId = effectiveGoalPhotonId,
                 )
             }
             val imageGeneration = when {
-                understanding.goal.intent != IntentType.CREATE_IMAGE -> null
-                !routing.ready -> ImageGenerationResult.Blocked(
-                    routing.blockingGaps
+                effectiveGoal.intent != IntentType.CREATE_IMAGE -> null
+                !effectiveRouting.ready -> ImageGenerationResult.Blocked(
+                    effectiveRouting.blockingGaps
                         .map { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
                         .ifEmpty { listOf("image goal is not action-ready") },
                 )
                 else -> generateImage(
-                    goal = understanding.goal,
-                    sourcePhotonId = photon.id,
-                    goalPhotonId = goalPhoton.photon.id,
-                    referenceInstant = photon.provenance.createdAt,
+                    goal = effectiveGoal,
+                    sourcePhotonId = effectiveSource.id,
+                    goalPhotonId = effectiveGoalPhotonId,
+                    referenceInstant = effectiveSource.provenance.createdAt,
                 )
             }
             LanguageSubmissionResult(
@@ -158,6 +177,7 @@ class LifeOsKernel internal constructor(
                 goalPhoton = goalPhoton,
                 goal = goal,
                 routing = routing,
+                goalResume = goalResume,
                 imageGeneration = imageGeneration,
                 localKnowledge = localKnowledge,
             )
@@ -224,6 +244,46 @@ class LifeOsKernel internal constructor(
                 photon = photon,
                 processingQueued = false,
                 processingFailure = error.message ?: error::class.simpleName,
+            )
+        }
+    }
+
+    private suspend fun executeGoalResume(
+        requestGoal: GoalFrame,
+        requestSource: Photon,
+        requestGoalPhotonId: PhotonId,
+    ): GoalResumeExecutionResult {
+        return try {
+            when (
+                val result = goalResumeEngine.resume(
+                    request = requestGoal,
+                    requestSource = requestSource,
+                    requestGoalPhotonId = requestGoalPhotonId,
+                    photons = photonStore.loadAll(),
+                    createdAt = requestSource.provenance.createdAt,
+                )
+            ) {
+                is GoalResumeResult.Blocked -> GoalResumeExecutionResult.Blocked(
+                    reason = result.reason,
+                    message = result.message,
+                )
+                is GoalResumeResult.Resumed -> {
+                    val resumedGoal = persistAndIngest(result.resumedPhoton)
+                    val resumedRouting = goalCapabilityRouter.route(result.frame)
+                    GoalResumeExecutionResult.Resumed(
+                        targetGoalId = result.targetGoal.id,
+                        sourcePhoton = result.sourcePhoton,
+                        frame = result.frame,
+                        resumedGoal = resumedGoal,
+                        routing = resumedRouting,
+                    )
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            GoalResumeExecutionResult.Failed(
+                error.message ?: error::class.simpleName ?: "goal resume failed",
             )
         }
     }
