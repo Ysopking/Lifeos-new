@@ -178,8 +178,25 @@ class LanguageGoalCapabilityRouterTest {
     }
 
     @Test
-    fun `continue remains an honest blocking gap`() = runTest {
-        val result = LanguageGoalCapabilityRouter(registryWithLocalSystemProviders()).route(goal(IntentType.CONTINUE))
+    fun `continue uses local resume provider from shared registry`() = runTest {
+        val registry = registryWithLocalSystemProviders()
+
+        val result = LanguageGoalCapabilityRouter(registry).route(goal(IntentType.CONTINUE))
+
+        assertTrue(result.ready)
+        assertTrue(result.gaps.isEmpty())
+        val provider = result.selectedProviders[CapabilityId("goal.resume")]
+        assertEquals("local-goal-resume-core", provider?.providerId)
+        assertEquals(TrustLevel.SYSTEM, provider?.trustLevel)
+        assertEquals(
+            "local-goal-resume-core",
+            registry.providersFor(CapabilityId("goal.resume")).single().providerId,
+        )
+    }
+
+    @Test
+    fun `continue stays an honest gap when resume executor is absent from registry`() = runTest {
+        val result = LanguageGoalCapabilityRouter(CapabilityRegistry()).route(goal(IntentType.CONTINUE))
 
         assertFalse(result.ready)
         assertEquals(listOf(CapabilityId("goal.resume")), result.blockingGaps.map { it.requirement.capabilityId })
