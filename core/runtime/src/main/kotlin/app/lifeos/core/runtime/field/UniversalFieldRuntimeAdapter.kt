@@ -12,25 +12,36 @@ import kotlinx.coroutines.CancellationException
 /**
  * Executes the universal field engine as an observational shadow stage.
  *
- * A regular convergence/persistence/health error is represented in [FieldShadowExecution] and is
- * never promoted to a durable task failure by this adapter. Cancellation still propagates so task
- * lease/lifecycle cancellation remains authoritative.
+ * A regular projection/enrichment/convergence/persistence/health error is represented in
+ * [FieldShadowExecution] and is never promoted to a durable task failure by this adapter.
+ * Cancellation still propagates so task lease/lifecycle cancellation remains authoritative.
  */
 class UniversalFieldRuntimeAdapter(
     private val snapshotRepository: FieldSnapshotRepository,
     private val requestFactory: PhotonFieldRequestFactory = DefaultPhotonFieldRequestFactory(),
+    private val requestEnricher: FieldRequestEnricher = FieldRequestEnricher.NONE,
     private val engine: FieldConvergenceEngine = FieldConvergenceEngine(),
     private val healthGate: HealthGate? = null,
     private val now: () -> Instant = Instant::now,
 ) : FieldShadowProcessor {
     override suspend fun process(photon: Photon): FieldShadowExecution {
-        val request = try {
+        val baseRequest = try {
             requestFactory.create(photon)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
             return FieldShadowExecution.failed(
                 message = error.message ?: "universal-field-request-projection-failed",
+            )
+        }
+        val request = try {
+            requestEnricher.enrich(baseRequest)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return FieldShadowExecution.failed(
+                domainId = baseRequest.domainId,
+                message = error.message ?: "universal-field-request-enrichment-failed",
             )
         }
 
