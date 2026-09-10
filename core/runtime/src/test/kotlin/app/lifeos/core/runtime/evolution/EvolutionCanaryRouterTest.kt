@@ -38,73 +38,98 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class EvolutionCanaryRouterTest {
-    private val t0 = Instant.parse("2026-09-10T20:00:00Z")
+    private val evidenceTime = Instant.parse("2026-09-10T12:00:00Z")
 
     @Test
     fun `approved replay can route bounded non critical task to trial candidate`() = runBlocking {
         val fixture = fixture(maxInvocations = 5)
         val store = InMemoryEvolutionCanaryBudgetStore()
-        val router = routerAt(store, t0.plusSeconds(1_000))
+        val router = EvolutionCanaryRouter(store)
         val assignmentKey = candidateAssignmentKey(router, fixture.bundle.adoptionEvidence.id)
+        val beforeRoute = Instant.now()
 
         val route = router.route(
             fixture.bundle,
             context(assignmentKey = assignmentKey, invocationId = "inv-1"),
         )
+        val afterRoute = Instant.now()
 
         val candidate = assertIs<EvolutionCanaryRoute.Candidate>(route)
         assertEquals(TOOL_ID, candidate.toolId)
         assertEquals(BASELINE_ID, candidate.baselineFallback.providerId)
         assertEquals(1, candidate.reservation.sequence)
-        assertEquals(t0.plusSeconds(1_000), candidate.reservation.reservedAt)
+        assertTrue(!candidate.reservation.reservedAt.isBefore(beforeRoute))
+        assertTrue(!candidate.reservation.reservedAt.isAfter(afterRoute))
         assertEquals(1, store.usedInvocations(fixture.bundle.adoptionEvidence.id))
         assertEquals(GeneratedToolState.TRIAL, fixture.bundle.currentCandidate.state)
     }
 
     @Test
-    fun `critical tag time and assignment failures fall back without spending budget`() = runBlocking {
+    fun `critical tags and assignment failures fall back without spending budget`() = runBlocking {
         val fixture = fixture(maxInvocations = 5)
         val store = InMemoryEvolutionCanaryBudgetStore()
-        val validRouter = routerAt(store, t0.plusSeconds(1_000))
-        val candidateKey = candidateAssignmentKey(validRouter, fixture.bundle.adoptionEvidence.id)
-        val baselineKey = baselineAssignmentKey(validRouter, fixture.bundle.adoptionEvidence.id)
+        val router = EvolutionCanaryRouter(store)
+        val candidateKey = candidateAssignmentKey(router, fixture.bundle.adoptionEvidence.id)
+        val baselineKey = baselineAssignmentKey(router, fixture.bundle.adoptionEvidence.id)
 
-        val critical = validRouter.route(fixture.bundle, context(candidateKey, "critical", critical = true))
-        assertBaselineReason(critical, "critical-context")
-
-        val wrongTag = validRouter.route(
-            fixture.bundle,
-            context(candidateKey, "wrong-tag", taskTags = setOf("other")),
+        assertBaselineReason(
+            router.route(fixture.bundle, context(candidateKey, "critical", critical = true)),
+            "critical-context",
         )
-        assertBaselineReason(wrongTag, "task-outside-canary-scope")
-
-        val mixedTags = validRouter.route(
-            fixture.bundle,
-            context(candidateKey, "mixed-tag", taskTags = setOf(TASK_TAG, "sensitive-other")),
+        assertBaselineReason(
+            router.route(fixture.bundle, context(candidateKey, "wrong-tag", taskTags = setOf("other"))),
+            "task-outside-canary-scope",
         )
-        assertBaselineReason(mixedTags, "task-outside-canary-scope")
-
-        val beforeRouter = routerAt(store, fixture.request.occurredAt.minusSeconds(1))
-        val before = beforeRouter.route(fixture.bundle, context(candidateKey, "before"))
-        assertBaselineReason(before, "canary-not-started")
-
-        val expiredRouter = routerAt(
-            store,
-            fixture.request.occurredAt.plusSeconds(fixture.request.scope.maxDurationSeconds),
+        assertBaselineReason(
+            router.route(
+                fixture.bundle,
+                context(candidateKey, "mixed-tag", taskTags = setOf(TASK_TAG, "sensitive-other")),
+            ),
+            "task-outside-canary-scope",
         )
-        val expired = expiredRouter.route(fixture.bundle, context(candidateKey, "expired"))
-        assertBaselineReason(expired, "canary-expired")
-
-        val assignment = validRouter.route(fixture.bundle, context(baselineKey, "assignment"))
-        assertBaselineReason(assignment, "assignment-baseline")
+        assertBaselineReason(
+            router.route(fixture.bundle, context(baselineKey, "assignment")),
+            "assignment-baseline",
+        )
         assertEquals(0, store.usedInvocations(fixture.bundle.adoptionEvidence.id))
+    }
+
+    @Test
+    fun `system time enforces future start and expiry without caller time input`() = runBlocking {
+        val futureFixture = fixture(
+            maxInvocations = 5,
+            requestAt = Instant.now().plusSeconds(600),
+        )
+        val expiredFixture = fixture(
+            maxInvocations = 5,
+            requestAt = Instant.now().minusSeconds(7_200),
+            maxDurationSeconds = 3_600,
+        )
+        val futureStore = InMemoryEvolutionCanaryBudgetStore()
+        val expiredStore = InMemoryEvolutionCanaryBudgetStore()
+        val futureRouter = EvolutionCanaryRouter(futureStore)
+        val expiredRouter = EvolutionCanaryRouter(expiredStore)
+
+        val futureKey = candidateAssignmentKey(futureRouter, futureFixture.bundle.adoptionEvidence.id)
+        val expiredKey = candidateAssignmentKey(expiredRouter, expiredFixture.bundle.adoptionEvidence.id)
+
+        assertBaselineReason(
+            futureRouter.route(futureFixture.bundle, context(futureKey, "future")),
+            "canary-not-started",
+        )
+        assertBaselineReason(
+            expiredRouter.route(expiredFixture.bundle, context(expiredKey, "expired")),
+            "canary-expired",
+        )
+        assertEquals(0, futureStore.usedInvocations(futureFixture.bundle.adoptionEvidence.id))
+        assertEquals(0, expiredStore.usedInvocations(expiredFixture.bundle.adoptionEvidence.id))
     }
 
     @Test
     fun `invocation budget is fail closed after exact maximum`() = runBlocking {
         val fixture = fixture(maxInvocations = 2)
         val store = InMemoryEvolutionCanaryBudgetStore()
-        val router = routerAt(store, t0.plusSeconds(1_000))
+        val router = EvolutionCanaryRouter(store)
         val keys = candidateAssignmentKeys(router, fixture.bundle.adoptionEvidence.id, 3)
 
         assertIs<EvolutionCanaryRoute.Candidate>(
@@ -113,8 +138,10 @@ class EvolutionCanaryRouterTest {
         assertIs<EvolutionCanaryRoute.Candidate>(
             router.route(fixture.bundle, context(keys[1], "inv-2"))
         )
-        val third = router.route(fixture.bundle, context(keys[2], "inv-3"))
-        assertBaselineReason(third, "invocation-budget-exhausted")
+        assertBaselineReason(
+            router.route(fixture.bundle, context(keys[2], "inv-3")),
+            "invocation-budget-exhausted",
+        )
         assertEquals(2, store.usedInvocations(fixture.bundle.adoptionEvidence.id))
     }
 
@@ -122,7 +149,7 @@ class EvolutionCanaryRouterTest {
     fun `duplicate invocation is idempotent and consumes one budget slot`() = runBlocking {
         val fixture = fixture(maxInvocations = 2)
         val store = InMemoryEvolutionCanaryBudgetStore()
-        val router = routerAt(store, t0.plusSeconds(1_000))
+        val router = EvolutionCanaryRouter(store)
         val key = candidateAssignmentKey(router, fixture.bundle.adoptionEvidence.id)
 
         val first = assertIs<EvolutionCanaryRoute.Candidate>(
@@ -140,14 +167,12 @@ class EvolutionCanaryRouterTest {
     fun `concurrent claims cannot overspend atomic budget`() = runBlocking {
         val fixture = fixture(maxInvocations = 10)
         val store = InMemoryEvolutionCanaryBudgetStore()
-        val router = routerAt(store, t0.plusSeconds(1_000))
+        val router = EvolutionCanaryRouter(store)
         val keys = candidateAssignmentKeys(router, fixture.bundle.adoptionEvidence.id, 40)
 
         val routes = coroutineScope {
             keys.mapIndexed { index, key ->
-                async {
-                    router.route(fixture.bundle, context(key, "parallel-$index"))
-                }
+                async { router.route(fixture.bundle, context(key, "parallel-$index")) }
             }.awaitAll()
         }
 
@@ -175,7 +200,7 @@ class EvolutionCanaryRouterTest {
             decision = EvolutionAdoptionDecision.APPROVED_FOR_CANARY,
             reasons = listOf("forged-approval"),
         )
-        val router = routerAt(InMemoryEvolutionCanaryBudgetStore(), t0.plusSeconds(1_000))
+        val router = EvolutionCanaryRouter(InMemoryEvolutionCanaryBudgetStore())
         val key = candidateAssignmentKey(router, forged.id)
 
         assertIllegalArgument {
@@ -187,7 +212,7 @@ class EvolutionCanaryRouterTest {
     fun `stale candidate or baseline fails before budget reservation`() = runBlocking {
         val fixture = fixture(maxInvocations = 5)
         val store = InMemoryEvolutionCanaryBudgetStore()
-        val router = routerAt(store, t0.plusSeconds(1_000))
+        val router = EvolutionCanaryRouter(store)
         val key = candidateAssignmentKey(router, fixture.bundle.adoptionEvidence.id)
 
         assertIllegalArgument {
@@ -211,7 +236,7 @@ class EvolutionCanaryRouterTest {
 
     @Test
     fun `assignment bucket is deterministic and bounded`() {
-        val router = routerAt(InMemoryEvolutionCanaryBudgetStore(), t0.plusSeconds(1_000))
+        val router = EvolutionCanaryRouter(InMemoryEvolutionCanaryBudgetStore())
         val evidenceId = "evidence-j06"
         val first = router.assignmentBucket(evidenceId, "stable-user")
         val second = router.assignmentBucket(evidenceId, "stable-user")
@@ -235,11 +260,6 @@ class EvolutionCanaryRouterTest {
         assertEquals(expected, baseline.reason)
         assertEquals(BASELINE_ID, baseline.provider.providerId)
     }
-
-    private fun routerAt(
-        store: EvolutionCanaryBudgetStore,
-        instant: Instant,
-    ): EvolutionCanaryRouter = EvolutionCanaryRouter.forTest(store) { instant }
 
     private fun context(
         assignmentKey: String,
@@ -288,7 +308,11 @@ class EvolutionCanaryRouterTest {
         val request: EvolutionAdoptionRequest,
     )
 
-    private fun fixture(maxInvocations: Int): Fixture {
+    private fun fixture(
+        maxInvocations: Int,
+        requestAt: Instant = Instant.now().minusSeconds(300),
+        maxDurationSeconds: Long = 3_600,
+    ): Fixture {
         val candidate = candidate()
         val baseline = baseline()
         val subject = EvolutionSubject.create(candidateArtifact(), candidate, baseline)
@@ -307,7 +331,7 @@ class EvolutionCanaryRouterTest {
                     qualityScore = 0.80,
                     latencyMs = 10,
                     peakMemoryBytes = 1_000,
-                    recordedAt = t0.plusSeconds(index.toLong()),
+                    recordedAt = evidenceTime.plusSeconds(index.toLong()),
                 ),
                 EvolutionShadowObservation(
                     caseId = case.caseId,
@@ -318,7 +342,7 @@ class EvolutionCanaryRouterTest {
                     qualityScore = 0.95,
                     latencyMs = 10,
                     peakMemoryBytes = 1_000,
-                    recordedAt = t0.plusSeconds(100L + index),
+                    recordedAt = evidenceTime.plusSeconds(100L + index),
                 ),
             )
         }
@@ -332,10 +356,10 @@ class EvolutionCanaryRouterTest {
             scope = EvolutionCanaryScope(
                 assignmentPermille = 100,
                 maxInvocations = maxInvocations,
-                maxDurationSeconds = 3_600,
+                maxDurationSeconds = maxDurationSeconds,
                 allowedTaskTags = setOf(TASK_TAG),
             ),
-            occurredAt = t0.plusSeconds(500),
+            occurredAt = requestAt,
         )
         val adoptionEvidence = EvolutionAdoptionGate().evaluate(
             subject,
@@ -380,7 +404,7 @@ class EvolutionCanaryRouterTest {
             sourceHash = "j06-source-hash",
             buildHash = APK_SHA,
             permissions = emptySet(),
-            generatedAt = t0,
+            generatedAt = evidenceTime,
             requiredInputs = setOf("text"),
             requiredOutputs = setOf("normalized-text"),
         ),
