@@ -215,6 +215,20 @@ data class BuildProvenance(
             require(verification.evidence.patchPlanId == patch.id)
             require(design.buildSpecId == spec.id)
             require(patch.designSpecId == design.id)
+            val gapCapability = spec.gap.requirement
+            val matchingChange = capabilityChanges.singleOrNull { change ->
+                change.capabilityId == gapCapability.capabilityId &&
+                    change.type != BuildCapabilityChangeType.REMOVED
+            }
+            require(matchingChange != null) {
+                "Build provenance capability delta must address source capability gap"
+            }
+            require(matchingChange.requiredInputs.containsAll(gapCapability.requiredInputs)) {
+                "Build provenance capability delta misses required inputs"
+            }
+            require(matchingChange.outputs.containsAll(gapCapability.requiredOutputs)) {
+                "Build provenance capability delta misses required outputs"
+            }
             return BuildProvenance(
                 sourceCommit = spec.sourceCommit,
                 buildSpecId = spec.id,
@@ -222,7 +236,7 @@ data class BuildProvenance(
                 patchPlanId = patch.id,
                 branchName = candidate.branchName,
                 branchHeadCommit = candidate.branchHeadCommit,
-                files = patch.operations.map(BuildFileProvenance::from),
+                files = patch.operations.map { operation -> BuildFileProvenance.from(operation) },
                 commandResults = verification.evidence.commandResults,
                 artifact = requireNotNull(verification.evidence.artifact),
                 capabilityChanges = capabilityChanges,
