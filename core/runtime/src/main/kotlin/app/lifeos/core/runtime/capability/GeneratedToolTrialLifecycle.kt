@@ -1,5 +1,7 @@
 package app.lifeos.core.runtime.capability
 
+import app.lifeos.core.field.FieldSnapshotId
+import app.lifeos.core.runtime.buildstudio.CandidateArtifact
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -36,7 +38,13 @@ class GeneratedToolTrialLedger {
     suspend fun record(toolId: String, result: GeneratedToolTrialResult): Boolean = mutex.withLock {
         require(toolId.isNotBlank()) { "Tool id must not be blank" }
         val toolResults = results.getOrPut(toolId) { linkedMapOf() }
-        if (result.invocationId in toolResults) return@withLock false
+        val existing = toolResults[result.invocationId]
+        if (existing != null) {
+            require(existing == result) {
+                "Conflicting trial result for invocation ${result.invocationId}"
+            }
+            return@withLock false
+        }
         toolResults[result.invocationId] = result
         true
     }
@@ -101,15 +109,23 @@ sealed interface GeneratedToolTrialRecordResult {
 }
 
 sealed interface GeneratedToolPromotionEvaluation {
-    data class Eligible(val stats: GeneratedToolTrialStats) : GeneratedToolPromotionEvaluation
-    data class NotReady(val stats: GeneratedToolTrialStats, val reasons: List<String>) : GeneratedToolPromotionEvaluation
+    data class Eligible(
+        val stats: GeneratedToolTrialStats,
+        val evidence: GeneratedToolPromotionEvidenceSnapshot,
+    ) : GeneratedToolPromotionEvaluation
+
+    data class NotReady(
+        val stats: GeneratedToolTrialStats,
+        val reasons: List<String>,
+        val evidence: GeneratedToolPromotionEvidenceSnapshot,
+    ) : GeneratedToolPromotionEvaluation
+
     data class Blocked(val state: GeneratedToolState, val reason: String) : GeneratedToolPromotionEvaluation
 }
 
 /**
- * Explicit lifecycle gate after workshop verification. Nothing here executes a
- * generated artifact. It controls sandbox trial admission, per-invocation
- * permission permits, trial evidence and explicit promotion to ACTIVE.
+ * Explicit lifecycle gate after workshop verification. Nothing here executes a generated artifact.
+ * Promotion requires both clean trial statistics and J03 build/field/health/rollback evidence.
  */
 class GeneratedToolLifecycleCoordinator(
     private val tools: GeneratedToolRegistry,
@@ -117,6 +133,10 @@ class GeneratedToolLifecycleCoordinator(
     private val trialLedger: GeneratedToolTrialLedger = GeneratedToolTrialLedger(),
     private val capabilityRegistry: CapabilityRegistry? = null,
     private val promotionPolicy: GeneratedToolPromotionPolicy = GeneratedToolPromotionPolicy(),
+    private val promotionEvidenceLedger: GeneratedToolPromotionEvidenceLedger =
+        GeneratedToolPromotionEvidenceLedger(),
+    private val promotionEvidencePolicy: GeneratedToolPromotionEvidencePolicy =
+        GeneratedToolPromotionEvidencePolicy(),
 ) {
     suspend fun admitToTrial(toolId: String): GeneratedToolTrialAdmissionResult {
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
@@ -143,6 +163,43 @@ class GeneratedToolLifecycleCoordinator(
                 GeneratedToolTrialAdmissionResult.Rejected(rejected, admission.reasons)
             }
         }
+    }
+
+    suspend fun bindDesignFieldSnapshots(toolId: String, snapshotIds: Set<FieldSnapshotId>): Boolean {
+        val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        require(record.state == GeneratedToolState.VERIFIED || record.state == GeneratedToolState.TRIAL) {
+            "Design field evidence may only bind VERIFIED or TRIAL tools"
+        }
+        return promotionEvidenceLedger.recordDesignFieldSnapshots(toolId, snapshotIds)
+    }
+
+    suspend fun bindBuildArtifact(toolId: String, artifact: CandidateArtifact): Boolean {
+        val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        require(record.state == GeneratedToolState.VERIFIED || record.state == GeneratedToolState.TRIAL) {
+            "Build provenance may only bind VERIFIED or TRIAL tools"
+        }
+        return promotionEvidenceLedger.bindBuildArtifact(toolId, record, artifact)
+    }
+
+    suspend fun recordHealthIncident(
+        toolId: String,
+        incident: GeneratedToolHealthIncident,
+    ): Boolean {
+        requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        return promotionEvidenceLedger.recordHealthIncident(toolId, incident)
+    }
+
+    suspend fun recordRollback(
+        toolId: String,
+        rollback: GeneratedToolRollbackEvidence,
+    ): Boolean {
+        requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        return promotionEvidenceLedger.recordRollback(toolId, rollback)
+    }
+
+    suspend fun promotionEvidence(toolId: String): GeneratedToolPromotionEvidenceSnapshot {
+        requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        return promotionEvidenceLedger.snapshot(toolId)
     }
 
     suspend fun authorizeTrialInvocation(
@@ -176,6 +233,7 @@ class GeneratedToolLifecycleCoordinator(
         }
 
         trialLedger.record(toolId, result)
+        promotionEvidenceLedger.recordTrial(toolId, result)
         val stats = trialLedger.stats(toolId)
         if (result.safetyViolation) {
             val reason = "sandbox-safety-violation:${result.invocationId}"
@@ -200,6 +258,7 @@ class GeneratedToolLifecycleCoordinator(
         }
 
         val stats = trialLedger.stats(toolId)
+        val evidence = promotionEvidenceLedger.snapshot(toolId)
         val reasons = buildList {
             if (stats.trials < promotionPolicy.minimumTrials) {
                 add("insufficient-trials:${stats.trials}<${promotionPolicy.minimumTrials}")
@@ -219,12 +278,13 @@ class GeneratedToolLifecycleCoordinator(
                         promotionPolicy.minimumVerificationConfidence
                 )
             }
-        }
+            addAll(promotionEvidencePolicy.reasons(stats, evidence))
+        }.distinct().sorted()
 
         return if (reasons.isEmpty()) {
-            GeneratedToolPromotionEvaluation.Eligible(stats)
+            GeneratedToolPromotionEvaluation.Eligible(stats, evidence)
         } else {
-            GeneratedToolPromotionEvaluation.NotReady(stats, reasons)
+            GeneratedToolPromotionEvaluation.NotReady(stats, reasons, evidence)
         }
     }
 
@@ -233,11 +293,13 @@ class GeneratedToolLifecycleCoordinator(
         require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
             "Generated tool is not eligible for promotion: $evaluation"
         }
+        require(!evaluation.evidence.activationAllowed)
 
+        tools.bindPromotionEvidence(toolId, evaluation.evidence.id)
         val active = tools.transition(
             toolId = toolId,
             to = GeneratedToolState.ACTIVE,
-            message = "trial-promoted",
+            message = "trial-promoted:evidence:${evaluation.evidence.id}",
         )
         capabilityRegistry?.register(active.toCapabilityDescriptor(evaluation.stats))
         return active
