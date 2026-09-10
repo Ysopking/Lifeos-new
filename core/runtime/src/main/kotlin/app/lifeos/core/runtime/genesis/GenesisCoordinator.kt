@@ -250,7 +250,6 @@ fun interface GenesisProposalSink {
 class GenesisCoordinator(
     private val registry: CapabilityRegistry,
     private val gapDetector: CapabilityGapDetector = CapabilityGapDetector(registry),
-    private val composer: CapabilityComposer = CapabilityComposer(registry),
     private val procedures: GenesisProcedureCatalog = GenesisProcedureCatalog.NONE,
     private val queryPipelinePolicy: GenesisQueryPipelinePolicy = GenesisQueryPipelinePolicy.DEFAULT,
     private val triggerPolicy: GenesisTriggerPolicy = DefaultGenesisTriggerPolicy(),
@@ -269,65 +268,71 @@ class GenesisCoordinator(
         val considered = mutableListOf<GenesisSolutionKind>()
 
         considered += GenesisSolutionKind.PROCEDURE
-        val procedure = selectProcedure(request, gap)
-        if (procedure != null) return emit(request, gap, procedure, considered)
+        selectProcedure(request, gap)?.let { return emit(request, gap, it, considered) }
 
         considered += GenesisSolutionKind.CAPABILITY_COMPOSITION
-        val composition = selectComposition(request)
-        if (composition != null) return emit(request, gap, composition, considered)
+        selectComposition(request)?.let { return emit(request, gap, it, considered) }
 
         considered += GenesisSolutionKind.CONNECTOR_WRAPPER
-        val connector = selectConnector(request)
-        if (connector != null) return emit(request, gap, connector, considered)
+        selectConnector(request)?.let { return emit(request, gap, it, considered) }
 
         considered += GenesisSolutionKind.QUERY_ANALYSIS_PIPELINE
         if (queryPipelinePolicy.canAddress(request, gap)) {
-            val query = GenesisSolutionCandidate(
-                kind = GenesisSolutionKind.QUERY_ANALYSIS_PIPELINE,
-                referenceId = "deepsearch:${request.id}",
-                reliability = 1.0,
-                expectedCost = 0.0,
-                rationale = "bounded-query-analysis-before-code-generation",
-                requiresExplicitApproval = false,
+            return emit(
+                request,
+                gap,
+                GenesisSolutionCandidate(
+                    kind = GenesisSolutionKind.QUERY_ANALYSIS_PIPELINE,
+                    referenceId = "deepsearch:${request.id}",
+                    reliability = 0.0,
+                    expectedCost = 0.0,
+                    rationale = "bounded-query-analysis-before-code-generation",
+                    requiresExplicitApproval = false,
+                ),
+                considered,
             )
-            return emit(request, gap, query, considered)
         }
 
         considered += GenesisSolutionKind.CODE_TOOL
         if (safetyPolicy.codeToolSafe(request, gap)) {
-            val code = GenesisSolutionCandidate(
-                kind = GenesisSolutionKind.CODE_TOOL,
-                referenceId = "tool-proposal:${request.id}",
-                reliability = 0.0,
-                expectedCost = 1.0,
-                rationale = "no-smaller-existing-solution;propose-sandboxed-code-tool",
-                requiresExplicitApproval = true,
+            return emit(
+                request,
+                gap,
+                GenesisSolutionCandidate(
+                    kind = GenesisSolutionKind.CODE_TOOL,
+                    referenceId = "tool-proposal:${request.id}",
+                    reliability = 0.0,
+                    expectedCost = 1.0,
+                    rationale = "no-smaller-existing-solution;propose-sandboxed-code-tool",
+                    requiresExplicitApproval = true,
+                ),
+                considered,
             )
-            return emit(request, gap, code, considered)
         }
 
         considered += GenesisSolutionKind.MODULE_IMPLEMENTATION
         if (request.moduleAllowed) {
             val protected = request.protectedRoot || safetyPolicy.isProtectedRoot(request.requirement)
-            val module = GenesisSolutionCandidate(
-                kind = GenesisSolutionKind.MODULE_IMPLEMENTATION,
-                referenceId = "module-proposal:${request.id}",
-                reliability = 0.0,
-                expectedCost = 1.0,
-                rationale = if (protected) {
-                    "protected-root-requires-reviewed-module-path"
-                } else {
-                    "code-tool-unavailable;propose-reviewed-module-path"
-                },
-                requiresExplicitApproval = true,
+            return emit(
+                request,
+                gap,
+                GenesisSolutionCandidate(
+                    kind = GenesisSolutionKind.MODULE_IMPLEMENTATION,
+                    referenceId = "module-proposal:${request.id}",
+                    reliability = 0.0,
+                    expectedCost = 1.0,
+                    rationale = if (protected) {
+                        "protected-root-requires-reviewed-module-path"
+                    } else {
+                        "code-tool-unavailable;propose-reviewed-module-path"
+                    },
+                    requiresExplicitApproval = true,
+                ),
+                considered,
             )
-            return emit(request, gap, module, considered)
         }
 
-        return GenesisResult.Blocked(
-            gap = gap,
-            reasons = listOf("no-safe-solution-path"),
-        )
+        return GenesisResult.Blocked(gap, listOf("no-safe-solution-path"))
     }
 
     private suspend fun selectProcedure(
@@ -356,25 +361,24 @@ class GenesisCoordinator(
 
     private suspend fun selectComposition(request: GenesisRequest): GenesisSolutionCandidate? {
         if (request.requirement.requiredOutputs.isEmpty()) return null
-        val plan = composer.compose(
+        val internalProviders = registry.all(includeUnavailable = false)
+            .filter { provider ->
+                provider.providerType != ProviderType.CONNECTOR &&
+                    provider.providerType != ProviderType.EXTERNAL_TOOL
+            }
+        if (internalProviders.isEmpty()) return null
+        val safeRegistry = CapabilityRegistry(internalProviders)
+        val plan = CapabilityComposer(safeRegistry).compose(
             availableContracts = request.availableContracts,
             requiredOutputs = request.requirement.requiredOutputs,
         ) ?: return null
         if (plan.steps.isEmpty()) return null
-        if (plan.steps.any { step ->
-                step.providerType == ProviderType.CONNECTOR ||
-                    step.providerType == ProviderType.EXTERNAL_TOOL
-            }
-        ) {
-            // External interaction must remain behind the explicit connector/permission handoff.
-            return null
-        }
         return GenesisSolutionCandidate(
             kind = GenesisSolutionKind.CAPABILITY_COMPOSITION,
             referenceId = compositionId(plan),
             reliability = plan.expectedReliability.coerceIn(0.0, 1.0),
             expectedCost = plan.expectedCost,
-            rationale = "existing-capability-composition",
+            rationale = "existing-internal-capability-composition",
             requiresExplicitApproval = false,
             composition = plan,
         )
