@@ -68,7 +68,35 @@ class BuildStudioPolicyTest {
         )
 
         assertEquals(
-            listOf("missing-planned-patch:$SOURCE_PATH"),
+            listOf(
+                "missing-materialized-source-patch",
+                "missing-planned-patch:$SOURCE_PATH",
+            ),
+            BuildPathPolicy().validate(spec, design, patch),
+        )
+    }
+
+    @Test
+    fun `required test cannot be satisfied by deleting it`() {
+        val spec = spec()
+        val design = BuildDesignSpec(
+            buildSpecId = spec.id,
+            capability = spec.gap.requirement,
+            summary = "unsafe test deletion",
+            implementationNotes = emptyList(),
+            plannedSourcePaths = setOf(SOURCE_PATH),
+            plannedTestPaths = setOf(TEST_PATH),
+        )
+        val patch = SourcePatchPlan(
+            design.id,
+            listOf(
+                SourcePatchOperation(SourcePatchOperationType.CREATE, SOURCE_PATH, "source"),
+                SourcePatchOperation(SourcePatchOperationType.DELETE, TEST_PATH),
+            ),
+        )
+
+        assertEquals(
+            listOf("test-delete-forbidden:$TEST_PATH"),
             BuildPathPolicy().validate(spec, design, patch),
         )
     }
