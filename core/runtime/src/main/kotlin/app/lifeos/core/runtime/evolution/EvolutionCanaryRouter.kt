@@ -64,13 +64,15 @@ interface EvolutionCanaryBudgetStore {
         reservedAt: Instant,
     ): EvolutionCanaryReserveResult
 
+    suspend fun reservation(adoptionEvidenceId: String, invocationId: String): EvolutionCanaryReservation?
     suspend fun usedInvocations(adoptionEvidenceId: String): Int
 }
 
 /** In-memory implementation for deterministic tests and explicitly ephemeral callers only. */
-internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryBudgetStore {
+internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryRuntimeStore {
     private val mutex = Mutex()
     private val reservations = mutableMapOf<String, LinkedHashMap<String, EvolutionCanaryReservation>>()
+    private val switches = mutableMapOf<String, EvolutionCanaryKillSwitchEvidence>()
 
     override suspend fun reserve(
         adoptionEvidenceId: String,
@@ -98,9 +100,22 @@ internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryBudgetStore {
         EvolutionCanaryReserveResult.Reserved(reservation, duplicate = false)
     }
 
+    override suspend fun reservation(
+        adoptionEvidenceId: String,
+        invocationId: String,
+    ): EvolutionCanaryReservation? = mutex.withLock {
+        reservations[adoptionEvidenceId]?.get(invocationId)
+    }
+
     override suspend fun usedInvocations(adoptionEvidenceId: String): Int = mutex.withLock {
         reservations[adoptionEvidenceId]?.size ?: 0
     }
+
+    override suspend fun trip(evidence: EvolutionCanaryKillSwitchEvidence): EvolutionCanaryKillSwitchEvidence =
+        mutex.withLock { switches.getOrPut(evidence.adoptionEvidenceId) { evidence } }
+
+    override suspend fun killSwitch(adoptionEvidenceId: String): EvolutionCanaryKillSwitchEvidence? =
+        mutex.withLock { switches[adoptionEvidenceId] }
 }
 
 sealed interface EvolutionCanaryRoute {
@@ -134,15 +149,11 @@ data class EvolutionCanaryEvidenceBundle(
 )
 
 /**
- * J06 enforces J05 scope before a TRIAL candidate can be selected for bounded canary use. It never
- * registers the candidate in CapabilityRegistry and never changes GeneratedToolState.
- *
- * Before every candidate route, the router deterministically replays the trusted default J05 gate
- * from the original J04 evidence and requires an exact content-id match with the supplied adoption
- * evidence. Canary time is read directly from the system clock and is never caller-controlled.
+ * J06/J07 enforce the J05 scope and persistent kill switch before a TRIAL candidate can be selected.
+ * The router never registers the candidate in CapabilityRegistry and never changes tool state.
  */
 class EvolutionCanaryRouter(
-    private val budgetStore: EvolutionCanaryBudgetStore,
+    private val runtimeStore: EvolutionCanaryRuntimeStore,
 ) {
     private val trustedAdoptionGate = EvolutionAdoptionGate()
 
@@ -189,6 +200,13 @@ class EvolutionCanaryRouter(
             "Initial canary cannot permit productive effects"
         }
 
+        runtimeStore.killSwitch(adoptionEvidence.id)?.let { stop ->
+            return EvolutionCanaryRoute.Baseline(
+                currentBaseline,
+                "canary-kill-switch:${stop.reason.name}",
+            )
+        }
+
         if (context.critical) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "critical-context")
         }
@@ -214,7 +232,7 @@ class EvolutionCanaryRouter(
         }
 
         return when (
-            val reservation = budgetStore.reserve(
+            val reservation = runtimeStore.reserve(
                 adoptionEvidenceId = adoptionEvidence.id,
                 invocationId = context.invocationId,
                 maxInvocations = adoptionRequest.scope.maxInvocations,
