@@ -16,8 +16,8 @@ internal data class EvolutionRuntimeResources(
     val generatedTools: GeneratedToolRegistry,
     val trialLedger: GeneratedToolTrialLedger,
     val lifecycle: GeneratedToolLifecycleCoordinator,
-    val artifactRepository: GeneratedToolArtifactRepository,
     val canaryRouter: EvolutionCanaryRouter,
     val outcomeCoordinator: EvolutionCanaryOutcomeCoordinator,
     val promotionBridge: EvolutionPromotionBridge,
+    val artifactRepository: GeneratedToolArtifactRepository? = null,
 )
