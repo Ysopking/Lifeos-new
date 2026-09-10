@@ -89,6 +89,31 @@ class LifeOsKernel internal constructor(
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
     val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
 
+    private val goalActionDispatcher = GoalActionDispatcher(
+        executeKnowledge = { context ->
+            executeLocalKnowledge(
+                goal = context.goal,
+                sourcePhoton = context.sourcePhoton,
+                goalPhotonId = context.goalPhotonId,
+            )
+        },
+        executeDeepSearch = { context ->
+            executeLocalDeepSearch(
+                goal = context.goal,
+                sourcePhoton = context.sourcePhoton,
+                goalPhotonId = context.goalPhotonId,
+            )
+        },
+        executeImageGeneration = { context ->
+            generateImage(
+                goal = context.goal,
+                sourcePhotonId = context.sourcePhoton.id,
+                goalPhotonId = context.goalPhotonId,
+                referenceInstant = context.sourcePhoton.provenance.createdAt,
+            )
+        },
+    )
+
     fun start(): Job = synchronized(startLock) {
         bootstrapJob ?: scope.launch {
             bootstrap()
@@ -150,39 +175,15 @@ class LifeOsKernel internal constructor(
             val effectiveRouting = resumed?.routing ?: routing
             val effectiveSource = resumed?.sourcePhoton ?: photon
             val effectiveGoalPhotonId = resumed?.resumedGoal?.photon?.id ?: goalPhoton.photon.id
+            val actions = goalActionDispatcher.execute(
+                GoalActionContext(
+                    goal = effectiveGoal,
+                    routing = effectiveRouting,
+                    sourcePhoton = effectiveSource,
+                    goalPhotonId = effectiveGoalPhotonId,
+                )
+            )
 
-            val localKnowledge = when {
-                !effectiveRouting.ready -> null
-                !localKnowledgeGoalEngine.supports(effectiveGoal.intent) -> null
-                else -> executeLocalKnowledge(
-                    goal = effectiveGoal,
-                    sourcePhoton = effectiveSource,
-                    goalPhotonId = effectiveGoalPhotonId,
-                )
-            }
-            val localDeepSearch = when {
-                !effectiveRouting.ready -> null
-                !localDeepSearchGoalEngine.supports(effectiveGoal.intent) -> null
-                else -> executeLocalDeepSearch(
-                    goal = effectiveGoal,
-                    sourcePhoton = effectiveSource,
-                    goalPhotonId = effectiveGoalPhotonId,
-                )
-            }
-            val imageGeneration = when {
-                effectiveGoal.intent != IntentType.CREATE_IMAGE -> null
-                !effectiveRouting.ready -> ImageGenerationResult.Blocked(
-                    effectiveRouting.blockingGaps
-                        .map { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
-                        .ifEmpty { listOf("image goal is not action-ready") },
-                )
-                else -> generateImage(
-                    goal = effectiveGoal,
-                    sourcePhotonId = effectiveSource.id,
-                    goalPhotonId = effectiveGoalPhotonId,
-                    referenceInstant = effectiveSource.provenance.createdAt,
-                )
-            }
             LanguageSubmissionResult(
                 source = source,
                 understanding = understanding,
@@ -190,9 +191,9 @@ class LifeOsKernel internal constructor(
                 goal = goal,
                 routing = routing,
                 goalResume = goalResume,
-                imageGeneration = imageGeneration,
-                localKnowledge = localKnowledge,
-                localDeepSearch = localDeepSearch,
+                imageGeneration = actions.imageGeneration,
+                localKnowledge = actions.localKnowledge,
+                localDeepSearch = actions.localDeepSearch,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
