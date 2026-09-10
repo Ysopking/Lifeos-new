@@ -75,6 +75,7 @@ class LifeOsKernel internal constructor(
     private val goalPhotonFactory: GoalPhotonFactory,
     private val languageContextBuilder: PhotonLanguageContextBuilder,
     private val goalCapabilityRouter: LanguageGoalCapabilityRouter,
+    private val localReminderScheduler: LocalReminderScheduler,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
@@ -96,6 +97,11 @@ class LifeOsKernel internal constructor(
     private val localImageTransformExecutor = LocalImageTransformActionExecutor(
         photons = photonStore,
         assets = imageAssets,
+        persistAndIngest = ::persistAndIngest,
+    )
+
+    private val localScheduleExecutor = LocalScheduleActionExecutor(
+        scheduler = localReminderScheduler,
         persistAndIngest = ::persistAndIngest,
     )
 
@@ -123,6 +129,7 @@ class LifeOsKernel internal constructor(
             )
         },
         executeImageTransform = localImageTransformExecutor::execute,
+        executeSchedule = localScheduleExecutor::execute,
         prepareCommunication = { context ->
             executeLocalCommunication(
                 goal = context.goal,
@@ -213,6 +220,7 @@ class LifeOsKernel internal constructor(
                 localImageTransform = actions.localImageTransform,
                 localKnowledge = actions.localKnowledge,
                 localDeepSearch = actions.localDeepSearch,
+                localSchedule = actions.localSchedule,
                 localCommunication = actions.localCommunication,
             )
         } catch (cancelled: CancellationException) {
