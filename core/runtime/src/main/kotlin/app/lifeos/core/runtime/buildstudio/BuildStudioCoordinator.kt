@@ -105,84 +105,86 @@ class BuildStudioCoordinator(
     private val pathPolicy: BuildPathPolicy = BuildPathPolicy(),
     private val verificationPolicy: BuildVerificationPolicy = BuildVerificationPolicy(),
 ) {
-    suspend fun build(spec: BuildSpec): BuildStudioResult = try {
-        val design = designer.design(spec)
-        if (design.buildSpecId != spec.id || design.capability != spec.gap.requirement) {
-            return BuildStudioResult.Rejected("design", listOf("design-does-not-match-build-spec"))
-        }
-
-        val patch = patchPlanner.plan(design)
-        val pathFailures = pathPolicy.validate(spec, design, patch)
-        if (pathFailures.isNotEmpty()) {
-            return BuildStudioResult.Rejected("patch-policy", pathFailures)
-        }
-
-        val requestedBranch = deterministicBranchName(spec, design, patch)
-        val isolated = workspace.createBranch(spec.sourceCommit, requestedBranch)
-        validateCreatedBranch(spec, requestedBranch, isolated)?.let { failure ->
-            return BuildStudioResult.Rejected("branch-isolation", listOf(failure))
-        }
-
-        val applied = workspace.applyPatch(isolated, patch)
-        validateAppliedPatch(isolated, patch, applied)?.let { failures ->
-            return BuildStudioResult.Rejected("patch-application", failures)
-        }
-
-        val results = BUILD_GATE_ORDER.map { command ->
-            gateRunner.run(applied.branch, command).also { result ->
-                require(result.command == command) { "Build gate runner changed requested command" }
+    suspend fun build(spec: BuildSpec): BuildStudioResult {
+        return try {
+            val design = designer.design(spec)
+            if (design.buildSpecId != spec.id || design.capability != spec.gap.requirement) {
+                return BuildStudioResult.Rejected("design", listOf("design-does-not-match-build-spec"))
             }
-        }
-        val allCommandsSuccessful = results.all { it.success }
-        val artifact = if (allCommandsSuccessful) {
-            artifactCollector.collectDebugApk(applied.branch)
-        } else {
-            null
-        }
-        val evidence = BuildVerificationEvidence(
-            branchName = applied.branch.name,
-            branchHeadCommit = applied.branch.headCommit,
-            patchPlanId = patch.id,
-            commandResults = results,
-            artifact = artifact,
-        )
-        val verification = verificationPolicy.verify(evidence)
-        if (verification.status != BuildVerificationStatus.VERIFIED) {
-            return BuildStudioResult.Rejected(
-                stage = "verification",
-                failures = verification.failures,
-                verification = verification,
-            )
-        }
 
-        val candidateId = StableFieldIds.fingerprint(
-            "buildstudio-candidate/v1",
-            spec.id,
-            design.id,
-            patch.id,
-            applied.branch.name,
-            applied.branch.headCommit,
-            verification.id,
-        )
-        BuildStudioResult.CandidateReady(
-            candidate = BuildStudioCandidate(
-                id = candidateId,
-                buildSpecId = spec.id,
-                designSpecId = design.id,
-                patchPlanId = patch.id,
+            val patch = patchPlanner.plan(design)
+            val pathFailures = pathPolicy.validate(spec, design, patch)
+            if (pathFailures.isNotEmpty()) {
+                return BuildStudioResult.Rejected("patch-policy", pathFailures)
+            }
+
+            val requestedBranch = deterministicBranchName(spec, design, patch)
+            val isolated = workspace.createBranch(spec.sourceCommit, requestedBranch)
+            validateCreatedBranch(spec, requestedBranch, isolated)?.let { failure ->
+                return BuildStudioResult.Rejected("branch-isolation", listOf(failure))
+            }
+
+            val applied = workspace.applyPatch(isolated, patch)
+            validateAppliedPatch(isolated, patch, applied)?.let { failures ->
+                return BuildStudioResult.Rejected("patch-application", failures)
+            }
+
+            val results = BUILD_GATE_ORDER.map { command ->
+                gateRunner.run(applied.branch, command).also { result ->
+                    require(result.command == command) { "Build gate runner changed requested command" }
+                }
+            }
+            val allCommandsSuccessful = results.all { it.success }
+            val artifact = if (allCommandsSuccessful) {
+                artifactCollector.collectDebugApk(applied.branch)
+            } else {
+                null
+            }
+            val evidence = BuildVerificationEvidence(
                 branchName = applied.branch.name,
                 branchHeadCommit = applied.branch.headCommit,
-                verificationId = verification.id,
-            ),
-            verification = verification,
-        )
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (error: Exception) {
-        BuildStudioResult.Failed(
-            stage = "pipeline",
-            reason = "${error::class.simpleName ?: "Exception"}:${error.message.orEmpty().take(180)}",
-        )
+                patchPlanId = patch.id,
+                commandResults = results,
+                artifact = artifact,
+            )
+            val verification = verificationPolicy.verify(evidence)
+            if (verification.status != BuildVerificationStatus.VERIFIED) {
+                return BuildStudioResult.Rejected(
+                    stage = "verification",
+                    failures = verification.failures,
+                    verification = verification,
+                )
+            }
+
+            val candidateId = StableFieldIds.fingerprint(
+                "buildstudio-candidate/v1",
+                spec.id,
+                design.id,
+                patch.id,
+                applied.branch.name,
+                applied.branch.headCommit,
+                verification.id,
+            )
+            BuildStudioResult.CandidateReady(
+                candidate = BuildStudioCandidate(
+                    id = candidateId,
+                    buildSpecId = spec.id,
+                    designSpecId = design.id,
+                    patchPlanId = patch.id,
+                    branchName = applied.branch.name,
+                    branchHeadCommit = applied.branch.headCommit,
+                    verificationId = verification.id,
+                ),
+                verification = verification,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            BuildStudioResult.Failed(
+                stage = "pipeline",
+                reason = "${error::class.simpleName ?: "Exception"}:${error.message.orEmpty().take(180)}",
+            )
+        }
     }
 
     private fun deterministicBranchName(
