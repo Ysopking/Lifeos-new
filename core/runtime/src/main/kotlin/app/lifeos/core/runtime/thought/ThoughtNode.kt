@@ -1,9 +1,34 @@
 package app.lifeos.core.runtime.thought
 
 import app.lifeos.core.field.FieldDomainId
+import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.field.TemporalValidity
 import app.lifeos.core.model.PhotonId
 import java.time.Instant
+
+@JvmInline
+value class ThoughtNodeId(val value: String) {
+    init {
+        require(value.isNotBlank()) { "Thought node id must not be blank" }
+    }
+
+    companion object {
+        fun create(
+            photonId: PhotonId,
+            fieldDomainId: FieldDomainId,
+            semanticKey: String,
+        ): ThoughtNodeId {
+            require(semanticKey.isNotBlank()) { "Thought semantic key must not be blank" }
+            return ThoughtNodeId(
+                "thought-node:" + StableFieldIds.fingerprint(
+                    photonId.value,
+                    fieldDomainId.value,
+                    semanticKey,
+                )
+            )
+        }
+    }
+}
 
 enum class ThoughtLifecycleStatus {
     ACTIVE,
@@ -36,6 +61,7 @@ data class ThoughtProvenance(
 }
 
 data class ThoughtNode(
+    val id: ThoughtNodeId,
     val provenance: ThoughtProvenance,
     val fieldDomainId: FieldDomainId,
     val semanticKey: String,
@@ -50,6 +76,9 @@ data class ThoughtNode(
 ) {
     init {
         require(semanticKey.isNotBlank()) { "Thought semantic key must not be blank" }
+        require(
+            id == ThoughtNodeId.create(provenance.sourcePhotonId, fieldDomainId, semanticKey)
+        ) { "Thought node id must match Photon/domain/semantic identity" }
         require(summary.isNotBlank()) { "Thought summary must not be blank" }
         require(semanticMass.isFinite() && semanticMass >= 0.0) {
             "Thought semantic mass must be finite and non-negative"
