@@ -137,6 +137,30 @@ class LanguageGoalCapabilityRouterTest {
     }
 
     @Test
+    fun `search uses local DeepSearch provider from shared registry`() = runTest {
+        val registry = registryWithLocalSystemProviders()
+
+        val result = LanguageGoalCapabilityRouter(registry).route(goal(IntentType.SEARCH))
+
+        assertTrue(result.ready)
+        assertTrue(result.gaps.isEmpty())
+        val provider = result.selectedProviders[CapabilityId("deepsearch.query")]
+        assertEquals("local-deepsearch-core", provider?.providerId)
+        assertEquals(TrustLevel.SYSTEM, provider?.trustLevel)
+    }
+
+    @Test
+    fun `search stays an honest gap when local DeepSearch executor is absent`() = runTest {
+        val result = LanguageGoalCapabilityRouter(CapabilityRegistry()).route(goal(IntentType.SEARCH))
+
+        assertFalse(result.ready)
+        assertEquals(
+            listOf(CapabilityId("deepsearch.query")),
+            result.blockingGaps.map { it.requirement.capabilityId },
+        )
+    }
+
+    @Test
     fun `query uses local knowledge provider from shared registry`() = runTest {
         val registry = registryWithLocalSystemProviders()
 
