@@ -13,7 +13,9 @@ class PhotonLanguageContextBuilder {
         now: Instant = Instant.now(),
         excludeIds: Set<app.lifeos.core.model.PhotonId> = emptySet(),
     ): LanguageContext {
-        val eligible = photons.filterNot { it.id in excludeIds }
+        val eligible = photons.filterNot { photon ->
+            photon.id in excludeIds || "context-record" in photon.tags
+        }
         val activeGoal = eligible
             .asSequence()
             .filter { "goal" in it.tags && it.phase != PhotonPhase.ARCHIVED }
@@ -36,6 +38,8 @@ class PhotonLanguageContextBuilder {
     private fun inferKind(photon: Photon): String = when {
         "goal" in photon.tags || photon.mimeType == "application/vnd.lifeos.goal+text" -> "goal"
         "image" in photon.tags || photon.mimeType.startsWith("image/") -> "image"
+        "apk" in photon.tags || photon.mimeType == "application/vnd.android.package-archive" -> "apk"
+        "module" in photon.tags || photon.tags.any { it.startsWith("module:") } -> "module"
         "file" in photon.tags -> "file"
         "result" in photon.tags -> "result"
         else -> "text"

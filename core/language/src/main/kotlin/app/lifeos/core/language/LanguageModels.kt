@@ -86,6 +86,7 @@ data class SemanticEntity(
 enum class ReferenceKind {
     THIS,
     THAT,
+    OTHER,
     PREVIOUS,
     LAST_RESULT,
     YESTERDAY,
