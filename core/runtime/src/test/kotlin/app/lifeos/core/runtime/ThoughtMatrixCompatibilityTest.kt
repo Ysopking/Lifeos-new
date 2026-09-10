@@ -37,18 +37,18 @@ class ThoughtMatrixCompatibilityTest {
     }
 
     @Test
-    fun `legacy matrix removes equal revision ambiguity instead of choosing first value`() = runTest {
+    fun `legacy matrix retains prior read model while v2 marks equal revision ambiguity unresolved`() = runTest {
         val at = Instant.parse("2026-09-10T12:05:00Z")
         val matrix = ThoughtMatrix()
         val first = photon("ambiguous", 1, "Value A", 3.0, at)
-        val conflicting = photon("ambiguous", 1, "Value B", 3.0, at)
+        val conflicting = photon("ambiguous", 1, "Value B", 99.0, at)
 
         assertEquals("INDEX", assertNotNull(matrix.influence(first)).type)
         val conflictInfluence = assertNotNull(matrix.influence(conflicting))
 
         assertEquals("INDEX_CONFLICT", conflictInfluence.type)
-        assertTrue(matrix.state.value.nodes.isEmpty())
-        assertEquals(0.0, matrix.state.value.totalEnergy)
+        assertEquals("Value A", matrix.state.value.nodes[first.id]?.summary)
+        assertEquals(3.0, matrix.state.value.totalEnergy)
         val v2 = matrix.v2Snapshot(at)
         assertTrue(v2.nodes.isEmpty())
         assertEquals(1, v2.conflicts.size)
