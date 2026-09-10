@@ -11,15 +11,22 @@ enum class SourcePatchOperationType {
 data class SourcePatchOperation(
     val type: SourcePatchOperationType,
     val path: String,
-    val contentFingerprint: String? = null,
+    val content: String? = null,
 ) {
     init {
         require(path.isSafeRepositoryPath()) { "BuildStudio patch path must be normalized and relative" }
         if (type == SourcePatchOperationType.DELETE) {
-            require(contentFingerprint == null) { "Delete operation cannot carry content fingerprint" }
+            require(content == null) { "Delete operation cannot carry content" }
         } else {
-            require(!contentFingerprint.isNullOrBlank()) { "Create/update operation requires content fingerprint" }
+            require(content != null) { "Create/update operation requires content" }
+            require(content.toByteArray(Charsets.UTF_8).size <= MAX_FILE_BYTES) {
+                "BuildStudio patch file exceeds size limit"
+            }
         }
+    }
+
+    val contentFingerprint: String? = content?.let {
+        StableFieldIds.fingerprint("source-patch-content/v1", it)
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
@@ -28,6 +35,10 @@ data class SourcePatchOperation(
         path,
         contentFingerprint.orEmpty(),
     )
+
+    companion object {
+        const val MAX_FILE_BYTES = 512 * 1024
+    }
 }
 
 data class SourcePatchPlan(
@@ -40,6 +51,10 @@ data class SourcePatchPlan(
         require(operations.map { it.path }.distinct().size == operations.size) {
             "BuildStudio patch plan may touch a path only once"
         }
+        val totalBytes = operations.sumOf { operation ->
+            operation.content?.toByteArray(Charsets.UTF_8)?.size?.toLong() ?: 0L
+        }
+        require(totalBytes <= MAX_PLAN_BYTES) { "BuildStudio patch plan exceeds total size limit" }
     }
 
     val id: String = StableFieldIds.fingerprint(
@@ -47,6 +62,10 @@ data class SourcePatchPlan(
         designSpecId,
         *operations.sortedBy { it.path }.map { it.fingerprint() }.toTypedArray(),
     )
+
+    companion object {
+        const val MAX_PLAN_BYTES = 4L * 1024 * 1024
+    }
 }
 
 fun interface SourcePatchPlanner {
@@ -83,14 +102,12 @@ class BuildPathPolicy(
         val normalized = path.lowercase()
         return protectedExactPaths.any { normalized == it.lowercase() } ||
             protectedPrefixes.any { normalized.startsWith(it.lowercase()) } ||
-            PROTECTED_NAME_TOKENS.any { token ->
-                normalized.substringAfterLast('/').contains(token)
-            }
+            PROTECTED_NAME_TOKENS.any { token -> normalized.substringAfterLast('/').contains(token) }
     }
 
     private fun String.isAllowedBy(prefixes: Set<String>): Boolean = prefixes.any { rawPrefix ->
         val prefix = rawPrefix.trim().removePrefix("./").trimEnd('/')
-        this == prefix || startsWith("$prefix/")
+        prefix.isNotBlank() && (this == prefix || startsWith("$prefix/"))
     }
 
     companion object {
