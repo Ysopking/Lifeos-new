@@ -25,6 +25,7 @@ value class DeepSearchEvidenceId(val value: String) {
 @JvmInline
 value class DeepSearchHypothesisId(val value: String) {
     init { require(value.isNotBlank()) { "DeepSearch hypothesis id must not be blank" } }
+}
 
 enum class DeepSearchSourceKind {
     LOCAL,
