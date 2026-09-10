@@ -246,7 +246,7 @@ object GeneratedToolStateCodec {
     private fun DataOutputStream.writeTexts(values: List<String>) {
         require(values.size <= MAX_LIST_ENTRIES) { "Generated-tool list exceeds size limit" }
         writeInt(values.size)
-        values.forEach(::writeText)
+        values.forEach { writeText(it) }
     }
 
     private fun DataInputStream.readTexts(label: String): List<String> {
