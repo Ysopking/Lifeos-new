@@ -155,12 +155,12 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                                 enabled = !state.capabilityRequestSaving && !state.loading && !state.loadFailed,
                             ) {
                                 Text(
-                                    if (state.capabilityRequestSaving) "Anforderung wird gespeichert …"
-                                    else "Für ToolWorkshop anfordern"
+                                    if (state.capabilityRequestSaving) "Tool wird lokal geprüft …"
+                                    else "Erstes Tool genehmigen & lokal erzeugen"
                                 )
                             }
                             Text(
-                                "Die Anforderung wird lokal und dauerhaft vorgemerkt; sie startet noch keine automatische Codegenerierung.",
+                                "Der Klick genehmigt genau die erste fehlende Fähigkeit für den beschränkten lokalen ToolWorkshop. Das Ergebnis bleibt TRIAL oder REJECTED; Aktivierung braucht weiterhin die separaten Canary-/Promotion-Gates.",
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
@@ -169,7 +169,7 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                 state.capabilityRequestStatus?.let { status ->
                     Text(status, style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = model::dismissCapabilityRequestStatus) {
-                        Text("Tool-Anforderungsstatus schließen")
+                        Text("Tool-Status schließen")
                     }
                 }
                 state.shareStatus?.let { status ->
