@@ -73,14 +73,26 @@ data class GeneratedToolTrialEvidence(
     )
 }
 
-class GeneratedToolTrialLedger {
+class GeneratedToolTrialLedger(
+    private val durableState: GeneratedToolStateRepository? = null,
+) {
     private val mutex = Mutex()
     private val results = mutableMapOf<String, LinkedHashMap<String, GeneratedToolTrialResult>>()
 
-    suspend fun record(toolId: String, result: GeneratedToolTrialResult): Boolean = mutex.withLock {
+    suspend fun record(toolId: String, result: GeneratedToolTrialResult): Boolean = mutationLocked {
         require(toolId.isNotBlank()) { "Tool id must not be blank" }
         val toolResults = results.getOrPut(toolId) { linkedMapOf() }
-        if (result.invocationId in toolResults) return@withLock false
+        toolResults[result.invocationId]?.let { existing ->
+            require(existing == result) {
+                "Conflicting generated-tool trial retry for ${result.invocationId}"
+            }
+            return@mutationLocked false
+        }
+        val evidence = GeneratedToolTrialEvidence(
+            toolId = toolId,
+            results = toolResults.values.toList() + result,
+        )
+        durableState?.persistTrialEvidence(evidence)
         toolResults[result.invocationId] = result
         true
     }
@@ -94,6 +106,29 @@ class GeneratedToolTrialLedger {
     }
 
     suspend fun stats(toolId: String): GeneratedToolTrialStats = evidence(toolId).stats
+
+    /** Boot-only restore of exact durable evidence without creating a new trial event. */
+    internal suspend fun restore(evidence: GeneratedToolTrialEvidence) = mutex.withLock {
+        require(results[evidence.toolId].isNullOrEmpty()) {
+            "Generated-tool trial ledger ${evidence.toolId} is already loaded"
+        }
+        if (evidence.orderedResults.isNotEmpty()) {
+            results[evidence.toolId] = linkedMapOf<String, GeneratedToolTrialResult>().apply {
+                evidence.orderedResults.forEach { put(it.invocationId, it) }
+            }
+        }
+    }
+
+    internal suspend fun isEmpty(): Boolean = mutex.withLock { results.isEmpty() }
+
+    private suspend fun <T> mutationLocked(action: suspend () -> T): T {
+        mutex.lock()
+        return try {
+            action()
+        } finally {
+            mutex.unlock()
+        }
+    }
 }
 
 data class GeneratedToolPromotionPolicy(
@@ -197,13 +232,18 @@ class GeneratedToolLifecycleCoordinator(
     suspend fun recordTrial(toolId: String, result: GeneratedToolTrialResult): GeneratedToolTrialRecordResult {
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
         require(record.state == GeneratedToolState.TRIAL) { "Trial results may only be recorded for TRIAL tools" }
-        trialLedger.record(toolId, result)
-        val stats = trialLedger.stats(toolId)
+
         if (result.safetyViolation) {
+            // Fail closed first: durable quarantine precedes persistence of the detailed trial result.
             val reason = "sandbox-safety-violation:${result.invocationId}"
             val quarantined = tools.transition(toolId, GeneratedToolState.QUARANTINED, message = reason)
+            trialLedger.record(toolId, result)
+            val stats = trialLedger.stats(toolId)
             return GeneratedToolTrialRecordResult.Quarantined(quarantined, stats, reason)
         }
+
+        trialLedger.record(toolId, result)
+        val stats = trialLedger.stats(toolId)
         return GeneratedToolTrialRecordResult.Recorded(record, stats)
     }
 
