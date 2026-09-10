@@ -58,7 +58,9 @@ data class BuildVerificationEvidence(
     val artifact: BuildArtifactEvidence?,
 ) {
     init {
-        require(branchName.isNotBlank() && branchName != "main")
+        require(branchName.isSafeBuildStudioBranchName()) {
+            "Build verification requires an isolated BuildStudio candidate branch"
+        }
         require(branchHeadCommit.matches(Regex("[0-9a-fA-F]{40}")))
         require(patchPlanId.isNotBlank())
         require(commandResults.map { it.command }.distinct().size == commandResults.size) {
@@ -69,7 +71,7 @@ data class BuildVerificationEvidence(
     fun fingerprint(): String = StableFieldIds.fingerprint(
         "build-verification-evidence/v1",
         branchName,
-        branchHeadCommit,
+        branchHeadCommit.lowercase(),
         patchPlanId,
         artifact?.fingerprint().orEmpty(),
         *commandResults.sortedBy { it.command.name }.map { it.fingerprint() }.toTypedArray(),
@@ -104,22 +106,19 @@ data class BuildVerification(
     )
 }
 
-class BuildVerificationPolicy(
-    private val requiredCommands: Set<BuildGateCommand> = BuildGateCommand.entries.toSet(),
-) {
-    init { require(requiredCommands.isNotEmpty()) }
-
+/** Mandatory J01 gate. Tests, lintDebug and assembleDebug cannot be configured away. */
+class BuildVerificationPolicy {
     fun verify(evidence: BuildVerificationEvidence): BuildVerification {
         val failures = mutableListOf<String>()
         val byCommand = evidence.commandResults.associateBy { it.command }
-        requiredCommands.sortedBy { it.name }.forEach { command ->
+        MANDATORY_COMMANDS.sortedBy { it.name }.forEach { command ->
             val result = byCommand[command]
             when {
                 result == null -> failures += "missing-command:${command.name}"
                 !result.success -> failures += "failed-command:${command.name}"
             }
         }
-        val unexpected = byCommand.keys - requiredCommands
+        val unexpected = byCommand.keys - MANDATORY_COMMANDS
         unexpected.sortedBy { it.name }.forEach { command -> failures += "unexpected-command:${command.name}" }
         if (evidence.artifact == null) failures += "missing-debug-apk-evidence"
 
@@ -130,4 +129,24 @@ class BuildVerificationPolicy(
             failures = stable,
         )
     }
+
+    private companion object {
+        val MANDATORY_COMMANDS = setOf(
+            BuildGateCommand.TEST,
+            BuildGateCommand.LINT_DEBUG,
+            BuildGateCommand.ASSEMBLE_DEBUG,
+        )
+    }
+}
+
+internal fun String.isSafeBuildStudioBranchName(): Boolean {
+    val normalized = lowercase()
+    return isNotBlank() &&
+        this == trim() &&
+        normalized.startsWith("buildstudio/candidate-") &&
+        normalized != "buildstudio/candidate-main" &&
+        normalized != "buildstudio/candidate-master" &&
+        !normalized.contains("..") &&
+        !normalized.contains(' ') &&
+        !normalized.contains('\\')
 }
