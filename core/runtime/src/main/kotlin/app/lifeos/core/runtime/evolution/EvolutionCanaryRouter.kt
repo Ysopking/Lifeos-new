@@ -14,7 +14,6 @@ data class EvolutionCanaryRoutingContext(
     val invocationId: String,
     val taskTags: Set<String>,
     val critical: Boolean = false,
-    val now: Instant,
 ) {
     init {
         require(assignmentKey.isNotBlank()) { "Canary assignment key must not be blank" }
@@ -140,11 +139,14 @@ data class EvolutionCanaryEvidenceBundle(
  *
  * Before every candidate route, the router deterministically replays the trusted default J05 gate
  * from the original J04 evidence and requires an exact content-id match with the supplied adoption
- * evidence. A stale, forged or differently-policy-produced adoption object therefore fails closed.
+ * evidence. Canary time comes from the router-owned clock, never from caller input.
  */
-class EvolutionCanaryRouter(
+class EvolutionCanaryRouter private constructor(
     private val budgetStore: EvolutionCanaryBudgetStore,
+    private val clock: () -> Instant,
 ) {
+    constructor(budgetStore: EvolutionCanaryBudgetStore) : this(budgetStore, Instant::now)
+
     private val trustedAdoptionGate = EvolutionAdoptionGate()
 
     suspend fun route(
@@ -193,14 +195,19 @@ class EvolutionCanaryRouter(
         if (context.critical) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "critical-context")
         }
-        if (context.taskTags.isEmpty() || context.taskTags.none { it in adoptionRequest.scope.allowedTaskTags }) {
+        if (
+            context.taskTags.isEmpty() ||
+            !adoptionRequest.scope.allowedTaskTags.containsAll(context.taskTags)
+        ) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "task-outside-canary-scope")
         }
-        if (context.now.isBefore(adoptionRequest.occurredAt)) {
+
+        val routeTime = clock()
+        if (routeTime.isBefore(adoptionRequest.occurredAt)) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "canary-not-started")
         }
         val expiresAt = adoptionRequest.occurredAt.plusSeconds(adoptionRequest.scope.maxDurationSeconds)
-        if (!context.now.isBefore(expiresAt)) {
+        if (!routeTime.isBefore(expiresAt)) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "canary-expired")
         }
 
@@ -214,7 +221,7 @@ class EvolutionCanaryRouter(
                 adoptionEvidenceId = adoptionEvidence.id,
                 invocationId = context.invocationId,
                 maxInvocations = adoptionRequest.scope.maxInvocations,
-                reservedAt = context.now,
+                reservedAt = routeTime,
             )
         ) {
             is EvolutionCanaryReserveResult.Exhausted ->
@@ -239,5 +246,12 @@ class EvolutionCanaryRouter(
             assignmentKey,
         )
         return (fingerprint.take(8).toLong(16) % 1000L).toInt()
+    }
+
+    companion object {
+        internal fun forTest(
+            budgetStore: EvolutionCanaryBudgetStore,
+            clock: () -> Instant,
+        ): EvolutionCanaryRouter = EvolutionCanaryRouter(budgetStore, clock)
     }
 }
