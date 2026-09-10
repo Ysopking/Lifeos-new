@@ -2,6 +2,7 @@ package app.lifeos.next
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -60,6 +61,18 @@ private fun LifeOsApp(model: LifeOsViewModel) {
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) model.saveDraft() else model.notificationPermissionDenied()
+    }
+    val pendingShare = state.pendingShare
+    LaunchedEffect(pendingShare) {
+        if (pendingShare != null) {
+            try {
+                val shareIntent = model.createShareIntent(pendingShare)
+                context.startActivity(Intent.createChooser(shareIntent, "Mit App teilen"))
+                model.communicationShareOpened(pendingShare)
+            } catch (_: Exception) {
+                model.communicationShareFailed(pendingShare)
+            }
+        }
     }
     val visible = remember(state.photons, query) {
         val term = query.trim()
@@ -157,6 +170,12 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                     Text(status, style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = model::dismissCapabilityRequestStatus) {
                         Text("Tool-Anforderungsstatus schließen")
+                    }
+                }
+                state.shareStatus?.let { status ->
+                    Text(status, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = model::dismissShareStatus) {
+                        Text("Teilen-Status schließen")
                     }
                 }
                 state.voiceStatus?.let { status ->
