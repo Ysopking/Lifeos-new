@@ -55,6 +55,39 @@ class LanguageConstraintAndContextTest {
     }
 
     @Test
+    fun `continuation and resumed goal photons do not replace substantive active goal`() {
+        val substantive = Photon(
+            id = PhotonId("goal-substantive"),
+            content = "goal/v2\nintent=BUILD_OR_IMPLEMENT",
+            mimeType = "application/vnd.lifeos.goal+text",
+            provenance = Provenance("test", "test", Instant.parse("2026-09-10T10:00:00Z")),
+            tags = setOf("goal", "intent:build_or_implement"),
+        )
+        val continuation = Photon(
+            id = PhotonId("goal-continue"),
+            content = "goal/v2\nintent=CONTINUE",
+            mimeType = "application/vnd.lifeos.goal+text",
+            provenance = Provenance("test", "test", Instant.parse("2026-09-10T10:01:00Z")),
+            tags = setOf("goal", "intent:continue"),
+        )
+        val resumed = Photon(
+            id = PhotonId("goal-resumed"),
+            content = substantive.content,
+            mimeType = "application/vnd.lifeos.goal+text",
+            provenance = Provenance("goal-resume", "GoalResumeEngine", Instant.parse("2026-09-10T10:02:00Z")),
+            tags = substantive.tags + "goal-resumed",
+        )
+
+        val context = PhotonLanguageContextBuilder().build(
+            listOf(substantive, continuation, resumed),
+            now = Instant.parse("2026-09-10T11:00:00Z"),
+        )
+
+        assertEquals(substantive.id, context.activeGoalId)
+        assertTrue(context.items.single { it.photonId == substantive.id }.active)
+    }
+
+    @Test
     fun `context records are metadata and never become language candidates`() {
         val target = Photon(
             id = PhotonId("image-target"),
