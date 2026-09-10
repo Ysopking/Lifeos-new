@@ -22,6 +22,9 @@ class GeneratedToolRegistry {
         confidence: Double? = null,
         message: String? = null,
     ): GeneratedToolRecord = mutex.withLock {
+        require(to != GeneratedToolState.ACTIVE) {
+            "ACTIVE transition requires evidence-bound promoteWithEvidence"
+        }
         val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
         require(to in allowedTransitions.getValue(current.state)) {
             "Invalid generated tool transition ${current.state} -> $to"
@@ -35,7 +38,7 @@ class GeneratedToolRegistry {
         updated
     }
 
-    suspend fun bindPromotionEvidence(toolId: String, evidenceId: String): String = mutex.withLock {
+    internal suspend fun bindPromotionEvidence(toolId: String, evidenceId: String): String = mutex.withLock {
         val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
         require(current.state == GeneratedToolState.TRIAL) {
             "Promotion evidence may only bind a TRIAL tool"
@@ -48,6 +51,28 @@ class GeneratedToolRegistry {
         }
         promotionEvidenceIds[toolId] = evidenceId
         evidenceId
+    }
+
+    internal suspend fun promoteWithEvidence(
+        toolId: String,
+        evidenceId: String,
+        message: String,
+    ): GeneratedToolRecord = mutex.withLock {
+        val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
+        require(current.state == GeneratedToolState.TRIAL) {
+            "Only TRIAL tools may be promoted"
+        }
+        require(evidenceId.isNotBlank())
+        require(promotionEvidenceIds[toolId] == evidenceId) {
+            "Promotion evidence is not bound to $toolId"
+        }
+        require(message.isNotBlank())
+        val updated = current.copy(
+            state = GeneratedToolState.ACTIVE,
+            lastMessage = message,
+        )
+        records[toolId] = updated
+        updated
     }
 
     suspend fun promotionEvidenceId(toolId: String): String? = mutex.withLock {
@@ -68,7 +93,6 @@ class GeneratedToolRegistry {
             GeneratedToolState.TESTED to setOf(GeneratedToolState.VERIFIED, GeneratedToolState.REJECTED),
             GeneratedToolState.VERIFIED to setOf(GeneratedToolState.TRIAL, GeneratedToolState.REJECTED),
             GeneratedToolState.TRIAL to setOf(
-                GeneratedToolState.ACTIVE,
                 GeneratedToolState.QUARANTINED,
                 GeneratedToolState.REJECTED,
             ),
