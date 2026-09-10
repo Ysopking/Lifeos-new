@@ -1,6 +1,7 @@
 package app.lifeos.core.runtime.capability
 
 import app.lifeos.core.field.FieldSnapshotId
+import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.buildstudio.BuildArtifactEvidence
 import app.lifeos.core.runtime.buildstudio.BuildCapabilityChange
 import app.lifeos.core.runtime.buildstudio.BuildCapabilityChangeType
@@ -70,21 +71,35 @@ class GeneratedToolPromotionEvidenceTest {
         fixture.enterTrial()
         fixture.bindRequiredEvidence()
         fixture.recordCleanTrials()
-        fixture.lifecycle.recordHealthIncident(
-            TOOL_ID,
-            GeneratedToolHealthIncident(
-                sourceNodeId = "worker:$TOOL_ID",
-                severity = GeneratedToolHealthSeverity.DEGRADED,
-                messageFingerprint = "health-degraded",
-                occurredAt = t0.plusSeconds(10),
-            ),
-        )
+        val incident = healthIncident()
+        fixture.lifecycle.recordHealthIncident(TOOL_ID, incident)
 
         val evaluation = assertIs<GeneratedToolPromotionEvaluation.NotReady>(
             fixture.lifecycle.evaluatePromotion(TOOL_ID)
         )
 
         assertTrue("unresolved-health-incidents:1" in evaluation.reasons)
+    }
+
+    @Test
+    fun `health incident requires explicit resolution evidence before eligibility returns`() = runTest {
+        val fixture = Fixture()
+        fixture.enterTrial()
+        fixture.bindRequiredEvidence()
+        fixture.recordCleanTrials()
+        val incident = healthIncident()
+        fixture.lifecycle.recordHealthIncident(TOOL_ID, incident)
+        assertIs<GeneratedToolPromotionEvaluation.NotReady>(fixture.lifecycle.evaluatePromotion(TOOL_ID))
+
+        fixture.lifecycle.resolveHealthIncident(
+            toolId = TOOL_ID,
+            incident = incident,
+            resolutionEvidenceRef = "repair-probe:healthy",
+        )
+
+        assertIs<GeneratedToolPromotionEvaluation.Eligible>(
+            fixture.lifecycle.evaluatePromotion(TOOL_ID)
+        )
     }
 
     @Test
@@ -131,6 +146,33 @@ class GeneratedToolPromotionEvidenceTest {
     }
 
     @Test
+    fun `generic registry transition cannot bypass promotion evidence`() = runTest {
+        val fixture = Fixture()
+        fixture.enterTrial()
+
+        assertFailsWith<IllegalArgumentException> {
+            fixture.tools.transition(TOOL_ID, GeneratedToolState.ACTIVE)
+        }
+        assertEquals(GeneratedToolState.TRIAL, fixture.tools.get(TOOL_ID)?.state)
+    }
+
+    @Test
+    fun `promotion freezes evidence against late mutation`() = runTest {
+        val fixture = Fixture()
+        fixture.enterTrial()
+        fixture.bindRequiredEvidence()
+        fixture.recordCleanTrials()
+        fixture.lifecycle.promote(TOOL_ID)
+
+        assertFailsWith<IllegalArgumentException> {
+            fixture.lifecycle.recordHealthIncident(
+                TOOL_ID,
+                healthIncident().copy(occurredAt = t0.plusSeconds(40)),
+            )
+        }
+    }
+
+    @Test
     fun `build artifact with different permission contract cannot bind`() = runTest {
         val fixture = Fixture(permissions = setOf(ToolPermission.WRITE_TEMP_FILE))
         fixture.enterTrial()
@@ -144,6 +186,29 @@ class GeneratedToolPromotionEvidenceTest {
             fixture.lifecycle.bindBuildArtifact(TOOL_ID, artifactWithoutPermission)
         }
     }
+
+    @Test
+    fun `build artifact with different source cannot bind even with same capability and permissions`() = runTest {
+        val fixture = Fixture()
+        fixture.enterTrial()
+        val differentSource = buildArtifact(
+            requiredInputs = fixture.record.manifest.requiredInputs,
+            requiredOutputs = fixture.record.manifest.requiredOutputs,
+            permissions = fixture.record.manifest.permissions,
+            sourceContent = "class OtherGeneratedNormalizer",
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            fixture.lifecycle.bindBuildArtifact(TOOL_ID, differentSource)
+        }
+    }
+
+    private fun healthIncident() = GeneratedToolHealthIncident(
+        sourceNodeId = "worker:$TOOL_ID",
+        severity = GeneratedToolHealthSeverity.DEGRADED,
+        messageFingerprint = "health-degraded",
+        occurredAt = t0.plusSeconds(10),
+    )
 
     private inner class Fixture(
         permissions: Set<ToolPermission> = emptySet(),
@@ -200,6 +265,10 @@ class GeneratedToolPromotionEvidenceTest {
             generatedAt = t0,
             requiredInputs = setOf("text"),
             requiredOutputs = setOf("normalized-text"),
+            sourceContentFingerprint = StableFieldIds.fingerprint(
+                "source-patch-content/v1",
+                GENERATED_SOURCE_CONTENT,
+            ),
         ),
         state = GeneratedToolState.VERIFIED,
         verificationConfidence = 0.95,
@@ -209,6 +278,7 @@ class GeneratedToolPromotionEvidenceTest {
         requiredInputs: Set<String>,
         requiredOutputs: Set<String>,
         permissions: Set<ToolPermission>,
+        sourceContent: String = GENERATED_SOURCE_CONTENT,
     ): CandidateArtifact {
         val requirement = CapabilityRequirement(
             capabilityId = CapabilityId(CAPABILITY_ID),
@@ -232,7 +302,7 @@ class GeneratedToolPromotionEvidenceTest {
         val patch = SourcePatchPlan(
             designSpecId = design.id,
             operations = listOf(
-                SourcePatchOperation(SourcePatchOperationType.CREATE, SOURCE_PATH, "class GeneratedNormalizer"),
+                SourcePatchOperation(SourcePatchOperationType.CREATE, SOURCE_PATH, sourceContent),
                 SourcePatchOperation(SourcePatchOperationType.CREATE, TEST_PATH, "class GeneratedNormalizerTest"),
             ),
         )
@@ -290,5 +360,6 @@ class GeneratedToolPromotionEvidenceTest {
         const val TEST_PREFIX = "core/runtime/src/test/kotlin/app/lifeos/core/runtime/generated"
         const val SOURCE_PATH = "$SOURCE_PREFIX/GeneratedNormalizer.kt"
         const val TEST_PATH = "$TEST_PREFIX/GeneratedNormalizerTest.kt"
+        const val GENERATED_SOURCE_CONTENT = "class GeneratedNormalizer"
     }
 }
