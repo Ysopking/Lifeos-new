@@ -21,11 +21,16 @@ class GeneratedToolArtifactBootVerifier(
         durableStates.forEach { state ->
             val record = state.record
             if (!GeneratedToolArtifact.isBoundedSourceHash(record.manifest.sourceHash)) return@forEach
-            val artifact = requireNotNull(artifactsByTool[record.manifest.toolId]) {
-                "Bounded generated tool ${record.manifest.toolId} is missing its executable artifact"
+            val artifact = artifactsByTool[record.manifest.toolId]
+            if (record.state.requiresExecutableArtifact()) {
+                requireNotNull(artifact) {
+                    "Bounded generated tool ${record.manifest.toolId} is missing its executable artifact"
+                }
             }
-            require(artifact.matches(record)) {
-                "Bounded generated tool ${record.manifest.toolId} artifact differs from lifecycle manifest"
+            if (artifact != null) {
+                require(artifact.matches(record)) {
+                    "Bounded generated tool ${record.manifest.toolId} artifact differs from lifecycle manifest"
+                }
             }
         }
 
@@ -40,5 +45,17 @@ class GeneratedToolArtifactBootVerifier(
                 "Generated-tool artifact ${artifact.toolId} differs from lifecycle record"
             }
         }
+    }
+
+    private fun GeneratedToolState.requiresExecutableArtifact(): Boolean = when (this) {
+        GeneratedToolState.BUILT,
+        GeneratedToolState.TESTED,
+        GeneratedToolState.VERIFIED,
+        GeneratedToolState.TRIAL,
+        GeneratedToolState.ACTIVE,
+        GeneratedToolState.QUARANTINED -> true
+        GeneratedToolState.GENERATED,
+        GeneratedToolState.REJECTED,
+        GeneratedToolState.RETIRED -> false
     }
 }
