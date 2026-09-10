@@ -29,6 +29,8 @@ import app.lifeos.core.runtime.cognition.PhotonDelta
 import app.lifeos.core.runtime.cognition.PhotonDeltaType
 import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
+import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
+import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
 import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.SceneGraphPhotonFactory
 import app.lifeos.core.scene.SceneRasterizer
@@ -70,6 +72,7 @@ class LifeOsKernel internal constructor(
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
     private val continuousCognition: ContinuousCognitionEngine,
+    private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
     private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
     private val imagePhotonFactory: ImagePhotonFactory = ImagePhotonFactory(),
     private val sceneGraphPhotonFactory: SceneGraphPhotonFactory = SceneGraphPhotonFactory(),
@@ -107,7 +110,7 @@ class LifeOsKernel internal constructor(
 
     /**
      * Persists the user's exact utterance first, derives a GoalPhoton, resolves capabilities, and
-     * executes an action-ready CREATE_IMAGE goal entirely offline before returning to the caller.
+     * executes supported action-ready goals entirely offline before returning to the caller.
      */
     suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
         require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
@@ -126,6 +129,15 @@ class LifeOsKernel internal constructor(
                 createdAt = photon.provenance.createdAt,
             )
             val goal = persistAndIngest(goalPhoton.photon)
+            val localKnowledge = when {
+                !routing.ready -> null
+                !localKnowledgeGoalEngine.supports(understanding.goal.intent) -> null
+                else -> executeLocalKnowledge(
+                    goal = understanding.goal,
+                    sourcePhoton = photon,
+                    goalPhotonId = goalPhoton.photon.id,
+                )
+            }
             val imageGeneration = when {
                 understanding.goal.intent != IntentType.CREATE_IMAGE -> null
                 !routing.ready -> ImageGenerationResult.Blocked(
@@ -147,6 +159,7 @@ class LifeOsKernel internal constructor(
                 goal = goal,
                 routing = routing,
                 imageGeneration = imageGeneration,
+                localKnowledge = localKnowledge,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -211,6 +224,38 @@ class LifeOsKernel internal constructor(
                 photon = photon,
                 processingQueued = false,
                 processingFailure = error.message ?: error::class.simpleName,
+            )
+        }
+    }
+
+    private suspend fun executeLocalKnowledge(
+        goal: GoalFrame,
+        sourcePhoton: Photon,
+        goalPhotonId: PhotonId,
+    ): LocalKnowledgeExecutionResult {
+        return try {
+            val result = localKnowledgeGoalEngine.execute(
+                goal = goal,
+                sourcePhoton = sourcePhoton,
+                goalPhotonId = goalPhotonId,
+                photons = photonStore.loadAll(),
+                createdAt = sourcePhoton.provenance.createdAt,
+            )
+            when (result) {
+                is LocalKnowledgeGoalResult.Produced -> LocalKnowledgeExecutionResult.Produced(
+                    kind = result.kind,
+                    output = persistAndIngest(result.photon),
+                    evidencePhotonIds = result.evidencePhotonIds,
+                )
+                is LocalKnowledgeGoalResult.Unsupported -> LocalKnowledgeExecutionResult.Failed(
+                    "Local knowledge executor does not support ${result.intent.name}",
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            LocalKnowledgeExecutionResult.Failed(
+                error.message ?: error::class.simpleName ?: "local knowledge execution failed",
             )
         }
     }
