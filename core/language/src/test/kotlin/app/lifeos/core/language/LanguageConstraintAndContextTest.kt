@@ -111,6 +111,7 @@ class LanguageConstraintAndContextTest {
             id = PhotonId("goal-resumed"),
             content = substantive.content,
             mimeType = substantive.mimeType,
+            confidence = substantive.confidence,
             provenance = Provenance("goal-resume", "GoalResumeEngine", Instant.parse("2026-09-10T10:02:00Z")),
             tags = substantive.tags + "goal-resumed",
         )
