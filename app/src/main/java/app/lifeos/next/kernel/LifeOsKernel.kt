@@ -31,6 +31,8 @@ import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.goal.GoalResumeEngine
 import app.lifeos.core.runtime.goal.GoalResumeResult
+import app.lifeos.core.runtime.goal.LocalDeepSearchGoalEngine
+import app.lifeos.core.runtime.goal.LocalDeepSearchGoalResult
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
 import app.lifeos.core.scene.ProceduralSceneCompiler
@@ -76,6 +78,7 @@ class LifeOsKernel internal constructor(
     private val continuousCognition: ContinuousCognitionEngine,
     private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
+    private val localDeepSearchGoalEngine: LocalDeepSearchGoalEngine = LocalDeepSearchGoalEngine(),
     private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
     private val imagePhotonFactory: ImagePhotonFactory = ImagePhotonFactory(),
     private val sceneGraphPhotonFactory: SceneGraphPhotonFactory = SceneGraphPhotonFactory(),
@@ -157,6 +160,15 @@ class LifeOsKernel internal constructor(
                     goalPhotonId = effectiveGoalPhotonId,
                 )
             }
+            val localDeepSearch = when {
+                !effectiveRouting.ready -> null
+                !localDeepSearchGoalEngine.supports(effectiveGoal.intent) -> null
+                else -> executeLocalDeepSearch(
+                    goal = effectiveGoal,
+                    sourcePhoton = effectiveSource,
+                    goalPhotonId = effectiveGoalPhotonId,
+                )
+            }
             val imageGeneration = when {
                 effectiveGoal.intent != IntentType.CREATE_IMAGE -> null
                 !effectiveRouting.ready -> ImageGenerationResult.Blocked(
@@ -180,6 +192,7 @@ class LifeOsKernel internal constructor(
                 goalResume = goalResume,
                 imageGeneration = imageGeneration,
                 localKnowledge = localKnowledge,
+                localDeepSearch = localDeepSearch,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -316,6 +329,40 @@ class LifeOsKernel internal constructor(
         } catch (error: Exception) {
             LocalKnowledgeExecutionResult.Failed(
                 error.message ?: error::class.simpleName ?: "local knowledge execution failed",
+            )
+        }
+    }
+
+    private suspend fun executeLocalDeepSearch(
+        goal: GoalFrame,
+        sourcePhoton: Photon,
+        goalPhotonId: PhotonId,
+    ): LocalDeepSearchExecutionResult {
+        return try {
+            when (
+                val result = localDeepSearchGoalEngine.execute(
+                    goal = goal,
+                    sourcePhoton = sourcePhoton,
+                    goalPhotonId = goalPhotonId,
+                    photons = photonStore.loadAll(),
+                    createdAt = sourcePhoton.provenance.createdAt,
+                )
+            ) {
+                is LocalDeepSearchGoalResult.Produced -> LocalDeepSearchExecutionResult.Produced(
+                    status = result.result.status,
+                    output = persistAndIngest(result.photon),
+                    evidencePhotonIds = result.evidencePhotonIds,
+                    workUnitsUsed = result.result.workUnitsUsed,
+                )
+                is LocalDeepSearchGoalResult.Unsupported -> LocalDeepSearchExecutionResult.Failed(
+                    "Local DeepSearch executor does not support ${result.intent.name}",
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            LocalDeepSearchExecutionResult.Failed(
+                error.message ?: error::class.simpleName ?: "local DeepSearch execution failed",
             )
         }
     }

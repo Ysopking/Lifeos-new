@@ -156,6 +156,7 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/recovery/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/escalation/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/deepsearch/",
         )
         val MANDATORY_PROTECTED_EXACT_PATHS = setOf(
             "gradle.properties",
@@ -164,6 +165,8 @@ class BuildPathPolicy(
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernel.kt",
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernelFactory.kt",
             "app/src/main/java/app/lifeos/next/kernel/EvolutionRuntimeResources.kt",
+            "app/src/main/java/app/lifeos/next/kernel/LocalReminderScheduler.kt",
+            "app/src/main/java/app/lifeos/next/kernel/LocalScheduleActionExecutor.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/LanguageModels.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/LanguageUnderstandingEngine.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/PhotonLanguageContextBuilder.kt",
@@ -190,6 +193,8 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolBootStateRehydrator.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/GoalResumeEngine.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalKnowledgeGoalEngine.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalDeepSearchGoalEngine.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalScheduleGoalEngine.kt",
         )
         private val PROTECTED_NAME_TOKENS = setOf(
             "crypto",
