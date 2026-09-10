@@ -148,6 +148,7 @@ class BuildPathPolicy(
             "core/data/src/main/kotlin/app/lifeos/core/data/checkpoint/",
             "core/data/src/main/kotlin/app/lifeos/core/data/health/",
             "core/data/src/main/kotlin/app/lifeos/core/data/evolution/",
+            "core/data/src/main/kotlin/app/lifeos/core/data/capability/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/tasks/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/checkpoints/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/health/",
@@ -176,6 +177,8 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolTrialLifecycle.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolPromotionEvidence.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolAudit.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolPersistentState.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolStateCodec.kt",
         )
         private val PROTECTED_NAME_TOKENS = setOf(
             "crypto",
