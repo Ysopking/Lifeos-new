@@ -33,8 +33,8 @@ data class MatrixState(
 /**
  * Backward-compatible force-field facade over ThoughtMatrixV2.
  *
- * Existing runtime callers keep the original MatrixState surface while every accepted Photon is
- * also projected into the provenance-complete, rebuildable v2 matrix.
+ * Existing runtime callers keep the original MatrixState semantics. Equal-revision disagreements
+ * never overwrite that legacy read model, while v2 records the disagreement as unresolved truth.
  */
 class ThoughtMatrix(
     private val v2: ThoughtMatrixV2 = ThoughtMatrixV2(),
@@ -81,24 +81,14 @@ class ThoughtMatrix(
                 )
             }
 
-            is ThoughtProjectionResult.Conflict -> {
-                val previous = mutableState.value
-                val removed = previous.nodes[photon.id]
-                if (removed != null) {
-                    mutableState.value = MatrixState(
-                        nodes = previous.nodes - photon.id,
-                        totalEnergy = previous.totalEnergy - removed.energy,
-                    )
-                }
-                FieldInfluence(
-                    module = "Gedankenmatrix",
-                    photonId = photon.id,
-                    type = "INDEX_CONFLICT",
-                    deltaEnergy = 0.0,
-                    confidence = 0.0,
-                    explanation = "Equal Photon revision produced conflicting thought projections; no variant remains authoritative in the matrix",
-                )
-            }
+            is ThoughtProjectionResult.Conflict -> FieldInfluence(
+                module = "Gedankenmatrix",
+                photonId = photon.id,
+                type = "INDEX_CONFLICT",
+                deltaEnergy = 0.0,
+                confidence = 0.0,
+                explanation = "Equal Photon revision produced conflicting v2 thought projections; legacy value retained for compatibility and not treated as v2 authority",
+            )
 
             is ThoughtProjectionResult.Stale,
             is ThoughtProjectionResult.Unchanged -> null
