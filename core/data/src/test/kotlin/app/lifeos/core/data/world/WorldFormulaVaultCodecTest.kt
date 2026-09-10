@@ -42,11 +42,11 @@ class WorldFormulaVaultCodecTest {
     }
 
     @Test
-    fun `malformed container length is rejected before decrypt`() {
-        val encrypted = WorldFormulaVaultCodec.encrypt("world-snapshot".encodeToByteArray(), key).copyOf()
-        encrypted[encrypted.size - 2] = (encrypted[encrypted.size - 2] xor 0x01)
+    fun `truncated container is rejected by envelope length validation`() {
+        val encrypted = WorldFormulaVaultCodec.encrypt("world-snapshot".encodeToByteArray(), key)
+        val truncated = encrypted.copyOf(encrypted.size - 1)
 
-        assertFails { WorldFormulaVaultCodec.decrypt(encrypted, key) }
+        assertFails { WorldFormulaVaultCodec.decrypt(truncated, key) }
     }
 
     private infix fun Byte.xor(value: Int): Byte = (toInt() xor value).toByte()
