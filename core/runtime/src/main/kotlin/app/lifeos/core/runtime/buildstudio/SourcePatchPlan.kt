@@ -88,10 +88,11 @@ class BuildPathPolicy(
         val plannedPaths = design.plannedSourcePaths + design.plannedTestPaths
         val touched = patch.operations.mapTo(linkedSetOf()) { it.path }
         (touched - plannedPaths).sorted().forEach { failures += "unplanned-path:$it" }
-        (design.plannedTestPaths - touched).sorted().forEach { failures += "missing-planned-test-patch:$it" }
+        (plannedPaths - touched).sorted().forEach { failures += "missing-planned-patch:$it" }
         (spec.requiredTestPaths - design.plannedTestPaths).sorted().forEach { failures += "missing-required-test-plan:$it" }
 
-        touched.sorted().forEach { path ->
+        plannedPaths.sorted().forEach { path ->
+            if (!path.isSafeRepositoryPath()) failures += "unsafe-planned-path:$path"
             if (!path.isAllowedBy(spec.allowedPathPrefixes)) failures += "path-outside-allowlist:$path"
             if (isProtected(path)) failures += "protected-root-path:$path"
         }
