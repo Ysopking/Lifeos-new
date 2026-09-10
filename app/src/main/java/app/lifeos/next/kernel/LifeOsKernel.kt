@@ -31,10 +31,13 @@ import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.goal.GoalResumeEngine
 import app.lifeos.core.runtime.goal.GoalResumeResult
+import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
+import app.lifeos.core.runtime.goal.LocalCommunicationGoalResult
 import app.lifeos.core.runtime.goal.LocalDeepSearchGoalEngine
 import app.lifeos.core.runtime.goal.LocalDeepSearchGoalResult
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
+import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.SceneGraphPhotonFactory
 import app.lifeos.core.scene.SceneRasterizer
@@ -79,6 +82,7 @@ class LifeOsKernel internal constructor(
     private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
     private val localDeepSearchGoalEngine: LocalDeepSearchGoalEngine = LocalDeepSearchGoalEngine(),
+    private val localCommunicationGoalEngine: LocalCommunicationGoalEngine = LocalCommunicationGoalEngine(),
     private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
     private val imagePhotonFactory: ImagePhotonFactory = ImagePhotonFactory(),
     private val sceneGraphPhotonFactory: SceneGraphPhotonFactory = SceneGraphPhotonFactory(),
@@ -110,6 +114,13 @@ class LifeOsKernel internal constructor(
                 sourcePhotonId = context.sourcePhoton.id,
                 goalPhotonId = context.goalPhotonId,
                 referenceInstant = context.sourcePhoton.provenance.createdAt,
+            )
+        },
+        prepareCommunication = { context ->
+            executeLocalCommunication(
+                goal = context.goal,
+                sourcePhoton = context.sourcePhoton,
+                goalPhotonId = context.goalPhotonId,
             )
         },
     )
@@ -194,6 +205,7 @@ class LifeOsKernel internal constructor(
                 imageGeneration = actions.imageGeneration,
                 localKnowledge = actions.localKnowledge,
                 localDeepSearch = actions.localDeepSearch,
+                localCommunication = actions.localCommunication,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -204,6 +216,10 @@ class LifeOsKernel internal constructor(
             )
         }
     }
+
+    /** Records only local handoff to Android's chooser; it never claims external delivery. */
+    suspend fun recordCommunicationHandoff(share: LocalSharePreparation): PhotonSubmissionResult =
+        persistAndIngest(localCommunicationGoalEngine.createHandoffReceipt(share))
 
     /** Reads and integrity-verifies an image asset referenced by a generated image photon. */
     suspend fun loadImageAsset(photon: Photon): ByteArray? {
@@ -364,6 +380,38 @@ class LifeOsKernel internal constructor(
         } catch (error: Exception) {
             LocalDeepSearchExecutionResult.Failed(
                 error.message ?: error::class.simpleName ?: "local DeepSearch execution failed",
+            )
+        }
+    }
+
+    private suspend fun executeLocalCommunication(
+        goal: GoalFrame,
+        sourcePhoton: Photon,
+        goalPhotonId: PhotonId,
+    ): LocalCommunicationExecutionResult {
+        return try {
+            when (
+                val result = localCommunicationGoalEngine.prepare(
+                    goal = goal,
+                    sourcePhoton = sourcePhoton,
+                    goalPhotonId = goalPhotonId,
+                    photons = photonStore.loadAll(),
+                )
+            ) {
+                is LocalCommunicationGoalResult.Prepared ->
+                    LocalCommunicationExecutionResult.Prepared(result.share)
+                is LocalCommunicationGoalResult.Blocked ->
+                    LocalCommunicationExecutionResult.Blocked(result.reason)
+                is LocalCommunicationGoalResult.Unsupported ->
+                    LocalCommunicationExecutionResult.Failed(
+                        "Local communication executor does not support ${result.intent.name}",
+                    )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            LocalCommunicationExecutionResult.Failed(
+                error.message ?: error::class.simpleName ?: "local communication preparation failed",
             )
         }
     }
