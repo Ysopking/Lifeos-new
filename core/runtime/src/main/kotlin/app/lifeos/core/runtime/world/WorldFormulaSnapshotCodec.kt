@@ -55,7 +55,9 @@ object WorldFormulaSnapshotCodec {
                 stream.writeInt(iteration.stableRounds)
                 require(iteration.contributions.size <= MAX_CONTRIBUTIONS_PER_ITERATION)
                 stream.writeInt(iteration.contributions.size)
-                iteration.contributions.sortedBy { it.edgeId.value }.forEach(stream::writeContribution)
+                iteration.contributions.sortedBy { it.edgeId.value }.forEach { contribution ->
+                    stream.writeContribution(contribution)
+                }
             }
 
             require(snapshot.conflicts.size <= MAX_CONFLICTS)
@@ -254,7 +256,7 @@ object WorldFormulaSnapshotCodec {
     private fun DataOutputStream.writeStringSet(values: Set<String>, max: Int) {
         require(values.size <= max)
         writeInt(values.size)
-        values.sorted().forEach(::writeString)
+        values.sorted().forEach { value -> writeString(value) }
     }
 
     private fun DataInputStream.readStringSet(max: Int): Set<String> {
