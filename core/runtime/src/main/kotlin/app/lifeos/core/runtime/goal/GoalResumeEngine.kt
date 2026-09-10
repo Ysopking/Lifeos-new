@@ -84,6 +84,9 @@ class GoalResumeEngine {
         if (!referenced.isGoalPhoton()) {
             return blocked(GoalResumeBlockReason.TARGET_NOT_GOAL, "Continuation target is not a goal photon")
         }
+        if (referenced.phase == PhotonPhase.ARCHIVED) {
+            return blocked(GoalResumeBlockReason.TARGET_ARCHIVED, "Archived goals cannot be resumed")
+        }
 
         val target = unwrapResumedGoal(referenced, byId)
             ?: return blocked(
@@ -157,6 +160,7 @@ class GoalResumeEngine {
         val visited = linkedSetOf<PhotonId>()
         repeat(MAX_RESUME_CHAIN_DEPTH) {
             if (!visited.add(current.id)) return null
+            if (current.phase == PhotonPhase.ARCHIVED) return null
             if ("goal-resumed" !in current.tags) return current
             val parents = current.relations
                 .asSequence()
@@ -188,22 +192,23 @@ private object PersistedGoalFrameDecoder {
     fun decode(photon: Photon): GoalFrame? = runCatching {
         val lines = photon.content.lines()
         require(lines.firstOrNull() == "goal/v2")
-        val intent = required(lines, "intent").let(IntentType::valueOf)
-        val language = required(lines, "language").let(LanguageCode::valueOf)
+        val intent = IntentType.valueOf(required(lines, "intent"))
+        val language = LanguageCode.valueOf(required(lines, "language"))
         val confidence = required(lines, "confidence").toDouble().also { require(it in 0.0..1.0) }
         val objective = unescape(required(lines, "objective")).also { require(it.isNotBlank()) }
 
-        val constraints = lines.mapNotNull { line ->
-            if (!line.startsWith("constraint.")) return@mapNotNull null
-            val assignment = splitUnescaped(line.removePrefix("constraint."), '=') ?: return@mapNotNull null
-            val payload = splitUnescaped(assignment.second, '|') ?: return@mapNotNull null
-            GoalConstraint(
-                key = unescape(assignment.first),
-                value = unescape(payload.first),
-                confidence = payload.second.toDouble(),
-                source = "persisted-goal:${photon.id.value}",
-            )
-        }
+        val constraints = lines
+            .filter { it.startsWith("constraint.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("constraint."), '='))
+                val payload = requireNotNull(splitUnescaped(assignment.second, '|'))
+                GoalConstraint(
+                    key = unescape(assignment.first),
+                    value = unescape(payload.first),
+                    confidence = payload.second.toDouble(),
+                    source = "persisted-goal:${photon.id.value}",
+                )
+            }
 
         val entities = constraints.mapIndexedNotNull { index, constraint ->
             val type = EntityType.entries.firstOrNull {
@@ -219,37 +224,40 @@ private object PersistedGoalFrameDecoder {
             )
         }
 
-        val references = lines.mapNotNull { line ->
-            if (!line.startsWith("reference.")) return@mapNotNull null
-            val assignment = splitUnescaped(line.removePrefix("reference."), '=') ?: return@mapNotNull null
-            val kind = ReferenceKind.valueOf(unescape(assignment.first))
-            val payload = splitUnescaped(assignment.second, '|') ?: return@mapNotNull null
-            val rawTarget = unescape(payload.first)
-            val target = rawTarget.takeUnless { it == "UNRESOLVED" }?.let(::PhotonId)
-            val score = payload.second.toDouble()
-            ResolvedReference(
-                expression = ReferenceExpression(
-                    kind = kind,
-                    rawText = target?.value ?: kind.name.lowercase(),
-                    preferredKinds = emptySet(),
-                    confidence = score,
-                ),
-                targetPhotonId = target,
-                score = score,
-            )
-        }
+        val references = lines
+            .filter { it.startsWith("reference.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("reference."), '='))
+                val kind = ReferenceKind.valueOf(unescape(assignment.first))
+                val payload = requireNotNull(splitUnescaped(assignment.second, '|'))
+                val rawTarget = unescape(payload.first)
+                val target = rawTarget.takeUnless { it == "UNRESOLVED" }?.let(::PhotonId)
+                val score = payload.second.toDouble().also { require(it in 0.0..1.0) }
+                ResolvedReference(
+                    expression = ReferenceExpression(
+                        kind = kind,
+                        rawText = target?.value ?: kind.name.lowercase(),
+                        preferredKinds = emptySet(),
+                        confidence = score,
+                    ),
+                    targetPhotonId = target,
+                    score = score,
+                )
+            }
 
-        val ambiguities = lines.mapNotNull { line ->
-            if (!line.startsWith("ambiguity.")) return@mapNotNull null
-            val assignment = splitUnescaped(line.removePrefix("ambiguity."), '=') ?: return@mapNotNull null
-            val payload = splitUnescaped(assignment.second, '|') ?: return@mapNotNull null
-            Ambiguity(
-                code = unescape(assignment.first),
-                message = unescape(payload.first),
-                alternatives = emptyList(),
-                severity = payload.second.toDouble(),
-            )
-        }
+        val ambiguities = lines
+            .filter { it.startsWith("ambiguity.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("ambiguity."), '='))
+                val payload = requireNotNull(splitUnescaped(assignment.second, '|'))
+                val severity = payload.second.toDouble().also { require(it in 0.0..1.0) }
+                Ambiguity(
+                    code = unescape(assignment.first),
+                    message = unescape(payload.first),
+                    alternatives = emptyList(),
+                    severity = severity,
+                )
+            }
 
         GoalFrame(
             intent = intent,
