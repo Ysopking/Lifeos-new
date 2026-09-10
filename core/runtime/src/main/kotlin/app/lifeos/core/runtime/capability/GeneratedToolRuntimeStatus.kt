@@ -11,7 +11,7 @@ data class GeneratedToolRuntimeItem(
     val expectedOutputs: Int,
     val safetyViolations: Int,
     val averageLatencyMs: Double,
-    val activeProviderRegistered: Boolean,
+    val promotionEvidenceId: String?,
     val lastMessage: String?,
 ) {
     init {
@@ -23,12 +23,12 @@ data class GeneratedToolRuntimeItem(
         require(expectedOutputs in 0..trials)
         require(safetyViolations in 0..trials)
         require(averageLatencyMs >= 0.0)
+        require(promotionEvidenceId == null || promotionEvidenceId.isNotBlank())
     }
 }
 
 data class GeneratedToolRuntimeStatus(
     val tools: List<GeneratedToolRuntimeItem>,
-    val generatedProviderIds: Set<String>,
 ) {
     init {
         require(tools.map { it.toolId } == tools.map { it.toolId }.sorted()) {
@@ -37,57 +37,45 @@ data class GeneratedToolRuntimeStatus(
         require(tools.map { it.toolId }.distinct().size == tools.size) {
             "Generated-tool runtime status contains duplicate tool ids"
         }
-        require(generatedProviderIds.none { it.isBlank() })
     }
 
     val totalTools: Int get() = tools.size
     val activeTools: Int get() = tools.count { it.state == GeneratedToolState.ACTIVE }
     val trialTools: Int get() = tools.count { it.state == GeneratedToolState.TRIAL }
     val quarantinedTools: Int get() = tools.count { it.state == GeneratedToolState.QUARANTINED }
+    val rejectedTools: Int get() = tools.count { it.state == GeneratedToolState.REJECTED }
     val totalTrials: Int get() = tools.sumOf { it.trials }
     val totalSafetyViolations: Int get() = tools.sumOf { it.safetyViolations }
 }
 
 /**
- * J12 read-only boundary. UI/kernel callers receive immutable status DTOs only; mutable registries,
- * trial ledgers and promotion primitives remain inside the process composition root.
+ * J12 read-only boundary over the durable J10 source of truth. The mutable repository never leaves
+ * this reader; UI callers receive immutable projections only. J11 already requires every ACTIVE
+ * durable generated tool to have its exact GENERATED_TOOL provider restored before boot succeeds.
  */
 class GeneratedToolRuntimeStatusReader(
-    private val tools: GeneratedToolRegistry,
-    private val trialLedger: GeneratedToolTrialLedger,
-    private val capabilityRegistry: CapabilityRegistry,
+    private val repository: GeneratedToolStateRepository,
 ) {
     suspend fun snapshot(): GeneratedToolRuntimeStatus {
-        val records = tools.snapshot()
-        val generatedProviders = capabilityRegistry
-            .all(includeUnavailable = true)
-            .filter { it.providerType == ProviderType.GENERATED_TOOL }
-        val providersById = generatedProviders.associateBy { it.providerId }
-
-        val items = records.sortedBy { it.manifest.toolId }.map { record ->
-            val stats = trialLedger.stats(record.manifest.toolId)
-            val provider = providersById[record.manifest.toolId]
-            GeneratedToolRuntimeItem(
-                toolId = record.manifest.toolId,
-                capabilityId = record.manifest.sourceCapability.value,
-                state = record.state,
-                verificationConfidence = record.verificationConfidence,
-                trials = stats.trials,
-                successes = stats.successes,
-                expectedOutputs = stats.expectedOutputs,
-                safetyViolations = stats.safetyViolations,
-                averageLatencyMs = stats.averageLatencyMs,
-                activeProviderRegistered = record.state == GeneratedToolState.ACTIVE &&
-                    provider != null &&
-                    provider.capabilityId == record.manifest.sourceCapability &&
-                    (provider.state == ProviderState.ACTIVE || provider.state == ProviderState.DEGRADED),
-                lastMessage = record.lastMessage,
-            )
-        }
-
+        val states = repository.loadAll().sortedBy { it.record.manifest.toolId }
         return GeneratedToolRuntimeStatus(
-            tools = items,
-            generatedProviderIds = generatedProviders.map { it.providerId }.toSortedSet(),
+            tools = states.map { state ->
+                val record = state.record
+                val stats = state.trialEvidence.stats
+                GeneratedToolRuntimeItem(
+                    toolId = record.manifest.toolId,
+                    capabilityId = record.manifest.sourceCapability.value,
+                    state = record.state,
+                    verificationConfidence = record.verificationConfidence,
+                    trials = stats.trials,
+                    successes = stats.successes,
+                    expectedOutputs = stats.expectedOutputs,
+                    safetyViolations = stats.safetyViolations,
+                    averageLatencyMs = stats.averageLatencyMs,
+                    promotionEvidenceId = record.promotionEvidenceId,
+                    lastMessage = record.lastMessage,
+                )
+            },
         )
     }
 }
