@@ -29,6 +29,8 @@ class BuildStudioCoordinatorTest {
         )
         assertTrue(ready.candidate.branchName.startsWith("buildstudio/candidate-"))
         assertEquals(APPLIED_HEAD, ready.candidate.branchHeadCommit)
+        assertEquals(ready.verification.id, ready.candidate.verificationId)
+        assertEquals(ready.verification.evidence.patchPlanId, ready.candidate.patchPlanId)
     }
 
     @Test
@@ -53,7 +55,7 @@ class BuildStudioCoordinatorTest {
     }
 
     @Test
-    fun `workspace cannot move patch to a different branch`() = runBlocking {
+    fun `workspace cannot move patch to a different candidate branch`() = runBlocking {
         val fixture = Fixture(movePatchBranch = true)
         val result = fixture.coordinator().build(fixture.spec)
 
@@ -111,7 +113,10 @@ class BuildStudioCoordinatorTest {
         val spec = BuildSpec(
             sourceCommit = SOURCE_COMMIT,
             gap = CapabilityGap(requirement, CapabilityGapType.CAPABILITY_MISSING),
-            allowedPathPrefixes = setOf("core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/generated", "core/runtime/src/test/kotlin/app/lifeos/core/runtime/buildstudio/generated"),
+            allowedPathPrefixes = setOf(
+                "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/generated",
+                "core/runtime/src/test/kotlin/app/lifeos/core/runtime/buildstudio/generated",
+            ),
             requiredTestPaths = setOf(TEST_PATH),
         )
 
@@ -146,7 +151,7 @@ class BuildStudioCoordinatorTest {
                     plan: SourcePatchPlan,
                 ): PatchApplicationResult {
                     events += "patch"
-                    val name = if (movePatchBranch) "buildstudio/other-branch" else branch.name
+                    val name = if (movePatchBranch) "buildstudio/candidate-other" else branch.name
                     return PatchApplicationResult(
                         branch = BuildWorkspaceBranch(name, branch.baseCommit, APPLIED_HEAD),
                         patchPlanId = plan.id,
