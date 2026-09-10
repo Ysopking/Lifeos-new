@@ -9,6 +9,7 @@ import app.lifeos.core.runtime.buildstudio.BuildCapabilityChangeType
 import app.lifeos.core.runtime.buildstudio.BuildCommandResult
 import app.lifeos.core.runtime.buildstudio.BuildDesignSpec
 import app.lifeos.core.runtime.buildstudio.BuildGateCommand
+import app.lifeos.core.runtime.buildstudio.BuildPathPolicy
 import app.lifeos.core.runtime.buildstudio.BuildPermissionDelta
 import app.lifeos.core.runtime.buildstudio.BuildProvenance
 import app.lifeos.core.runtime.buildstudio.BuildSpec
@@ -62,6 +63,7 @@ class GeneratedToolPromotionEvidenceTest {
         assertEquals(setOf("text"), provider.contract.requiredInputs)
         assertEquals(setOf("normalized-text"), provider.contract.outputs)
         assertEquals(1.0, provider.reliability)
+        assertTrue(tools.verifyAuditChain(TOOL_ID))
     }
 
     @Test
@@ -189,6 +191,137 @@ class GeneratedToolPromotionEvidenceTest {
         val stricter = baseline.copy(minimumTrials = 4)
         assertTrue(baseline.fingerprint().isNotBlank())
         assertFalse(baseline.fingerprint() == stricter.fingerprint())
+    }
+
+    @Test
+    fun `exact active promotion rolls back to quarantine removes provider and appends audit`() = runTest {
+        val tools = GeneratedToolRegistry(now = { t0 })
+        val capabilities = CapabilityRegistry()
+        val lifecycle = GeneratedToolLifecycleCoordinator(
+            tools = tools,
+            capabilityRegistry = capabilities,
+        )
+        tools.register(verifiedRecord())
+        lifecycle.admitToTrial(TOOL_ID)
+        recordCleanTrials(lifecycle)
+        val promotion = lifecycle.preparePromotionEvidence(TOOL_ID, candidateArtifact())
+        lifecycle.promote(TOOL_ID, promotion)
+        assertEquals(1, capabilities.providersFor(CAPABILITY_ID).size)
+
+        val request = GeneratedToolRollbackRequest(
+            toolId = TOOL_ID,
+            expectedPromotionEvidenceId = promotion.id,
+            actorId = "promotion:local-user",
+            evidenceRef = "rollback:incident-42",
+            reason = "post-promotion-regression",
+            occurredAt = t0.plusSeconds(200),
+        )
+        val result = lifecycle.rollback(request)
+
+        assertEquals(GeneratedToolState.QUARANTINED, result.record.state)
+        assertEquals(promotion.id, result.record.promotionEvidenceId)
+        assertNotNull(result.removedCapabilityProvider)
+        assertTrue(capabilities.providersFor(CAPABILITY_ID, includeUnavailable = true).isEmpty())
+        assertEquals(GeneratedToolAuditAction.ROLLED_BACK, result.auditEntry.action)
+        assertEquals("promotion:local-user", result.auditEntry.actorId)
+        assertEquals("rollback:incident-42", result.auditEntry.evidenceRef)
+        assertTrue(result.auditEntry.reason?.contains(request.id) == true)
+
+        val audit = tools.auditSnapshot(TOOL_ID)
+        assertEquals(GeneratedToolAuditAction.REGISTERED, audit.first().action)
+        assertEquals(GeneratedToolAuditAction.PROMOTED, audit[audit.lastIndex - 1].action)
+        assertEquals(GeneratedToolAuditAction.ROLLED_BACK, audit.last().action)
+        assertEquals(audit[audit.lastIndex - 1].id, audit.last().previousEntryId)
+        assertTrue(tools.verifyAuditChain(TOOL_ID))
+    }
+
+    @Test
+    fun `stale rollback cannot remove active provider`() = runTest {
+        val tools = GeneratedToolRegistry()
+        val capabilities = CapabilityRegistry()
+        val lifecycle = GeneratedToolLifecycleCoordinator(tools = tools, capabilityRegistry = capabilities)
+        tools.register(verifiedRecord())
+        lifecycle.admitToTrial(TOOL_ID)
+        recordCleanTrials(lifecycle)
+        val promotion = lifecycle.preparePromotionEvidence(TOOL_ID, candidateArtifact())
+        lifecycle.promote(TOOL_ID, promotion)
+
+        val stale = GeneratedToolRollbackRequest(
+            toolId = TOOL_ID,
+            expectedPromotionEvidenceId = "stale-promotion-evidence",
+            actorId = "promotion:local-user",
+            evidenceRef = "rollback:stale",
+            reason = "should-not-apply",
+            occurredAt = t0.plusSeconds(201),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            lifecycle.rollback(stale)
+        }
+        assertEquals(GeneratedToolState.ACTIVE, tools.get(TOOL_ID)?.state)
+        assertEquals(1, capabilities.providersFor(CAPABILITY_ID).size)
+        assertEquals(GeneratedToolAuditAction.PROMOTED, tools.auditSnapshot(TOOL_ID).last().action)
+        assertTrue(tools.verifyAuditChain(TOOL_ID))
+    }
+
+    @Test
+    fun `generic capability registry rejects generated provider bypass`() = runTest {
+        val generated = CapabilityDescriptor(
+            capabilityId = CAPABILITY_ID,
+            providerId = TOOL_ID,
+            providerType = ProviderType.GENERATED_TOOL,
+            contract = CapabilityContract(
+                requiredInputs = setOf("text"),
+                outputs = setOf("normalized-text"),
+            ),
+            trustLevel = TrustLevel.LOW,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            CapabilityRegistry(initialProviders = listOf(generated))
+        }
+        val registry = CapabilityRegistry()
+        assertFailsWith<IllegalArgumentException> {
+            registry.register(generated)
+        }
+        assertTrue(registry.providersFor(CAPABILITY_ID, includeUnavailable = true).isEmpty())
+    }
+
+    @Test
+    fun `rejection is append only audited and chain remains valid`() = runTest {
+        val tools = GeneratedToolRegistry(now = { t0 })
+        tools.register(verifiedRecord())
+        tools.transition(
+            toolId = TOOL_ID,
+            to = GeneratedToolState.REJECTED,
+            message = "manual-policy-rejection",
+        )
+
+        val audit = tools.auditSnapshot(TOOL_ID)
+        assertEquals(2, audit.size)
+        assertEquals(GeneratedToolAuditAction.REGISTERED, audit[0].action)
+        assertEquals(GeneratedToolAuditAction.REJECTED, audit[1].action)
+        assertEquals(audit[0].id, audit[1].previousEntryId)
+        assertEquals("manual-policy-rejection", audit[1].reason)
+        assertTrue(tools.verifyAuditChain(TOOL_ID))
+    }
+
+    @Test
+    fun `rollback identity is deterministic and content sensitive and audit path is protected`() {
+        val first = GeneratedToolRollbackRequest(
+            toolId = TOOL_ID,
+            expectedPromotionEvidenceId = "promotion-1",
+            actorId = "promotion:local-user",
+            evidenceRef = "incident:42",
+            reason = "regression",
+            occurredAt = t0,
+        )
+        val same = first.copy()
+        val changed = first.copy(reason = "different-regression")
+
+        assertEquals(first.id, same.id)
+        assertFalse(first.id == changed.id)
+        assertTrue(BuildPathPolicy().isProtected(J03_AUDIT_PATH))
     }
 
     private suspend fun recordCleanTrials(
@@ -348,5 +481,7 @@ class GeneratedToolPromotionEvidenceTest {
         private const val TEST_PREFIX = "core/runtime/src/test/kotlin/app/lifeos/core/runtime/generated"
         private const val SOURCE_PATH = "$SOURCE_PREFIX/J03Tool.kt"
         private const val TEST_PATH = "$TEST_PREFIX/J03ToolTest.kt"
+        private const val J03_AUDIT_PATH =
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolAudit.kt"
     }
 }

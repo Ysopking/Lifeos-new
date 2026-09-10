@@ -11,11 +11,42 @@ class CapabilityRegistry(
 
     init {
         initialProviders.forEach { descriptor ->
+            require(descriptor.providerType != ProviderType.GENERATED_TOOL) {
+                "Generated capability providers require J03 promotion evidence"
+            }
             providers[descriptor.capabilityId to descriptor.providerId] = descriptor
         }
     }
 
     suspend fun register(descriptor: CapabilityDescriptor): CapabilityDescriptor = mutex.withLock {
+        require(descriptor.providerType != ProviderType.GENERATED_TOOL) {
+            "Generated capability providers require J03 promotion evidence"
+        }
+        providers[descriptor.capabilityId to descriptor.providerId] = descriptor
+        descriptor
+    }
+
+    internal suspend fun registerGenerated(
+        descriptor: CapabilityDescriptor,
+        activeRecord: GeneratedToolRecord,
+        evidence: GeneratedToolPromotionEvidence,
+    ): CapabilityDescriptor = mutex.withLock {
+        require(descriptor.providerType == ProviderType.GENERATED_TOOL)
+        require(activeRecord.state == GeneratedToolState.ACTIVE) {
+            "Generated capability registration requires ACTIVE generated-tool record"
+        }
+        require(activeRecord.promotionEvidenceId == evidence.id) {
+            "Generated capability registration requires the accepted promotion evidence"
+        }
+        require(evidence.toolId == activeRecord.manifest.toolId)
+        require(descriptor.providerId == activeRecord.manifest.toolId)
+        require(descriptor.capabilityId == activeRecord.manifest.sourceCapability)
+        require(descriptor.contract.requiredInputs == activeRecord.manifest.requiredInputs)
+        require(descriptor.contract.outputs == activeRecord.manifest.requiredOutputs)
+        require(descriptor.state == ProviderState.ACTIVE)
+        require(descriptor.trustLevel == TrustLevel.LOW) {
+            "Generated capability providers start at LOW trust"
+        }
         providers[descriptor.capabilityId to descriptor.providerId] = descriptor
         descriptor
     }
