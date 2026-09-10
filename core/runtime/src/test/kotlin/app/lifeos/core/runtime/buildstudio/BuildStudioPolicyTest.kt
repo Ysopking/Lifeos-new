@@ -52,6 +52,23 @@ class BuildStudioPolicyTest {
     }
 
     @Test
+    fun `ownership recovery crypto composition and BuildStudio gates are always protected`() {
+        val policy = BuildPathPolicy()
+        val roots = listOf(
+            "core/model/src/main/kotlin/app/lifeos/core/model/task/Task.kt",
+            "core/data/src/main/kotlin/app/lifeos/core/data/task/TaskRepository.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/recovery/LeaseRecoveryService.kt",
+            "core/model/src/main/kotlin/app/lifeos/core/model/health/RuntimeProtectionState.kt",
+            "core/data/src/main/kotlin/app/lifeos/core/data/world/WorldFormulaVaultCodec.kt",
+            "app/src/main/java/app/lifeos/next/kernel/LifeOsKernelFactory.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildVerification.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolTrialLifecycle.kt",
+        )
+
+        roots.forEach { path -> assertTrue(policy.isProtected(path), "expected protected root: $path") }
+    }
+
+    @Test
     fun `all planned source and tests must be materialized exactly`() {
         val spec = spec()
         val design = BuildDesignSpec(
@@ -131,7 +148,7 @@ class BuildStudioPolicyTest {
                 branchName = "feature/generated-module",
                 branchHeadCommit = "b".repeat(40),
                 patchPlanId = "patch",
-                commandResults = BuildGateCommand.entries.map(::success),
+                commandResults = BuildGateCommand.entries.map { success(it) },
                 artifact = BuildArtifactEvidence("artifact://debug.apk", "a".repeat(64)),
             )
         }
