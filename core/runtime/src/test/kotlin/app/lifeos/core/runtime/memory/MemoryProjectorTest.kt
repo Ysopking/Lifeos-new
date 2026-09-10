@@ -73,9 +73,10 @@ class MemoryProjectorTest {
     fun `fact and preference use distinct stable keys even for same semantic key`() = runTest {
         val matrix = ThoughtMatrixV2 { at }
         matrix.project(input(photon("same-source", "Tea"), "drink"))
-        val node = matrix.snapshot(at).nodes.single()
+        val snapshot = matrix.snapshot(at)
+        val node = snapshot.nodes.single()
         val report = MemoryProjector().project(
-            matrix.snapshot(at),
+            snapshot,
             listOf(
                 MemoryProjectionDirective(
                     node.id,
@@ -116,14 +117,12 @@ class MemoryProjectorTest {
     }
 
     @Test
-    fun `directive cannot target missing or conflicted thought node`() = runTest {
+    fun `directive cannot target missing thought node`() = runTest {
         val report = MemoryProjector().project(
             snapshot = ThoughtMatrixV2 { at }.snapshot(at),
             directives = listOf(
                 MemoryProjectionDirective(
-                    thoughtNodeId = app.lifeos.core.runtime.thought.ThoughtNodeId(
-                        "thought-node:missing"
-                    ),
+                    thoughtNodeId = app.lifeos.core.runtime.thought.ThoughtNodeId("thought-node:missing"),
                     kind = MemoryKind.PROCEDURAL,
                     evidenceKind = MemoryEvidenceKind.GENERATED_STRATEGY,
                 )
@@ -132,6 +131,28 @@ class MemoryProjectorTest {
 
         assertTrue(report.candidates.isEmpty())
         assertEquals("thought-node-not-active-or-conflicted", report.rejected.single().reason)
+    }
+
+    @Test
+    fun `active thought explicitly marked conflicted is rejected instead of throwing`() = runTest {
+        val matrix = ThoughtMatrixV2 { at }
+        matrix.project(input(photon("marked-conflict", "Ambiguous"), "claim"))
+        val base = matrix.snapshot(at)
+        val conflictedNode = base.nodes.single().copy(
+            verification = ThoughtVerificationStatus.CONFLICTED,
+        )
+        val legalExternalSnapshot = base.copy(nodes = listOf(conflictedNode))
+        val directive = MemoryProjectionDirective(
+            thoughtNodeId = conflictedNode.id,
+            kind = MemoryKind.PROCEDURAL,
+            evidenceKind = MemoryEvidenceKind.GENERATED_STRATEGY,
+        )
+
+        val report = MemoryProjector().project(legalExternalSnapshot, listOf(directive))
+
+        assertTrue(report.candidates.isEmpty())
+        assertEquals(2, report.rejected.size)
+        assertTrue(report.rejected.all { it.reason == "conflicted-thought-node-not-projectable" })
     }
 
     private fun input(photon: Photon, semanticKey: String) = ThoughtProjectionInput(
