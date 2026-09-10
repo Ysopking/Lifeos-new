@@ -113,6 +113,19 @@ class LanguageGoalCapabilityRouter(
                 cost = 0.0,
             ),
             CapabilityDescriptor(
+                capabilityId = CapabilityId("image.transform.mmsi"),
+                providerId = "local-image-transform-core",
+                providerType = ProviderType.MODULE,
+                contract = CapabilityContract(
+                    requiredInputs = setOf("image-photon"),
+                    outputs = setOf("image-photon"),
+                ),
+                state = ProviderState.ACTIVE,
+                trustLevel = TrustLevel.SYSTEM,
+                reliability = 1.0,
+                cost = 0.0,
+            ),
+            CapabilityDescriptor(
                 capabilityId = CapabilityId("deepsearch.query"),
                 providerId = "local-deepsearch-core",
                 providerType = ProviderType.MODULE,
