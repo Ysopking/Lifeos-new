@@ -50,14 +50,9 @@ sealed interface EvolutionCanaryReserveResult {
     ) : EvolutionCanaryReserveResult
 
     data class Exhausted(val usedInvocations: Int) : EvolutionCanaryReserveResult
-
     data class Stopped(val killSwitch: EvolutionCanaryKillSwitchEvidence) : EvolutionCanaryReserveResult
 }
 
-/**
- * Storage contract for atomic canary-budget claims. Production adapters must persist this state if
- * the canary is expected to survive process death. The router deliberately has no in-memory default.
- */
 interface EvolutionCanaryBudgetStore {
     suspend fun reserve(
         adoptionEvidenceId: String,
@@ -70,7 +65,6 @@ interface EvolutionCanaryBudgetStore {
     suspend fun usedInvocations(adoptionEvidenceId: String): Int
 }
 
-/** In-memory implementation for deterministic tests and explicitly ephemeral callers only. */
 internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryRuntimeStore {
     private val mutex = Mutex()
     private val reservations = mutableMapOf<String, LinkedHashMap<String, EvolutionCanaryReservation>>()
@@ -151,7 +145,8 @@ data class EvolutionCanaryEvidenceBundle(
 
 /**
  * J06/J07 enforce the J05 scope and persistent kill switch before a TRIAL candidate can be selected.
- * The runtime store must make kill-switch observation and reservation atomic at its storage boundary.
+ * A tripped canary returns the exact validated baseline even if the live candidate is already
+ * QUARANTINED; candidate replay is only required when candidate routing remains possible.
  */
 class EvolutionCanaryRouter(
     private val runtimeStore: EvolutionCanaryRuntimeStore,
@@ -167,6 +162,22 @@ class EvolutionCanaryRouter(
         val adoptionRequest = evidence.adoptionRequest
         val currentCandidate = evidence.currentCandidate
         val currentBaseline = evidence.currentBaseline
+
+        require(currentBaseline.providerId == subject.baselineProviderId) {
+            "Canary baseline provider differs from evolution subject"
+        }
+        require(currentBaseline.evolutionFingerprint() == subject.baselineDescriptorFingerprint) {
+            "Canary baseline changed after independent evaluation"
+        }
+        require(currentBaseline.state == ProviderState.ACTIVE || currentBaseline.state == ProviderState.DEGRADED) {
+            "Canary baseline must remain usable"
+        }
+
+        runtimeStore.killSwitch(adoptionEvidence.id)?.let { stop ->
+            require(stop.adoptionEvidenceId == adoptionEvidence.id)
+            require(stop.candidateToolId == subject.candidateToolId)
+            return EvolutionCanaryRoute.Baseline(currentBaseline, "canary-kill-switch:${stop.reason.name}")
+        }
 
         val replayedAdoption = trustedAdoptionGate.evaluate(
             subject = subject,
@@ -193,16 +204,8 @@ class EvolutionCanaryRouter(
         require(currentCandidate.state == GeneratedToolState.TRIAL) {
             "Canary candidate must remain TRIAL"
         }
-        require(currentBaseline.providerId == subject.baselineProviderId)
-        require(currentBaseline.state == ProviderState.ACTIVE || currentBaseline.state == ProviderState.DEGRADED) {
-            "Canary baseline must remain usable"
-        }
         require(!adoptionRequest.scope.productiveEffectsAllowed) {
             "Initial canary cannot permit productive effects"
-        }
-
-        runtimeStore.killSwitch(adoptionEvidence.id)?.let { stop ->
-            return EvolutionCanaryRoute.Baseline(currentBaseline, "canary-kill-switch:${stop.reason.name}")
         }
 
         if (context.critical) {
@@ -237,11 +240,13 @@ class EvolutionCanaryRouter(
             is EvolutionCanaryReserveResult.Exhausted ->
                 EvolutionCanaryRoute.Baseline(currentBaseline, "invocation-budget-exhausted")
 
-            is EvolutionCanaryReserveResult.Stopped ->
+            is EvolutionCanaryReserveResult.Stopped -> {
+                require(reservation.killSwitch.candidateToolId == subject.candidateToolId)
                 EvolutionCanaryRoute.Baseline(
                     currentBaseline,
                     "canary-kill-switch:${reservation.killSwitch.reason.name}",
                 )
+            }
 
             is EvolutionCanaryReserveResult.Reserved ->
                 EvolutionCanaryRoute.Candidate(
