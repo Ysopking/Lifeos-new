@@ -81,8 +81,8 @@ class GeneratedToolTrialLedger(
 
     suspend fun record(toolId: String, result: GeneratedToolTrialResult): Boolean = mutationLocked {
         require(toolId.isNotBlank()) { "Tool id must not be blank" }
-        val toolResults = results.getOrPut(toolId) { linkedMapOf() }
-        toolResults[result.invocationId]?.let { existing ->
+        val currentResults = results[toolId]
+        currentResults?.get(result.invocationId)?.let { existing ->
             require(existing == result) {
                 "Conflicting generated-tool trial retry for ${result.invocationId}"
             }
@@ -90,10 +90,10 @@ class GeneratedToolTrialLedger(
         }
         val evidence = GeneratedToolTrialEvidence(
             toolId = toolId,
-            results = toolResults.values.toList() + result,
+            results = currentResults?.values?.toList().orEmpty() + result,
         )
         durableState?.persistTrialEvidence(evidence)
-        toolResults[result.invocationId] = result
+        results.getOrPut(toolId) { linkedMapOf() }[result.invocationId] = result
         true
     }
 
