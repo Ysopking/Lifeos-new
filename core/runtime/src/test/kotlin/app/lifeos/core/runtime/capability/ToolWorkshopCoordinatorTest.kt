@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.capability
 
+import app.lifeos.core.field.FieldSnapshotId
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -26,6 +27,30 @@ class ToolWorkshopCoordinatorTest {
         assertEquals(GeneratedToolState.VERIFIED, result.record.state)
         assertEquals(0.92, result.record.verificationConfidence)
         assertEquals(GeneratedToolState.VERIFIED, registry.get("tool-test")?.state)
+        assertEquals(emptySet(), result.designFieldSnapshotIds)
+    }
+
+    @Test
+    fun fieldSnapshotsAreCapturedBeforeDesignAndBoundToPromotionLedger() = runTest {
+        val registry = GeneratedToolRegistry()
+        val evidenceLedger = GeneratedToolPromotionEvidenceLedger()
+        val snapshotId = FieldSnapshotId("snapshot:tool-design")
+        val coordinator = coordinator(
+            registry = registry,
+            security = ToolSecurityResult(accepted = true),
+            tests = ToolTestResult(success = true, passed = 4, failed = 0),
+            verification = CapabilityVerificationResult(verified = true, confidence = 0.95),
+            promotionEvidenceLedger = evidenceLedger,
+            fieldEvidenceProvider = ToolWorkshopFieldEvidenceProvider { requestedGap ->
+                assertEquals(gap, requestedGap)
+                setOf(snapshotId)
+            },
+        )
+
+        val result = assertIs<ToolWorkshopResult.Verified>(coordinator.generate(gap))
+
+        assertEquals(setOf(snapshotId), result.designFieldSnapshotIds)
+        assertEquals(setOf(snapshotId), evidenceLedger.snapshot("tool-test").fieldSnapshotIds)
     }
 
     @Test
@@ -49,6 +74,9 @@ class ToolWorkshopCoordinatorTest {
         security: ToolSecurityResult,
         tests: ToolTestResult,
         verification: CapabilityVerificationResult,
+        promotionEvidenceLedger: GeneratedToolPromotionEvidenceLedger? = null,
+        fieldEvidenceProvider: ToolWorkshopFieldEvidenceProvider =
+            ToolWorkshopFieldEvidenceProvider { emptySet() },
     ) = ToolWorkshopCoordinator(
         specificationBuilder = object : ToolSpecificationBuilder {
             override suspend fun build(gap: CapabilityGap) = ToolSpecification(
@@ -91,6 +119,8 @@ class ToolWorkshopCoordinatorTest {
             ) = verification
         },
         registry = registry,
+        promotionEvidenceLedger = promotionEvidenceLedger,
+        fieldEvidenceProvider = fieldEvidenceProvider,
         now = { Instant.parse("2026-09-07T18:00:00Z") },
         newToolId = { "tool-test" },
     )
