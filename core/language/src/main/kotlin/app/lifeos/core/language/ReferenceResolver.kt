@@ -12,6 +12,8 @@ class ReferenceExpressionExtractor {
         val preferred = buildSet {
             if (wordSet.any { it in setOf("bild", "bilder", "foto", "fotos", "image", "images", "photo", "photos", "picture", "pictures") }) add("image")
             if (wordSet.any { it in setOf("datei", "dateien", "file", "files", "dokument", "dokumente", "document", "documents") }) add("file")
+            if (wordSet.any { it in setOf("apk", "apks", "paket", "package") }) add("apk")
+            if (wordSet.any { it in setOf("modul", "module", "modules", "komponente", "komponenten", "component", "components") }) add("module")
             if (wordSet.any { it in setOf("ziel", "ziele", "goal", "goals", "plan", "aufgabe", "aufgaben", "task", "tasks") }) add("goal")
         }
         val result = mutableListOf<ReferenceExpression>()
@@ -19,20 +21,34 @@ class ReferenceExpressionExtractor {
         explicitIdRegex.findAll(utterance.original).forEach { match ->
             result += ReferenceExpression(ReferenceKind.EXPLICIT_ID, match.value, preferred, 1.0)
         }
-        if (wordSet.any { it in setOf("gestern", "yesterday") } && preferred.isNotEmpty()) {
-            result += ReferenceExpression(ReferenceKind.YESTERDAY, "yesterday", preferred, 0.96)
+        if (wordSet.any { it in setOf("gestern", "yesterday") }) {
+            result += ReferenceExpression(ReferenceKind.YESTERDAY, utterance.original, preferred, 0.96)
         }
         if (wordSet.any { it in setOf("vorher", "zuvor", "previous", "before") }) {
-            result += ReferenceExpression(ReferenceKind.PREVIOUS, "previous", preferred, 0.92)
+            result += ReferenceExpression(ReferenceKind.PREVIOUS, utterance.original, preferred, 0.92)
         }
         if (wordSet.any { it in setOf("letzte", "letzten", "letztes", "letzter", "last") }) {
-            result += ReferenceExpression(ReferenceKind.LAST_RESULT, "last", preferred, 0.90)
+            result += ReferenceExpression(ReferenceKind.LAST_RESULT, utterance.original, preferred, 0.90)
         }
-        if (wordSet.any { it in setOf("dieses", "diese", "diesen", "dieser", "this", "these") } && preferred.isNotEmpty()) {
-            result += ReferenceExpression(ReferenceKind.THIS, "this", preferred, 0.88)
-        }
-        if (wordSet.any { it in setOf("das", "jene", "jener", "jenes", "that", "those") } && preferred.isNotEmpty()) {
-            result += ReferenceExpression(ReferenceKind.THAT, "that", preferred, 0.82)
+        if (
+            preferred.isNotEmpty() &&
+            wordSet.any { it in setOf("andere", "anderen", "anderes", "anderer", "other", "another") }
+        ) {
+            result += ReferenceExpression(ReferenceKind.OTHER, utterance.original, preferred, 0.94)
+        } else {
+            if (wordSet.any { it in setOf("dieses", "diese", "diesen", "dieser", "this", "these") } && preferred.isNotEmpty()) {
+                result += ReferenceExpression(ReferenceKind.THIS, utterance.original, preferred, 0.88)
+            }
+            if (
+                wordSet.any {
+                    it in setOf(
+                        "das", "die", "der", "den", "dem",
+                        "jene", "jener", "jenes", "that", "those", "the",
+                    )
+                } && preferred.isNotEmpty()
+            ) {
+                result += ReferenceExpression(ReferenceKind.THAT, utterance.original, preferred, 0.82)
+            }
         }
         if (topIntent == IntentType.CONTINUE && result.isEmpty()) {
             result += ReferenceExpression(ReferenceKind.PREVIOUS, utterance.original, setOf("goal"), 0.98)
@@ -41,18 +57,13 @@ class ReferenceExpressionExtractor {
     }
 }
 
+/**
+ * Semantic reference scorer. Runtime durability is deliberately outside this class: callers may
+ * provide process-local or durable context candidates, then reuse the same deterministic ranking.
+ */
 class ReferenceResolver {
     fun resolve(expression: ReferenceExpression, context: LanguageContext): ResolvedReference {
-        if (expression.kind == ReferenceKind.EXPLICIT_ID) {
-            val id = PhotonId(expression.rawText)
-            val found = context.items.firstOrNull { it.photonId == id }
-            return ResolvedReference(expression, found?.photonId, if (found != null) 1.0 else 0.0)
-        }
-        if (context.items.isEmpty()) return ResolvedReference(expression, null, 0.0)
-
-        val candidates = context.items.map { item -> item.photonId to score(item, expression, context) }
-            .filter { it.second > 0.0 }
-            .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+        val candidates = rank(expression, context)
         val best = candidates.firstOrNull()
         return ResolvedReference(
             expression = expression,
@@ -62,19 +73,54 @@ class ReferenceResolver {
         )
     }
 
+    fun rank(expression: ReferenceExpression, context: LanguageContext): List<Pair<PhotonId, Double>> {
+        if (expression.kind == ReferenceKind.EXPLICIT_ID) {
+            val id = PhotonId(expression.rawText)
+            val found = context.items.any { it.photonId == id }
+            return if (found) listOf(id to 1.0) else emptyList()
+        }
+        if (context.items.isEmpty()) return emptyList()
+
+        return context.items
+            .map { item -> item.photonId to score(item, expression, context) }
+            .filter { it.second > 0.0 }
+            .groupBy { it.first }
+            .map { (id, scored) -> id to scored.maxOf { it.second } }
+            .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+    }
+
     private fun score(item: LanguageContextItem, expression: ReferenceExpression, context: LanguageContext): Double {
         var score = 0.05
-        if (expression.preferredKinds.isEmpty() || item.kind in expression.preferredKinds || item.tags.any { it in expression.preferredKinds }) {
+        if (
+            expression.preferredKinds.isEmpty() ||
+            item.kind in expression.preferredKinds ||
+            item.tags.any { it in expression.preferredKinds }
+        ) {
             score += 0.34
         } else {
             score -= 0.20
         }
-        if (item.active) score += 0.16
-        if (item.photonId == context.activeGoalId && expression.kind in setOf(ReferenceKind.PREVIOUS, ReferenceKind.LAST_RESULT, ReferenceKind.THIS, ReferenceKind.THAT)) {
+        if (expression.kind == ReferenceKind.OTHER) {
+            score += if (item.active) -0.18 else 0.20
+        } else if (item.active) {
+            score += 0.16
+        }
+        if (
+            item.photonId == context.activeGoalId &&
+            expression.kind in setOf(
+                ReferenceKind.PREVIOUS,
+                ReferenceKind.LAST_RESULT,
+                ReferenceKind.THIS,
+                ReferenceKind.THAT,
+            )
+        ) {
             score += 0.32
         }
 
-        val ageHours = Duration.between(item.createdAt, context.now).toMinutes().coerceAtLeast(0).toDouble() / 60.0
+        val ageHours = Duration.between(item.createdAt, context.now)
+            .toMinutes()
+            .coerceAtLeast(0)
+            .toDouble() / 60.0
         val recency = (1.0 - ageHours / 168.0).coerceIn(0.0, 1.0)
         score += recency * 0.22
         if (expression.kind == ReferenceKind.YESTERDAY) {
