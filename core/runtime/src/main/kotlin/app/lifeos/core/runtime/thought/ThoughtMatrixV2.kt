@@ -76,7 +76,7 @@ class ThoughtMatrixV2(
     suspend fun project(input: ThoughtProjectionInput): ThoughtProjectionResult = mutex.withLock {
         val projected = projectSource(input)
         val current = mutableState.value
-        val activeConflict = current.conflicts.firstOrNull { it.photonId == input.photon.id }
+        val activeConflict = current.conflicts.firstOrNull { it.nodeId == projected.node.id }
 
         if (activeConflict != null) {
             return@withLock when {
@@ -99,10 +99,10 @@ class ThoughtMatrixV2(
                             revision = current.revision + 1,
                             nodes = current.nodes,
                             relations = current.relations.filterNot {
-                                it.sourcePhotonId == projected.node.photonId
+                                it.sourceNodeId == projected.node.id
                             },
                             conflicts = current.conflicts.filterNot {
-                                it.photonId == projected.node.photonId
+                                it.nodeId == projected.node.id
                             } + expanded,
                             capturedAt = now(),
                         )
@@ -114,12 +114,12 @@ class ThoughtMatrixV2(
                 else -> {
                     val next = buildSnapshot(
                         revision = current.revision + 1,
-                        nodes = current.nodes.filterNot { it.photonId == projected.node.photonId } + projected.node,
+                        nodes = current.nodes.filterNot { it.id == projected.node.id } + projected.node,
                         relations = current.relations.filterNot {
-                            it.sourcePhotonId == projected.node.photonId
+                            it.sourceNodeId == projected.node.id
                         } + projected.relations,
                         conflicts = current.conflicts.filterNot {
-                            it.photonId == projected.node.photonId
+                            it.nodeId == projected.node.id
                         },
                         capturedAt = now(),
                     )
@@ -132,7 +132,7 @@ class ThoughtMatrixV2(
             }
         }
 
-        val existing = current.nodes.firstOrNull { it.photonId == input.photon.id }
+        val existing = current.nodes.firstOrNull { it.id == projected.node.id }
         if (existing == null) {
             val next = buildSnapshot(
                 revision = current.revision + 1,
@@ -153,7 +153,7 @@ class ThoughtMatrixV2(
             )
         }
 
-        val existingRelations = current.relations.filter { it.sourcePhotonId == existing.photonId }
+        val existingRelations = current.relations.filter { it.sourceNodeId == existing.id }
         val existingFingerprint = projectionFingerprint(existing, existingRelations)
         if (projected.node.sourceRevision == existing.sourceRevision) {
             if (projected.fingerprint == existingFingerprint) {
@@ -161,14 +161,15 @@ class ThoughtMatrixV2(
             }
 
             val conflict = ThoughtProjectionConflict(
+                nodeId = existing.id,
                 photonId = existing.photonId,
                 sourceRevision = existing.sourceRevision,
                 fingerprints = listOf(existingFingerprint, projected.fingerprint).distinct().sorted(),
             )
             val next = buildSnapshot(
                 revision = current.revision + 1,
-                nodes = current.nodes.filterNot { it.photonId == existing.photonId },
-                relations = current.relations.filterNot { it.sourcePhotonId == existing.photonId },
+                nodes = current.nodes.filterNot { it.id == existing.id },
+                relations = current.relations.filterNot { it.sourceNodeId == existing.id },
                 conflicts = current.conflicts + conflict,
                 capturedAt = now(),
             )
@@ -178,9 +179,9 @@ class ThoughtMatrixV2(
 
         val next = buildSnapshot(
             revision = current.revision + 1,
-            nodes = current.nodes.filterNot { it.photonId == existing.photonId } + projected.node,
-            relations = current.relations.filterNot { it.sourcePhotonId == existing.photonId } + projected.relations,
-            conflicts = current.conflicts.filterNot { it.photonId == existing.photonId },
+            nodes = current.nodes.filterNot { it.id == existing.id } + projected.node,
+            relations = current.relations.filterNot { it.sourceNodeId == existing.id } + projected.relations,
+            conflicts = current.conflicts.filterNot { it.nodeId == existing.id },
             capturedAt = now(),
         )
         mutableState.value = next
@@ -196,17 +197,19 @@ class ThoughtMatrixV2(
         val relations = mutableListOf<ThoughtRelation>()
         val conflicts = mutableListOf<ThoughtProjectionConflict>()
 
-        projected.groupBy { it.node.photonId }
-            .toSortedMap(compareBy<PhotonId> { it.value })
-            .forEach { (photonId, versions) ->
+        projected.groupBy { it.node.id }
+            .toSortedMap(compareBy<ThoughtNodeId> { it.value })
+            .forEach { (_, versions) ->
                 val highestRevision = versions.maxOf { it.node.sourceRevision }
                 val highest = versions
                     .filter { it.node.sourceRevision == highestRevision }
                     .distinctBy { it.fingerprint }
                     .sortedBy { it.fingerprint }
                 if (highest.size > 1) {
+                    val sample = highest.first().node
                     conflicts += ThoughtProjectionConflict(
-                        photonId = photonId,
+                        nodeId = sample.id,
+                        photonId = sample.photonId,
                         sourceRevision = highestRevision,
                         fingerprints = highest.map { it.fingerprint }.sorted(),
                     )
@@ -230,7 +233,10 @@ class ThoughtMatrixV2(
         ThoughtMatrixRebuildReport(
             snapshot = next,
             changed = changed,
-            acceptedPhotonIds = next.nodes.map { it.photonId },
+            acceptedPhotonIds = next.nodes
+                .map { it.photonId }
+                .distinct()
+                .sortedBy { it.value },
             conflicts = next.conflicts,
         )
     }
@@ -242,7 +248,9 @@ class ThoughtMatrixV2(
     private fun projectSource(input: ThoughtProjectionInput): ProjectedSource {
         val photon = input.photon
         val sourceFingerprint = sourcePhotonFingerprint(photon)
+        val nodeId = ThoughtNodeId.create(photon.id, input.fieldDomainId, input.semanticKey)
         val node = ThoughtNode(
+            id = nodeId,
             provenance = ThoughtProvenance(
                 sourcePhotonId = photon.id,
                 sourceRevision = photon.revision,
@@ -265,6 +273,7 @@ class ThoughtMatrixV2(
         val relations = photon.relations
             .map { relation ->
                 ThoughtRelation.create(
+                    sourceNodeId = nodeId,
                     sourcePhotonId = photon.id,
                     targetPhotonId = relation.target,
                     type = relationType(relation.type),
@@ -295,7 +304,7 @@ class ThoughtMatrixV2(
         capturedAt = capturedAt,
     )
 
-    private fun sourcePhotonFingerprint(photon: Photon): String = StableFieldIds.fingerprint(
+    private fun sourcePhotonFingerprint(photon: Photon): String = ThoughtFingerprint.exact(
         "photon/v1",
         photon.id.value,
         photon.revision.toString(),
@@ -317,7 +326,8 @@ class ThoughtMatrixV2(
 
     private fun projectionFingerprint(node: ThoughtNode, relations: List<ThoughtRelation>): String =
         StableFieldIds.fingerprint(
-            "thought-projection/v1",
+            "thought-projection/v2",
+            node.id.value,
             node.photonId.value,
             node.sourceRevision.toString(),
             node.provenance.sourceFingerprint,
