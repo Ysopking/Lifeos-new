@@ -17,7 +17,6 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
 import app.lifeos.core.runtime.goal.LocalSharePreparation
-import app.lifeos.next.kernel.AndroidLocalReminderScheduler
 import app.lifeos.next.kernel.GoalResumeExecutionResult
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
@@ -25,7 +24,6 @@ import app.lifeos.next.kernel.LocalCommunicationExecutionResult
 import app.lifeos.next.kernel.LocalDeepSearchExecutionResult
 import app.lifeos.next.kernel.LocalImageTransformExecutionResult
 import app.lifeos.next.kernel.LocalKnowledgeExecutionResult
-import app.lifeos.next.kernel.LocalScheduleActionExecutor
 import app.lifeos.next.kernel.LocalScheduleExecutionResult
 import app.lifeos.next.kernel.LocalShareIntentFactory
 import java.util.concurrent.atomic.AtomicBoolean
@@ -79,9 +77,6 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private val kernel = owner.kernel
     private val generatedToolStatusReader = owner.generatedToolStatusReader
     private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
-    private val localScheduleExecutor = LocalScheduleActionExecutor(
-        AndroidLocalReminderScheduler(application.applicationContext)
-    )
     private val localShareIntentFactory = LocalShareIntentFactory(application.applicationContext, kernel)
     private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
@@ -278,9 +273,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                val baseResult = kernel.persistUserUtterance(photon)
-                val schedule = localScheduleExecutor.execute(kernel, baseResult)
-                val result = if (schedule == null) baseResult else baseResult.copy(localSchedule = schedule)
+                val result = kernel.persistUserUtterance(photon)
                 val retainDraft =
                     result.localSchedule is LocalScheduleExecutionResult.Blocked ||
                         result.localImageTransform is LocalImageTransformExecutionResult.Blocked
