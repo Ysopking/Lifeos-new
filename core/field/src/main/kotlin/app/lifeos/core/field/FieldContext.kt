@@ -7,6 +7,8 @@ import java.time.Instant
 enum class FieldContextScope {
     CURRENT_TASK,
     CURRENT_CONVERSATION,
+    CURRENT_PROJECT,
+    CURRENT_GOAL,
     PERSON_CONTEXT,
     DOCUMENT_CONTEXT,
     FINANCIAL_CONTEXT,
@@ -92,7 +94,8 @@ data class FieldContext(
                 reference.revision.toString(),
                 reference.confidence.toString(),
                 reference.observedAt.toString(),
-            ) + reference.semanticTerms.map(::normalizeContextTerm).sorted()
+            ) + reference.scopes.map { "scope:${it.name}" }.sorted() +
+                reference.semanticTerms.map(::normalizeContextTerm).sorted()
         }.toTypedArray(),
     )
 }
