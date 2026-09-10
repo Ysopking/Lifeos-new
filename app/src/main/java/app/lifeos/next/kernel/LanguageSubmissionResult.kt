@@ -2,6 +2,7 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.GoalPhoton
+import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingResult
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
 
@@ -18,8 +19,12 @@ data class LanguageSubmissionResult(
 ) {
     val sourceStored: Boolean get() = true
     val languageUnderstood: Boolean get() = understanding != null && goalPhoton != null && languageFailure == null
-    val effectiveGoal: GoalFrame? get() =
-        (goalResume as? GoalResumeExecutionResult.Resumed)?.frame ?: understanding?.goal
+    val effectiveGoal: GoalFrame? get() = when (val resume = goalResume) {
+        is GoalResumeExecutionResult.Resumed -> resume.frame
+        is GoalResumeExecutionResult.Blocked,
+        is GoalResumeExecutionResult.Failed -> null
+        null -> understanding?.goal?.takeUnless { it.intent == IntentType.CONTINUE }
+    }
     val effectiveRouting: GoalCapabilityResolution? get() =
         (goalResume as? GoalResumeExecutionResult.Resumed)?.routing ?: routing
     val fullyQueued: Boolean get() =
