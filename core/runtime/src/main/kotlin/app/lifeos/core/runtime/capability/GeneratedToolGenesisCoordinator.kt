@@ -15,7 +15,8 @@ sealed interface GeneratedToolGenesisResult {
 /**
  * Safe default entrypoint for future Genesis triggers. A generated artifact can
  * leave this coordinator only as TRIAL or REJECTED; it can never become ACTIVE
- * as a side effect of generation.
+ * as a side effect of generation. J03 field evidence is explicitly handed from
+ * workshop output into the lifecycle before trial admission.
  */
 class GeneratedToolGenesisCoordinator(
     private val workshop: ToolWorkshopCoordinator,
@@ -28,20 +29,24 @@ class GeneratedToolGenesisCoordinator(
                 reasons = listOf(workshopResult.reason),
             )
 
-            is ToolWorkshopResult.Verified -> when (
-                val trial = lifecycle.admitToTrial(workshopResult.record.manifest.toolId)
-            ) {
-                is GeneratedToolTrialAdmissionResult.TrialStarted ->
-                    GeneratedToolGenesisResult.TrialReady(
-                        record = trial.record,
-                        sandboxProfileId = trial.sandbox.profileId,
-                    )
+            is ToolWorkshopResult.Verified -> {
+                val toolId = workshopResult.record.manifest.toolId
+                if (workshopResult.designFieldSnapshotIds.isNotEmpty()) {
+                    lifecycle.bindDesignFieldSnapshots(toolId, workshopResult.designFieldSnapshotIds)
+                }
+                when (val trial = lifecycle.admitToTrial(toolId)) {
+                    is GeneratedToolTrialAdmissionResult.TrialStarted ->
+                        GeneratedToolGenesisResult.TrialReady(
+                            record = trial.record,
+                            sandboxProfileId = trial.sandbox.profileId,
+                        )
 
-                is GeneratedToolTrialAdmissionResult.Rejected ->
-                    GeneratedToolGenesisResult.Rejected(
-                        record = trial.record,
-                        reasons = trial.reasons,
-                    )
+                    is GeneratedToolTrialAdmissionResult.Rejected ->
+                        GeneratedToolGenesisResult.Rejected(
+                            record = trial.record,
+                            reasons = trial.reasons,
+                        )
+                }
             }
         }
     }
