@@ -208,7 +208,7 @@ class EncryptedEvolutionStore(context: Context) : EvolutionPromotionRuntimeStore
     }
 
     private suspend fun <T> ioLocked(block: () -> T): T = withContext(Dispatchers.IO) {
-        processMutex.withLock(block)
+        processMutex.withLock { block() }
     }
 
     private fun readSnapshotLocked(): EvolutionVaultSnapshot {
