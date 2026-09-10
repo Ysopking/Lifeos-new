@@ -163,6 +163,8 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/SourcePatchPlan.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildStudioCoordinator.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildVerification.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildProvenance.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/CandidateArtifact.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/ToolWorkshopCoordinator.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolRegistry.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolTrialLifecycle.kt",
