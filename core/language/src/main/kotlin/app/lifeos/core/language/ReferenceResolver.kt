@@ -19,12 +19,16 @@ class ReferenceExpressionExtractor {
     private val goalNouns = setOf(
         "ziel", "ziele", "goal", "goals", "plan", "aufgabe", "aufgaben", "task", "tasks"
     )
+    private val resultNouns = setOf(
+        "ergebnis", "ergebnisse", "antwort", "antworten", "result", "results", "answer", "answers"
+    )
     private val preferredNouns = mapOf(
         "image" to imageNouns,
         "file" to fileNouns,
         "apk" to apkNouns,
         "module" to moduleNouns,
         "goal" to goalNouns,
+        "result" to resultNouns,
     )
 
     fun extract(utterance: NormalizedUtterance, topIntent: IntentType): List<ReferenceExpression> {
@@ -36,6 +40,7 @@ class ReferenceExpressionExtractor {
             if (wordSet.any { it in apkNouns }) add("apk")
             if (wordSet.any { it in moduleNouns }) add("module")
             if (wordSet.any { it in goalNouns }) add("goal")
+            if (wordSet.any { it in resultNouns }) add("result")
         }
         val result = mutableListOf<ReferenceExpression>()
 
