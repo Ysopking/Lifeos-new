@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.withLock
 class GeneratedToolRegistry {
     private val mutex = Mutex()
     private val records = linkedMapOf<String, GeneratedToolRecord>()
+    private val promotionEvidenceIds = linkedMapOf<String, String>()
 
     suspend fun register(record: GeneratedToolRecord): GeneratedToolRecord = mutex.withLock {
         require(record.manifest.toolId !in records) {
@@ -32,6 +33,26 @@ class GeneratedToolRegistry {
         )
         records[toolId] = updated
         updated
+    }
+
+    suspend fun bindPromotionEvidence(toolId: String, evidenceId: String): String = mutex.withLock {
+        val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
+        require(current.state == GeneratedToolState.TRIAL) {
+            "Promotion evidence may only bind a TRIAL tool"
+        }
+        require(evidenceId.isNotBlank()) { "Promotion evidence id must not be blank" }
+        val existing = promotionEvidenceIds[toolId]
+        if (existing != null) {
+            require(existing == evidenceId) { "Conflicting promotion evidence for $toolId" }
+            return@withLock existing
+        }
+        promotionEvidenceIds[toolId] = evidenceId
+        evidenceId
+    }
+
+    suspend fun promotionEvidenceId(toolId: String): String? = mutex.withLock {
+        require(toolId.isNotBlank())
+        promotionEvidenceIds[toolId]
     }
 
     suspend fun get(toolId: String): GeneratedToolRecord? = mutex.withLock { records[toolId] }
