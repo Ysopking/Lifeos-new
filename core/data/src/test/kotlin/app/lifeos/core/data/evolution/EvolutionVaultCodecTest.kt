@@ -38,18 +38,10 @@ class EvolutionVaultCodecTest {
         )
 
         val stoppedReservation = reservation("adoption-stopped", "call-stop", 1, t0.plusSeconds(30))
-        val stoppedOutcome = EvolutionCanaryOutcome(
+        val stoppedOutcome = hardFailureOutcome(
             adoptionEvidenceId = "adoption-stopped",
-            reservationId = stoppedReservation.id,
             candidateToolId = "tool-stopped",
-            candidateRecordFingerprint = "candidate-stopped",
-            invocationId = stoppedReservation.invocationId,
-            inputFingerprint = "input-stopped",
-            success = false,
-            producedExpectedOutput = false,
-            outputFingerprint = null,
-            latencyMs = 9,
-            hardFailures = setOf(EvolutionHardFailure.SAFETY_VIOLATION),
+            reservation = stoppedReservation,
             recordedAt = t0.plusSeconds(31),
         )
         val stop = EvolutionCanaryKillSwitchEvidence(
@@ -83,6 +75,25 @@ class EvolutionVaultCodecTest {
 
         assertEquals(snapshot.buckets.sortedBy { it.adoptionEvidenceId }, decoded.buckets)
         assertContentEquals(encoded, EvolutionVaultCodec.encode(decoded))
+    }
+
+    @Test
+    fun `hard failure outcome without matching stop is rejected`() {
+        val reservation = reservation("adoption-hard", "call-hard", 1, t0)
+        val outcome = hardFailureOutcome(
+            adoptionEvidenceId = "adoption-hard",
+            candidateToolId = "tool-hard",
+            reservation = reservation,
+            recordedAt = t0.plusSeconds(1),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            EvolutionVaultBucket(
+                adoptionEvidenceId = "adoption-hard",
+                reservations = listOf(reservation),
+                outcomes = listOf(outcome),
+            )
+        }
     }
 
     @Test
@@ -181,6 +192,26 @@ class EvolutionVaultCodecTest {
         outputFingerprint = "output-${reservation.invocationId}",
         latencyMs = 5,
         hardFailures = emptySet(),
+        recordedAt = recordedAt,
+    )
+
+    private fun hardFailureOutcome(
+        adoptionEvidenceId: String,
+        candidateToolId: String,
+        reservation: EvolutionCanaryReservation,
+        recordedAt: Instant,
+    ) = EvolutionCanaryOutcome(
+        adoptionEvidenceId = adoptionEvidenceId,
+        reservationId = reservation.id,
+        candidateToolId = candidateToolId,
+        candidateRecordFingerprint = "candidate-record-$candidateToolId",
+        invocationId = reservation.invocationId,
+        inputFingerprint = "input-${reservation.invocationId}",
+        success = false,
+        producedExpectedOutput = false,
+        outputFingerprint = null,
+        latencyMs = 9,
+        hardFailures = setOf(EvolutionHardFailure.SAFETY_VIOLATION),
         recordedAt = recordedAt,
     )
 
