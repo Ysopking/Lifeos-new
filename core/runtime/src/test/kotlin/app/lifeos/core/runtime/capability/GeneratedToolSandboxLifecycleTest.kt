@@ -89,9 +89,8 @@ class GeneratedToolSandboxLifecycleTest {
     }
 
     @Test
-    fun threeCleanTrialsRequireExplicitPromotionAndRegisterCapability() = runTest {
+    fun threeCleanTrialsRemainNotReadyWithoutJ03Evidence() = runTest {
         val tools = GeneratedToolRegistry()
-        val capabilities = CapabilityRegistry()
         tools.register(
             verifiedRecord(
                 permissions = emptySet(),
@@ -99,10 +98,7 @@ class GeneratedToolSandboxLifecycleTest {
                 requiredOutputs = setOf("normalized-text"),
             )
         )
-        val lifecycle = GeneratedToolLifecycleCoordinator(
-            tools = tools,
-            capabilityRegistry = capabilities,
-        )
+        val lifecycle = GeneratedToolLifecycleCoordinator(tools = tools)
         lifecycle.admitToTrial("tool-1")
 
         repeat(3) { index ->
@@ -118,20 +114,13 @@ class GeneratedToolSandboxLifecycleTest {
             )
         }
 
-        val evaluation = assertIs<GeneratedToolPromotionEvaluation.Eligible>(
+        val evaluation = assertIs<GeneratedToolPromotionEvaluation.NotReady>(
             lifecycle.evaluatePromotion("tool-1")
         )
         assertEquals(3, evaluation.stats.trials)
+        assertTrue("missing-build-provenance" in evaluation.reasons)
+        assertTrue(evaluation.reasons.any { it.startsWith("insufficient-field-snapshots:") })
         assertEquals(GeneratedToolState.TRIAL, tools.get("tool-1")?.state)
-
-        val promoted = lifecycle.promote("tool-1")
-        assertEquals(GeneratedToolState.ACTIVE, promoted.state)
-        val provider = capabilities.providersFor(CapabilityId("text.normalize")).single()
-        assertEquals(ProviderType.GENERATED_TOOL, provider.providerType)
-        assertEquals(TrustLevel.LOW, provider.trustLevel)
-        assertEquals(setOf("text"), provider.contract.requiredInputs)
-        assertEquals(setOf("normalized-text"), provider.contract.outputs)
-        assertEquals(1.0, provider.reliability)
     }
 
     @Test
