@@ -1,6 +1,7 @@
 package app.lifeos.core.runtime.capability
 
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 
 /** One bounded, expectation-bearing invocation used to accumulate real trial evidence. */
 data class GeneratedToolTrialInvocation(
@@ -82,6 +83,8 @@ class GeneratedToolTrialRunner(
 
         val artifact = try {
             artifacts.load(invocation.toolId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (_: Exception) {
             return quarantineArtifactFailure(invocation, listOf("artifact-load-failed"))
         } ?: return quarantineArtifactFailure(invocation, listOf("artifact-missing"))
