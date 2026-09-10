@@ -23,6 +23,7 @@ import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.LocalCommunicationExecutionResult
 import app.lifeos.next.kernel.LocalDeepSearchExecutionResult
+import app.lifeos.next.kernel.LocalImageTransformExecutionResult
 import app.lifeos.next.kernel.LocalKnowledgeExecutionResult
 import app.lifeos.next.kernel.LocalScheduleActionExecutor
 import app.lifeos.next.kernel.LocalScheduleExecutionResult
@@ -280,7 +281,9 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                 val baseResult = kernel.persistUserUtterance(photon)
                 val schedule = localScheduleExecutor.execute(kernel, baseResult)
                 val result = if (schedule == null) baseResult else baseResult.copy(localSchedule = schedule)
-                val retainDraft = result.localSchedule is LocalScheduleExecutionResult.Blocked
+                val retainDraft =
+                    result.localSchedule is LocalScheduleExecutionResult.Blocked ||
+                        result.localImageTransform is LocalImageTransformExecutionResult.Blocked
                 mutableState.update {
                     it.copy(
                         draft = if (retainDraft) photon.content else "",
@@ -325,6 +328,24 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                             result.localSchedule is LocalScheduleExecutionResult.Scheduled &&
                                 !result.localSchedule.output.processingQueued ->
                                 "Die Erinnerung wurde lokal geplant, ihr Photon konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
+                            result.localImageTransform is LocalImageTransformExecutionResult.Blocked -> when (result.localImageTransform.reason) {
+                                "image-transform-operation-unsupported" ->
+                                    "Unterstützte lokale Bildänderungen sind heller, dunkler, wärmer, kühler, schärfer oder Graustufen."
+                                "image-transform-reference-unresolved",
+                                "goal-is-not-action-ready" ->
+                                    "Welches lokale Bild bearbeitet werden soll, ist nicht eindeutig. Der Entwurf bleibt zum Ergänzen erhalten."
+                                "image-transform-source-missing" ->
+                                    "Es ist kein lokales Bild zum Bearbeiten vorhanden."
+                                "image-transform-pixel-budget-exceeded" ->
+                                    "Das Bild ist für die lokale Bearbeitung zu groß."
+                                else ->
+                                    "Die lokale Bildbearbeitung ist blockiert: ${result.localImageTransform.reason}"
+                            }
+                            result.localImageTransform is LocalImageTransformExecutionResult.Failed ->
+                                "Die lokale Bildbearbeitung ist fehlgeschlagen: ${result.localImageTransform.message}"
+                            result.localImageTransform is LocalImageTransformExecutionResult.Transformed &&
+                                !result.localImageTransform.output.processingQueued ->
+                                "Das bearbeitete Bild wurde lokal gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.localCommunication is LocalCommunicationExecutionResult.Blocked ->
                                 "Es gibt kein eindeutig teilbares lokales Ergebnis."
                             result.localCommunication is LocalCommunicationExecutionResult.Failed ->
