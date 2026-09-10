@@ -47,9 +47,11 @@ object GeneratedToolRequestPhotonCodec {
     }
 
     fun decodeRequest(photon: Photon): GeneratedToolRequest {
-        require(photon.mimeType == REQUEST_MIME || LEGACY_REQUEST_HEADER in photon.content.lineSequence().take(1)) {
-            "Photon is not a generated-tool request"
-        }
+        val header = photon.content.lineSequence().firstOrNull()
+        require(
+            (photon.mimeType == REQUEST_MIME && header == REQUEST_HEADER) ||
+                header == LEGACY_REQUEST_HEADER
+        ) { "Photon is not a generated-tool request" }
         require(photon.provenance.source == REQUEST_SOURCE) {
             "Generated-tool request provenance source is invalid"
         }
@@ -61,7 +63,11 @@ object GeneratedToolRequestPhotonCodec {
         }
         require(photon.phase != PhotonPhase.ARCHIVED) { "Archived generated-tool request is not actionable" }
 
-        val fields = parseFields(photon.content, setOf(REQUEST_HEADER, LEGACY_REQUEST_HEADER))
+        val fields = parseFields(
+            content = photon.content,
+            headers = setOf(REQUEST_HEADER, LEGACY_REQUEST_HEADER),
+            allowedKeys = REQUEST_KEYS,
+        )
         val capability = requireField(fields, "capability")
         val severity = enumValueOf<GapSeverity>(requireField(fields, "severity"))
         val gapType = enumValueOf<CapabilityGapType>(requireField(fields, "gapType"))
@@ -69,7 +75,7 @@ object GeneratedToolRequestPhotonCodec {
         val outputs = csv(requireField(fields, "requiredOutputs"))
         val candidates = csv(requireField(fields, "candidateProviders")).toList().sorted()
 
-        return GeneratedToolRequest(
+        val request = GeneratedToolRequest(
             requestPhotonId = photon.id,
             capabilityId = CapabilityId(capability),
             severity = severity,
@@ -80,6 +86,15 @@ object GeneratedToolRequestPhotonCodec {
             requestedBy = photon.provenance.actor,
             requestedAt = photon.provenance.createdAt,
         )
+        if (header == REQUEST_HEADER) {
+            require(requireField(fields, "requestId") == request.id) {
+                "Generated-tool request fingerprint mismatch"
+            }
+            require("user-requested" in photon.tags) {
+                "V2 generated-tool request is missing user-requested tag"
+            }
+        }
+        return request
     }
 
     fun createApprovalPhoton(
@@ -141,7 +156,11 @@ object GeneratedToolRequestPhotonCodec {
             }
         ) { "Tool-generation approval relation does not match request photon" }
 
-        val fields = parseFields(photon.content, setOf(APPROVAL_HEADER))
+        val fields = parseFields(
+            content = photon.content,
+            headers = setOf(APPROVAL_HEADER),
+            allowedKeys = APPROVAL_KEYS,
+        )
         require(requireField(fields, "requestId") == request.id) { "Approval request id mismatch" }
         require(requireField(fields, "requestPhotonId") == request.requestPhotonId.value) {
             "Approval request photon id mismatch"
@@ -182,7 +201,11 @@ object GeneratedToolRequestPhotonCodec {
         append("candidateProviders=").append(request.candidateProviderIds.sorted().joinToString(","))
     }
 
-    private fun parseFields(content: String, headers: Set<String>): Map<String, String> {
+    private fun parseFields(
+        content: String,
+        headers: Set<String>,
+        allowedKeys: Set<String>,
+    ): Map<String, String> {
         val lines = content.lineSequence().toList()
         require(lines.firstOrNull() in headers) { "Generated-tool photon header is invalid" }
         val fields = linkedMapOf<String, String>()
@@ -191,7 +214,7 @@ object GeneratedToolRequestPhotonCodec {
             require(separator > 0) { "Generated-tool photon field is malformed" }
             val key = line.substring(0, separator)
             val value = line.substring(separator + 1)
-            require(key in REQUEST_KEYS || key in APPROVAL_KEYS) { "Unknown generated-tool photon field: $key" }
+            require(key in allowedKeys) { "Unknown generated-tool photon field: $key" }
             require(fields.put(key, value) == null) { "Duplicate generated-tool photon field: $key" }
         }
         return fields
