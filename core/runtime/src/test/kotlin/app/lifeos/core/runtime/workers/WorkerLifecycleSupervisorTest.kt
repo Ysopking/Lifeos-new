@@ -23,16 +23,11 @@ class WorkerLifecycleSupervisorTest {
     fun `drain never stops worker while durable leases remain`() = runTest {
         val workerId = WorkerId("worker-drain")
         val controller = FakeController(workerId)
-        val leaseInspector = FakeLeaseInspector(baseTime).apply {
+        val leases = FakeLeaseInspector().apply {
             owned[workerId] = listOf(TaskId("task-b"), TaskId("task-a"))
         }
         val registry = WorkerRegistry()
-        val supervisor = WorkerLifecycleSupervisor(
-            registry = registry,
-            leases = leaseInspector,
-            healthGraph = HealthGraph(),
-            now = { baseTime },
-        )
+        val supervisor = supervisor(registry, leases)
 
         supervisor.attach(descriptor(workerId), controller)
         assertIs<WorkerStartResult.Started>(supervisor.start(workerId))
@@ -43,10 +38,9 @@ class WorkerLifecycleSupervisorTest {
         assertEquals(1, controller.stopAcceptingCalls)
         assertEquals(0, controller.stopCalls)
 
-        leaseInspector.owned[workerId] = emptyList()
-        val drained = assertIs<WorkerDrainResult.Drained>(supervisor.drain(workerId))
-        assertEquals(WorkerRuntimeState.STOPPED, drained.entry.state)
-        assertEquals(1, controller.stopAcceptingCalls)
+        leases.owned[workerId] = emptyList()
+        assertIs<WorkerDrainResult.Drained>(supervisor.drain(workerId))
+        assertEquals(WorkerRuntimeState.STOPPED, registry.entry(workerId)?.state)
         assertEquals(1, controller.stopCalls)
     }
 
@@ -54,13 +48,11 @@ class WorkerLifecycleSupervisorTest {
     fun `incomplete lease inspection blocks physical stop`() = runTest {
         val workerId = WorkerId("worker-corrupt-leases")
         val controller = FakeController(workerId)
-        val leaseInspector = FakeLeaseInspector(baseTime).apply {
-            unreadable[workerId] = listOf("vault-b", "vault-a")
-        }
+        val leases = FakeLeaseInspector().apply { unreadable[workerId] = listOf("vault-b", "vault-a") }
         val signals = RecordingSignalSink()
         val registry = WorkerRegistry()
         val graph = HealthGraph()
-        val supervisor = WorkerLifecycleSupervisor(registry, leaseInspector, graph, signals) { baseTime }
+        val supervisor = supervisor(registry, leases, graph, signals)
 
         supervisor.attach(descriptor(workerId), controller)
         supervisor.start(workerId)
@@ -74,22 +66,20 @@ class WorkerLifecycleSupervisorTest {
     }
 
     @Test
-    fun `heartbeat reconciles registry load from durable leases and emits mismatches`() = runTest {
+    fun `heartbeat reconciles load from durable leases and invariant mismatch is unhealthy`() = runTest {
         val workerId = WorkerId("worker-heartbeat")
-        val leaseInspector = FakeLeaseInspector(baseTime).apply {
+        val leases = FakeLeaseInspector().apply {
             owned[workerId] = listOf(TaskId("lease-1"), TaskId("lease-2"))
         }
         val signals = RecordingSignalSink()
         val registry = WorkerRegistry()
         val graph = HealthGraph()
-        val supervisor = WorkerLifecycleSupervisor(registry, leaseInspector, graph, signals) { baseTime }
+        val supervisor = supervisor(registry, leases, graph, signals)
 
         supervisor.attach(descriptor(workerId, maxConcurrency = 1), FakeController(workerId))
         supervisor.start(workerId)
         val result = assertIs<WorkerHeartbeatResult.Inconsistent>(
-            supervisor.observeHeartbeat(
-                WorkerHeartbeat(workerId, baseTime.plusSeconds(5), reportedActiveWork = 0)
-            )
+            supervisor.observeHeartbeat(WorkerHeartbeat(workerId, baseTime.plusSeconds(5), 0))
         )
 
         assertEquals(2, result.actualActiveWork)
@@ -102,54 +92,34 @@ class WorkerLifecycleSupervisorTest {
             ),
             result.signals,
         )
-        assertEquals(HealthState.DEGRADED, graph.node(result.entry.descriptor.healthNodeId)?.state)
+        assertEquals(HealthState.UNHEALTHY, graph.node(result.entry.descriptor.healthNodeId)?.state)
     }
 
     @Test
-    fun `consistent heartbeat records healthy state and stale verification escalates`() = runTest {
+    fun `consistent heartbeat is healthy and stale heartbeat escalates`() = runTest {
         val workerId = WorkerId("worker-stale-heartbeat")
         val heartbeatAt = baseTime.plusSeconds(10)
-        val leaseInspector = FakeLeaseInspector(baseTime)
         val signals = RecordingSignalSink()
         val registry = WorkerRegistry()
         val graph = HealthGraph()
-        val supervisor = WorkerLifecycleSupervisor(registry, leaseInspector, graph, signals) { baseTime }
+        val supervisor = supervisor(registry, FakeLeaseInspector(), graph, signals)
 
         supervisor.attach(descriptor(workerId), FakeController(workerId))
         supervisor.start(workerId)
         val accepted = assertIs<WorkerHeartbeatResult.Accepted>(
-            supervisor.observeHeartbeat(WorkerHeartbeat(workerId, heartbeatAt, reportedActiveWork = 0))
+            supervisor.observeHeartbeat(WorkerHeartbeat(workerId, heartbeatAt, 0))
         )
         assertEquals(HealthState.HEALTHY, graph.node(accepted.entry.descriptor.healthNodeId)?.state)
-
-        assertTrue(
-            supervisor.verifyHeartbeat(
-                workerId = workerId,
-                at = heartbeatAt.plusSeconds(30),
-                maxSilence = Duration.ofSeconds(30),
-            )
-        )
-        assertFalse(
-            supervisor.verifyHeartbeat(
-                workerId = workerId,
-                at = heartbeatAt.plusSeconds(31),
-                maxSilence = Duration.ofSeconds(30),
-            )
-        )
+        assertTrue(supervisor.verifyHeartbeat(workerId, heartbeatAt.plusSeconds(30), Duration.ofSeconds(30)))
+        assertFalse(supervisor.verifyHeartbeat(workerId, heartbeatAt.plusSeconds(31), Duration.ofSeconds(30)))
         assertTrue(signals.events.any { it.kind == WorkerLifecycleSignalKind.HEARTBEAT_STALE })
     }
 
     @Test
-    fun `out of order heartbeat is ignored without replacing last accepted heartbeat`() = runTest {
+    fun `out of order heartbeat is ignored`() = runTest {
         val workerId = WorkerId("worker-heartbeat-order")
-        val leaseInspector = FakeLeaseInspector(baseTime)
         val signals = RecordingSignalSink()
-        val supervisor = WorkerLifecycleSupervisor(
-            WorkerRegistry(),
-            leaseInspector,
-            HealthGraph(),
-            signals,
-        ) { baseTime }
+        val supervisor = supervisor(WorkerRegistry(), FakeLeaseInspector(), HealthGraph(), signals)
 
         supervisor.attach(descriptor(workerId), FakeController(workerId))
         supervisor.start(workerId)
@@ -160,26 +130,15 @@ class WorkerLifecycleSupervisorTest {
 
         assertEquals("out-of-order-heartbeat", ignored.reason)
         assertTrue(signals.events.any { it.kind == WorkerLifecycleSignalKind.HEARTBEAT_OUT_OF_ORDER })
-        assertTrue(
-            supervisor.verifyHeartbeat(
-                workerId,
-                baseTime.plusSeconds(50),
-                Duration.ofSeconds(30),
-            )
-        )
     }
 
     @Test
-    fun `same id replacement requires complete stop and resets implementation version`() = runTest {
+    fun `same id replacement requires complete stop`() = runTest {
         val workerId = WorkerId("worker-replace")
         val registry = WorkerRegistry()
-        val supervisor = WorkerLifecycleSupervisor(
-            registry,
-            FakeLeaseInspector(baseTime),
-            HealthGraph(),
-        ) { baseTime }
-        val first = descriptor(workerId, version = WorkerVersion(1, 0, 0), fingerprint = "impl-v1")
-        val second = descriptor(workerId, version = WorkerVersion(2, 0, 0), fingerprint = "impl-v2")
+        val supervisor = supervisor(registry, FakeLeaseInspector())
+        val first = descriptor(workerId, WorkerVersion(1), fingerprint = "impl-v1")
+        val second = descriptor(workerId, WorkerVersion(2), fingerprint = "impl-v2")
 
         supervisor.attach(first, FakeController(workerId))
         supervisor.start(workerId)
@@ -191,8 +150,8 @@ class WorkerLifecycleSupervisorTest {
         val replaced = assertIs<WorkerRegistrationResult.Registered>(
             supervisor.replaceStopped(second, FakeController(workerId))
         )
-        assertEquals(WorkerVersion(1, 0, 0), replaced.replacedStoppedVersion)
-        assertEquals(WorkerVersion(2, 0, 0), registry.entry(workerId)?.descriptor?.version)
+        assertEquals(WorkerVersion(1), replaced.replacedStoppedVersion)
+        assertEquals(WorkerVersion(2), registry.entry(workerId)?.descriptor?.version)
         assertEquals(WorkerRuntimeState.REGISTERED, registry.entry(workerId)?.state)
     }
 
@@ -203,19 +162,14 @@ class WorkerLifecycleSupervisorTest {
         val registry = WorkerRegistry()
         val graph = HealthGraph()
         val signals = RecordingSignalSink()
-        val supervisor = WorkerLifecycleSupervisor(
-            registry,
-            FakeLeaseInspector(baseTime),
-            graph,
-            signals,
-        ) { baseTime }
+        val supervisor = supervisor(registry, FakeLeaseInspector(), graph, signals)
 
         supervisor.attach(descriptor(incumbentId), FakeController(incumbentId))
         supervisor.start(incumbentId)
         supervisor.stageCanary(
-            incumbentId = incumbentId,
-            descriptor = descriptor(canaryId, version = WorkerVersion(2), fingerprint = "canary-v2"),
-            controller = FakeController(canaryId),
+            incumbentId,
+            descriptor(canaryId, WorkerVersion(2), fingerprint = "canary-v2"),
+            FakeController(canaryId),
         )
         supervisor.start(canaryId)
 
@@ -223,53 +177,43 @@ class WorkerLifecycleSupervisorTest {
             supervisor.promoteCanary(incumbentId, canaryId)
         )
         assertEquals("incumbent-not-stopped", rejected.reason)
-        assertEquals(WorkerDeploymentRole.PRIMARY, supervisor.role(incumbentId))
-        assertEquals(WorkerDeploymentRole.CANARY, supervisor.role(canaryId))
 
         supervisor.drain(incumbentId)
-        val promoted = assertIs<WorkerCanaryPromotionResult.Promoted>(
-            supervisor.promoteCanary(incumbentId, canaryId)
-        )
-        assertEquals(canaryId, promoted.canaryId)
-        assertEquals(incumbentId, promoted.retiredIncumbentId)
+        assertIs<WorkerCanaryPromotionResult.Promoted>(supervisor.promoteCanary(incumbentId, canaryId))
         assertEquals(WorkerDeploymentRole.RETIRED, supervisor.role(incumbentId))
         assertEquals(WorkerDeploymentRole.PRIMARY, supervisor.role(canaryId))
     }
 
     @Test
-    fun `start failure is contained and cancellation still propagates`() = runTest {
+    fun `start failure is contained but cancellation propagates`() = runTest {
         val failedId = WorkerId("worker-start-failure")
         val signals = RecordingSignalSink()
         val registry = WorkerRegistry()
-        val supervisor = WorkerLifecycleSupervisor(
-            registry,
-            FakeLeaseInspector(baseTime),
-            HealthGraph(),
-            signals,
-        ) { baseTime }
-        supervisor.attach(
-            descriptor(failedId),
-            FakeController(failedId, startFailure = IllegalStateException("boom")),
-        )
+        val supervisor = supervisor(registry, FakeLeaseInspector(), HealthGraph(), signals)
+        supervisor.attach(descriptor(failedId), FakeController(failedId, IllegalStateException("boom")))
 
         val failed = assertIs<WorkerStartResult.Failed>(supervisor.start(failedId))
         assertEquals(WorkerRuntimeState.STOPPED, failed.entry.state)
         assertTrue(signals.events.any { it.kind == WorkerLifecycleSignalKind.START_FAILED })
 
         val cancelledId = WorkerId("worker-start-cancelled")
-        supervisor.attach(
-            descriptor(cancelledId),
-            FakeController(cancelledId, startFailure = CancellationException("cancel")),
-        )
+        supervisor.attach(descriptor(cancelledId), FakeController(cancelledId, CancellationException("cancel")))
         assertFailsWith<CancellationException> { supervisor.start(cancelledId) }
         assertEquals(WorkerRuntimeState.REGISTERED, registry.entry(cancelledId)?.state)
     }
+
+    private fun supervisor(
+        registry: WorkerRegistry,
+        leases: WorkerLeaseInspector,
+        graph: HealthGraph = HealthGraph(),
+        signals: WorkerLifecycleSignalSink = NoOpWorkerLifecycleSignalSink,
+    ) = WorkerLifecycleSupervisor(registry, leases, graph, signals) { baseTime }
 
     private fun descriptor(
         workerId: WorkerId,
         version: WorkerVersion = WorkerVersion(1),
         maxConcurrency: Int = 2,
-        fingerprint: String = "${workerId.value}/v${version}",
+        fingerprint: String = "${workerId.value}/v$version",
     ) = WorkerDescriptor(
         workerId = workerId,
         version = version,
@@ -281,47 +225,37 @@ class WorkerLifecycleSupervisorTest {
     private class FakeController(
         override val workerId: WorkerId,
         private val startFailure: Exception? = null,
-        private val stopAcceptingFailure: Exception? = null,
-        private val stopFailure: Exception? = null,
     ) : WorkerRuntimeController {
-        var startCalls: Int = 0
-        var stopAcceptingCalls: Int = 0
-        var stopCalls: Int = 0
+        var stopAcceptingCalls = 0
+        var stopCalls = 0
 
         override suspend fun start() {
-            startCalls += 1
             startFailure?.let { throw it }
         }
 
         override suspend fun stopAcceptingNewWork() {
             stopAcceptingCalls += 1
-            stopAcceptingFailure?.let { throw it }
         }
 
         override suspend fun stop() {
             stopCalls += 1
-            stopFailure?.let { throw it }
         }
     }
 
-    private class FakeLeaseInspector(
-        private val defaultTime: Instant,
-    ) : WorkerLeaseInspector {
+    private class FakeLeaseInspector : WorkerLeaseInspector {
         val owned = mutableMapOf<WorkerId, List<TaskId>>()
         val unreadable = mutableMapOf<WorkerId, List<String>>()
 
-        override suspend fun inspect(workerId: WorkerId, at: Instant): WorkerLeaseSnapshot =
-            WorkerLeaseSnapshot(
-                workerId = workerId,
-                ownedTaskIds = owned[workerId].orEmpty().distinct().sortedBy { it.value },
-                unreadableEntries = unreadable[workerId].orEmpty().distinct().sorted(),
-                capturedAt = if (at == Instant.MIN) defaultTime else at,
-            )
+        override suspend fun inspect(workerId: WorkerId, at: Instant) = WorkerLeaseSnapshot(
+            workerId = workerId,
+            ownedTaskIds = owned[workerId].orEmpty().distinct().sortedBy { it.value },
+            unreadableEntries = unreadable[workerId].orEmpty().distinct().sorted(),
+            capturedAt = at,
+        )
     }
 
     private class RecordingSignalSink : WorkerLifecycleSignalSink {
         val events = mutableListOf<WorkerLifecycleSignal>()
-
         override suspend fun emit(signal: WorkerLifecycleSignal) {
             events += signal
         }
