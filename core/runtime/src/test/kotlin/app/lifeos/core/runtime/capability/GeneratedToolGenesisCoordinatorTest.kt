@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.capability
 
+import app.lifeos.core.field.FieldSnapshotId
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -18,11 +19,17 @@ class GeneratedToolGenesisCoordinatorTest {
     )
 
     @Test
-    fun successfulGenesisStopsAtTrial() = runTest {
+    fun successfulGenesisStopsAtTrialAndCarriesFieldEvidence() = runTest {
         val registry = GeneratedToolRegistry()
+        val lifecycle = GeneratedToolLifecycleCoordinator(registry)
+        val snapshotId = FieldSnapshotId("snapshot:genesis-design")
         val genesis = GeneratedToolGenesisCoordinator(
-            workshop = workshop(registry, permissions = emptySet()),
-            lifecycle = GeneratedToolLifecycleCoordinator(registry),
+            workshop = workshop(
+                registry = registry,
+                permissions = emptySet(),
+                fieldEvidenceProvider = ToolWorkshopFieldEvidenceProvider { setOf(snapshotId) },
+            ),
+            lifecycle = lifecycle,
         )
 
         val result = assertIs<GeneratedToolGenesisResult.TrialReady>(
@@ -33,6 +40,7 @@ class GeneratedToolGenesisCoordinatorTest {
         assertEquals(setOf("text"), result.record.manifest.requiredInputs)
         assertEquals(setOf("normalized-text"), result.record.manifest.requiredOutputs)
         assertEquals(GeneratedToolState.TRIAL, registry.get("tool-genesis")?.state)
+        assertEquals(setOf(snapshotId), lifecycle.promotionEvidence("tool-genesis").fieldSnapshotIds)
     }
 
     @Test
@@ -57,6 +65,8 @@ class GeneratedToolGenesisCoordinatorTest {
     private fun workshop(
         registry: GeneratedToolRegistry,
         permissions: Set<ToolPermission>,
+        fieldEvidenceProvider: ToolWorkshopFieldEvidenceProvider =
+            ToolWorkshopFieldEvidenceProvider { emptySet() },
     ) = ToolWorkshopCoordinator(
         specificationBuilder = object : ToolSpecificationBuilder {
             override suspend fun build(gap: CapabilityGap) = ToolSpecification(
@@ -107,6 +117,7 @@ class GeneratedToolGenesisCoordinatorTest {
             )
         },
         registry = registry,
+        fieldEvidenceProvider = fieldEvidenceProvider,
         now = { t0 },
         newToolId = { "tool-genesis" },
     )
