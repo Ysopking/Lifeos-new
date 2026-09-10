@@ -149,6 +149,7 @@ class BuildPathPolicy(
             "core/data/src/main/kotlin/app/lifeos/core/data/health/",
             "core/data/src/main/kotlin/app/lifeos/core/data/evolution/",
             "core/data/src/main/kotlin/app/lifeos/core/data/capability/",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/boot/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/tasks/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/checkpoints/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/health/",
@@ -162,6 +163,7 @@ class BuildPathPolicy(
             "app/src/main/AndroidManifest.xml",
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernel.kt",
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernelFactory.kt",
+            "app/src/main/java/app/lifeos/next/kernel/EvolutionRuntimeResources.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildSpec.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/SourcePatchPlan.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildStudioCoordinator.kt",
@@ -179,6 +181,7 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolAudit.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolPersistentState.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolStateCodec.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolBootStateRehydrator.kt",
         )
         private val PROTECTED_NAME_TOKENS = setOf(
             "crypto",
