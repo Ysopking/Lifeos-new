@@ -28,6 +28,28 @@ class LanguageUnderstandingEngineTest {
     }
 
     @Test
+    fun `German remind me with temporal cues becomes schedule not memory`() {
+        val result = engine.understand("Erinnere mich morgen um 16:30 an den Termin")
+
+        assertEquals(IntentType.SCHEDULE, result.goal.intent)
+        assertTrue(result.goal.entities.any {
+            it.type == EntityType.DATE && it.normalizedValue == "relative:tomorrow"
+        })
+        assertTrue(result.goal.entities.any {
+            it.type == EntityType.TIME && it.normalizedValue == "16:30"
+        })
+        assertFalse(result.intentEvidence.first().intent == IntentType.STORE_OR_REMEMBER)
+    }
+
+    @Test
+    fun `German remember this remains memory intent`() {
+        val result = engine.understand("Erinnere dich daran, dass mein Fahrrad im Keller steht")
+
+        assertEquals(IntentType.STORE_OR_REMEMBER, result.goal.intent)
+        assertFalse(result.intentEvidence.any { it.intent == IntentType.SCHEDULE })
+    }
+
+    @Test
     fun `resolves image from yesterday for transformation`() {
         val imageId = PhotonId("image-yesterday")
         val now = Instant.parse("2026-09-07T18:00:00Z")
