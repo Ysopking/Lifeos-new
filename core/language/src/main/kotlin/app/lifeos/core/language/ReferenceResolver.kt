@@ -133,7 +133,13 @@ class ReferenceResolver {
         }
         if (context.items.isEmpty()) return emptyList()
 
-        return context.items
+        val candidates = context.items.filterNot { item ->
+            expression.kind == ReferenceKind.PREVIOUS &&
+                "goal" in expression.preferredKinds &&
+                ("intent:continue" in item.tags || "goal-resumed" in item.tags)
+        }
+
+        return candidates
             .map { item -> item.photonId to score(item, expression, context) }
             .filter { it.second > 0.0 }
             .groupBy { it.first }
