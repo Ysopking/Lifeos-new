@@ -42,6 +42,16 @@ class DurableReferenceExpressionContractTest {
         assertTrue(expression.preferredKinds.isEmpty())
     }
 
+    @Test
+    fun `relative pronoun does not bind to distant image noun`() {
+        val result = engine.understand(
+            "Erzeuge ein Bild von zwei Leuten, die Fußball spielen."
+        )
+
+        assertTrue(result.goal.references.isEmpty())
+        assertTrue(result.goal.confidence > 0.65)
+    }
+
     private fun expression(text: String, kind: ReferenceKind): ReferenceExpression =
         engine.understand(text).goal.references.single { it.expression.kind == kind }.expression
 }
