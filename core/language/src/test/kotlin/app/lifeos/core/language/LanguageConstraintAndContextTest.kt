@@ -53,4 +53,31 @@ class LanguageConstraintAndContextTest {
         assertTrue(context.items.single { it.photonId == newGoal.id }.active)
         assertTrue("football" in context.items.single { it.photonId == image.id }.contentTerms)
     }
+
+    @Test
+    fun `context records are metadata and never become language candidates`() {
+        val target = Photon(
+            id = PhotonId("image-target"),
+            content = "real image",
+            mimeType = "image/png",
+            phase = PhotonPhase.ACTIVE,
+            provenance = Provenance("test", "test", Instant.parse("2026-09-10T10:00:00Z")),
+            tags = setOf("image"),
+        )
+        val contextRecord = Photon(
+            id = PhotonId("ctx_deadbeef"),
+            content = "context/v1\ntargetId=image-target",
+            mimeType = "application/vnd.lifeos.context+text",
+            phase = PhotonPhase.ACTIVE,
+            provenance = Provenance("durable-context", "test", Instant.parse("2026-09-10T10:01:00Z")),
+            tags = setOf("context-record", "context-kind:image"),
+        )
+
+        val context = PhotonLanguageContextBuilder().build(
+            listOf(target, contextRecord),
+            now = Instant.parse("2026-09-10T11:00:00Z"),
+        )
+
+        assertEquals(listOf(target.id), context.items.map { it.photonId })
+    }
 }
