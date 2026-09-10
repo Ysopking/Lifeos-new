@@ -162,12 +162,14 @@ class BuildPathPolicy(
             "gradle.properties",
             "settings.gradle.kts",
             "app/src/main/AndroidManifest.xml",
+            "app/src/main/res/xml/share_paths.xml",
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernel.kt",
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernelFactory.kt",
             "app/src/main/java/app/lifeos/next/kernel/EvolutionRuntimeResources.kt",
             "app/src/main/java/app/lifeos/next/kernel/GoalActionDispatcher.kt",
             "app/src/main/java/app/lifeos/next/kernel/LocalReminderScheduler.kt",
             "app/src/main/java/app/lifeos/next/kernel/LocalScheduleActionExecutor.kt",
+            "app/src/main/java/app/lifeos/next/kernel/LocalShareIntentFactory.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/LanguageModels.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/LanguageUnderstandingEngine.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/PhotonLanguageContextBuilder.kt",
@@ -196,6 +198,7 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalKnowledgeGoalEngine.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalDeepSearchGoalEngine.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalScheduleGoalEngine.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalCommunicationGoalEngine.kt",
         )
         private val PROTECTED_NAME_TOKENS = setOf(
             "crypto",
