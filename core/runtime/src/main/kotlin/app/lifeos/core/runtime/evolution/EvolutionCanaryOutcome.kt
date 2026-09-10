@@ -5,6 +5,7 @@ import app.lifeos.core.runtime.capability.GeneratedToolLifecycleCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.capability.GeneratedToolTrialResult
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -165,16 +166,11 @@ interface EvolutionCanaryControlStore {
     suspend fun killSwitch(adoptionEvidenceId: String): EvolutionCanaryKillSwitchEvidence?
 }
 
-internal class InMemoryEvolutionCanaryControlStore : EvolutionCanaryControlStore {
-    private val mutex = Mutex()
-    private val switches = mutableMapOf<String, EvolutionCanaryKillSwitchEvidence>()
-
-    override suspend fun trip(evidence: EvolutionCanaryKillSwitchEvidence): EvolutionCanaryKillSwitchEvidence =
-        mutex.withLock { switches.getOrPut(evidence.adoptionEvidenceId) { evidence } }
-
-    override suspend fun killSwitch(adoptionEvidenceId: String): EvolutionCanaryKillSwitchEvidence? =
-        mutex.withLock { switches[adoptionEvidenceId] }
-}
+/**
+ * J07 requires budget reservations and the kill switch to share one durable state boundary. This
+ * prevents callers from routing through one store while recording failures into another.
+ */
+interface EvolutionCanaryRuntimeStore : EvolutionCanaryBudgetStore, EvolutionCanaryControlStore
 
 data class EvolutionCanaryOutcomeRecordResult(
     val outcome: EvolutionCanaryOutcome,
@@ -187,9 +183,8 @@ data class EvolutionCanaryOutcomeRecordResult(
  * existing J03 trial ledger so canary failures cannot be hidden from promotion eligibility.
  */
 class EvolutionCanaryOutcomeCoordinator(
-    private val budgetStore: EvolutionCanaryBudgetStore,
+    private val runtimeStore: EvolutionCanaryRuntimeStore,
     private val outcomeStore: EvolutionCanaryOutcomeStore,
-    private val controlStore: EvolutionCanaryControlStore,
     private val lifecycle: GeneratedToolLifecycleCoordinator,
 ) {
     private val trustedAdoptionGate = EvolutionAdoptionGate()
@@ -209,7 +204,7 @@ class EvolutionCanaryOutcomeCoordinator(
             return@withLock EvolutionCanaryOutcomeRecordResult(
                 outcome = existing,
                 duplicate = true,
-                killSwitch = controlStore.killSwitch(evidence.adoptionEvidence.id),
+                killSwitch = runtimeStore.killSwitch(evidence.adoptionEvidence.id),
             )
         }
 
@@ -229,9 +224,12 @@ class EvolutionCanaryOutcomeCoordinator(
         require(evidence.currentCandidate.state == GeneratedToolState.TRIAL) {
             "Canary outcome candidate must still be TRIAL"
         }
+        require(runtimeStore.killSwitch(evidence.adoptionEvidence.id) == null) {
+            "Cannot add a new outcome after the canary kill switch has tripped"
+        }
 
         val reservation = requireNotNull(
-            budgetStore.reservation(evidence.adoptionEvidence.id, input.invocationId)
+            runtimeStore.reservation(evidence.adoptionEvidence.id, input.invocationId)
         ) { "Canary outcome requires an existing J06 reservation" }
         require(reservation.id == input.reservationId) {
             "Canary outcome reservation id does not match budget ledger"
@@ -260,14 +258,14 @@ class EvolutionCanaryOutcomeCoordinator(
                 return@withLock EvolutionCanaryOutcomeRecordResult(
                     write.outcome,
                     duplicate = true,
-                    killSwitch = controlStore.killSwitch(evidence.adoptionEvidence.id),
+                    killSwitch = runtimeStore.killSwitch(evidence.adoptionEvidence.id),
                 )
             is EvolutionCanaryOutcomeWriteResult.Recorded -> Unit
         }
 
         var killSwitch: EvolutionCanaryKillSwitchEvidence? = null
         if (outcome.hardFailures.isNotEmpty()) {
-            killSwitch = controlStore.trip(
+            killSwitch = runtimeStore.trip(
                 EvolutionCanaryKillSwitchEvidence(
                     adoptionEvidenceId = outcome.adoptionEvidenceId,
                     candidateToolId = outcome.candidateToolId,
@@ -291,8 +289,10 @@ class EvolutionCanaryOutcomeCoordinator(
                     recordedAt = outcome.recordedAt,
                 )
             )
-        } catch (failure: Throwable) {
-            killSwitch = controlStore.trip(
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            killSwitch = runtimeStore.trip(
                 EvolutionCanaryKillSwitchEvidence(
                     adoptionEvidenceId = outcome.adoptionEvidenceId,
                     candidateToolId = outcome.candidateToolId,
@@ -352,6 +352,7 @@ data class EvolutionCanaryReadinessEvidence(
     val decision: EvolutionCanaryReadinessDecision,
     val reasons: List<String>,
     val outcomeEvidenceIds: List<String>,
+    val killSwitchEvidenceId: String? = null,
 ) {
     init {
         require(adoptionEvidenceId.isNotBlank())
@@ -364,6 +365,7 @@ data class EvolutionCanaryReadinessEvidence(
         require(expectedOutputs in 0..completedOutcomes)
         require(averageLatencyMs >= 0.0)
         require(reasons.isNotEmpty())
+        require(killSwitchEvidenceId == null || killSwitchEvidenceId.isNotBlank())
     }
 
     val successRate: Double = if (completedOutcomes == 0) 0.0 else successes.toDouble() / completedOutcomes
@@ -382,17 +384,18 @@ data class EvolutionCanaryReadinessEvidence(
         expectedOutputs.toString(),
         averageLatencyMs.toString(),
         decision.name,
+        killSwitchEvidenceId.orEmpty(),
         *reasons.sorted().map { "reason:$it" }.toTypedArray(),
         *outcomeEvidenceIds.sorted().map { "outcome:$it" }.toTypedArray(),
     )
 
+    /** J07 readiness is evidence for review only and cannot activate or promote a tool. */
     val activationAllowed: Boolean = false
 }
 
 class EvolutionCanaryReadinessGate(
-    private val budgetStore: EvolutionCanaryBudgetStore,
+    private val runtimeStore: EvolutionCanaryRuntimeStore,
     private val outcomeStore: EvolutionCanaryOutcomeStore,
-    private val controlStore: EvolutionCanaryControlStore,
     private val policy: EvolutionCanaryReadinessPolicy = EvolutionCanaryReadinessPolicy(),
 ) {
     private val trustedAdoptionGate = EvolutionAdoptionGate()
@@ -419,13 +422,15 @@ class EvolutionCanaryReadinessGate(
         require(outcomes.all { it.candidateToolId == evidence.subject.candidateToolId })
         require(outcomes.all { it.candidateRecordFingerprint == evidence.subject.candidateRecordFingerprint })
 
-        val reserved = budgetStore.usedInvocations(evidence.adoptionEvidence.id)
+        val reserved = runtimeStore.usedInvocations(evidence.adoptionEvidence.id)
         val completed = outcomes.size
+        require(completed <= reserved) { "Canary outcomes exceed reserved invocation count" }
+
         val successes = outcomes.count { it.success && it.hardFailures.isEmpty() }
         val expected = outcomes.count { it.producedExpectedOutput }
         val averageLatency = outcomes.map { it.latencyMs.toDouble() }.takeIf { it.isNotEmpty() }?.average() ?: 0.0
         val reasons = mutableListOf<String>()
-        val killSwitch = controlStore.killSwitch(evidence.adoptionEvidence.id)
+        val killSwitch = runtimeStore.killSwitch(evidence.adoptionEvidence.id)
 
         val decision = when {
             killSwitch != null -> {
@@ -476,6 +481,7 @@ class EvolutionCanaryReadinessGate(
             decision = decision,
             reasons = reasons,
             outcomeEvidenceIds = outcomes.map { it.id }.sorted(),
+            killSwitchEvidenceId = killSwitch?.id,
         )
     }
 
