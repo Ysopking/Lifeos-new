@@ -52,7 +52,7 @@ class BuildStudioPolicyTest {
     }
 
     @Test
-    fun `ownership recovery crypto composition and BuildStudio gates are always protected`() {
+    fun `ownership recovery crypto composition and promotion gates are always protected`() {
         val policy = BuildPathPolicy()
         val roots = listOf(
             "core/model/src/main/kotlin/app/lifeos/core/model/task/Task.kt",
@@ -62,7 +62,10 @@ class BuildStudioPolicyTest {
             "core/data/src/main/kotlin/app/lifeos/core/data/world/WorldFormulaVaultCodec.kt",
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernelFactory.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildVerification.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/ToolWorkshopModels.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolTrialLifecycle.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolPromotionEvidence.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolGenesisCoordinator.kt",
         )
 
         roots.forEach { path -> assertTrue(policy.isProtected(path), "expected protected root: $path") }
