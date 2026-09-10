@@ -35,7 +35,11 @@ class DurableContextFieldEnricher(
                 } catch (_: Exception) {
                     issues += "malformed:${photon.id.value}"
                     null
-                } ?: return@forEach
+                }
+                if (entry == null) {
+                    issues += "malformed:${photon.id.value}"
+                    return@forEach
+                }
                 if (!entry.active) return@forEach
 
                 val target = targets[entry.targetPhotonId]
@@ -64,7 +68,7 @@ class DurableContextFieldEnricher(
         )
         val activeScopes = buildSet {
             addAll(request.context.activeScopes)
-            references.flatMapTo(this) { it.scopes }
+            references.forEach { reference -> addAll(reference.scopes) }
         }
         val normalizedIssues = issues.distinct().sorted()
         val attributes = request.context.domain.attributes.toMutableMap().apply {
@@ -169,8 +173,10 @@ class DurableContextFieldEnricher(
             PhotonContextReference(
                 photonId = strongest.photonId,
                 revision = strongest.revision,
-                scopes = grouped.flatMapTo(sortedSetOf(compareBy { it.name })) { it.scopes },
-                semanticTerms = grouped.flatMapTo(sortedSetOf()) { it.semanticTerms },
+                scopes = grouped
+                    .flatMap { it.scopes }
+                    .toSortedSet(compareBy<FieldContextScope> { it.name }),
+                semanticTerms = grouped.flatMap { it.semanticTerms }.toSortedSet(),
                 confidence = grouped.maxOf { it.confidence },
                 observedAt = grouped.maxOf { it.observedAt },
             )
