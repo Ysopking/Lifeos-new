@@ -89,11 +89,10 @@ class WorldFormulaSnapshotCodecTest {
             graphFingerprint = "graph-fingerprint",
             equationFingerprint = "equation-fingerprint",
             generation = 1,
-            vectors = sortedMapOf(
+            vectors = mapOf(
                 sourceNode to sourceVector,
                 targetNode to targetVector,
-                comparator = compareBy { it.value },
-            ),
+            ).toSortedMap(compareBy<WorldFieldNodeId> { it.value }),
         )
         val contribution = WorldEquationContribution(
             edgeId = WorldFieldEdgeId("world-edge:support-priority"),
