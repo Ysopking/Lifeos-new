@@ -50,6 +50,8 @@ sealed interface EvolutionCanaryReserveResult {
     ) : EvolutionCanaryReserveResult
 
     data class Exhausted(val usedInvocations: Int) : EvolutionCanaryReserveResult
+
+    data class Stopped(val killSwitch: EvolutionCanaryKillSwitchEvidence) : EvolutionCanaryReserveResult
 }
 
 /**
@@ -83,6 +85,9 @@ internal class InMemoryEvolutionCanaryBudgetStore : EvolutionCanaryRuntimeStore 
         require(adoptionEvidenceId.isNotBlank())
         require(invocationId.isNotBlank())
         require(maxInvocations > 0)
+        switches[adoptionEvidenceId]?.let { stop ->
+            return@withLock EvolutionCanaryReserveResult.Stopped(stop)
+        }
         val ledger = reservations.getOrPut(adoptionEvidenceId) { linkedMapOf() }
         ledger[invocationId]?.let { existing ->
             return@withLock EvolutionCanaryReserveResult.Reserved(existing, duplicate = true)
@@ -132,10 +137,6 @@ sealed interface EvolutionCanaryRoute {
     ) : EvolutionCanaryRoute
 }
 
-/**
- * Full immutable proof bundle needed to replay J04 and J05 before a canary route can be granted.
- * J06 therefore never trusts a caller-supplied adoption result in isolation.
- */
 data class EvolutionCanaryEvidenceBundle(
     val subject: EvolutionSubject,
     val dataset: EvolutionDatasetRef,
@@ -150,7 +151,7 @@ data class EvolutionCanaryEvidenceBundle(
 
 /**
  * J06/J07 enforce the J05 scope and persistent kill switch before a TRIAL candidate can be selected.
- * The router never registers the candidate in CapabilityRegistry and never changes tool state.
+ * The runtime store must make kill-switch observation and reservation atomic at its storage boundary.
  */
 class EvolutionCanaryRouter(
     private val runtimeStore: EvolutionCanaryRuntimeStore,
@@ -201,19 +202,13 @@ class EvolutionCanaryRouter(
         }
 
         runtimeStore.killSwitch(adoptionEvidence.id)?.let { stop ->
-            return EvolutionCanaryRoute.Baseline(
-                currentBaseline,
-                "canary-kill-switch:${stop.reason.name}",
-            )
+            return EvolutionCanaryRoute.Baseline(currentBaseline, "canary-kill-switch:${stop.reason.name}")
         }
 
         if (context.critical) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "critical-context")
         }
-        if (
-            context.taskTags.isEmpty() ||
-            !adoptionRequest.scope.allowedTaskTags.containsAll(context.taskTags)
-        ) {
+        if (context.taskTags.isEmpty() || !adoptionRequest.scope.allowedTaskTags.containsAll(context.taskTags)) {
             return EvolutionCanaryRoute.Baseline(currentBaseline, "task-outside-canary-scope")
         }
 
@@ -241,6 +236,12 @@ class EvolutionCanaryRouter(
         ) {
             is EvolutionCanaryReserveResult.Exhausted ->
                 EvolutionCanaryRoute.Baseline(currentBaseline, "invocation-budget-exhausted")
+
+            is EvolutionCanaryReserveResult.Stopped ->
+                EvolutionCanaryRoute.Baseline(
+                    currentBaseline,
+                    "canary-kill-switch:${reservation.killSwitch.reason.name}",
+                )
 
             is EvolutionCanaryReserveResult.Reserved ->
                 EvolutionCanaryRoute.Candidate(
