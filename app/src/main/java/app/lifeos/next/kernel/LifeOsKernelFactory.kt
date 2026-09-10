@@ -47,10 +47,10 @@ import app.lifeos.core.runtime.capability.CapabilityContract
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
 import app.lifeos.core.runtime.capability.CapabilityId
 import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.GeneratedToolBootStateRehydrator
 import app.lifeos.core.runtime.capability.GeneratedToolLifecycleCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolState
-import app.lifeos.core.runtime.capability.GeneratedToolStateRehydrator
 import app.lifeos.core.runtime.capability.GeneratedToolTrialLedger
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.capability.ProviderState
@@ -207,7 +207,7 @@ class LifeOsKernelFactory(
             trialLedger = generatedToolTrials,
             capabilityRegistry = capabilityRegistry,
         )
-        val generatedToolRehydrator = GeneratedToolStateRehydrator(
+        val generatedToolBootRehydrator = GeneratedToolBootStateRehydrator(
             repository = generatedToolStateRepository,
             tools = generatedTools,
             trialLedger = generatedToolTrials,
@@ -352,7 +352,7 @@ class LifeOsKernelFactory(
                     generatedToolStateRepository.loadAll()
                 },
                 RuntimeStateRehydrationStep {
-                    generatedToolRehydrator.rehydrate()
+                    generatedToolBootRehydrator.rehydrateOrVerify()
                 },
             ),
         )
