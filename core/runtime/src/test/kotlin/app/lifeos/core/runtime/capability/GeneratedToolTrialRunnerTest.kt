@@ -144,6 +144,7 @@ class GeneratedToolTrialRunnerTest {
         )
         assertTrue(lifecycle.admitToTrial(TOOL_ID) is GeneratedToolTrialAdmissionResult.TrialStarted)
         val repository = MemoryArtifactRepository(if (artifactAvailable) artifact else null)
+        var tick = 0L
         return Fixture(
             tools = tools,
             runner = GeneratedToolTrialRunner(
@@ -151,13 +152,10 @@ class GeneratedToolTrialRunnerTest {
                 lifecycle = lifecycle,
                 artifacts = repository,
                 now = { createdAt },
-                nanoTime = object {
-                    var tick = 0L
-                    fun next(): Long {
-                        tick += 1_000_000L
-                        return tick
-                    }
-                }::next,
+                nanoTime = {
+                    tick += 1_000_000L
+                    tick
+                },
             ),
         )
     }
