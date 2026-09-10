@@ -1,5 +1,7 @@
 package app.lifeos.core.runtime.capability
 
+import app.lifeos.core.field.StableFieldIds
+import app.lifeos.core.runtime.buildstudio.CandidateArtifact
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -16,6 +18,16 @@ data class GeneratedToolTrialResult(
         require(invocationId.isNotBlank()) { "Trial invocation id must not be blank" }
         require(latencyMs >= 0) { "Trial latency must not be negative" }
     }
+
+    fun fingerprint(): String = StableFieldIds.fingerprint(
+        "generated-tool-trial-result/v1",
+        invocationId,
+        success.toString(),
+        producedExpectedOutput.toString(),
+        safetyViolation.toString(),
+        latencyMs.toString(),
+        recordedAt.toString(),
+    )
 }
 
 data class GeneratedToolTrialStats(
@@ -27,6 +39,38 @@ data class GeneratedToolTrialStats(
 ) {
     val successRate: Double = if (trials == 0) 0.0 else successes.toDouble() / trials
     val expectedOutputRate: Double = if (trials == 0) 0.0 else expectedOutputs.toDouble() / trials
+}
+
+data class GeneratedToolTrialEvidence(
+    val toolId: String,
+    val results: List<GeneratedToolTrialResult>,
+) {
+    init {
+        require(toolId.isNotBlank()) { "Trial evidence tool id must not be blank" }
+        require(results.map { it.invocationId }.distinct().size == results.size) {
+            "Trial evidence cannot contain duplicate invocation ids"
+        }
+    }
+
+    val orderedResults: List<GeneratedToolTrialResult> = results.sortedBy { it.invocationId }
+
+    val stats: GeneratedToolTrialStats = GeneratedToolTrialStats(
+        trials = orderedResults.size,
+        successes = orderedResults.count { it.success },
+        expectedOutputs = orderedResults.count { it.producedExpectedOutput },
+        safetyViolations = orderedResults.count { it.safetyViolation },
+        averageLatencyMs = orderedResults
+            .map { it.latencyMs.toDouble() }
+            .takeIf { it.isNotEmpty() }
+            ?.average()
+            ?: 0.0,
+    )
+
+    val id: String = StableFieldIds.fingerprint(
+        "generated-tool-trial-evidence/v1",
+        toolId,
+        *orderedResults.map { it.fingerprint() }.toTypedArray(),
+    )
 }
 
 class GeneratedToolTrialLedger {
@@ -41,20 +85,15 @@ class GeneratedToolTrialLedger {
         true
     }
 
-    suspend fun stats(toolId: String): GeneratedToolTrialStats = mutex.withLock {
-        val values = results[toolId]?.values.orEmpty()
-        GeneratedToolTrialStats(
-            trials = values.size,
-            successes = values.count { it.success },
-            expectedOutputs = values.count { it.producedExpectedOutput },
-            safetyViolations = values.count { it.safetyViolation },
-            averageLatencyMs = values
-                .map { it.latencyMs.toDouble() }
-                .takeIf { it.isNotEmpty() }
-                ?.average()
-                ?: 0.0,
+    suspend fun evidence(toolId: String): GeneratedToolTrialEvidence = mutex.withLock {
+        require(toolId.isNotBlank()) { "Tool id must not be blank" }
+        GeneratedToolTrialEvidence(
+            toolId = toolId,
+            results = results[toolId]?.values?.toList().orEmpty(),
         )
     }
+
+    suspend fun stats(toolId: String): GeneratedToolTrialStats = evidence(toolId).stats
 }
 
 data class GeneratedToolPromotionPolicy(
@@ -73,6 +112,14 @@ data class GeneratedToolPromotionPolicy(
             "Minimum promotion confidence must be normalized"
         }
     }
+
+    fun fingerprint(): String = StableFieldIds.fingerprint(
+        "generated-tool-promotion-policy/v1",
+        minimumTrials.toString(),
+        minimumSuccessRate.toString(),
+        minimumExpectedOutputRate.toString(),
+        minimumVerificationConfidence.toString(),
+    )
 }
 
 sealed interface GeneratedToolTrialAdmissionResult {
@@ -228,18 +275,60 @@ class GeneratedToolLifecycleCoordinator(
         }
     }
 
+    /**
+     * Creates immutable evidence for the current exact TRIAL snapshot. The evidence remains
+     * non-activating and is invalidated by any later trial result, tool mutation or policy change.
+     */
+    suspend fun preparePromotionEvidence(
+        toolId: String,
+        artifact: CandidateArtifact,
+    ): GeneratedToolPromotionEvidence {
+        val evaluation = evaluatePromotion(toolId)
+        require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
+            "Generated tool is not eligible for promotion evidence: $evaluation"
+        }
+        val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        val trialEvidence = trialLedger.evidence(toolId)
+        require(trialEvidence.stats == evaluation.stats) {
+            "Trial evidence changed while promotion was being prepared"
+        }
+        return GeneratedToolPromotionEvidence.create(
+            artifact = artifact,
+            record = record,
+            trialEvidence = trialEvidence,
+            policy = promotionPolicy,
+        )
+    }
+
+    /** Legacy activation without J03 build evidence is deliberately disabled. */
+    @Deprecated("J03 requires CandidateArtifact-backed promotion evidence")
     suspend fun promote(toolId: String): GeneratedToolRecord {
+        error("J03 CandidateArtifact-backed promotion evidence is required for $toolId")
+    }
+
+    suspend fun promote(
+        toolId: String,
+        evidence: GeneratedToolPromotionEvidence,
+    ): GeneratedToolRecord {
         val evaluation = evaluatePromotion(toolId)
         require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
             "Generated tool is not eligible for promotion: $evaluation"
         }
 
-        val active = tools.transition(
+        val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        val exactTrials = trialLedger.evidence(toolId)
+        require(exactTrials.stats == evaluation.stats) {
+            "Trial evidence changed while promotion was being evaluated"
+        }
+        require(evidence.matches(record, exactTrials, promotionPolicy)) {
+            "J03 promotion evidence is stale or belongs to another candidate/tool/policy"
+        }
+
+        val active = tools.promote(
             toolId = toolId,
-            to = GeneratedToolState.ACTIVE,
-            message = "trial-promoted",
+            evidence = evidence,
         )
-        capabilityRegistry?.register(active.toCapabilityDescriptor(evaluation.stats))
+        capabilityRegistry?.register(active.toCapabilityDescriptor(exactTrials.stats))
         return active
     }
 
