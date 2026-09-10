@@ -271,10 +271,11 @@ private object PersistedGoalFrameDecoder {
         )
     }.getOrNull()
 
-    private fun required(lines: List<String>, key: String): String =
-        lines.firstOrNull { it.startsWith("$key=") }
-            ?.substringAfter('=')
-            ?: error("missing $key")
+    private fun required(lines: List<String>, key: String): String {
+        val matches = lines.filter { it.startsWith("$key=") }
+        require(matches.size == 1) { "Persisted goal must contain exactly one $key field" }
+        return matches.single().substringAfter('=')
+    }
 
     private fun splitUnescaped(value: String, delimiter: Char): Pair<String, String>? {
         var escaped = false
