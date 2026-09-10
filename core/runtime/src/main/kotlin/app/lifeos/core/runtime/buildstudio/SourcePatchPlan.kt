@@ -74,8 +74,8 @@ fun interface SourcePatchPlanner {
 
 /**
  * Mandatory trust-root barrier for generated BuildStudio candidates. Callers may only add more
- * protected paths; the built-in ownership, recovery, protection, crypto and activation roots cannot
- * be removed or weakened by configuration.
+ * protected paths; the built-in ownership, recovery, protection, crypto, activation and independent
+ * evaluation roots cannot be removed or weakened by configuration.
  */
 class BuildPathPolicy(
     additionalProtectedPrefixes: Set<String> = emptySet(),
@@ -152,6 +152,7 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/health/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/recovery/",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/escalation/",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/",
         )
         val MANDATORY_PROTECTED_EXACT_PATHS = setOf(
             "gradle.properties",
