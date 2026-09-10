@@ -31,16 +31,14 @@ class ToolWorkshopCoordinatorTest {
     }
 
     @Test
-    fun fieldSnapshotsAreCapturedBeforeDesignAndBoundToPromotionLedger() = runTest {
+    fun fieldSnapshotsAreCapturedAsExplicitWorkshopEvidence() = runTest {
         val registry = GeneratedToolRegistry()
-        val evidenceLedger = GeneratedToolPromotionEvidenceLedger()
         val snapshotId = FieldSnapshotId("snapshot:tool-design")
         val coordinator = coordinator(
             registry = registry,
             security = ToolSecurityResult(accepted = true),
             tests = ToolTestResult(success = true, passed = 4, failed = 0),
             verification = CapabilityVerificationResult(verified = true, confidence = 0.95),
-            promotionEvidenceLedger = evidenceLedger,
             fieldEvidenceProvider = ToolWorkshopFieldEvidenceProvider { requestedGap ->
                 assertEquals(gap, requestedGap)
                 setOf(snapshotId)
@@ -50,7 +48,6 @@ class ToolWorkshopCoordinatorTest {
         val result = assertIs<ToolWorkshopResult.Verified>(coordinator.generate(gap))
 
         assertEquals(setOf(snapshotId), result.designFieldSnapshotIds)
-        assertEquals(setOf(snapshotId), evidenceLedger.snapshot("tool-test").fieldSnapshotIds)
     }
 
     @Test
@@ -74,7 +71,6 @@ class ToolWorkshopCoordinatorTest {
         security: ToolSecurityResult,
         tests: ToolTestResult,
         verification: CapabilityVerificationResult,
-        promotionEvidenceLedger: GeneratedToolPromotionEvidenceLedger? = null,
         fieldEvidenceProvider: ToolWorkshopFieldEvidenceProvider =
             ToolWorkshopFieldEvidenceProvider { emptySet() },
     ) = ToolWorkshopCoordinator(
@@ -119,7 +115,6 @@ class ToolWorkshopCoordinatorTest {
             ) = verification
         },
         registry = registry,
-        promotionEvidenceLedger = promotionEvidenceLedger,
         fieldEvidenceProvider = fieldEvidenceProvider,
         now = { Instant.parse("2026-09-07T18:00:00Z") },
         newToolId = { "tool-test" },
