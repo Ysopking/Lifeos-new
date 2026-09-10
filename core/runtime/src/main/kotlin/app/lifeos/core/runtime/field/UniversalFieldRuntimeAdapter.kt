@@ -32,6 +32,7 @@ class UniversalFieldRuntimeAdapter(
         } catch (error: Exception) {
             return FieldShadowExecution.failed(
                 message = error.message ?: "universal-field-request-projection-failed",
+                source = photon,
             )
         }
         val request = try {
@@ -42,6 +43,7 @@ class UniversalFieldRuntimeAdapter(
             return FieldShadowExecution.failed(
                 domainId = baseRequest.domainId,
                 message = error.message ?: "universal-field-request-enrichment-failed",
+                source = photon,
             )
         }
 
@@ -52,14 +54,17 @@ class UniversalFieldRuntimeAdapter(
                 is HealthGateResult.BlockedByProtection -> return FieldShadowExecution.blocked(
                     domainId = request.domainId,
                     message = "protection:${admission.state.mode.name.lowercase()}:generation-${admission.state.generation}",
+                    source = photon,
                 )
                 is HealthGateResult.BlockedByQuarantine -> return FieldShadowExecution.blocked(
                     domainId = request.domainId,
                     message = "quarantined:${admission.entry.nodeId.value}",
+                    source = photon,
                 )
                 is HealthGateResult.BlockedByCircuit -> return FieldShadowExecution.blocked(
                     domainId = request.domainId,
                     message = "circuit:${admission.state.name.lowercase()}",
+                    source = photon,
                 )
             }
         }
@@ -80,6 +85,9 @@ class UniversalFieldRuntimeAdapter(
                 runId = result.state.runId,
                 snapshotId = result.snapshot.id,
                 convergenceStatus = result.status,
+                sourcePhotonId = photon.id,
+                sourceRevision = photon.revision,
+                sourceFingerprint = runtimePhotonFingerprint(photon),
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -94,6 +102,7 @@ class UniversalFieldRuntimeAdapter(
             FieldShadowExecution.failed(
                 domainId = request.domainId,
                 message = error.message ?: error::class.simpleName ?: "universal-field-shadow-failed",
+                source = photon,
             )
         }
     }
