@@ -22,12 +22,14 @@ data class GoalActionDispatchResult(
     val imageGeneration: ImageGenerationResult? = null,
     val localKnowledge: LocalKnowledgeExecutionResult? = null,
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
+    val localCommunication: LocalCommunicationExecutionResult? = null,
 )
 
 class GoalActionDispatcher(
     private val executeKnowledge: suspend (GoalActionContext) -> LocalKnowledgeExecutionResult,
     private val executeDeepSearch: suspend (GoalActionContext) -> LocalDeepSearchExecutionResult,
     private val executeImageGeneration: suspend (GoalActionContext) -> ImageGenerationResult,
+    private val prepareCommunication: suspend (GoalActionContext) -> LocalCommunicationExecutionResult,
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
         if (!context.routing.ready) {
@@ -56,6 +58,10 @@ class GoalActionDispatcher(
 
             IntentType.CREATE_IMAGE -> GoalActionDispatchResult(
                 imageGeneration = executeImageGeneration(context),
+            )
+
+            IntentType.COMMUNICATE -> GoalActionDispatchResult(
+                localCommunication = prepareCommunication(context),
             )
 
             else -> GoalActionDispatchResult()
