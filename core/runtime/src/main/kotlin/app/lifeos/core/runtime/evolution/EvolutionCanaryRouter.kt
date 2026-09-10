@@ -119,24 +119,60 @@ sealed interface EvolutionCanaryRoute {
 }
 
 /**
+ * Full immutable proof bundle needed to replay J04 and J05 before a canary route can be granted.
+ * J06 therefore never trusts a caller-supplied adoption result in isolation.
+ */
+data class EvolutionCanaryEvidenceBundle(
+    val subject: EvolutionSubject,
+    val dataset: EvolutionDatasetRef,
+    val evaluationReport: EvolutionEvaluationReport,
+    val cases: List<EvolutionTestCase>,
+    val observations: List<EvolutionShadowObservation>,
+    val adoptionEvidence: EvolutionAdoptionEvidence,
+    val adoptionRequest: EvolutionAdoptionRequest,
+    val currentCandidate: GeneratedToolRecord,
+    val currentBaseline: CapabilityDescriptor,
+)
+
+/**
  * J06 enforces J05 scope before a TRIAL candidate can be selected for bounded canary use. It never
  * registers the candidate in CapabilityRegistry and never changes GeneratedToolState.
+ *
+ * Before every candidate route, the router deterministically replays the trusted default J05 gate
+ * from the original J04 evidence and requires an exact content-id match with the supplied adoption
+ * evidence. A stale, forged or differently-policy-produced adoption object therefore fails closed.
  */
 class EvolutionCanaryRouter(
     private val budgetStore: EvolutionCanaryBudgetStore,
+    private val trustedAdoptionGate: EvolutionAdoptionGate = EvolutionAdoptionGate(),
 ) {
     suspend fun route(
-        subject: EvolutionSubject,
-        adoptionEvidence: EvolutionAdoptionEvidence,
-        adoptionRequest: EvolutionAdoptionRequest,
-        currentCandidate: GeneratedToolRecord,
-        currentBaseline: CapabilityDescriptor,
+        evidence: EvolutionCanaryEvidenceBundle,
         context: EvolutionCanaryRoutingContext,
     ): EvolutionCanaryRoute {
-        require(adoptionEvidence.decision == EvolutionAdoptionDecision.APPROVED_FOR_CANARY) {
-            "Canary routing requires APPROVED_FOR_CANARY evidence"
+        val subject = evidence.subject
+        val adoptionEvidence = evidence.adoptionEvidence
+        val adoptionRequest = evidence.adoptionRequest
+        val currentCandidate = evidence.currentCandidate
+        val currentBaseline = evidence.currentBaseline
+
+        val replayedAdoption = trustedAdoptionGate.evaluate(
+            subject = subject,
+            dataset = evidence.dataset,
+            report = evidence.evaluationReport,
+            cases = evidence.cases,
+            observations = evidence.observations,
+            currentCandidate = currentCandidate,
+            currentBaseline = currentBaseline,
+            request = adoptionRequest,
+        )
+        require(replayedAdoption.id == adoptionEvidence.id) {
+            "Canary routing requires exact trusted J05 replay"
         }
-        require(!adoptionEvidence.activationAllowed) {
+        require(replayedAdoption.decision == EvolutionAdoptionDecision.APPROVED_FOR_CANARY) {
+            "Canary routing requires APPROVED_FOR_CANARY replay evidence"
+        }
+        require(!replayedAdoption.activationAllowed && !adoptionEvidence.activationAllowed) {
             "Canary routing evidence must not carry activation authority"
         }
         require(adoptionEvidence.matches(subject, adoptionRequest, currentCandidate, currentBaseline)) {
@@ -201,6 +237,6 @@ class EvolutionCanaryRouter(
             adoptionEvidenceId,
             assignmentKey,
         )
-        return Math.floorMod(fingerprint.hashCode(), 1000)
+        return (fingerprint.take(8).toLong(16) % 1000L).toInt()
     }
 }
