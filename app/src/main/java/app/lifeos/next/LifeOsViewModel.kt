@@ -15,6 +15,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
+import app.lifeos.next.kernel.GoalResumeExecutionResult
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.LocalKnowledgeExecutionResult
@@ -230,8 +231,8 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                 mutableState.update {
                     it.copy(
                         draft = "",
-                        lastGoal = result.understanding?.goal ?: it.lastGoal,
-                        lastCapabilityGaps = result.routing?.blockingGaps.orEmpty(),
+                        lastGoal = result.effectiveGoal ?: it.lastGoal,
+                        lastCapabilityGaps = result.effectiveRouting?.blockingGaps.orEmpty(),
                         capabilityRequestStatus = null,
                         error = when {
                             result.languageFailure != null ->
@@ -240,6 +241,13 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                                 "Gedanke wurde gespeichert, konnte aber nicht zur Verarbeitung eingereiht werden."
                             result.goal?.processingQueued != true ->
                                 "Gedanke wurde verstanden und gespeichert, das abgeleitete Ziel konnte aber nicht zur Verarbeitung eingereiht werden."
+                            result.goalResume is GoalResumeExecutionResult.Blocked ->
+                                "Das vorherige Ziel konnte nicht sicher fortgesetzt werden: ${result.goalResume.message}"
+                            result.goalResume is GoalResumeExecutionResult.Failed ->
+                                "Das vorherige Ziel konnte nicht fortgesetzt werden: ${result.goalResume.message}"
+                            result.goalResume is GoalResumeExecutionResult.Resumed &&
+                                !result.goalResume.resumedGoal.processingQueued ->
+                                "Das vorherige Ziel wurde wiederaufgenommen und gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.localKnowledge is LocalKnowledgeExecutionResult.Failed ->
                                 "Die lokale Wissensaktion ist fehlgeschlagen: ${result.localKnowledge.message}"
                             result.localKnowledge is LocalKnowledgeExecutionResult.Produced &&

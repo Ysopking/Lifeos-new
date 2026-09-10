@@ -133,7 +133,13 @@ class ReferenceResolver {
         }
         if (context.items.isEmpty()) return emptyList()
 
-        return context.items
+        val candidates = context.items.filterNot { item ->
+            expression.kind == ReferenceKind.PREVIOUS &&
+                "goal" in expression.preferredKinds &&
+                ("intent:continue" in item.tags || "goal-resumed" in item.tags)
+        }
+
+        return candidates
             .map { item -> item.photonId to score(item, expression, context) }
             .filter { it.second > 0.0 }
             .groupBy { it.first }
@@ -179,7 +185,17 @@ class ReferenceResolver {
             score += if (ageHours in 8.0..40.0) 0.28 else -0.20
         }
         if (expression.kind == ReferenceKind.LAST_RESULT && "result" in item.tags) score += 0.18
-        score *= item.confidence
-        return score.coerceIn(0.0, 1.0)
+
+        val confidenceWeighted = score * item.confidence
+        val activeGoalAnchor =
+            item.photonId == context.activeGoalId &&
+                expression.kind == ReferenceKind.PREVIOUS &&
+                "goal" in expression.preferredKinds
+        val resolved = if (activeGoalAnchor) {
+            maxOf(confidenceWeighted, expression.confidence)
+        } else {
+            confidenceWeighted
+        }
+        return resolved.coerceIn(0.0, 1.0)
     }
 }

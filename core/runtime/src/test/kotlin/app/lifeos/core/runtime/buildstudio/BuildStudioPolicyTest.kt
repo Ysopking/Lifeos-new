@@ -52,7 +52,7 @@ class BuildStudioPolicyTest {
     }
 
     @Test
-    fun `ownership recovery crypto composition BuildStudio and local knowledge gates are always protected`() {
+    fun `ownership recovery composition knowledge and resume gates are always protected`() {
         val policy = BuildPathPolicy()
         val roots = listOf(
             "core/model/src/main/kotlin/app/lifeos/core/model/task/Task.kt",
@@ -61,9 +61,15 @@ class BuildStudioPolicyTest {
             "core/model/src/main/kotlin/app/lifeos/core/model/health/RuntimeProtectionState.kt",
             "core/data/src/main/kotlin/app/lifeos/core/data/world/WorldFormulaVaultCodec.kt",
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernelFactory.kt",
+            "core/language/src/main/kotlin/app/lifeos/core/language/LanguageModels.kt",
+            "core/language/src/main/kotlin/app/lifeos/core/language/LanguageUnderstandingEngine.kt",
+            "core/language/src/main/kotlin/app/lifeos/core/language/PhotonLanguageContextBuilder.kt",
+            "core/language/src/main/kotlin/app/lifeos/core/language/ReferenceResolver.kt",
+            "core/language/src/main/kotlin/app/lifeos/core/language/RuleBasedIntentClassifier.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildVerification.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolTrialLifecycle.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/LanguageGoalCapabilityRouter.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/GoalResumeEngine.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/LocalKnowledgeGoalEngine.kt",
         )
 

@@ -100,6 +100,19 @@ class LanguageGoalCapabilityRouter(
         /** APK-shipped local executors. The kernel installs these into the shared registry. */
         val LOCAL_SYSTEM_PROVIDERS: List<CapabilityDescriptor> = listOf(
             CapabilityDescriptor(
+                capabilityId = CapabilityId("goal.resume"),
+                providerId = "local-goal-resume-core",
+                providerType = ProviderType.MODULE,
+                contract = CapabilityContract(
+                    requiredInputs = setOf("goal-photon"),
+                    outputs = setOf("goal-photon"),
+                ),
+                state = ProviderState.ACTIVE,
+                trustLevel = TrustLevel.SYSTEM,
+                reliability = 1.0,
+                cost = 0.0,
+            ),
+            CapabilityDescriptor(
                 capabilityId = CapabilityId("knowledge.resolve"),
                 providerId = "local-knowledge-core",
                 providerType = ProviderType.MODULE,
