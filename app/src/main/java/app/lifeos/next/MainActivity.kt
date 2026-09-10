@@ -110,6 +110,48 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                         Text(if (state.loadFailed) "Erneut laden" else "Meldung schließen")
                     }
                 }
+                if (state.lastCapabilityGaps.isNotEmpty()) {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(
+                            Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("Fehlende lokale Fähigkeit", style = MaterialTheme.typography.titleSmall)
+                            state.lastCapabilityGaps.take(3).forEach { gap ->
+                                Text(
+                                    "${gap.requirement.capabilityId.value} · ${gap.type.name.lowercase()} · ${gap.requirement.severity.name.lowercase()}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            if (state.lastCapabilityGaps.size > 3) {
+                                Text(
+                                    "+ ${state.lastCapabilityGaps.size - 3} weitere",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = model::requestCapabilityGaps,
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !state.capabilityRequestSaving && !state.loading && !state.loadFailed,
+                            ) {
+                                Text(
+                                    if (state.capabilityRequestSaving) "Anforderung wird gespeichert …"
+                                    else "Für ToolWorkshop anfordern"
+                                )
+                            }
+                            Text(
+                                "Die Anforderung wird lokal und dauerhaft vorgemerkt; sie startet noch keine automatische Codegenerierung.",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                }
+                state.capabilityRequestStatus?.let { status ->
+                    Text(status, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = model::dismissCapabilityRequestStatus) {
+                        Text("Tool-Anforderungsstatus schließen")
+                    }
+                }
                 state.voiceStatus?.let { status ->
                     Text(status, style = MaterialTheme.typography.bodySmall)
                     if (state.voicePhase == VoiceCapturePhase.IDLE) {
@@ -175,17 +217,56 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                         },
                         title = { Text("App-Diagnose") },
                         text = {
-                            Text(
-                                "Version ${BuildConfig.VERSION_NAME}\n" +
-                                    "Runtime: ${if (runtime.running) "aktiv" else "gestoppt"}\n" +
-                                    "Indexiert: ${matrix.nodes.size}\n" +
-                                    "Verarbeitet: ${runtime.processed}\n" +
-                                    "Fehlgeschlagen: ${runtime.failed}\n" +
-                                    "Feldeinflüsse im Verlauf: ${runtime.recentInfluences.size}\n" +
-                                    "Feldenergie: ${"%.1f".format(matrix.totalEnergy)}\n" +
-                                    "Sprachaufnahme: ${state.voicePhase.name.lowercase()}\n" +
-                                    (runtime.lastError ?: "Kein Runtime-Fehler"),
-                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    "Version ${BuildConfig.VERSION_NAME}\n" +
+                                        "Runtime: ${if (runtime.running) "aktiv" else "gestoppt"}\n" +
+                                        "Indexiert: ${matrix.nodes.size}\n" +
+                                        "Verarbeitet: ${runtime.processed}\n" +
+                                        "Fehlgeschlagen: ${runtime.failed}\n" +
+                                        "Feldeinflüsse im Verlauf: ${runtime.recentInfluences.size}\n" +
+                                        "Feldenergie: ${"%.1f".format(matrix.totalEnergy)}\n" +
+                                        "Sprachaufnahme: ${state.voicePhase.name.lowercase()}\n" +
+                                        (runtime.lastError ?: "Kein Runtime-Fehler"),
+                                )
+                                HorizontalDivider()
+                                val toolStatus = state.generatedToolStatus
+                                if (toolStatus == null) {
+                                    Text("Generated Tools: noch nicht geladen")
+                                } else {
+                                    Text(
+                                        "Generated Tools: ${toolStatus.totalTools}\n" +
+                                            "Trial: ${toolStatus.trialTools} · Aktiv: ${toolStatus.activeTools}\n" +
+                                            "Quarantäne: ${toolStatus.quarantinedTools} · Abgelehnt: ${toolStatus.rejectedTools}\n" +
+                                            "Trial-Aufrufe: ${toolStatus.totalTrials}\n" +
+                                            "Safety-Verstöße: ${toolStatus.totalSafetyViolations}",
+                                    )
+                                    toolStatus.tools.take(6).forEach { tool ->
+                                        Text(
+                                            "${tool.toolId} · ${tool.state.name.lowercase()} · ${tool.trials} Trial(s)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
+                                    if (toolStatus.tools.size > 6) {
+                                        Text(
+                                            "+ ${toolStatus.tools.size - 6} weitere Tools",
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
+                                }
+                                state.generatedToolStatusError?.let { error ->
+                                    Text(error, color = MaterialTheme.colorScheme.error)
+                                }
+                                if (state.generatedToolStatusLoading) {
+                                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                                }
+                                TextButton(
+                                    onClick = model::refreshGeneratedToolStatus,
+                                    enabled = !state.generatedToolStatusLoading,
+                                ) {
+                                    Text("Toolstatus aktualisieren")
+                                }
+                            }
                         },
                     )
                 }
