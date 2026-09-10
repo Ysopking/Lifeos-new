@@ -308,11 +308,16 @@ class GeneratedToolLifecycleCoordinator(
         }
         require(!evaluation.evidence.activationAllowed)
 
-        tools.bindPromotionEvidence(toolId, evaluation.evidence.id)
-        val active = tools.transition(
+        val frozenEvidence = promotionEvidenceLedger.freezeForPromotion(
             toolId = toolId,
-            to = GeneratedToolState.ACTIVE,
-            message = "trial-promoted:evidence:${evaluation.evidence.id}",
+            expectedSnapshotId = evaluation.evidence.id,
+        )
+        require(frozenEvidence.id == evaluation.evidence.id)
+        tools.bindPromotionEvidence(toolId, frozenEvidence.id)
+        val active = tools.promoteWithEvidence(
+            toolId = toolId,
+            evidenceId = frozenEvidence.id,
+            message = "trial-promoted:evidence:${frozenEvidence.id}",
         )
         capabilityRegistry?.register(active.toCapabilityDescriptor(evaluation.stats))
         return active
