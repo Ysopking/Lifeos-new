@@ -113,6 +113,19 @@ class LanguageGoalCapabilityRouter(
                 cost = 0.0,
             ),
             CapabilityDescriptor(
+                capabilityId = CapabilityId("deepsearch.query"),
+                providerId = "local-deepsearch-core",
+                providerType = ProviderType.MODULE,
+                contract = CapabilityContract(
+                    requiredInputs = emptySet(),
+                    outputs = setOf("reference-photons"),
+                ),
+                state = ProviderState.ACTIVE,
+                trustLevel = TrustLevel.SYSTEM,
+                reliability = 1.0,
+                cost = 0.0,
+            ),
+            CapabilityDescriptor(
                 capabilityId = CapabilityId("knowledge.resolve"),
                 providerId = "local-knowledge-core",
                 providerType = ProviderType.MODULE,
