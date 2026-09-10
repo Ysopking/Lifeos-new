@@ -18,7 +18,12 @@ class PhotonLanguageContextBuilder {
         }
         val activeGoal = eligible
             .asSequence()
-            .filter { "goal" in it.tags && it.phase != PhotonPhase.ARCHIVED }
+            .filter {
+                "goal" in it.tags &&
+                    it.phase != PhotonPhase.ARCHIVED &&
+                    "intent:continue" !in it.tags &&
+                    "goal-resumed" !in it.tags
+            }
             .maxByOrNull { it.provenance.createdAt }
             ?.id
         val items = eligible.map { photon ->
