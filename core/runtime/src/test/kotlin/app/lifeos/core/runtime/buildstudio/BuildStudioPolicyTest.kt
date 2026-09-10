@@ -52,7 +52,7 @@ class BuildStudioPolicyTest {
     }
 
     @Test
-    fun `ownership recovery composition knowledge search and reminder gates are always protected`() {
+    fun `ownership recovery composition dispatch knowledge search and reminder gates are always protected`() {
         val policy = BuildPathPolicy()
         val roots = listOf(
             "core/model/src/main/kotlin/app/lifeos/core/model/task/Task.kt",
@@ -61,6 +61,7 @@ class BuildStudioPolicyTest {
             "core/model/src/main/kotlin/app/lifeos/core/model/health/RuntimeProtectionState.kt",
             "core/data/src/main/kotlin/app/lifeos/core/data/world/WorldFormulaVaultCodec.kt",
             "app/src/main/java/app/lifeos/next/kernel/LifeOsKernelFactory.kt",
+            "app/src/main/java/app/lifeos/next/kernel/GoalActionDispatcher.kt",
             "app/src/main/java/app/lifeos/next/kernel/LocalReminderScheduler.kt",
             "app/src/main/java/app/lifeos/next/kernel/LocalScheduleActionExecutor.kt",
             "core/language/src/main/kotlin/app/lifeos/core/language/LanguageModels.kt",
