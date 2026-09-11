@@ -14,6 +14,7 @@ import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class HotSwapRevertBootRecoveryTest {
     @Test
@@ -93,6 +94,108 @@ class HotSwapRevertBootRecoveryTest {
         assertEquals(0, second.budgetsCommitted)
         assertEquals(REQUESTED, budgets.current(revertAccountId).consumed)
         assertEquals(listOf(OLD_TOOL), capabilities.providersFor(CAPABILITY).map { it.providerId })
+    }
+
+    @Test
+    fun `revoked owner authority leaves committed swap durable but unroutable after restart`() = runTest {
+        val capabilities = CapabilityRegistry()
+        val old = restoredProvider(OLD_TOOL)
+        val candidate = restoredProvider(NEW_TOOL)
+        capabilities.registerGeneratedRestored(old.descriptor, old.record, old.receipt)
+        capabilities.registerGeneratedRestored(candidate.descriptor, candidate.record, candidate.receipt)
+        capabilities.applyRestoredHotSwap(CAPABILITY, OLD_TOOL, NEW_TOOL, committed = true)
+
+        val ledger = HotSwapLedger(MemoryHotSwapRepository()) { NOW }
+        val prepared = ledger.prepare(
+            CAPABILITY,
+            OLD_TOOL,
+            NEW_TOOL,
+            old.receipt.evidenceId,
+            candidate.receipt.evidenceId,
+        )
+        val promoted = ledger.markCandidatePromoted(prepared, 5L, "world:committed-before-revoke")
+        val committed = ledger.markCommitted(promoted)
+        val policy = v14AllowHotSwap(NOW)
+        policy.ledger.revoke(policy.grant.id)
+
+        val report = HotSwapBootReconciler(
+            ledger = ledger,
+            capabilities = capabilities,
+            ownerPolicy = policy.ledger,
+            actorId = V14_TEST_OWNER,
+            ownerScope = V14_TEST_HOT_SWAP_SCOPE,
+        ).reconcile()
+
+        assertEquals(1, report.ownerPolicyBlocked)
+        assertEquals(0, report.committedRestored)
+        assertEquals(HotSwapState.COMMITTED, ledger.snapshot(committed.transactionId)?.state)
+        assertTrue(capabilities.providersFor(CAPABILITY, includeUnavailable = true).isEmpty())
+    }
+
+    @Test
+    fun `revocation after persisted revert preparation blocks boot revert and keeps reservation open`() = runTest {
+        val capabilities = CapabilityRegistry()
+        val old = restoredProvider(OLD_TOOL)
+        val candidate = restoredProvider(NEW_TOOL)
+        capabilities.registerGeneratedRestored(old.descriptor, old.record, old.receipt)
+        capabilities.registerGeneratedRestored(candidate.descriptor, candidate.record, candidate.receipt)
+        capabilities.applyRestoredHotSwap(CAPABILITY, OLD_TOOL, NEW_TOOL, committed = true)
+
+        val ledger = HotSwapLedger(MemoryHotSwapRepository()) { NOW }
+        val prepared = ledger.prepare(
+            CAPABILITY,
+            OLD_TOOL,
+            NEW_TOOL,
+            old.receipt.evidenceId,
+            candidate.receipt.evidenceId,
+        )
+        val promoted = ledger.markCandidatePromoted(prepared, 6L, "world:forward-before-revert")
+        val committed = ledger.markCommitted(promoted)
+        val revertPrepared = ledger.markRevertPrepared(
+            committed,
+            ownerPolicyRevision = 7L,
+            worldSnapshotId = "world:revert-prepared-before-revoke",
+        )
+
+        val budgets = ResourceBudgetCoordinator(MemoryResourceBudgetRepository()) { NOW }
+        val initialAccountId = ResourceBudgetAccountId("hot-swap:${revertPrepared.transactionId.value}")
+        budgets.createAccount(initialAccountId, QUOTA)
+        val initialReservation = (budgets.reserve(
+            initialAccountId,
+            revertPrepared.transactionId.value,
+            REQUESTED,
+        ) as ResourceBudgetReservationResult.Reserved).reservation
+        budgets.commit(initialAccountId, initialReservation.id, REQUESTED)
+
+        val revertAccountId = ResourceBudgetAccountId("hot-swap-revert:${revertPrepared.transactionId.value}")
+        budgets.createAccount(revertAccountId, QUOTA)
+        val revertReservation = (budgets.reserve(
+            revertAccountId,
+            "revert:${revertPrepared.transactionId.value}",
+            REQUESTED,
+        ) as ResourceBudgetReservationResult.Reserved).reservation
+
+        val policy = v14AllowHotSwap(NOW)
+        policy.ledger.revoke(policy.grant.id)
+
+        val report = HotSwapBootReconciler(
+            ledger = ledger,
+            capabilities = capabilities,
+            budgets = budgets,
+            ownerPolicy = policy.ledger,
+            actorId = V14_TEST_OWNER,
+            ownerScope = V14_TEST_HOT_SWAP_SCOPE,
+        ).reconcile()
+
+        assertEquals(1, report.ownerPolicyBlocked)
+        assertEquals(0, report.revertsCompleted)
+        assertEquals(HotSwapState.REVERT_PREPARED, ledger.snapshot(revertPrepared.transactionId)?.state)
+        assertTrue(capabilities.providersFor(CAPABILITY, includeUnavailable = true).isEmpty())
+        assertEquals(
+            ResourceBudgetReservationState.RESERVED,
+            budgets.current(revertAccountId).reservations.single().state,
+        )
+        assertEquals(revertReservation.id, budgets.current(revertAccountId).reservations.single().id)
     }
 
     private fun restoredProvider(toolId: String): RestoredProvider {
