@@ -39,6 +39,36 @@ class DecisionTraceLedgerTest {
     }
 
     @Test
+    fun `same node id cannot silently replace different metadata`() = runTest {
+        val repository = MemoryRepository()
+        val ledger = DecisionTraceLedger(repository)
+        val id = DecisionTraceId.create("goal", "goal-collision")
+        val original = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.OBSERVED_FACT,
+            sourceType = "goal",
+            sourceId = "goal-collision",
+            sourceRevision = 1,
+            displayLabel = "original",
+            recordedAt = NOW,
+        )
+        ledger.append(id, listOf(original), emptyList())
+        val conflicting = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.OBSERVED_FACT,
+            sourceType = "goal",
+            sourceId = "goal-collision",
+            sourceRevision = 1,
+            displayLabel = "rewritten",
+            recordedAt = NOW,
+        )
+        assertEquals(original.id, conflicting.id)
+        assertFailsWith<IllegalArgumentException> {
+            ledger.append(id, listOf(conflicting), emptyList())
+        }
+        assertEquals(1, repository.saveCalls)
+        assertEquals(original, ledger.snapshot(id)?.nodes?.single())
+    }
+
+    @Test
     fun `blocked alternatives and unresolved uncertainty remain visible`() = runTest {
         val repository = MemoryRepository()
         val id = DecisionTraceId.create("goal", "goal-blocked")
