@@ -7,6 +7,7 @@ import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
 import app.lifeos.core.data.policy.EncryptedOwnerPolicyRepository
 import app.lifeos.core.data.resource.EncryptedResourceBudgetRepository
+import app.lifeos.core.data.trace.EncryptedDecisionTraceRepository
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
@@ -26,6 +27,8 @@ import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
+import app.lifeos.core.runtime.trace.DecisionTraceLedger
+import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.next.kernel.DurableGoalPlanRuntime
 import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
 import app.lifeos.next.kernel.GoalExecutionRuntimeRegistry
@@ -57,9 +60,13 @@ class LifeOsApplication : Application() {
     lateinit var resourceBudgets: ResourceBudgetCoordinator
         private set
 
+    lateinit var decisionTraces: DecisionTraceLedger
+        private set
+
     internal lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
         private set
 
+    private lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
@@ -75,6 +82,8 @@ class LifeOsApplication : Application() {
                     SharedResourceBudgetRuntimeRegistry.install(hardwareResourceIntelligence)
                     ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(this))
                     resourceBudgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(this))
+                    decisionTraces = DecisionTraceLedger(EncryptedDecisionTraceRepository(this))
+                    goalDecisionTraceRecorder = GoalDecisionTraceRecorder(decisionTraces)
                     runBlocking {
                         PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
                     }
@@ -154,6 +163,7 @@ class LifeOsApplication : Application() {
                             convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
                             persistDerivedOutcome = kernel::persistAndIngest,
                             loadPersistedPhotons = kernel.photonStore::loadAll,
+                            traces = goalDecisionTraceRecorder,
                         )
                     )
                 },
