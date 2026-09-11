@@ -7,8 +7,13 @@ on:
       - "app/src/androidTest/**"
       - "app/src/main/java/app/lifeos/next/LifeOsApplication.kt"
       - "app/src/main/java/app/lifeos/next/kernel/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/ThoughtMatrix*.kt"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/checkpoints/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/thought/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/workers/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/**"
+      - "core/data/src/main/kotlin/app/lifeos/core/data/thought/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/capability/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/evolution/**"
 permissions:

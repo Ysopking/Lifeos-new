@@ -30,30 +30,40 @@ data class MatrixState(
     val totalEnergy: Double = 0.0,
 )
 
+data class ThoughtMatrixRestoreSummary(
+    val restored: Boolean,
+    val legacyNodeCount: Int,
+    val v2NodeCount: Int,
+    val conflictCount: Int,
+)
+
 /**
  * Backward-compatible force-field facade over ThoughtMatrixV2.
  *
  * Existing runtime callers keep the original MatrixState semantics. Equal-revision disagreements
  * never overwrite that legacy read model, while v2 records the disagreement as unresolved truth.
+ * When a durable repository is configured, every successful field call persists the exact v2 and
+ * legacy state before the worker may record its field checkpoint.
  */
 class ThoughtMatrix(
     private val v2: ThoughtMatrixV2 = ThoughtMatrixV2(),
+    private val durableState: ThoughtMatrixStateRepository? = null,
 ) : ForceField {
     private val mutex = Mutex()
     private val mutableState = MutableStateFlow(MatrixState())
     val state: StateFlow<MatrixState> = mutableState.asStateFlow()
 
     override suspend fun influence(photon: Photon): FieldInfluence? = mutex.withLock {
-        when (
-            val result = v2.project(
-                ThoughtProjectionInput(
-                    photon = photon,
-                    fieldDomainId = LEGACY_DOMAIN,
-                    semanticKey = semanticKey(photon),
-                    verification = ThoughtVerificationStatus.OBSERVED,
-                )
+        val result = v2.project(
+            ThoughtProjectionInput(
+                photon = photon,
+                fieldDomainId = LEGACY_DOMAIN,
+                semanticKey = semanticKey(photon),
+                verification = ThoughtVerificationStatus.OBSERVED,
             )
-        ) {
+        )
+
+        val influence = when (result) {
             is ThoughtProjectionResult.Applied -> {
                 val projected = result.snapshot.nodes.single { it.photonId == photon.id }
                 val previous = mutableState.value
@@ -93,6 +103,34 @@ class ThoughtMatrix(
             is ThoughtProjectionResult.Stale,
             is ThoughtProjectionResult.Unchanged -> null
         }
+
+        // Persistence intentionally precedes the worker's onFieldSuccess checkpoint callback.
+        // If this write fails, the field call fails and no durable completion checkpoint exists.
+        durableState?.save(
+            ThoughtMatrixDurableState(
+                v2Snapshot = result.snapshot,
+                legacyState = mutableState.value,
+            )
+        )
+        influence
+    }
+
+    suspend fun rehydrate(): ThoughtMatrixRestoreSummary = mutex.withLock {
+        val stored = durableState?.load()
+            ?: return@withLock ThoughtMatrixRestoreSummary(
+                restored = false,
+                legacyNodeCount = mutableState.value.nodes.size,
+                v2NodeCount = v2.state.value.nodes.size,
+                conflictCount = v2.state.value.conflicts.size,
+            )
+        v2.restore(stored.v2Snapshot)
+        mutableState.value = stored.legacyState
+        ThoughtMatrixRestoreSummary(
+            restored = true,
+            legacyNodeCount = stored.legacyState.nodes.size,
+            v2NodeCount = stored.v2Snapshot.nodes.size,
+            conflictCount = stored.v2Snapshot.conflicts.size,
+        )
     }
 
     suspend fun v2Snapshot(capturedAt: Instant = Instant.now()): ThoughtMatrixSnapshot =

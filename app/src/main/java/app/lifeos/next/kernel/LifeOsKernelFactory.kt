@@ -9,6 +9,7 @@ import app.lifeos.core.data.evolution.EncryptedEvolutionStore
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
+import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
@@ -119,7 +120,8 @@ class LifeOsKernelFactory(
         val appContext = context.applicationContext
         val store = EncryptedPhotonStore(appContext)
         val assetStore = EncryptedBinaryAssetStore(appContext)
-        val matrix = ThoughtMatrix()
+        val thoughtMatrixStateRepository = EncryptedThoughtMatrixStateRepository(appContext)
+        val matrix = ThoughtMatrix(durableState = thoughtMatrixStateRepository)
         val registry = StaticFieldRegistry(listOf(matrix))
         val executor = InfluenceExecutor()
         val healthGraph = HealthGraph()
@@ -460,6 +462,14 @@ class LifeOsKernelFactory(
                         }
                     },
                     object : StoreProbe {
+                        override val storeId: String = "thought-matrix-state-store"
+
+                        override suspend fun probe(): StoreStatus {
+                            thoughtMatrixStateRepository.load()
+                            return StoreStatus(storeId, StoreState.HEALTHY)
+                        }
+                    },
+                    object : StoreProbe {
                         override val storeId: String = "task-store"
 
                         override suspend fun probe(): StoreStatus {
@@ -566,9 +576,12 @@ class LifeOsKernelFactory(
             stateRehydrator = stateRehydrator,
             photonRehydrator = PhotonRehydrator(store),
             moduleRehydrator = object : ModuleRehydrator {
-                override suspend fun rehydrate() = ModuleRestoreSummary(
-                    restored = registry.activeFields().size,
-                )
+                override suspend fun rehydrate(): ModuleRestoreSummary {
+                    matrix.rehydrate()
+                    return ModuleRestoreSummary(
+                        restored = registry.activeFields().size,
+                    )
+                }
             },
             thoughtMatrixWarmup = object : ThoughtMatrixWarmup {
                 override suspend fun warmup() = ThoughtMatrixWarmupResult()

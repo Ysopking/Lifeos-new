@@ -121,6 +121,19 @@ class PrivateV1DeviceSmokeTest {
             withTimeout(BOOT_TIMEOUT_MS) {
                 app.kernel.matrix.state.first { it.nodes[sentinel.id]?.revision == sentinel.revision }
             }
+            val preKillV2 = app.kernel.matrix.v2Snapshot()
+            assertTrue(
+                "Sentinel must be durable in the v2 ThoughtMatrix before process kill",
+                preKillV2.nodes.any {
+                    it.photonId == sentinel.id && it.sourceRevision == sentinel.revision
+                },
+            )
+            val matrixVault = thoughtMatrixVaultFile()
+            assertTrue(
+                "ThoughtMatrix encrypted vault must exist before process kill",
+                matrixVault.isFile && matrixVault.length() > 0L,
+            )
+
             assertTrue(app.kernel.persistAndIngest(sentinel).processingQueued)
             assertSingleCognitiveTask(sentinel)
 
@@ -152,7 +165,27 @@ class PrivateV1DeviceSmokeTest {
             val sentinel = app.kernel.photonStore.loadAll()
                 .singleOrNull { SENTINEL_TAG in it.tags }
             assertNotNull("Cold restart must preserve encrypted recovery sentinel", sentinel)
-            assertSingleCognitiveTask(sentinel!!)
+            sentinel!!
+
+            // This assertion occurs before any re-ingest in the recovered process. Because boot
+            // ThoughtMatrix warmup is intentionally non-reprojecting, success proves that module
+            // rehydration restored the encrypted matrix state written before the process kill.
+            withTimeout(BOOT_TIMEOUT_MS) {
+                app.kernel.matrix.state.first { it.nodes[sentinel.id]?.revision == sentinel.revision }
+            }
+            val restoredV2 = app.kernel.matrix.v2Snapshot()
+            assertTrue(
+                "Cold restart must restore the sentinel into v2 ThoughtMatrix without re-ingest",
+                restoredV2.nodes.any {
+                    it.photonId == sentinel.id && it.sourceRevision == sentinel.revision
+                },
+            )
+            assertTrue(
+                "ThoughtMatrix encrypted vault must remain readable after cold restart",
+                thoughtMatrixVaultFile().isFile && thoughtMatrixVaultFile().length() > 0L,
+            )
+
+            assertSingleCognitiveTask(sentinel)
             val orphan = app.kernel.photonStore.loadAll().single { ORPHAN_TAG in it.tags }
             assertSingleCognitiveTask(orphan)
             assertTrue(app.kernel.persistAndIngest(orphan).processingQueued)
@@ -186,6 +219,11 @@ class PrivateV1DeviceSmokeTest {
             }
         }
     }
+
+    private fun thoughtMatrixVaultFile() =
+        instrumentation.targetContext.filesDir
+            .resolve("thought-matrix-state-vault")
+            .resolve("latest.tmatrix")
 
     private suspend fun cognitiveTasks(photon: Photon) =
         EncryptedTaskRepository(instrumentation.targetContext).loadReport().also {
