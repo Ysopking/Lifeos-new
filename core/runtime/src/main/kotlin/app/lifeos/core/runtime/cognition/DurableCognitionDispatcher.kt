@@ -88,8 +88,14 @@ class DurableCognitionDispatcher(
         }
     }
 
-    private suspend fun submitDurably(draft: TaskDraft): LifeTask? =
-        admissionController?.submit(draft) ?: taskEngine.submit(draft)
+    private suspend fun submitDurably(draft: TaskDraft): LifeTask? {
+        val controller = admissionController
+        return if (controller != null) {
+            controller.submit(draft)
+        } else {
+            taskEngine.submit(draft)
+        }
+    }
 
     private fun CognitivePriority.toTaskPriority(): TaskPriority = when (this) {
         CognitivePriority.IDLE,
