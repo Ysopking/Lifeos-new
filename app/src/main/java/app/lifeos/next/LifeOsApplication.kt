@@ -2,11 +2,16 @@ package app.lifeos.next
 
 import android.app.Application
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
+import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.policy.EncryptedOwnerPolicyRepository
 import app.lifeos.core.data.resource.EncryptedResourceBudgetRepository
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
+import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
+import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import app.lifeos.next.kernel.DurableGoalPlanRuntime
+import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
 import app.lifeos.next.kernel.GoalExecutionRuntimeRegistry
 import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
 import app.lifeos.next.kernel.LifeOsKernel
@@ -45,7 +50,17 @@ class LifeOsApplication : Application() {
                 hardware = hardwareResourceIntelligence,
             )
         )
+
         kernel = LifeOsKernelFactory(this).create()
+        val durableV5Decisions = DurableConvergenceDecisionCoordinator(
+            EncryptedConvergenceDecisionCheckpointRepository(this),
+        )
+        DurableGoalPlanRuntimeRegistry.install(
+            DurableGoalPlanRuntime(
+                ledger = kernel.goalPlans,
+                convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
+            )
+        )
         kernel.start()
     }
 }
