@@ -25,6 +25,7 @@ import app.lifeos.core.runtime.capability.PrivateToolSecurityValidator
 import app.lifeos.core.runtime.capability.PrivateToolSpecificationBuilder
 import app.lifeos.core.runtime.capability.PrivateToolTestRunner
 import app.lifeos.core.runtime.capability.PrivateToolWorkshopBuildStateRehydrator
+import app.lifeos.core.runtime.capability.ToolWorkshopBootRuntimeRegistry
 import app.lifeos.core.runtime.capability.ToolWorkshopCoordinator
 import app.lifeos.core.runtime.capability.ToolWorkshopJobLedger
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
@@ -103,18 +104,29 @@ internal data class PrivateGeneratedToolRuntimeResources(
             )
 
             val photonStore = EncryptedPhotonStore(appContext)
-            AutonomousToolWorkshopRuntimeRegistry.install(
-                AutonomousToolWorkshopRuntime(
-                    workshop = durableWorkshop,
-                    jobs = workshopJobs,
-                    persistPhoton = { photon ->
+            val autonomousRuntime = AutonomousToolWorkshopRuntime(
+                workshop = durableWorkshop,
+                jobs = workshopJobs,
+                persistPhoton = { photon ->
+                    val existing = photonStore.load(photon.id)
+                    if (existing != null) {
+                        require(existing == photon) {
+                            "Autonomous ToolWorkshop Photon identity was reused with different content"
+                        }
+                        existing
+                    } else {
                         photonStore.save(photon)
                         requireNotNull(photonStore.load(photon.id)) {
-                            "Autonomous ToolWorkshop request was not durable after persistence"
+                            "Autonomous ToolWorkshop Photon was not durable after persistence"
                         }
-                    },
-                )
+                    }
+                },
             )
+            AutonomousToolWorkshopRuntimeRegistry.install(autonomousRuntime)
+            ToolWorkshopBootRuntimeRegistry.install {
+                autonomousRuntime.reconcileOpenJobs()
+                Unit
+            }
 
             val genesis = GeneratedToolGenesisCoordinator(
                 workshop = workshop,
