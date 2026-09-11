@@ -2,27 +2,38 @@ package app.lifeos.core.runtime.capability
 
 import app.lifeos.core.field.StableFieldIds
 
+/** Persisted activation proof is evidence only and can never invoke a live promotion primitive. */
+sealed interface GeneratedToolActivationReceipt {
+    val id: String
+    val evidenceId: String
+    val toolId: String
+    val recordFingerprint: String
+    val trialEvidenceId: String
+    val promotionPolicyFingerprint: String
+    val activationAllowed: Boolean
+}
+
 /**
  * Persisted receipt for one already accepted J03 promotion. It preserves every content-addressed
  * J03 field but cannot be passed to the live promotion primitive, so rehydration never manufactures
  * fresh promotion authority from disk.
  */
 data class GeneratedToolPromotionReceipt(
-    val evidenceId: String,
-    val toolId: String,
+    override val evidenceId: String,
+    override val toolId: String,
     val candidateArtifactId: String,
     val candidateId: String,
     val verificationId: String,
     val provenanceId: String,
-    val recordFingerprint: String,
-    val trialEvidenceId: String,
-    val promotionPolicyFingerprint: String,
+    override val recordFingerprint: String,
+    override val trialEvidenceId: String,
+    override val promotionPolicyFingerprint: String,
     val apkSha256: String,
     val capabilityChangeFingerprint: String,
     val permissionDeltaFingerprint: String,
     val reviewerEvidenceFingerprints: List<String>,
     val promotionActorEvidenceFingerprints: List<String>,
-) {
+) : GeneratedToolActivationReceipt {
     init {
         require(evidenceId.isNotBlank())
         require(toolId.isNotBlank())
@@ -42,7 +53,7 @@ data class GeneratedToolPromotionReceipt(
         }
     }
 
-    val id: String = StableFieldIds.fingerprint(
+    override val id: String = StableFieldIds.fingerprint(
         "generated-tool-promotion-receipt/v1",
         evidenceId,
         toolId,
@@ -61,7 +72,7 @@ data class GeneratedToolPromotionReceipt(
     )
 
     /** A persisted receipt is evidence only and is never accepted by the live promotion method. */
-    val activationAllowed: Boolean = false
+    override val activationAllowed: Boolean = false
 
     private fun computedEvidenceId(): String = StableFieldIds.fingerprint(
         "generated-tool-promotion-evidence/v1",
@@ -102,58 +113,162 @@ data class GeneratedToolPromotionReceipt(
 }
 
 /**
- * J10 durable lifecycle state. Record, audit chain, trial evidence and accepted J03 promotion
- * receipt are restored as one verified unit; none of these fields grants activation authority.
+ * Durable receipt shape reserved for the bounded novel-capability promotion path. It binds only
+ * immutable proof references and carries no activation authority. V1.2 can store and validate this
+ * receipt, but runtime rehydration deliberately refuses to restore it as an ACTIVE provider until
+ * the later bounded admission/promotion gates exist.
+ */
+data class BoundedGeneratedToolPromotionReceipt(
+    override val evidenceId: String,
+    override val toolId: String,
+    val artifactId: String,
+    override val recordFingerprint: String,
+    override val trialEvidenceId: String,
+    override val promotionPolicyFingerprint: String,
+    val novelAdmissionEvidenceId: String,
+    val canaryReadinessEvidenceId: String,
+    val promotionSealId: String,
+    val reviewerEvidenceFingerprints: List<String>,
+    val activationActorEvidenceFingerprints: List<String>,
+) : GeneratedToolActivationReceipt {
+    init {
+        require(evidenceId.isNotBlank())
+        require(toolId.isNotBlank())
+        require(artifactId.isNotBlank())
+        require(recordFingerprint.isNotBlank() && trialEvidenceId.isNotBlank())
+        require(promotionPolicyFingerprint.isNotBlank())
+        require(novelAdmissionEvidenceId.isNotBlank())
+        require(canaryReadinessEvidenceId.isNotBlank())
+        require(promotionSealId.isNotBlank())
+        require(reviewerEvidenceFingerprints.isNotEmpty())
+        require(activationActorEvidenceFingerprints.isNotEmpty())
+        require(reviewerEvidenceFingerprints.none { it.isBlank() })
+        require(activationActorEvidenceFingerprints.none { it.isBlank() })
+        require(
+            evidenceId == boundedGeneratedToolPromotionEvidenceId(
+                toolId = toolId,
+                artifactId = artifactId,
+                recordFingerprint = recordFingerprint,
+                trialEvidenceId = trialEvidenceId,
+                promotionPolicyFingerprint = promotionPolicyFingerprint,
+                novelAdmissionEvidenceId = novelAdmissionEvidenceId,
+                canaryReadinessEvidenceId = canaryReadinessEvidenceId,
+                promotionSealId = promotionSealId,
+                reviewerEvidenceFingerprints = reviewerEvidenceFingerprints,
+                activationActorEvidenceFingerprints = activationActorEvidenceFingerprints,
+            )
+        ) { "Persisted bounded promotion receipt does not reproduce its evidence id" }
+    }
+
+    override val id: String = StableFieldIds.fingerprint(
+        "bounded-generated-tool-promotion-receipt/v1",
+        evidenceId,
+        toolId,
+        artifactId,
+        recordFingerprint,
+        trialEvidenceId,
+        promotionPolicyFingerprint,
+        novelAdmissionEvidenceId,
+        canaryReadinessEvidenceId,
+        promotionSealId,
+        *reviewerEvidenceFingerprints.sorted().map { "reviewer:$it" }.toTypedArray(),
+        *activationActorEvidenceFingerprints.sorted().map { "activation:$it" }.toTypedArray(),
+    )
+
+    override val activationAllowed: Boolean = false
+}
+
+internal fun boundedGeneratedToolPromotionEvidenceId(
+    toolId: String,
+    artifactId: String,
+    recordFingerprint: String,
+    trialEvidenceId: String,
+    promotionPolicyFingerprint: String,
+    novelAdmissionEvidenceId: String,
+    canaryReadinessEvidenceId: String,
+    promotionSealId: String,
+    reviewerEvidenceFingerprints: List<String>,
+    activationActorEvidenceFingerprints: List<String>,
+): String = StableFieldIds.fingerprint(
+    "bounded-generated-tool-promotion-evidence/v1",
+    toolId,
+    artifactId,
+    recordFingerprint,
+    trialEvidenceId,
+    promotionPolicyFingerprint,
+    novelAdmissionEvidenceId,
+    canaryReadinessEvidenceId,
+    promotionSealId,
+    *reviewerEvidenceFingerprints.sorted().map { "reviewer:$it" }.toTypedArray(),
+    *activationActorEvidenceFingerprints.sorted().map { "activation:$it" }.toTypedArray(),
+)
+
+internal fun GeneratedToolActivationReceipt.promotionAuditReason(): String = when (this) {
+    is GeneratedToolPromotionReceipt -> "j03-promotion-evidence:$evidenceId"
+    is BoundedGeneratedToolPromotionReceipt -> "bounded-generated-tool-promotion-evidence:$evidenceId"
+}
+
+/**
+ * J10 durable lifecycle state. Legacy J03 receipt semantics remain byte/fingerprint compatible;
+ * bounded receipts use a distinct state-id domain and are still non-authoritative evidence only.
  */
 data class GeneratedToolPersistentState(
     val record: GeneratedToolRecord,
     val auditEntries: List<GeneratedToolAuditEntry>,
     val trialEvidence: GeneratedToolTrialEvidence,
     val promotionReceipt: GeneratedToolPromotionReceipt? = null,
+    val boundedPromotionReceipt: BoundedGeneratedToolPromotionReceipt? = null,
 ) {
     init {
         val toolId = record.manifest.toolId
         require(trialEvidence.toolId == toolId) {
             "Persisted trial evidence belongs to another generated tool"
         }
+        require(promotionReceipt == null || boundedPromotionReceipt == null) {
+            "Persisted generated tool may carry exactly one promotion receipt kind"
+        }
         GeneratedToolStateIntegrity.requireValidAudit(record, auditEntries)
 
+        val receipt: GeneratedToolActivationReceipt? = promotionReceipt ?: boundedPromotionReceipt
         val promotionId = record.promotionEvidenceId
         if (promotionId == null) {
-            require(promotionReceipt == null) {
+            require(receipt == null) {
                 "Persisted promotion receipt requires a record promotion evidence id"
             }
         } else {
-            val receipt = requireNotNull(promotionReceipt) {
-                "Persisted promoted lifecycle state requires the full J03 promotion receipt"
+            val exactReceipt = requireNotNull(receipt) {
+                "Persisted promoted lifecycle state requires a full promotion receipt"
             }
-            require(receipt.evidenceId == promotionId) {
+            require(!exactReceipt.activationAllowed) {
+                "Persisted promotion receipt must remain non-authoritative"
+            }
+            require(exactReceipt.evidenceId == promotionId) {
                 "Persisted promotion receipt id does not match generated tool record"
             }
-            require(receipt.toolId == toolId) {
+            require(exactReceipt.toolId == toolId) {
                 "Persisted promotion receipt belongs to another generated tool"
             }
-            require(receipt.trialEvidenceId == trialEvidence.id) {
+            require(exactReceipt.trialEvidenceId == trialEvidence.id) {
                 "Persisted promotion receipt does not match exact trial evidence"
             }
             val originalTrialRecord = record.copy(
                 state = GeneratedToolState.TRIAL,
                 promotionEvidenceId = null,
             )
-            require(receipt.recordFingerprint == originalTrialRecord.promotionRecordFingerprint()) {
+            require(exactReceipt.recordFingerprint == originalTrialRecord.promotionRecordFingerprint()) {
                 "Persisted promotion receipt does not bind the original TRIAL record"
             }
             val lastPromotion = auditEntries.lastOrNull { it.action == GeneratedToolAuditAction.PROMOTED }
             require(lastPromotion != null) {
                 "Persisted promotion receipt requires a PROMOTED audit entry"
             }
-            require(lastPromotion.reason == "j03-promotion-evidence:${receipt.evidenceId}") {
+            require(lastPromotion.reason == exactReceipt.promotionAuditReason()) {
                 "Persisted promotion receipt does not match the last promotion audit"
             }
         }
 
         if (record.state == GeneratedToolState.ACTIVE) {
-            require(promotionReceipt != null) { "ACTIVE restore requires a full promotion receipt" }
+            require(receipt != null) { "ACTIVE restore requires a full promotion receipt" }
             require(auditEntries.last().action == GeneratedToolAuditAction.PROMOTED) {
                 "ACTIVE restore must end at the promotion audit entry"
             }
@@ -163,13 +278,25 @@ data class GeneratedToolPersistentState(
         }
     }
 
-    val id: String = StableFieldIds.fingerprint(
-        "generated-tool-persistent-state/v1",
-        record.auditFingerprint(),
-        auditEntries.last().id,
-        trialEvidence.id,
-        promotionReceipt?.id.orEmpty(),
-    )
+    val id: String = if (boundedPromotionReceipt == null) {
+        // Preserve the exact legacy v1 identity domain for all pre-V1.2 states.
+        StableFieldIds.fingerprint(
+            "generated-tool-persistent-state/v1",
+            record.auditFingerprint(),
+            auditEntries.last().id,
+            trialEvidence.id,
+            promotionReceipt?.id.orEmpty(),
+        )
+    } else {
+        StableFieldIds.fingerprint(
+            "generated-tool-persistent-state/v2",
+            record.auditFingerprint(),
+            auditEntries.last().id,
+            trialEvidence.id,
+            "BOUNDED",
+            boundedPromotionReceipt.id,
+        )
+    }
 }
 
 /**
@@ -203,8 +330,8 @@ data class GeneratedToolRehydrationReport(
 
 /**
  * Restores an empty in-process generated-tool runtime from durable, already integrity-checked state.
- * ACTIVE providers are re-registered only with an exact non-activating J03 receipt and the same
- * promotion policy; all validation is completed before the first in-memory mutation.
+ * V1.2 continues to re-register ACTIVE providers only with an exact non-activating J03 receipt;
+ * bounded ACTIVE receipt restoration is intentionally withheld until the later guarded restore gate.
  */
 class GeneratedToolStateRehydrator(
     private val repository: GeneratedToolStateRepository,
@@ -237,7 +364,11 @@ class GeneratedToolStateRehydrator(
         states.forEach { state ->
             GeneratedToolStateIntegrity.requireValidAudit(state.record, state.auditEntries)
             state.promotionReceipt?.let { require(!it.activationAllowed) }
+            state.boundedPromotionReceipt?.let { require(!it.activationAllowed) }
             if (state.record.state == GeneratedToolState.ACTIVE) {
+                require(state.boundedPromotionReceipt == null) {
+                    "Bounded ACTIVE rehydration is unavailable before the guarded bounded restore gate"
+                }
                 val receipt = requireNotNull(state.promotionReceipt)
                 require(receipt.promotionPolicyFingerprint == promotionPolicy.fingerprint()) {
                     "ACTIVE persisted promotion receipt uses another promotion policy"
