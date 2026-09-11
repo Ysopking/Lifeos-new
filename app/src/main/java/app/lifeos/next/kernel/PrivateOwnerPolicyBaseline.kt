@@ -1,5 +1,6 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.policy.OwnerActorId
 import app.lifeos.core.runtime.policy.OwnerEffectType
@@ -58,6 +59,16 @@ object PrivateOwnerPolicyBaseline {
             resource = OwnerResourceSelector(
                 OwnerResourceSelectorType.EXACT,
                 PrivateOwnerEffectAuthority.SHARE_CACHE_RESOURCE,
+            ),
+            scope = GOAL_SCOPE,
+            validFrom = Instant.EPOCH,
+        ),
+        OwnerPolicyGrant.create(
+            actorId = ownerActorId,
+            effect = OwnerEffectType.FILE_WRITE,
+            resource = OwnerResourceSelector(
+                OwnerResourceSelectorType.EXACT,
+                EncryptedBinaryAssetStore.OWNER_RESOURCE,
             ),
             scope = GOAL_SCOPE,
             validFrom = Instant.EPOCH,
