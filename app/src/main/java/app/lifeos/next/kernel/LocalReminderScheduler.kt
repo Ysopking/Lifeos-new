@@ -16,6 +16,7 @@ import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.goal.LocalReminderRecord
 import app.lifeos.core.runtime.goal.LocalScheduleGoalEngine
+import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
 import app.lifeos.next.MainActivity
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -25,7 +26,7 @@ import kotlinx.coroutines.launch
 
 interface LocalReminderScheduler {
     fun canNotify(): Boolean
-    fun schedule(reminderId: PhotonId, record: LocalReminderRecord)
+    suspend fun schedule(reminderId: PhotonId, record: LocalReminderRecord)
 }
 
 /** Uses inexact while-idle alarms so LIFEOS does not require privileged exact-alarm access. */
@@ -40,8 +41,24 @@ class AndroidLocalReminderScheduler(
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             appContext.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-    override fun schedule(reminderId: PhotonId, record: LocalReminderRecord) {
+    override suspend fun schedule(reminderId: PhotonId, record: LocalReminderRecord) {
         require(record.triggerAt.isAfter(now())) { "Reminder trigger must be in the future" }
+        val exposure = PrivateOwnerEffectAuthority.expose(
+            context = appContext,
+            request = PrivateOwnerEffectAuthority.reminderRequest(
+                PrivateOwnerEffectAuthority.REMINDER_SCHEDULE_RESOURCE
+            ),
+        ) {
+            scheduleUnchecked(reminderId, record)
+        }
+        if (exposure is OwnerEffectExposureResult.Blocked) {
+            throw SecurityException(
+                "owner-policy:${exposure.assessment.reasonCodes.joinToString(",") { it.name }}"
+            )
+        }
+    }
+
+    private fun scheduleUnchecked(reminderId: PhotonId, record: LocalReminderRecord) {
         val intent = Intent(appContext, ReminderAlarmReceiver::class.java).apply {
             action = ACTION_REMINDER
             data = reminderUri(reminderId)
@@ -88,6 +105,25 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
         val message = intent.getStringExtra(AndroidLocalReminderScheduler.EXTRA_MESSAGE)
             ?.takeIf { it.isNotBlank() }
             ?: return
+        val pending = goAsync()
+        val appContext = context.applicationContext
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
+                PrivateOwnerEffectAuthority.expose(
+                    context = appContext,
+                    request = PrivateOwnerEffectAuthority.reminderRequest(
+                        PrivateOwnerEffectAuthority.REMINDER_DELIVERY_RESOURCE
+                    ),
+                ) {
+                    deliverNotification(appContext, reminderId, message)
+                }
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    private fun deliverNotification(context: Context, reminderId: String, message: String) {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(
@@ -135,14 +171,17 @@ class ReminderRestoreReceiver : BroadcastReceiver() {
             try {
                 val now = Instant.now()
                 val scheduler = AndroidLocalReminderScheduler(appContext) { now }
-                EncryptedPhotonStore(appContext).loadReport().photons
+                val reminders = EncryptedPhotonStore(appContext).loadReport().photons
                     .asSequence()
                     .filter { it.mimeType == LocalScheduleGoalEngine.REMINDER_MIME }
                     .mapNotNull { photon ->
                         runCatching { photon.id to LocalReminderRecord.decode(photon) }.getOrNull()
                     }
                     .filter { (_, record) -> record.triggerAt.isAfter(now) }
-                    .forEach { (id, record) -> scheduler.schedule(id, record) }
+                    .toList()
+                for ((id, record) in reminders) {
+                    runCatching { scheduler.schedule(id, record) }
+                }
             } finally {
                 pending.finish()
             }
