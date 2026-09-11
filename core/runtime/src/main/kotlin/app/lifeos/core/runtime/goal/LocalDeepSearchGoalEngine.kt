@@ -25,6 +25,7 @@ import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
 import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
 import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
+import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import java.time.Duration
 import java.time.Instant
 import java.util.Locale
@@ -47,7 +48,7 @@ sealed interface LocalDeepSearchGoalResult {
  */
 class LocalDeepSearchGoalEngine(
     private val planner: DeepSearchPlanner = DeepSearchPlanner(),
-    private val sharedBudgets: SharedResourceBudgetGate? = null,
+    private val sharedBudgets: SharedResourceBudgetGate? = SharedResourceBudgetRuntimeRegistry.current(),
 ) {
     fun supports(intent: IntentType): Boolean = intent == IntentType.SEARCH
 
