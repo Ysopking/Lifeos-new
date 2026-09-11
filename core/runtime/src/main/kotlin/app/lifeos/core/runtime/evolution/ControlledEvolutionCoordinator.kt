@@ -13,10 +13,7 @@ import app.lifeos.core.runtime.resource.ResourceBudgetReservationResult
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
 
-/**
- * One bounded candidate execution result. Productive effects remain forbidden by the trusted
- * adoption gate; this object carries only the observation that will be written into J07 evidence.
- */
+/** One bounded candidate execution observation that becomes durable J07 evidence. */
 data class ControlledEvolutionCandidateObservation(
     val success: Boolean,
     val producedExpectedOutput: Boolean,
@@ -46,6 +43,13 @@ data class ControlledEvolutionCandidatePermit(
         require(invocationId.isNotBlank())
         require(resourceReservation.state == ResourceBudgetReservationState.RESERVED)
     }
+}
+
+fun interface ControlledEvolutionOutcomeRecorder {
+    suspend fun record(
+        evidence: EvolutionCanaryEvidenceBundle,
+        input: EvolutionCanaryOutcomeInput,
+    ): EvolutionCanaryOutcomeRecordResult
 }
 
 sealed interface ControlledEvolutionExecutionResult {
@@ -80,7 +84,7 @@ class ControlledEvolutionCoordinator(
     private val budgets: ResourceBudgetCoordinator,
     private val router: EvolutionCanaryRouter,
     private val outcomes: EvolutionCanaryOutcomeStore,
-    private val outcomeCoordinator: EvolutionCanaryOutcomeCoordinator,
+    private val outcomeRecorder: ControlledEvolutionOutcomeRecorder,
     private val budgetAccountId: ResourceBudgetAccountId,
     private val actorId: OwnerActorId,
     private val ownerScope: String,
@@ -161,9 +165,9 @@ class ControlledEvolutionCoordinator(
                 ownerPolicyRevision = finalOwnerDecision.policyRevision,
             )
         )
-        val recorded = outcomeCoordinator.record(
-            evidence = evidence,
-            input = EvolutionCanaryOutcomeInput(
+        val recorded = outcomeRecorder.record(
+            evidence,
+            EvolutionCanaryOutcomeInput(
                 reservationId = route.reservation.id,
                 invocationId = context.invocationId,
                 success = observation.success,
