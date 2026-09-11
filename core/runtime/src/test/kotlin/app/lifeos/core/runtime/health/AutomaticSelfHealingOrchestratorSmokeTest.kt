@@ -6,7 +6,7 @@ import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.ResourceBudgetRepository
 import app.lifeos.core.runtime.resource.ResourceBudgetRepositoryLoadReport
 import java.time.Instant
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -36,6 +36,7 @@ class AutomaticSelfHealingOrchestratorSmokeTest {
             now = { NOW },
         )
         orchestrator.start()
+        runCurrent()
         val nodeId = HealthNodeId("external:unsafe")
         graph.register(nodeId, HealthScope.EXTERNAL_APP)
         graph.record(
@@ -53,7 +54,7 @@ class AutomaticSelfHealingOrchestratorSmokeTest {
                 ),
             )
         )
-        advanceUntilIdle()
+        runCurrent()
         assertNotNull(quarantine.active(nodeId, NOW))
         assertEquals(HealthState.QUARANTINED, graph.node(nodeId)?.state)
     }
