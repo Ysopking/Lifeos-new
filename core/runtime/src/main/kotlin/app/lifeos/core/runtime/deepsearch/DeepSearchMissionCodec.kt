@@ -9,7 +9,7 @@ import java.time.Instant
 
 object DeepSearchMissionEventLogCodec {
     private const val MAGIC = 0x44534D32 // DSM2
-    private const val VERSION = 1
+    private const val VERSION = 2
     private const val MAX_EVENTS = 50_000
     private const val MAX_STRING_BYTES = 128 * 1024
     const val MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
@@ -36,6 +36,7 @@ object DeepSearchMissionEventLogCodec {
                         write(out, definition.searchPolicyVersion)
                         out.writeInt(definition.sourceScopeIds.size)
                         definition.sourceScopeIds.sorted().forEach { write(out, it) }
+                        write(out, definition.sourceSnapshotFingerprint)
                         write(out, definition.createdAt.toString())
                     }
                     writeNullable(out, event.checkpointFingerprint)
@@ -69,6 +70,7 @@ object DeepSearchMissionEventLogCodec {
                 require(scopeCount in 1..256)
                 val scopes = List(scopeCount) { read(input) }.toSet()
                 require(scopes.size == scopeCount) { "Duplicate DeepSearch source scope" }
+                val sourceSnapshotFingerprint = read(input)
                 DeepSearchMissionDefinition(
                     id = missionId,
                     goalPhotonId = goalPhotonId,
@@ -77,6 +79,7 @@ object DeepSearchMissionEventLogCodec {
                     query = query,
                     searchPolicyVersion = policy,
                     sourceScopeIds = scopes,
+                    sourceSnapshotFingerprint = sourceSnapshotFingerprint,
                     createdAt = Instant.parse(read(input)),
                 )
             } else null
