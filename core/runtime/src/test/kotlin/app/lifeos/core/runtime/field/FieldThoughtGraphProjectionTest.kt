@@ -60,7 +60,6 @@ class FieldThoughtGraphProjectionTest {
         val snapshots = MemorySnapshots()
         val graphDeltas = MemoryGraphDeltas()
         val firstProcessGraph = DurableThoughtGraph(graphDeltas)
-        val firstProcess = FieldThoughtGraphProjectionCoordinator(outbox, snapshots, firstProcessGraph)
 
         outbox.save(fixture.envelope)
         snapshots.save(fixture.result.snapshot)
@@ -136,17 +135,16 @@ class FieldThoughtGraphProjectionTest {
         val snapshots = MemorySnapshots()
         val graph = DurableThoughtGraph(MemoryGraphDeltas())
         val coordinator = FieldThoughtGraphProjectionCoordinator(outbox, snapshots, graph)
-        val mismatched = fixture.envelope.copy(
+        val mismatched = FieldThoughtGraphProjectionEnvelope.create(
+            snapshotId = fixture.result.snapshot.id,
             snapshotFingerprint = "mismatch",
-            id = FieldThoughtGraphProjectionId(
-                "field-thought-graph-projection:" + "0".repeat(64),
-            ),
+            delta = fixture.envelope.delta,
         )
 
-        // Invalid envelopes are rejected before they can enter the durable outbox.
-        assertFailsWith<IllegalArgumentException> {
-            FieldThoughtGraphProjectionCodec.encode(mismatched)
-        }
+        outbox.save(mismatched)
+        snapshots.save(fixture.result.snapshot)
+
+        assertFailsWith<IllegalStateException> { coordinator.reconcile() }
         assertEquals(0L, graph.state.value.revision)
     }
 
@@ -175,7 +173,7 @@ class FieldThoughtGraphProjectionTest {
         val request = DefaultPhotonFieldRequestFactory().create(photon)
         val result = FieldConvergenceEngine().converge(request)
         val envelope = FieldThoughtGraphProjector().project(photon, request, result)
-        return Fixture(photon, result, envelope)
+        return Fixture(result, envelope)
     }
 
     private fun photon(): Photon = Photon(
@@ -193,7 +191,6 @@ class FieldThoughtGraphProjectionTest {
     )
 
     private data class Fixture(
-        val photon: Photon,
         val result: app.lifeos.core.field.FieldConvergenceResult,
         val envelope: FieldThoughtGraphProjectionEnvelope,
     )
