@@ -35,6 +35,9 @@ class DecisionTraceLedger(private val repository: DecisionTraceRepository) {
             val mergedNodes = mergeNodes(current?.nodes.orEmpty(), nodes)
             val mergedLinks = (current?.links.orEmpty() + links).distinct()
                 .sortedWith(compareBy({ it.from.value }, { it.to.value }, { it.type.name }))
+            if (current != null && current.nodes == mergedNodes && current.links == mergedLinks) {
+                return current
+            }
             val next = DecisionTrace(id, (current?.revision ?: 0L) + 1L, mergedNodes, mergedLinks)
             if (repository.save(current?.revision ?: 0L, next)) return next
         }
