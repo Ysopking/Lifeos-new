@@ -144,7 +144,7 @@ class LifeOsApplication : Application() {
                         )
                     )
                 },
-                startKernel = kernel::start,
+                startKernel = { kernel.start() },
             )
         )
     }
