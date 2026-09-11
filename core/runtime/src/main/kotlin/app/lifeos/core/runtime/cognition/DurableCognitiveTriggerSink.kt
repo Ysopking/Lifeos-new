@@ -83,7 +83,12 @@ class DurableCognitiveTriggerSink(
             },
         )
 
-        val task = admissionController?.submit(draft) ?: taskEngine.submit(draft)
+        val controller = admissionController
+        val task = if (controller != null) {
+            controller.submit(draft)
+        } else {
+            taskEngine.submit(draft)
+        }
         return task != null
     }
 
