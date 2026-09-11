@@ -19,6 +19,12 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchSource
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceDescriptor
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceKind
 import app.lifeos.core.runtime.deepsearch.DeepSearchStatus
+import app.lifeos.core.runtime.resource.ResourceBudgetDemand
+import app.lifeos.core.runtime.resource.ResourceBudgetDomain
+import app.lifeos.core.runtime.resource.ResourceBudgetQuota
+import app.lifeos.core.runtime.resource.ResourceBudgetUsage
+import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
+import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
 import java.time.Duration
 import java.time.Instant
 import java.util.Locale
@@ -34,12 +40,14 @@ sealed interface LocalDeepSearchGoalResult {
 }
 
 /**
- * Private-v1 local DeepSearch adapter. It turns the already bounded DeepSearch planner into a real
- * SEARCH executor over encrypted local Photon evidence. It does not claim network access and never
- * treats derived search/query answers, goals or tool requests as fresh primary evidence.
+ * Private-v1 local DeepSearch adapter. It turns the bounded DeepSearch planner into a real SEARCH
+ * executor over encrypted local Photon evidence. When a shared V16 broker is installed, the planner
+ * limits themselves are derived from the persisted World Formula `DEEP_SEARCH` allocation rather
+ * than from a fixed local budget. It does not claim network access.
  */
 class LocalDeepSearchGoalEngine(
     private val planner: DeepSearchPlanner = DeepSearchPlanner(),
+    private val sharedBudgets: SharedResourceBudgetGate? = null,
 ) {
     fun supports(intent: IntentType): Boolean = intent == IntentType.SEARCH
 
@@ -63,12 +71,7 @@ class LocalDeepSearchGoalEngine(
         val request = DeepSearchRequest(
             query = query,
             contextTerms = goal.entities.map { it.normalizedValue }.filter { it.isNotBlank() }.toSet(),
-            budget = DeepSearchBudget(
-                maxDepth = 2,
-                maxBreadth = MAX_RESULTS,
-                maxWorkUnits = MAX_WORK_UNITS,
-                maxElapsed = Duration.ofSeconds(MAX_SECONDS),
-            ),
+            budget = effectiveBudget(goal),
         )
         val result = planner.search(
             request = request,
@@ -87,6 +90,38 @@ class LocalDeepSearchGoalEngine(
             createdAt = createdAt,
         )
         return LocalDeepSearchGoalResult.Produced(output, result, evidenceIds)
+    }
+
+    private suspend fun effectiveBudget(goal: GoalFrame): DeepSearchBudget {
+        val broker = sharedBudgets ?: return DEFAULT_BUDGET
+        val demand = ResourceBudgetDemand(
+            domain = ResourceBudgetDomain.DEEP_SEARCH,
+            requested = DEEP_SEARCH_REQUEST,
+            goalRelevance = goal.confidence.coerceIn(0.0, 1.0),
+            priority = 0.80,
+            expectedUtility = 0.90,
+            confidence = goal.confidence.coerceIn(0.0, 1.0),
+        )
+        val allocation = when (val decision = broker.allocate(DEEP_SEARCH_HARD_QUOTA, listOf(demand))) {
+            is SharedResourceBudgetDecision.Blocked -> error(
+                "deepsearch-world-formula-budget-blocked:${decision.reason}"
+            )
+            is SharedResourceBudgetDecision.Ready -> requireNotNull(
+                decision.allocation.allocation(ResourceBudgetDomain.DEEP_SEARCH)
+            ) { "World Formula allocation omitted DEEP_SEARCH domain" }
+        }
+        val work = minOf(MAX_WORK_UNITS.toLong(), allocation.allocated.workUnits).toInt()
+        val breadth = minOf(MAX_RESULTS.toLong(), allocation.allocated.candidates).toInt()
+        val elapsedMillis = minOf(MAX_SECONDS * 1_000L, allocation.allocated.elapsedMillis)
+        require(work > 0 && breadth > 0 && elapsedMillis > 0L) {
+            "deepsearch-world-formula-allocation-too-small"
+        }
+        return DeepSearchBudget(
+            maxDepth = if (work >= 4) 2 else 1,
+            maxBreadth = breadth,
+            maxWorkUnits = work,
+            maxElapsed = Duration.ofMillis(elapsedMillis),
+        )
     }
 
     private fun resultPhoton(
@@ -255,6 +290,28 @@ class LocalDeepSearchGoalEngine(
         private const val MAX_EXCERPT_CHARS = 280
         private const val EVIDENCE_MASS = 0.08
         private const val NO_EVIDENCE_CONFIDENCE = 0.70
+        private val DEFAULT_BUDGET = DeepSearchBudget(
+            maxDepth = 2,
+            maxBreadth = MAX_RESULTS,
+            maxWorkUnits = MAX_WORK_UNITS,
+            maxElapsed = Duration.ofSeconds(MAX_SECONDS),
+        )
+        private val DEEP_SEARCH_HARD_QUOTA = ResourceBudgetQuota(
+            elapsedMillis = 6_000,
+            workUnits = 24,
+            memoryBytes = 96L * 1024L * 1024L,
+            ioBytes = 12L * 1024L * 1024L,
+            networkBytes = 0,
+            candidates = 8,
+        )
+        private val DEEP_SEARCH_REQUEST = ResourceBudgetUsage(
+            elapsedMillis = MAX_SECONDS * 1_000L,
+            workUnits = MAX_WORK_UNITS.toLong(),
+            memoryBytes = 48L * 1024L * 1024L,
+            ioBytes = 4L * 1024L * 1024L,
+            networkBytes = 0,
+            candidates = MAX_RESULTS.toLong(),
+        )
         private val TERM_REGEX = Regex("[\\p{L}\\p{N}]+")
         private val WHITESPACE_REGEX = Regex("\\s+")
         private val SEARCH_DIRECTIVE_WORDS = setOf(
