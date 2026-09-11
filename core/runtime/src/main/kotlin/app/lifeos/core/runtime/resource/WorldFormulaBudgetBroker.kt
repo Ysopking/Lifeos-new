@@ -14,6 +14,7 @@ enum class ResourceBudgetDomain {
     COGNITION,
     TOOL_WORKSHOP,
     EVOLUTION,
+    HOT_SWAP,
     SELF_HEALING,
     BACKGROUND,
 }
@@ -160,12 +161,36 @@ class WorldFormulaBudgetBroker(
         }
 
         val requestedByDomain = demands.associate { it.domain to it.requested }
-        val elapsed = distributeDimension(pool.elapsedMillis, requestedByDomain.mapValues { it.value.elapsedMillis }, weights)
-        val work = distributeDimension(pool.workUnits, requestedByDomain.mapValues { it.value.workUnits }, weights)
-        val memory = distributeDimension(pool.memoryBytes, requestedByDomain.mapValues { it.value.memoryBytes }, weights)
-        val io = distributeDimension(pool.ioBytes, requestedByDomain.mapValues { it.value.ioBytes }, weights)
-        val network = distributeDimension(pool.networkBytes, requestedByDomain.mapValues { it.value.networkBytes }, weights)
-        val candidates = distributeDimension(pool.candidates, requestedByDomain.mapValues { it.value.candidates }, weights)
+        val elapsed = distributeDimension(
+            pool.elapsedMillis,
+            requestedByDomain.mapValues { it.value.elapsedMillis },
+            weights,
+        )
+        val work = distributeDimension(
+            pool.workUnits,
+            requestedByDomain.mapValues { it.value.workUnits },
+            weights,
+        )
+        val memory = distributeDimension(
+            pool.memoryBytes,
+            requestedByDomain.mapValues { it.value.memoryBytes },
+            weights,
+        )
+        val io = distributeDimension(
+            pool.ioBytes,
+            requestedByDomain.mapValues { it.value.ioBytes },
+            weights,
+        )
+        val network = distributeDimension(
+            pool.networkBytes,
+            requestedByDomain.mapValues { it.value.networkBytes },
+            weights,
+        )
+        val candidates = distributeDimension(
+            pool.candidates,
+            requestedByDomain.mapValues { it.value.candidates },
+            weights,
+        )
 
         val allocations = demands.sortedBy { it.domain.name }.map { demand ->
             ResourceBudgetDomainAllocation(
