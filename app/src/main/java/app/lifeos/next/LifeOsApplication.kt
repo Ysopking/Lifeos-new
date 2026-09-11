@@ -102,6 +102,7 @@ class LifeOsApplication : Application() {
                             budgets = resourceBudgets,
                             hardware = hardwareResourceIntelligence,
                             sharedBudgets = hardwareResourceIntelligence,
+                            traces = goalDecisionTraceRecorder,
                         )
                     )
                 },
