@@ -59,6 +59,7 @@ class LifeOsApplication : Application() {
             DurableGoalPlanRuntime(
                 ledger = kernel.goalPlans,
                 convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
+                persistDerivedOutcome = kernel::persistAndIngest,
             )
         )
         kernel.start()
