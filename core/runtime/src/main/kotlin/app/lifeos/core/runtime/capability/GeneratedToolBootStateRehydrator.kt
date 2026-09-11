@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.withLock
  * Process-boot adapter around generated-tool rehydration. Legacy J03 states keep their established
  * path; snapshots containing bounded ACTIVE tools use the stricter V1.5 artifact/seal replay gate.
  * A later bootstrap retry never restores twice and verifies RAM against the durable source of truth.
+ * V10 routing cutovers are reconciled only after all promoted tool records/providers are restored.
  */
 class GeneratedToolBootStateRehydrator(
     private val repository: GeneratedToolStateRepository,
@@ -28,11 +29,11 @@ class GeneratedToolBootStateRehydrator(
             ?.filter { it.providerType == ProviderType.GENERATED_TOOL }
             .orEmpty()
 
-        if (loaded.isEmpty() && trialLedger.isEmpty() && generatedProviders.isEmpty()) {
+        val report = if (loaded.isEmpty() && trialLedger.isEmpty() && generatedProviders.isEmpty()) {
             val hasBoundedActive = durable.any { state ->
                 state.record.state == GeneratedToolState.ACTIVE && state.boundedPromotionReceipt != null
             }
-            return@withLock if (hasBoundedActive) {
+            if (hasBoundedActive) {
                 BoundedGeneratedToolStateRehydrator(
                     repository = repository,
                     tools = tools,
@@ -55,35 +56,38 @@ class GeneratedToolBootStateRehydrator(
                     promotionPolicy = promotionPolicy,
                 ).rehydrate()
             }
+        } else {
+            require(loaded == durable.map { it.record }) {
+                "Generated-tool boot retry found RAM records different from durable state"
+            }
+            for (state in durable) {
+                require(tools.auditSnapshot(state.record.manifest.toolId) == state.auditEntries) {
+                    "Generated-tool boot retry found an audit chain different from durable state"
+                }
+                require(trialLedger.evidence(state.record.manifest.toolId) == state.trialEvidence) {
+                    "Generated-tool boot retry found trial evidence different from durable state"
+                }
+            }
+
+            val activeIds = durable
+                .filter { it.record.state == GeneratedToolState.ACTIVE }
+                .map { it.record.manifest.toolId }
+                .toSet()
+            if (capabilityRegistry != null) {
+                val providerIds = generatedProviders.map { it.providerId }.toSet()
+                require(providerIds == activeIds) {
+                    "Generated-tool boot retry found generated providers different from ACTIVE durable tools"
+                }
+            }
+
+            GeneratedToolRehydrationReport(
+                restoredTools = durable.size,
+                restoredTrialResults = durable.sumOf { it.trialEvidence.stats.trials },
+                restoredActiveProviders = if (capabilityRegistry == null) 0 else activeIds.size,
+            )
         }
 
-        require(loaded == durable.map { it.record }) {
-            "Generated-tool boot retry found RAM records different from durable state"
-        }
-        for (state in durable) {
-            require(tools.auditSnapshot(state.record.manifest.toolId) == state.auditEntries) {
-                "Generated-tool boot retry found an audit chain different from durable state"
-            }
-            require(trialLedger.evidence(state.record.manifest.toolId) == state.trialEvidence) {
-                "Generated-tool boot retry found trial evidence different from durable state"
-            }
-        }
-
-        val activeIds = durable
-            .filter { it.record.state == GeneratedToolState.ACTIVE }
-            .map { it.record.manifest.toolId }
-            .toSet()
-        if (capabilityRegistry != null) {
-            val providerIds = generatedProviders.map { it.providerId }.toSet()
-            require(providerIds == activeIds) {
-                "Generated-tool boot retry found generated providers different from ACTIVE durable tools"
-            }
-        }
-
-        GeneratedToolRehydrationReport(
-            restoredTools = durable.size,
-            restoredTrialResults = durable.sumOf { it.trialEvidence.stats.trials },
-            restoredActiveProviders = if (capabilityRegistry == null) 0 else activeIds.size,
-        )
+        HotSwapBootRuntimeRegistry.reconcileIfInstalled()
+        report
     }
 }
