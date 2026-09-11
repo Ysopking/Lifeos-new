@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.health
 import java.time.Instant
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,6 +15,7 @@ class HealthGraphObservationStreamTest {
         val nodeId = HealthNodeId("runtime")
         graph.register(nodeId, HealthScope.RUNTIME)
         val received = async { graph.observations.first() }
+        runCurrent()
         val observation = HealthObservation(
             nodeId = nodeId,
             state = HealthState.UNHEALTHY,
