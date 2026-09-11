@@ -72,6 +72,57 @@ class DeepSearchMissionRecoveryAuditTest {
         assertEquals(0, report.terminalMissions)
     }
 
+    @Test
+    fun `verifying mission with persisted result passes audit without rerunning source`() = runTest {
+        val fixture = Fixture()
+        val product = fixture.prepareVerifyingMission()
+        val sourceExecutionsBeforeAudit = fixture.sourceExecutions
+        assertTrue(sourceExecutionsBeforeAudit > 0)
+
+        val report = fixture.auditor().audit()
+
+        assertTrue(report.healthy)
+        assertEquals(1, report.missionsChecked)
+        assertEquals(1, report.activeMissions)
+        assertEquals(0, report.terminalMissions)
+        assertEquals(sourceExecutionsBeforeAudit, fixture.sourceExecutions)
+        assertEquals(product.photon, fixture.photons.load(product.photon.id))
+    }
+
+    @Test
+    fun `synthesizing mission with non terminal checkpoint fails closed`() = runTest {
+        val fixture = Fixture()
+        fixture.prepareSynthesizingWithNonTerminalCheckpoint()
+
+        val report = fixture.auditor().audit()
+
+        assertFalse(report.healthy)
+        assertEquals(
+            listOf("synthesis-checkpoint-not-terminal"),
+            report.issues.map { it.code },
+        )
+    }
+
+    @Test
+    fun `terminal result status tag mismatch fails closed deterministically`() = runTest {
+        val fixture = Fixture()
+        val product = fixture.completeMission()
+        fixture.photons.save(
+            product.photon.copy(
+                tags = (product.photon.tags - "deepsearch-status:resolved") +
+                    "deepsearch-status:unresolved",
+            )
+        )
+
+        val report = fixture.auditor().audit()
+
+        assertFalse(report.healthy)
+        assertEquals(
+            listOf("deepsearch-result-verification-failed:-status-tag-mismatch"),
+            report.issues.map { it.code },
+        )
+    }
+
     private inner class Fixture {
         val definition = definition()
         val missionRepo = MemoryMissionRepository()
@@ -80,9 +131,55 @@ class DeepSearchMissionRecoveryAuditTest {
         val ledger = DeepSearchMissionLedger(missionRepo, now = { now })
         val checkpoints = DeepSearchCheckpointStore(checkpointRepo, now = { now })
         val coordinator = DeepSearchMissionCoordinator(ledger, checkpoints, photons)
+        var sourceExecutions: Int = 0
+            private set
 
         suspend fun completeMission(): DeepSearchMissionProduct = coordinator.run(definition) { _, sink, missionId ->
             searchProduct(missionId, sink)
+        }
+
+        suspend fun prepareVerifyingMission(): DeepSearchMissionProduct {
+            var snapshot = ledger.create(definition)
+            snapshot = ledger.startExploring(snapshot)
+            var latestSnapshot = snapshot
+            val product = searchProduct(
+                missionId = definition.id,
+                sink = DeepSearchCheckpointSink { checkpoint ->
+                    val stored = checkpoints.persist(definition.id, checkpoint)
+                    latestSnapshot = ledger.checkpoint(
+                        latestSnapshot,
+                        stored.checkpoint.fingerprint(),
+                    )
+                },
+                onSourceExpand = { sourceExecutions += 1 },
+            )
+            latestSnapshot = ledger.startSynthesizing(latestSnapshot)
+            photons.save(product.photon)
+            ledger.startVerifying(latestSnapshot)
+            return product
+        }
+
+        suspend fun prepareSynthesizingWithNonTerminalCheckpoint() {
+            var snapshot = ledger.create(definition)
+            snapshot = ledger.startExploring(snapshot)
+            val checkpoint = DeepSearchPlannerCheckpoint(
+                request = request(),
+                frontier = DeepSearchFrontierSnapshot(
+                    admittedBranches = emptyList(),
+                    queuedBranchIds = emptySet(),
+                    expandedBranchIds = emptySet(),
+                ),
+                evidence = emptyList(),
+                trace = emptyList(),
+                workUnitsUsed = 0,
+                elapsedMillisUsed = 0L,
+                blockedSourceIds = emptySet(),
+                failedSourceIds = emptySet(),
+                rootExpanded = false,
+            )
+            val stored = checkpoints.persist(definition.id, checkpoint)
+            snapshot = ledger.checkpoint(snapshot, stored.checkpoint.fingerprint())
+            ledger.startSynthesizing(snapshot)
         }
 
         fun auditor() = DeepSearchMissionRecoveryAuditor(
@@ -95,21 +192,11 @@ class DeepSearchMissionRecoveryAuditTest {
     private suspend fun searchProduct(
         missionId: DeepSearchMissionId,
         sink: DeepSearchCheckpointSink,
+        onSourceExpand: () -> Unit = {},
     ): DeepSearchMissionProduct {
-        val request = DeepSearchRequest(
-            query = "lifeos photons",
-            budget = DeepSearchBudget(
-                maxDepth = 2,
-                maxBreadth = 4,
-                maxWorkUnits = 4,
-                maxElapsed = Duration.ofSeconds(4),
-            ),
-            minimumResolutionScore = 0.0,
-            minimumWinnerMargin = 0.0,
-        )
         val result = DeepSearchPlannerV2(now = { now }).search(
-            request = request,
-            sources = listOf(SingleFindingSource()),
+            request = request(),
+            sources = listOf(SingleFindingSource(onSourceExpand)),
             checkpointSink = sink,
         )
         assertEquals(DeepSearchStatus.RESOLVED, result.status)
@@ -143,6 +230,18 @@ class DeepSearchMissionRecoveryAuditTest {
         )
     }
 
+    private fun request() = DeepSearchRequest(
+        query = "lifeos photons",
+        budget = DeepSearchBudget(
+            maxDepth = 2,
+            maxBreadth = 4,
+            maxWorkUnits = 4,
+            maxElapsed = Duration.ofSeconds(4),
+        ),
+        minimumResolutionScore = 0.0,
+        minimumWinnerMargin = 0.0,
+    )
+
     private fun definition() = DeepSearchMissionDefinition.create(
         goalPhotonId = PhotonId("goal-deepsearch"),
         sourcePhotonId = PhotonId("source-chat"),
@@ -154,7 +253,9 @@ class DeepSearchMissionRecoveryAuditTest {
         createdAt = now,
     )
 
-    private class SingleFindingSource : DeepSearchSource {
+    private class SingleFindingSource(
+        private val onExpand: () -> Unit = {},
+    ) : DeepSearchSource {
         override val descriptor = DeepSearchSourceDescriptor(
             sourceId = "test-source",
             kind = DeepSearchSourceKind.LOCAL,
@@ -165,6 +266,7 @@ class DeepSearchMissionRecoveryAuditTest {
             request: DeepSearchRequest,
             branch: DeepSearchBranch,
         ): List<DeepSearchFindingDraft> {
+            onExpand()
             if (branch.depth > 0) return emptyList()
             return listOf(
                 DeepSearchFindingDraft(
