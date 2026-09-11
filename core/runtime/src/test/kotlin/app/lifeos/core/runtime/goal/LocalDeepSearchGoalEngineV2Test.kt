@@ -74,6 +74,7 @@ class LocalDeepSearchGoalEngineV2Test {
             query = "search: lifeos photons",
             searchPolicyVersion = LocalDeepSearchGoalEngine.SEARCH_POLICY_VERSION,
             sourceScopeIds = setOf(LocalDeepSearchGoalEngine.LOCAL_SOURCE_ID),
+            sourceSnapshotFingerprint = "a".repeat(64),
             createdAt = at,
         )
 
