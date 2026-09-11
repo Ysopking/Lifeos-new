@@ -14,7 +14,10 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchBudget
 import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointSink
 import app.lifeos.core.runtime.deepsearch.DeepSearchEvidenceDraft
 import app.lifeos.core.runtime.deepsearch.DeepSearchFindingDraft
+import app.lifeos.core.runtime.deepsearch.DeepSearchMissionDefinition
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
+import app.lifeos.core.runtime.deepsearch.DeepSearchMissionProduct
+import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRuntimeRegistry
 import app.lifeos.core.runtime.deepsearch.DeepSearchPlannerCheckpoint
 import app.lifeos.core.runtime.deepsearch.DeepSearchPlannerV2
 import app.lifeos.core.runtime.deepsearch.DeepSearchRequest
@@ -47,9 +50,9 @@ sealed interface LocalDeepSearchGoalResult {
 
 /**
  * Private-v1 local DeepSearch adapter. V12 routes SEARCH through the resumable planner while keeping
- * the existing public call shape compatible. A mission runtime may supply a durable checkpoint and
- * sink; legacy/unit compositions simply run V2 in-memory. World Formula/V16 still bounds the actual
- * planner limits and no network source is claimed here.
+ * the existing public call shape compatible. Production installs a durable mission coordinator;
+ * legacy/unit compositions simply run V2 in-memory. World Formula/V16 bounds the planner limits and
+ * no network source is claimed here.
  */
 class LocalDeepSearchGoalEngine(
     private val planner: DeepSearchPlannerV2 = DeepSearchPlannerV2(),
@@ -69,6 +72,51 @@ class LocalDeepSearchGoalEngine(
     ): LocalDeepSearchGoalResult {
         if (!supports(goal.intent)) return LocalDeepSearchGoalResult.Unsupported(goal.intent)
 
+        if (missionId == null && resume == null && checkpointSink == null) {
+            val missionRuntime = DeepSearchMissionRuntimeRegistry.currentOrNull()
+            if (missionRuntime != null) {
+                val definition = DeepSearchMissionDefinition.create(
+                    goalPhotonId = goalPhotonId,
+                    sourcePhotonId = sourcePhoton.id,
+                    sourceRevision = sourcePhoton.revision,
+                    query = goal.objective,
+                    searchPolicyVersion = SEARCH_POLICY_VERSION,
+                    sourceScopeIds = setOf(LOCAL_SOURCE_ID),
+                    createdAt = createdAt,
+                )
+                val product = missionRuntime.run(definition) { durableResume, durableSink, durableMissionId ->
+                    when (
+                        val nested = execute(
+                            goal = goal,
+                            sourcePhoton = sourcePhoton,
+                            goalPhotonId = goalPhotonId,
+                            photons = photons,
+                            createdAt = createdAt,
+                            resume = durableResume,
+                            checkpointSink = durableSink,
+                            missionId = durableMissionId,
+                        )
+                    ) {
+                        is LocalDeepSearchGoalResult.Produced -> DeepSearchMissionProduct(
+                            photon = nested.photon,
+                            result = nested.result,
+                            evidencePhotonIds = nested.evidencePhotonIds,
+                            missionId = durableMissionId,
+                        )
+                        is LocalDeepSearchGoalResult.Unsupported -> error(
+                            "Durable DeepSearch mission became unsupported"
+                        )
+                    }
+                }
+                return LocalDeepSearchGoalResult.Produced(
+                    photon = product.photon,
+                    result = product.result,
+                    evidencePhotonIds = product.evidencePhotonIds,
+                    missionId = product.missionId,
+                )
+            }
+        }
+
         val query = extractQuery(goal)
         val excluded = setOf(sourcePhoton.id, goalPhotonId)
         val candidates = photons
@@ -77,13 +125,27 @@ class LocalDeepSearchGoalEngine(
             .filter(::isPrimarySearchEvidence)
             .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
             .toList()
-        val request = DeepSearchRequest(
+        val freshRequest = DeepSearchRequest(
             query = query,
             contextTerms = goal.entities.map { it.normalizedValue }.filter { it.isNotBlank() }.toSet(),
             budget = effectiveBudget(goal),
         )
-        if (resume != null) {
-            require(resume.request == request) { "DeepSearch mission resume request no longer matches goal" }
+        val request = if (resume == null) {
+            freshRequest
+        } else {
+            require(resume.request.query == freshRequest.query) {
+                "DeepSearch mission query changed during resume"
+            }
+            require(resume.request.contextTerms == freshRequest.contextTerms) {
+                "DeepSearch mission context changed during resume"
+            }
+            require(resume.request.minimumResolutionScore == freshRequest.minimumResolutionScore)
+            require(resume.request.minimumWinnerMargin == freshRequest.minimumWinnerMargin)
+            require(budgetFitsWithin(resume.request.budget, freshRequest.budget)) {
+                "deepsearch-resume-budget-tightened"
+            }
+            // Preserve the original request identity; a looser current allocation never expands a running mission.
+            resume.request
         }
         val result = planner.search(
             request = request,
@@ -143,6 +205,14 @@ class LocalDeepSearchGoalEngine(
             maxElapsed = Duration.ofMillis(elapsedMillis),
         )
     }
+
+    private fun budgetFitsWithin(
+        requested: DeepSearchBudget,
+        currentLimit: DeepSearchBudget,
+    ): Boolean = requested.maxDepth <= currentLimit.maxDepth &&
+        requested.maxBreadth <= currentLimit.maxBreadth &&
+        requested.maxWorkUnits <= currentLimit.maxWorkUnits &&
+        requested.maxElapsed <= currentLimit.maxElapsed
 
     private fun resultPhoton(
         goal: GoalFrame,
