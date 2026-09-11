@@ -12,20 +12,20 @@ import app.lifeos.core.runtime.buildstudio.CandidateArtifact
  * BuildStudio candidate that is being promoted. Creating this evidence does not activate anything.
  */
 class GeneratedToolPromotionEvidence private constructor(
-    val toolId: String,
+    override val toolId: String,
     val candidateArtifactId: String,
     val candidateId: String,
     val verificationId: String,
     val provenanceId: String,
-    val recordFingerprint: String,
-    val trialEvidenceId: String,
-    val promotionPolicyFingerprint: String,
+    override val recordFingerprint: String,
+    override val trialEvidenceId: String,
+    override val promotionPolicyFingerprint: String,
     val apkSha256: String,
     val capabilityChangeFingerprint: String,
     val permissionDeltaFingerprint: String,
     val reviewerEvidenceFingerprints: List<String>,
     val promotionActorEvidenceFingerprints: List<String>,
-) {
+) : GeneratedToolActivationEvidence {
     init {
         require(toolId.isNotBlank()) { "Promotion evidence tool id must not be blank" }
         require(candidateArtifactId.isNotBlank()) { "Promotion evidence requires candidate artifact" }
@@ -45,7 +45,7 @@ class GeneratedToolPromotionEvidence private constructor(
         }
     }
 
-    val id: String = StableFieldIds.fingerprint(
+    override val id: String = StableFieldIds.fingerprint(
         "generated-tool-promotion-evidence/v1",
         toolId,
         candidateArtifactId,
@@ -63,7 +63,7 @@ class GeneratedToolPromotionEvidence private constructor(
     )
 
     /** Evidence is not authority. Only the lifecycle's guarded promotion operation can activate. */
-    val activationAllowed: Boolean = false
+    override val activationAllowed: Boolean = false
 
     internal fun matchesRecord(record: GeneratedToolRecord): Boolean =
         toolId == record.manifest.toolId && recordFingerprint == record.promotionRecordFingerprint()
