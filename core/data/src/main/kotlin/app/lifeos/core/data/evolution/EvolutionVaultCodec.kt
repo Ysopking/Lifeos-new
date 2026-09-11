@@ -10,6 +10,7 @@ import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryKillSwitchEvidence
 import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryOutcome
 import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReservation
 import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryStopReason
+import app.lifeos.core.runtime.evolution.NovelCapabilityPromotionSealEvidence
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -18,10 +19,6 @@ import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.time.Instant
 
-/**
- * One logical evolution snapshot. Legacy replacement-evolution buckets and novel-capability canary
- * buckets share the same encrypted/atomic vault while retaining distinct evidence semantics.
- */
 internal data class EvolutionVaultSnapshot(
     val buckets: List<EvolutionVaultBucket> = emptyList(),
     val novelBuckets: List<NovelCapabilityVaultBucket> = emptyList(),
@@ -114,34 +111,25 @@ internal data class EvolutionVaultBucket(
         require(candidateIds.size <= 1) {
             "Evolution adoption bucket cannot mix candidate tool identities"
         }
-
         val hardFailureOutcomes = outcomes.filter { it.hardFailures.isNotEmpty() }
         if (hardFailureOutcomes.isNotEmpty()) {
             require(hardFailureOutcomes.size == 1) {
                 "Evolution vault cannot contain outcomes after the first hard failure"
             }
             val hardFailure = hardFailureOutcomes.single()
-            require(killSwitch != null) {
-                "Persisted hard failure requires an atomic kill switch"
-            }
-            require(killSwitch.reason == EvolutionCanaryStopReason.HARD_FAILURE) {
-                "Persisted hard failure requires HARD_FAILURE stop reason"
-            }
-            require(killSwitch.triggerOutcomeId == hardFailure.id) {
-                "Hard-failure kill switch must reference the persisted failing outcome"
-            }
-            require(killSwitch.hardFailures == hardFailure.hardFailures) {
-                "Hard-failure kill switch evidence differs from failing outcome"
-            }
+            require(killSwitch != null) { "Persisted hard failure requires an atomic kill switch" }
+            require(killSwitch.reason == EvolutionCanaryStopReason.HARD_FAILURE)
+            require(killSwitch.triggerOutcomeId == hardFailure.id)
+            require(killSwitch.hardFailures == hardFailure.hardFailures)
         }
     }
 }
 
-/** Durable novel-capability bucket. It never contains replacement-baseline/adoption evidence. */
 internal data class NovelCapabilityVaultBucket(
     val admissionEvidenceId: String,
     val reservations: List<NovelCapabilityCanaryReservation> = emptyList(),
     val killSwitch: NovelCapabilityCanaryKillSwitchEvidence? = null,
+    val promotionSeal: NovelCapabilityPromotionSealEvidence? = null,
     val outcomes: List<NovelCapabilityCanaryOutcome> = emptyList(),
 ) {
     init {
@@ -162,6 +150,15 @@ internal data class NovelCapabilityVaultBucket(
         require(killSwitch == null || killSwitch.admissionEvidenceId == admissionEvidenceId) {
             "Novel canary kill switch belongs to another admission"
         }
+        require(promotionSeal == null || promotionSeal.admissionEvidenceId == admissionEvidenceId) {
+            "Novel promotion seal belongs to another admission"
+        }
+        require(promotionSeal == null || promotionSeal.expectedReservedInvocations == reservations.size) {
+            "Novel promotion seal reservation count does not match vault"
+        }
+        require(promotionSeal == null || killSwitch == null) {
+            "Stopped novel canary cannot also be promotion sealed"
+        }
         require(outcomes.all { it.admissionEvidenceId == admissionEvidenceId }) {
             "Novel canary outcome belongs to another admission"
         }
@@ -174,33 +171,33 @@ internal data class NovelCapabilityVaultBucket(
         require(outcomes.size <= reservations.size) {
             "Novel canary outcomes cannot exceed reservations"
         }
+        if (promotionSeal != null) {
+            require(outcomes.size == reservations.size) {
+                "Novel promotion seal requires all reserved outcomes"
+            }
+        }
         val reservationByInvocation = reservations.associateBy { it.invocationId }
         outcomes.forEach { outcome ->
             val reservation = requireNotNull(reservationByInvocation[outcome.invocationId]) {
                 "Novel canary outcome has no matching reservation"
             }
-            require(reservation.id == outcome.reservationId) {
-                "Novel canary outcome reservation evidence does not match vault"
-            }
-            require(reservation.toolId == outcome.toolId) {
-                "Novel canary outcome tool differs from reservation"
-            }
-            require(reservation.candidateRecordFingerprint == outcome.candidateRecordFingerprint) {
-                "Novel canary outcome record differs from reservation"
-            }
+            require(reservation.id == outcome.reservationId)
+            require(reservation.toolId == outcome.toolId)
+            require(reservation.candidateRecordFingerprint == outcome.candidateRecordFingerprint)
         }
         val toolIds = buildSet {
             reservations.mapTo(this) { it.toolId }
             outcomes.mapTo(this) { it.toolId }
             killSwitch?.toolId?.let(::add)
+            promotionSeal?.toolId?.let(::add)
         }
         require(toolIds.size <= 1) { "Novel canary bucket cannot mix tool identities" }
         val recordFingerprints = buildSet {
             reservations.mapTo(this) { it.candidateRecordFingerprint }
             outcomes.mapTo(this) { it.candidateRecordFingerprint }
+            promotionSeal?.candidateRecordFingerprint?.let(::add)
         }
         require(recordFingerprints.size <= 1) { "Novel canary bucket cannot mix candidate records" }
-
         val safetyOutcomes = outcomes.filter { it.safetyViolation }
         if (safetyOutcomes.isNotEmpty()) {
             require(safetyOutcomes.size == 1) {
@@ -209,16 +206,14 @@ internal data class NovelCapabilityVaultBucket(
             val safety = safetyOutcomes.single()
             require(killSwitch != null) { "Novel canary safety violation requires atomic stop evidence" }
             require(killSwitch.reason == NovelCapabilityCanaryStopReason.SAFETY_VIOLATION)
-            require(killSwitch.triggerEvidenceId == safety.id) {
-                "Novel canary stop must reference the persisted safety outcome"
-            }
+            require(killSwitch.triggerEvidenceId == safety.id)
         }
     }
 }
 
-/** Strict binary codec kept Android-free so corruption and rehydration invariants are JVM-tested. */
 internal object EvolutionVaultCodec {
-    const val VERSION = 2
+    const val VERSION = 3
+    private const val NOVEL_VERSION = 2
     private const val LEGACY_VERSION = 1
     private const val MAGIC = 0x4C45564F // LEVO
     private const val MAX_BUCKETS = 512
@@ -256,12 +251,10 @@ internal object EvolutionVaultCodec {
             }
             val bucketCount = data.readBoundedCount(MAX_BUCKETS, "adoption buckets")
             val buckets = List(bucketCount) { data.readBucket() }
-            val novelBuckets = if (version >= VERSION) {
+            val novelBuckets = if (version >= NOVEL_VERSION) {
                 val novelCount = data.readBoundedCount(MAX_BUCKETS, "novel admission buckets")
-                List(novelCount) { data.readNovelBucket() }
-            } else {
-                emptyList()
-            }
+                List(novelCount) { data.readNovelBucket(version) }
+            } else emptyList()
             require(data.read() == -1) { "Evolution vault contains trailing bytes" }
             EvolutionVaultSnapshot(buckets = buckets, novelBuckets = novelBuckets)
         }
@@ -269,19 +262,16 @@ internal object EvolutionVaultCodec {
 
     private fun DataOutputStream.writeBucket(bucket: EvolutionVaultBucket) {
         writeText(bucket.adoptionEvidenceId)
-        require(bucket.reservations.size <= MAX_ENTRIES_PER_BUCKET)
         val reservations = bucket.reservations.sortedBy { it.sequence }
+        require(reservations.size <= MAX_ENTRIES_PER_BUCKET)
         writeInt(reservations.size)
         reservations.forEach { writeReservation(it) }
-
         writeBoolean(bucket.killSwitch != null)
         bucket.killSwitch?.let { writeKillSwitch(it) }
-
         writeBoolean(bucket.promotionSeal != null)
         bucket.promotionSeal?.let { writePromotionSeal(it) }
-
-        require(bucket.outcomes.size <= MAX_ENTRIES_PER_BUCKET)
         val outcomes = bucket.outcomes.sortedBy { it.invocationId }
+        require(outcomes.size <= MAX_ENTRIES_PER_BUCKET)
         writeInt(outcomes.size)
         outcomes.forEach { writeOutcome(it) }
     }
@@ -294,8 +284,35 @@ internal object EvolutionVaultCodec {
         val killSwitch = if (readBoolean()) readKillSwitch() else null
         val promotionSeal = if (readBoolean()) readPromotionSeal() else null
         val outcomes = List(readBoundedCount(MAX_ENTRIES_PER_BUCKET, "outcomes")) { readOutcome() }
-        return EvolutionVaultBucket(
-            adoptionEvidenceId = adoptionEvidenceId,
+        return EvolutionVaultBucket(adoptionEvidenceId, reservations, killSwitch, promotionSeal, outcomes)
+    }
+
+    private fun DataOutputStream.writeNovelBucket(bucket: NovelCapabilityVaultBucket) {
+        writeText(bucket.admissionEvidenceId)
+        val reservations = bucket.reservations.sortedBy { it.sequence }
+        require(reservations.size <= MAX_ENTRIES_PER_BUCKET)
+        writeInt(reservations.size)
+        reservations.forEach { writeNovelReservation(it) }
+        writeBoolean(bucket.killSwitch != null)
+        bucket.killSwitch?.let { writeNovelKillSwitch(it) }
+        writeBoolean(bucket.promotionSeal != null)
+        bucket.promotionSeal?.let { writeNovelPromotionSeal(it) }
+        val outcomes = bucket.outcomes.sortedBy { it.invocationId }
+        require(outcomes.size <= MAX_ENTRIES_PER_BUCKET)
+        writeInt(outcomes.size)
+        outcomes.forEach { writeNovelOutcome(it) }
+    }
+
+    private fun DataInputStream.readNovelBucket(version: Int): NovelCapabilityVaultBucket {
+        val admissionEvidenceId = readText()
+        val reservations = List(readBoundedCount(MAX_ENTRIES_PER_BUCKET, "novel reservations")) {
+            readNovelReservation().also { require(it.admissionEvidenceId == admissionEvidenceId) }
+        }
+        val killSwitch = if (readBoolean()) readNovelKillSwitch() else null
+        val promotionSeal = if (version >= VERSION && readBoolean()) readNovelPromotionSeal() else null
+        val outcomes = List(readBoundedCount(MAX_ENTRIES_PER_BUCKET, "novel outcomes")) { readNovelOutcome() }
+        return NovelCapabilityVaultBucket(
+            admissionEvidenceId = admissionEvidenceId,
             reservations = reservations,
             killSwitch = killSwitch,
             promotionSeal = promotionSeal,
@@ -303,216 +320,134 @@ internal object EvolutionVaultCodec {
         )
     }
 
-    private fun DataOutputStream.writeNovelBucket(bucket: NovelCapabilityVaultBucket) {
-        writeText(bucket.admissionEvidenceId)
-        require(bucket.reservations.size <= MAX_ENTRIES_PER_BUCKET)
-        val reservations = bucket.reservations.sortedBy { it.sequence }
-        writeInt(reservations.size)
-        reservations.forEach { writeNovelReservation(it) }
-        writeBoolean(bucket.killSwitch != null)
-        bucket.killSwitch?.let { writeNovelKillSwitch(it) }
-        require(bucket.outcomes.size <= MAX_ENTRIES_PER_BUCKET)
-        val outcomes = bucket.outcomes.sortedBy { it.invocationId }
-        writeInt(outcomes.size)
-        outcomes.forEach { writeNovelOutcome(it) }
-    }
-
-    private fun DataInputStream.readNovelBucket(): NovelCapabilityVaultBucket {
-        val admissionEvidenceId = readText()
-        val reservations = List(readBoundedCount(MAX_ENTRIES_PER_BUCKET, "novel reservations")) {
-            readNovelReservation().also { require(it.admissionEvidenceId == admissionEvidenceId) }
-        }
-        val killSwitch = if (readBoolean()) readNovelKillSwitch() else null
-        val outcomes = List(readBoundedCount(MAX_ENTRIES_PER_BUCKET, "novel outcomes")) { readNovelOutcome() }
-        return NovelCapabilityVaultBucket(
-            admissionEvidenceId = admissionEvidenceId,
-            reservations = reservations,
-            killSwitch = killSwitch,
-            outcomes = outcomes,
-        )
-    }
-
     private fun DataOutputStream.writeReservation(value: EvolutionCanaryReservation) {
-        writeText(value.id)
-        writeText(value.adoptionEvidenceId)
-        writeText(value.invocationId)
-        writeInt(value.sequence)
-        writeInstant(value.reservedAt)
+        writeText(value.id); writeText(value.adoptionEvidenceId); writeText(value.invocationId)
+        writeInt(value.sequence); writeInstant(value.reservedAt)
     }
 
     private fun DataInputStream.readReservation(): EvolutionCanaryReservation {
         val expectedId = readText()
-        val value = EvolutionCanaryReservation(
-            adoptionEvidenceId = readText(),
-            invocationId = readText(),
-            sequence = readInt(),
-            reservedAt = readInstant(),
-        )
+        val value = EvolutionCanaryReservation(readText(), readText(), readInt(), readInstant())
         require(value.id == expectedId) { "Evolution reservation id integrity check failed" }
         return value
     }
 
     private fun DataOutputStream.writeNovelReservation(value: NovelCapabilityCanaryReservation) {
-        writeText(value.id)
-        writeText(value.admissionEvidenceId)
-        writeText(value.toolId)
-        writeText(value.candidateRecordFingerprint)
-        writeText(value.invocationId)
-        writeText(value.inputFingerprint)
-        writeText(value.expectedOutputFingerprint)
-        writeInt(value.sequence)
-        writeInstant(value.reservedAt)
+        writeText(value.id); writeText(value.admissionEvidenceId); writeText(value.toolId)
+        writeText(value.candidateRecordFingerprint); writeText(value.invocationId)
+        writeText(value.inputFingerprint); writeText(value.expectedOutputFingerprint)
+        writeInt(value.sequence); writeInstant(value.reservedAt)
     }
 
     private fun DataInputStream.readNovelReservation(): NovelCapabilityCanaryReservation {
         val expectedId = readText()
         val value = NovelCapabilityCanaryReservation(
-            admissionEvidenceId = readText(),
-            toolId = readText(),
-            candidateRecordFingerprint = readText(),
-            invocationId = readText(),
-            inputFingerprint = readText(),
-            expectedOutputFingerprint = readText(),
-            sequence = readInt(),
-            reservedAt = readInstant(),
+            admissionEvidenceId = readText(), toolId = readText(), candidateRecordFingerprint = readText(),
+            invocationId = readText(), inputFingerprint = readText(), expectedOutputFingerprint = readText(),
+            sequence = readInt(), reservedAt = readInstant(),
         )
         require(value.id == expectedId) { "Novel canary reservation id integrity check failed" }
         return value
     }
 
     private fun DataOutputStream.writeKillSwitch(value: EvolutionCanaryKillSwitchEvidence) {
-        writeText(value.id)
-        writeText(value.adoptionEvidenceId)
-        writeText(value.candidateToolId)
-        writeText(value.reason.name)
-        writeText(value.triggerOutcomeId)
-        writeFailures(value.hardFailures)
+        writeText(value.id); writeText(value.adoptionEvidenceId); writeText(value.candidateToolId)
+        writeText(value.reason.name); writeText(value.triggerOutcomeId); writeFailures(value.hardFailures)
         writeInstant(value.trippedAt)
     }
 
     private fun DataInputStream.readKillSwitch(): EvolutionCanaryKillSwitchEvidence {
         val expectedId = readText()
         val value = EvolutionCanaryKillSwitchEvidence(
-            adoptionEvidenceId = readText(),
-            candidateToolId = readText(),
-            reason = enumValueOf<EvolutionCanaryStopReason>(readText()),
-            triggerOutcomeId = readText(),
-            hardFailures = readFailures(),
-            trippedAt = readInstant(),
+            adoptionEvidenceId = readText(), candidateToolId = readText(),
+            reason = enumValueOf(readText()), triggerOutcomeId = readText(),
+            hardFailures = readFailures(), trippedAt = readInstant(),
         )
         require(value.id == expectedId) { "Evolution kill-switch id integrity check failed" }
         return value
     }
 
     private fun DataOutputStream.writeNovelKillSwitch(value: NovelCapabilityCanaryKillSwitchEvidence) {
-        writeText(value.id)
-        writeText(value.admissionEvidenceId)
-        writeText(value.toolId)
-        writeText(value.reason.name)
-        writeText(value.triggerEvidenceId)
-        writeInstant(value.trippedAt)
+        writeText(value.id); writeText(value.admissionEvidenceId); writeText(value.toolId)
+        writeText(value.reason.name); writeText(value.triggerEvidenceId); writeInstant(value.trippedAt)
     }
 
     private fun DataInputStream.readNovelKillSwitch(): NovelCapabilityCanaryKillSwitchEvidence {
         val expectedId = readText()
         val value = NovelCapabilityCanaryKillSwitchEvidence(
-            admissionEvidenceId = readText(),
-            toolId = readText(),
-            reason = enumValueOf<NovelCapabilityCanaryStopReason>(readText()),
-            triggerEvidenceId = readText(),
-            trippedAt = readInstant(),
+            admissionEvidenceId = readText(), toolId = readText(),
+            reason = enumValueOf(readText()), triggerEvidenceId = readText(), trippedAt = readInstant(),
         )
         require(value.id == expectedId) { "Novel canary kill-switch id integrity check failed" }
         return value
     }
 
     private fun DataOutputStream.writePromotionSeal(value: EvolutionCanaryPromotionSealEvidence) {
-        writeText(value.id)
-        writeText(value.adoptionEvidenceId)
-        writeText(value.candidateToolId)
-        writeText(value.readinessEvidenceId)
-        writeInt(value.expectedReservedInvocations)
-        writeInstant(value.sealedAt)
+        writeText(value.id); writeText(value.adoptionEvidenceId); writeText(value.candidateToolId)
+        writeText(value.readinessEvidenceId); writeInt(value.expectedReservedInvocations); writeInstant(value.sealedAt)
     }
 
     private fun DataInputStream.readPromotionSeal(): EvolutionCanaryPromotionSealEvidence {
         val expectedId = readText()
         val value = EvolutionCanaryPromotionSealEvidence(
-            adoptionEvidenceId = readText(),
-            candidateToolId = readText(),
-            readinessEvidenceId = readText(),
-            expectedReservedInvocations = readInt(),
-            sealedAt = readInstant(),
+            adoptionEvidenceId = readText(), candidateToolId = readText(), readinessEvidenceId = readText(),
+            expectedReservedInvocations = readInt(), sealedAt = readInstant(),
         )
         require(value.id == expectedId) { "Evolution promotion-seal id integrity check failed" }
         return value
     }
 
+    private fun DataOutputStream.writeNovelPromotionSeal(value: NovelCapabilityPromotionSealEvidence) {
+        writeText(value.id); writeText(value.admissionEvidenceId); writeText(value.subjectId); writeText(value.toolId)
+        writeText(value.candidateRecordFingerprint); writeText(value.artifactId); writeText(value.readinessEvidenceId)
+        writeInt(value.expectedReservedInvocations); writeInstant(value.sealedAt)
+    }
+
+    private fun DataInputStream.readNovelPromotionSeal(): NovelCapabilityPromotionSealEvidence {
+        val expectedId = readText()
+        val value = NovelCapabilityPromotionSealEvidence(
+            admissionEvidenceId = readText(), subjectId = readText(), toolId = readText(),
+            candidateRecordFingerprint = readText(), artifactId = readText(), readinessEvidenceId = readText(),
+            expectedReservedInvocations = readInt(), sealedAt = readInstant(),
+        )
+        require(value.id == expectedId) { "Novel promotion-seal id integrity check failed" }
+        return value
+    }
+
     private fun DataOutputStream.writeOutcome(value: EvolutionCanaryOutcome) {
-        writeText(value.id)
-        writeText(value.adoptionEvidenceId)
-        writeText(value.reservationId)
-        writeText(value.candidateToolId)
-        writeText(value.candidateRecordFingerprint)
-        writeText(value.invocationId)
-        writeText(value.inputFingerprint)
-        writeBoolean(value.success)
-        writeBoolean(value.producedExpectedOutput)
-        writeNullableText(value.outputFingerprint)
-        writeLong(value.latencyMs)
-        writeFailures(value.hardFailures)
+        writeText(value.id); writeText(value.adoptionEvidenceId); writeText(value.reservationId)
+        writeText(value.candidateToolId); writeText(value.candidateRecordFingerprint); writeText(value.invocationId)
+        writeText(value.inputFingerprint); writeBoolean(value.success); writeBoolean(value.producedExpectedOutput)
+        writeNullableText(value.outputFingerprint); writeLong(value.latencyMs); writeFailures(value.hardFailures)
         writeInstant(value.recordedAt)
     }
 
     private fun DataInputStream.readOutcome(): EvolutionCanaryOutcome {
         val expectedId = readText()
         val value = EvolutionCanaryOutcome(
-            adoptionEvidenceId = readText(),
-            reservationId = readText(),
-            candidateToolId = readText(),
-            candidateRecordFingerprint = readText(),
-            invocationId = readText(),
-            inputFingerprint = readText(),
-            success = readBoolean(),
-            producedExpectedOutput = readBoolean(),
-            outputFingerprint = readNullableText(),
-            latencyMs = readLong(),
-            hardFailures = readFailures(),
-            recordedAt = readInstant(),
+            adoptionEvidenceId = readText(), reservationId = readText(), candidateToolId = readText(),
+            candidateRecordFingerprint = readText(), invocationId = readText(), inputFingerprint = readText(),
+            success = readBoolean(), producedExpectedOutput = readBoolean(), outputFingerprint = readNullableText(),
+            latencyMs = readLong(), hardFailures = readFailures(), recordedAt = readInstant(),
         )
         require(value.id == expectedId) { "Evolution outcome id integrity check failed" }
         return value
     }
 
     private fun DataOutputStream.writeNovelOutcome(value: NovelCapabilityCanaryOutcome) {
-        writeText(value.id)
-        writeText(value.admissionEvidenceId)
-        writeText(value.reservationId)
-        writeText(value.toolId)
-        writeText(value.candidateRecordFingerprint)
-        writeText(value.invocationId)
-        writeText(value.trialResultFingerprint)
-        writeBoolean(value.success)
-        writeBoolean(value.producedExpectedOutput)
-        writeBoolean(value.safetyViolation)
-        writeLong(value.latencyMs)
-        writeInstant(value.recordedAt)
+        writeText(value.id); writeText(value.admissionEvidenceId); writeText(value.reservationId); writeText(value.toolId)
+        writeText(value.candidateRecordFingerprint); writeText(value.invocationId); writeText(value.trialResultFingerprint)
+        writeBoolean(value.success); writeBoolean(value.producedExpectedOutput); writeBoolean(value.safetyViolation)
+        writeLong(value.latencyMs); writeInstant(value.recordedAt)
     }
 
     private fun DataInputStream.readNovelOutcome(): NovelCapabilityCanaryOutcome {
         val expectedId = readText()
         val value = NovelCapabilityCanaryOutcome(
-            admissionEvidenceId = readText(),
-            reservationId = readText(),
-            toolId = readText(),
-            candidateRecordFingerprint = readText(),
-            invocationId = readText(),
-            trialResultFingerprint = readText(),
-            success = readBoolean(),
-            producedExpectedOutput = readBoolean(),
-            safetyViolation = readBoolean(),
-            latencyMs = readLong(),
-            recordedAt = readInstant(),
+            admissionEvidenceId = readText(), reservationId = readText(), toolId = readText(),
+            candidateRecordFingerprint = readText(), invocationId = readText(), trialResultFingerprint = readText(),
+            success = readBoolean(), producedExpectedOutput = readBoolean(), safetyViolation = readBoolean(),
+            latencyMs = readLong(), recordedAt = readInstant(),
         )
         require(value.id == expectedId) { "Novel canary outcome id integrity check failed" }
         return value
@@ -534,35 +469,25 @@ internal object EvolutionVaultCodec {
     }
 
     private fun DataOutputStream.writeInstant(value: Instant) = writeText(value.toString())
-
     private fun DataInputStream.readInstant(): Instant = Instant.parse(readText())
-
     private fun DataOutputStream.writeNullableText(value: String?) {
-        writeBoolean(value != null)
-        if (value != null) writeText(value)
+        writeBoolean(value != null); if (value != null) writeText(value)
     }
-
     private fun DataInputStream.readNullableText(): String? = if (readBoolean()) readText() else null
-
     private fun DataOutputStream.writeText(value: String) {
         val bytes = value.toByteArray(Charsets.UTF_8)
         require(bytes.size <= MAX_STRING_BYTES) { "Evolution vault string exceeds size limit" }
-        writeInt(bytes.size)
-        write(bytes)
+        writeInt(bytes.size); write(bytes)
     }
-
     private fun DataInputStream.readText(): String {
         val size = readInt()
         require(size in 0..MAX_STRING_BYTES) { "Invalid evolution vault string length" }
-        val bytes = ByteArray(size)
-        readFully(bytes)
+        val bytes = ByteArray(size); readFully(bytes)
         return Charsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
-            .decode(ByteBuffer.wrap(bytes))
-            .toString()
+            .decode(ByteBuffer.wrap(bytes)).toString()
     }
-
     private fun DataInputStream.readBoundedCount(maximum: Int, label: String): Int = readInt().also {
         require(it in 0..maximum) { "Invalid evolution vault $label count: $it" }
     }
