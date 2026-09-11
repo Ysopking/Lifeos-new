@@ -26,6 +26,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchResult
 import app.lifeos.core.runtime.deepsearch.DeepSearchSource
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceDescriptor
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceKind
+import app.lifeos.core.runtime.deepsearch.DeepSearchSourceSnapshot
 import app.lifeos.core.runtime.deepsearch.DeepSearchStatus
 import app.lifeos.core.runtime.resource.ResourceBudgetDemand
 import app.lifeos.core.runtime.resource.ResourceBudgetDomain
@@ -77,6 +78,12 @@ class LocalDeepSearchGoalEngine(
         if (missionId == null && resume == null && checkpointSink == null) {
             val missionRuntime = DeepSearchMissionRuntimeRegistry.currentOrNull()
             if (missionRuntime != null) {
+                val missionEvidence = photons
+                    .asSequence()
+                    .filter { it.id != sourcePhoton.id && it.id != goalPhotonId }
+                    .filter(::isPrimarySearchEvidence)
+                    .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+                    .toList()
                 val definition = DeepSearchMissionDefinition.create(
                     goalPhotonId = goalPhotonId,
                     sourcePhotonId = sourcePhoton.id,
@@ -84,6 +91,7 @@ class LocalDeepSearchGoalEngine(
                     query = goal.objective,
                     searchPolicyVersion = SEARCH_POLICY_VERSION,
                     sourceScopeIds = setOf(LOCAL_SOURCE_ID),
+                    sourceSnapshotFingerprint = DeepSearchSourceSnapshot.fingerprint(missionEvidence),
                     createdAt = createdAt,
                 )
                 val product = missionRuntime.run(definition) { durableResume, durableSink, durableMissionId ->
@@ -146,12 +154,9 @@ class LocalDeepSearchGoalEngine(
             require(budgetFitsWithin(resume.request.budget, freshRequest.budget)) {
                 "deepsearch-resume-budget-tightened"
             }
-            // Preserve the original request identity; a looser current allocation never expands a running mission.
             resume.request
         }
         val result = if (resume != null && checkpointProjector.isTerminal(resume)) {
-            // Synthesis/terminal recovery must never re-authorize or touch a source. The final durable
-            // planner checkpoint is sufficient to reconstruct the exact ranked result.
             checkpointProjector.project(resume)
         } else {
             planner.search(
