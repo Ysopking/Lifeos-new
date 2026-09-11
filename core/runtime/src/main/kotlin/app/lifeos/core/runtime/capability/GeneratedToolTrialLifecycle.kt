@@ -243,6 +243,7 @@ class GeneratedToolLifecycleCoordinator(
         activationEvidenceRef: String = evidence.id,
         actorId: String? = null,
         novelClaim: GeneratedToolNovelActivationClaim? = null,
+        registerCapability: Boolean = true,
     ): GeneratedToolRecord = activationMutex.withLock {
         require(activationEvidenceRef.isNotBlank())
         require(actorId == null || actorId.isNotBlank())
@@ -258,19 +259,21 @@ class GeneratedToolLifecycleCoordinator(
             "Activation evidence is stale or belongs to another tool/trial/policy"
         }
 
-        val descriptor = record.copy(
+        val prospective = record.copy(
             state = GeneratedToolState.ACTIVE,
             promotionEvidenceId = evidence.id,
-        ).toCapabilityDescriptor(exactTrials.stats)
+        )
+        val descriptor = prospective.toCapabilityDescriptor(exactTrials.stats)
         val capabilities = capabilityRegistry
         when (evidence) {
-            is GeneratedToolPromotionEvidence -> {
-                require(novelClaim == null) { "J03 promotion cannot consume a novel activation claim" }
+            is GeneratedToolPromotionEvidence -> require(novelClaim == null) {
+                "J03 promotion cannot consume a novel activation claim"
             }
             is BoundedGeneratedToolPromotionEvidence -> {
                 val claim = requireNotNull(novelClaim) { "Bounded promotion requires a novel activation claim" }
+                require(registerCapability) { "Bounded novel promotion cannot be staged as a replacement hot-swap" }
                 requireNotNull(capabilities) { "Bounded promotion requires a capability registry" }
-                    .preflightGeneratedNovel(descriptor, record.copy(state = GeneratedToolState.ACTIVE, promotionEvidenceId = evidence.id), evidence, claim)
+                    .preflightGeneratedNovel(descriptor, prospective, evidence, claim)
             }
         }
 
@@ -280,7 +283,7 @@ class GeneratedToolLifecycleCoordinator(
             activationEvidenceRef = activationEvidenceRef,
             actorId = actorId,
         )
-        if (capabilities != null) {
+        if (capabilities != null && registerCapability) {
             when (evidence) {
                 is GeneratedToolPromotionEvidence -> capabilities.registerGenerated(
                     active.toCapabilityDescriptor(exactTrials.stats), active, evidence
@@ -294,6 +297,12 @@ class GeneratedToolLifecycleCoordinator(
             }
         }
         active
+    }
+
+    internal suspend fun activeDescriptor(toolId: String): CapabilityDescriptor = activationMutex.withLock {
+        val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
+        require(record.state == GeneratedToolState.ACTIVE) { "Hot-swap candidate must be ACTIVE before cutover" }
+        record.toCapabilityDescriptor(trialLedger.stats(toolId))
     }
 
     suspend fun rollback(request: GeneratedToolRollbackRequest): GeneratedToolRollbackResult = activationMutex.withLock {
