@@ -23,15 +23,15 @@ interface DeepSearchResultPhotonPersistence {
  * Coordinates V12 mission state, planner checkpoints and the durable result Photon.
  *
  * Ordering is deliberate:
- * EXPLORING -> final checkpoint -> SYNTHESIZING -> Photon.save -> VERIFYING -> terminal ledger event.
- * A terminal ledger entry therefore never points at an unpersisted result Photon. Once synthesis
- * starts the final planner checkpoint is frozen; recovery can render/project it but never mutate it.
+ * EXPLORING -> final checkpoint -> SYNTHESIZING -> verify -> Photon.save -> VERIFYING -> terminal.
+ * A terminal ledger entry therefore never points at an unpersisted or unverified result Photon.
  */
 class DeepSearchMissionCoordinator(
     private val ledger: DeepSearchMissionLedger,
     private val checkpoints: DeepSearchCheckpointStore,
     private val resultPhotons: DeepSearchResultPhotonPersistence,
     private val projector: DeepSearchCheckpointResultProjector = DeepSearchCheckpointResultProjector(),
+    private val verifier: DeepSearchMissionVerifier = DeepSearchMissionVerifier(projector),
 ) {
     suspend fun run(
         definition: DeepSearchMissionDefinition,
@@ -60,12 +60,11 @@ class DeepSearchMissionCoordinator(
             val checkpoint = requireNotNull(storedAtEntry) {
                 "DeepSearch VERIFYING mission is missing its final checkpoint"
             }.checkpoint
-            require(projector.isTerminal(checkpoint)) {
-                "DeepSearch VERIFYING mission checkpoint is not terminal"
-            }
             val status = statusFromPhoton(existing)
+            val recovered = product(existing, checkpoint, status, definition.id)
+            verifier.requireVerified(snapshot.definition, checkpoint, recovered)
             terminalize(snapshot, existing.id, status)
-            return product(existing, checkpoint, status, definition.id)
+            return recovered
         }
 
         if (snapshot.state == DeepSearchMissionState.SYNTHESIZING) {
@@ -78,9 +77,11 @@ class DeepSearchMissionCoordinator(
             val existing = resultPhotons.findForMission(definition.id)
             if (existing != null) {
                 val status = statusFromPhoton(existing)
+                val recovered = product(existing, checkpoint, status, definition.id)
+                verifier.requireVerified(snapshot.definition, checkpoint, recovered)
                 snapshot = ledger.startVerifying(snapshot)
                 terminalize(snapshot, existing.id, status)
-                return product(existing, checkpoint, status, definition.id)
+                return recovered
             }
         }
 
@@ -120,11 +121,8 @@ class DeepSearchMissionCoordinator(
             latestSnapshot = ledger.startSynthesizing(latestSnapshot)
         }
         require(latestSnapshot.state == DeepSearchMissionState.SYNTHESIZING)
-        require(searched.result == projector.project(finalStored.checkpoint)) {
-            "DeepSearch rendered result diverges from durable terminal checkpoint"
-        }
 
-        // Persist the deterministic result Photon before the ledger can enter VERIFYING/terminal.
+        verifier.requireVerified(latestSnapshot.definition, finalStored.checkpoint, searched)
         resultPhotons.save(searched.photon)
         latestSnapshot = ledger.startVerifying(latestSnapshot)
         terminalize(latestSnapshot, searched.photon.id, searched.result.status)
@@ -160,9 +158,6 @@ class DeepSearchMissionCoordinator(
         val stored = requireNotNull(checkpoints.load(snapshot.definition.id)) {
             "Terminal DeepSearch mission is missing final checkpoint"
         }
-        require(projector.isTerminal(stored.checkpoint)) {
-            "Terminal DeepSearch mission checkpoint is not terminal"
-        }
         require(
             snapshot.checkpointFingerprint == null ||
                 snapshot.checkpointFingerprint == stored.checkpoint.fingerprint()
@@ -171,7 +166,9 @@ class DeepSearchMissionCoordinator(
         require(status == statusFromPhoton(photon)) {
             "DeepSearch terminal ledger/result Photon status mismatch"
         }
-        return product(photon, stored.checkpoint, status, snapshot.definition.id)
+        val recovered = product(photon, stored.checkpoint, status, snapshot.definition.id)
+        verifier.requireVerified(snapshot.definition, stored.checkpoint, recovered)
+        return recovered
     }
 
     private suspend fun terminalize(
@@ -224,7 +221,7 @@ class DeepSearchMissionCoordinator(
     }
 
     private fun terminalDetail(status: DeepSearchStatus): String =
-        "$STATUS_PREFIX${status.name};result-photon-persisted"
+        "$STATUS_PREFIX${status.name};result-photon-persisted-and-verified"
 
     private companion object {
         const val STATUS_PREFIX = "deepsearch-status="
