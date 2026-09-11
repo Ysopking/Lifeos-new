@@ -18,6 +18,7 @@ object AutonomousToolWorkshopRequestPhoton {
     const val SOURCE = "autonomous-capability-gap-request"
     const val ACTOR = "lifeos"
     private const val HEADER = "LIFEOS_AUTONOMOUS_TOOL_WORKSHOP_REQUEST_V1"
+    private const val ID_PREFIX = "autonomous-tool-request_"
 
     fun create(
         gap: CapabilityGap,
@@ -25,7 +26,7 @@ object AutonomousToolWorkshopRequestPhoton {
     ): Pair<Photon, GeneratedToolRequest> {
         require(sourcePhoton.revision > 0L)
         val id = PhotonId(
-            "autonomous-tool-request:" + StableFieldIds.fingerprint(
+            ID_PREFIX + StableFieldIds.fingerprint(
                 "autonomous-tool-workshop-request-photon/v1",
                 sourcePhoton.id.value,
                 sourcePhoton.revision.toString(),
@@ -66,6 +67,7 @@ object AutonomousToolWorkshopRequestPhoton {
 
     fun decode(photon: Photon, sourcePhoton: Photon): GeneratedToolRequest {
         require(photon.mimeType == MIME && photon.phase != PhotonPhase.ARCHIVED)
+        require(photon.id.value.startsWith(ID_PREFIX))
         require(photon.provenance.source == SOURCE && photon.provenance.actor == ACTOR)
         require(sourcePhoton.id in photon.provenance.parentIds)
         require(
