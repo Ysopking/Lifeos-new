@@ -39,83 +39,87 @@ class PrivateV1DeviceSmokeTest {
         get() = instrumentation.targetContext.applicationContext as LifeOsApplication
 
     @Test
-    fun seedGeneratedToolAndAssertRuntime() = runBlocking {
-        val boot = awaitBoot()
-        assertTrue("Kernel must complete boot before device smoke", boot.ready)
+    fun seedGeneratedToolAndAssertRuntime() {
+        runBlocking {
+            val boot = awaitBoot()
+            assertTrue("Kernel must complete boot before device smoke", boot.ready)
 
-        val result = app.kernel.generateExplicitlyApprovedTool(
-            CapabilityGap(
-                requirement = CapabilityRequirement(
-                    capabilityId = CapabilityId("text.uppercase.local"),
-                    severity = GapSeverity.BLOCKING,
-                    requiredInputs = setOf("text"),
-                    requiredOutputs = setOf("text"),
-                ),
-                type = CapabilityGapType.CAPABILITY_MISSING,
+            val result = app.kernel.generateExplicitlyApprovedTool(
+                CapabilityGap(
+                    requirement = CapabilityRequirement(
+                        capabilityId = CapabilityId("text.uppercase.local"),
+                        severity = GapSeverity.BLOCKING,
+                        requiredInputs = setOf("text"),
+                        requiredOutputs = setOf("text"),
+                    ),
+                    type = CapabilityGapType.CAPABILITY_MISSING,
+                )
             )
-        )
-        assertTrue(result.execution is GeneratedToolRequestExecutionResult.Completed)
-        val completed = result.execution as GeneratedToolRequestExecutionResult.Completed
-        assertTrue(completed.genesis is GeneratedToolGenesisResult.TrialReady)
-        val genesis = completed.genesis as GeneratedToolGenesisResult.TrialReady
-        val trials = result.trials
-        assertNotNull("Explicit generated-tool action must execute private trial suite", trials)
-        assertTrue("Private trial suite must satisfy all expected cases", trials!!.completeAndExpected)
-        assertEquals(3, trials.finalStats?.trials)
+            assertTrue(result.execution is GeneratedToolRequestExecutionResult.Completed)
+            val completed = result.execution as GeneratedToolRequestExecutionResult.Completed
+            assertTrue(completed.genesis is GeneratedToolGenesisResult.TrialReady)
+            val genesis = completed.genesis as GeneratedToolGenesisResult.TrialReady
+            val trials = result.trials
+            assertNotNull("Explicit generated-tool action must execute private trial suite", trials)
+            assertTrue("Private trial suite must satisfy all expected cases", trials!!.completeAndExpected)
+            assertEquals(3, trials.finalStats?.trials)
 
-        val status = app.generatedToolStatusReader.snapshot()
-        val tool = status.tools.single { it.toolId == genesis.record.manifest.toolId }
-        assertEquals(GeneratedToolState.TRIAL, tool.state)
-        assertEquals(3, tool.trials)
-        assertEquals(3, tool.successes)
-        assertEquals(3, tool.expectedOutputs)
-        assertEquals(0, tool.safetyViolations)
-        assertTrue("TRIAL action must not create ACTIVE provider state", status.activeTools == 0)
+            val status = app.generatedToolStatusReader.snapshot()
+            val tool = status.tools.single { it.toolId == genesis.record.manifest.toolId }
+            assertEquals(GeneratedToolState.TRIAL, tool.state)
+            assertEquals(3, tool.trials)
+            assertEquals(3, tool.successes)
+            assertEquals(3, tool.expectedOutputs)
+            assertEquals(0, tool.safetyViolations)
+            assertTrue("TRIAL action must not create ACTIVE provider state", status.activeTools == 0)
 
-        val sentinel = Photon(
-            content = "$SENTINEL_PREFIX${tool.toolId}",
-            provenance = Provenance("private-v1-device-smoke", "instrumentation"),
-            tags = setOf(SENTINEL_TAG),
-        )
-        val persisted = app.kernel.persistAndIngest(sentinel)
-        assertEquals(sentinel, app.kernel.photonStore.load(sentinel.id))
-        assertTrue("Smoke sentinel must enter durable cognition", persisted.processingQueued)
+            val sentinel = Photon(
+                content = "$SENTINEL_PREFIX${tool.toolId}",
+                provenance = Provenance("private-v1-device-smoke", "instrumentation"),
+                tags = setOf(SENTINEL_TAG),
+            )
+            val persisted = app.kernel.persistAndIngest(sentinel)
+            assertEquals(sentinel, app.kernel.photonStore.load(sentinel.id))
+            assertTrue("Smoke sentinel must enter durable cognition", persisted.processingQueued)
 
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            scenario.onActivity { activity ->
-                assertFalse(activity.isFinishing)
-            }
-            scenario.recreate()
-            scenario.onActivity { activity ->
-                assertFalse(activity.isFinishing)
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                scenario.onActivity { activity ->
+                    assertFalse(activity.isFinishing)
+                }
+                scenario.recreate()
+                scenario.onActivity { activity ->
+                    assertFalse(activity.isFinishing)
+                }
             }
         }
     }
 
     @Test
-    fun assertRecoveredRuntimeAndToolEvidence() = runBlocking {
-        val boot = awaitBoot()
-        assertTrue("Kernel must recover after target process cold restart", boot.ready)
+    fun assertRecoveredRuntimeAndToolEvidence() {
+        runBlocking {
+            val boot = awaitBoot()
+            assertTrue("Kernel must recover after target process cold restart", boot.ready)
 
-        val sentinel = app.kernel.photonStore.loadAll()
-            .singleOrNull { SENTINEL_TAG in it.tags }
-        assertNotNull("Cold restart must preserve encrypted smoke sentinel", sentinel)
-        val toolId = sentinel!!.content.removePrefix(SENTINEL_PREFIX)
-        assertTrue("Smoke sentinel must contain generated tool id", toolId.isNotBlank())
+            val sentinel = app.kernel.photonStore.loadAll()
+                .singleOrNull { SENTINEL_TAG in it.tags }
+            assertNotNull("Cold restart must preserve encrypted smoke sentinel", sentinel)
+            val toolId = sentinel!!.content.removePrefix(SENTINEL_PREFIX)
+            assertTrue("Smoke sentinel must contain generated tool id", toolId.isNotBlank())
 
-        val status = app.generatedToolStatusReader.snapshot()
-        val tool = status.tools.single { it.toolId == toolId }
-        assertEquals(GeneratedToolState.TRIAL, tool.state)
-        assertEquals(3, tool.trials)
-        assertEquals(3, tool.successes)
-        assertEquals(3, tool.expectedOutputs)
-        assertEquals(0, tool.safetyViolations)
-        assertEquals("Cold recovery must not activate generated tools", 0, status.activeTools)
-        assertTrue(tool.promotionEvidenceId == null)
+            val status = app.generatedToolStatusReader.snapshot()
+            val tool = status.tools.single { it.toolId == toolId }
+            assertEquals(GeneratedToolState.TRIAL, tool.state)
+            assertEquals(3, tool.trials)
+            assertEquals(3, tool.successes)
+            assertEquals(3, tool.expectedOutputs)
+            assertEquals(0, tool.safetyViolations)
+            assertEquals("Cold recovery must not activate generated tools", 0, status.activeTools)
+            assertTrue(tool.promotionEvidenceId == null)
 
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            scenario.onActivity { activity ->
-                assertFalse(activity.isFinishing)
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                scenario.onActivity { activity ->
+                    assertFalse(activity.isFinishing)
+                }
             }
         }
     }
