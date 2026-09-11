@@ -12,6 +12,7 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
@@ -19,7 +20,7 @@ class IntegratedWorldEquationProfileTest {
     private val time = Instant.parse("2026-09-11T08:30:00Z")
 
     @Test
-    fun `typed field links become a valid deterministic multi-field world request`() = runTest {
+    fun `typed field links become a valid deterministic informational world request`() = runTest {
         val photon = photon()
         val fieldRequest = DefaultPhotonFieldRequestFactory().create(photon)
         val fieldResult = FieldConvergenceEngine().converge(fieldRequest)
@@ -29,6 +30,7 @@ class IntegratedWorldEquationProfileTest {
         val request = profile.request(signals, links, observedAt = time, photonId = photon.id)
         val equation = WorldFieldEquation(profile.spec)
 
+        assertNull(request.sourceTaskId)
         assertTrue(links.isNotEmpty())
         assertTrue(request.interactions.isNotEmpty())
         assertEquals(emptyList(), equation.validate(request.buildGraph()))
@@ -53,7 +55,7 @@ class IntegratedWorldEquationProfileTest {
     private fun photon(): Photon = Photon(
         id = PhotonId("v4-integrated-world-photon"),
         revision = 1,
-        content = "combine typed field signals",
+        content = "combine typed field signals for information only",
         semanticMass = 1.0,
         energy = 0.8,
         confidence = 0.88,
