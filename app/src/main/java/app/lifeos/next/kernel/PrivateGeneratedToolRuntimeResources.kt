@@ -1,6 +1,7 @@
 package app.lifeos.next.kernel
 
 import android.content.Context
+import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.data.capability.EncryptedGeneratedToolArtifactRepository
 import app.lifeos.core.data.capability.EncryptedToolWorkshopJobRepository
 import app.lifeos.core.data.capability.EncryptedToolWorkshopStageArtifactRepository
@@ -26,9 +27,9 @@ import app.lifeos.core.runtime.capability.PrivateToolTestRunner
 import app.lifeos.core.runtime.capability.PrivateToolWorkshopBuildStateRehydrator
 import app.lifeos.core.runtime.capability.ToolWorkshopCoordinator
 import app.lifeos.core.runtime.capability.ToolWorkshopJobLedger
-import app.lifeos.core.runtime.policy.OwnerActorId
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import kotlinx.coroutines.runBlocking
 
 /**
  * Process-owned private-v1 generated-tool composition. Explicit Genesis and autonomous V11 both use
@@ -75,6 +76,9 @@ internal data class PrivateGeneratedToolRuntimeResources(
                 artifactRepository = artifacts,
             )
 
+            val ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(appContext))
+            runBlocking { PrivateOwnerPolicyBaseline.ensure(ownerPolicy) }
+            val budgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(appContext))
             val workshopJobs = ToolWorkshopJobLedger(
                 EncryptedToolWorkshopJobRepository(appContext)
             )
@@ -90,12 +94,26 @@ internal data class PrivateGeneratedToolRuntimeResources(
                 capabilityVerifier = capabilityVerifier,
                 tools = tools,
                 lifecycle = lifecycle,
-                ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(appContext)),
-                budgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(appContext)),
-                actorId = PRIVATE_OWNER,
-                ownerScope = TOOL_WORKSHOP_SCOPE,
+                ownerPolicy = ownerPolicy,
+                budgets = budgets,
+                actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+                ownerScope = PrivateOwnerPolicyBaseline.TOOL_WORKSHOP_SCOPE,
                 generatedArtifacts = artifacts,
                 buildStateRehydrator = PrivateToolWorkshopBuildStateRehydrator(catalog),
+            )
+
+            val photonStore = EncryptedPhotonStore(appContext)
+            AutonomousToolWorkshopRuntimeRegistry.install(
+                AutonomousToolWorkshopRuntime(
+                    workshop = durableWorkshop,
+                    jobs = workshopJobs,
+                    persistPhoton = { photon ->
+                        photonStore.save(photon)
+                        requireNotNull(photonStore.load(photon.id)) {
+                            "Autonomous ToolWorkshop request was not durable after persistence"
+                        }
+                    },
+                )
             )
 
             val genesis = GeneratedToolGenesisCoordinator(
@@ -120,8 +138,5 @@ internal data class PrivateGeneratedToolRuntimeResources(
                 ),
             )
         }
-
-        private val PRIVATE_OWNER = OwnerActorId("private-owner")
-        private const val TOOL_WORKSHOP_SCOPE = "private-apk-tool-workshop"
     }
 }
