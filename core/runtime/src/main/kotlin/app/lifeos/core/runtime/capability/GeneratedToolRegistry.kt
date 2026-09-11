@@ -44,12 +44,8 @@ class GeneratedToolRegistry(
         require(current.state != GeneratedToolState.ACTIVE) {
             "ACTIVE generated tool state changes require coordinated rollback"
         }
-        require(to != GeneratedToolState.ACTIVE) {
-            "ACTIVE transition requires guarded promotion"
-        }
-        require(message == null || message.isNotBlank()) {
-            "Generated tool transition message must not be blank"
-        }
+        require(to != GeneratedToolState.ACTIVE) { "ACTIVE transition requires guarded promotion" }
+        require(message == null || message.isNotBlank()) { "Generated tool transition message must not be blank" }
         require(to in allowedTransitions.getValue(current.state)) {
             "Invalid generated tool transition ${current.state} -> $to"
         }
@@ -70,7 +66,6 @@ class GeneratedToolRegistry(
         updated
     }
 
-    /** Internal mutation primitive. Public activation remains owned by guarded promotion coordinators. */
     internal suspend fun promote(
         toolId: String,
         evidence: GeneratedToolActivationEvidence,
@@ -81,16 +76,10 @@ class GeneratedToolRegistry(
         require(activationEvidenceRef.isNotBlank()) { "Promotion requires activation evidence reference" }
         require(actorId == null || actorId.isNotBlank()) { "Promotion actor id must not be blank" }
         require(message.isNotBlank()) { "Promotion message must not be blank" }
-        require(!evidence.activationAllowed) {
-            "Activation evidence must remain non-authoritative"
-        }
+        require(!evidence.activationAllowed) { "Activation evidence must remain non-authoritative" }
         val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
-        require(current.state == GeneratedToolState.TRIAL) {
-            "Only TRIAL generated tools can be promoted"
-        }
-        require(evidence.matchesRecord(current)) {
-            "Activation evidence does not match current generated tool record"
-        }
+        require(current.state == GeneratedToolState.TRIAL) { "Only TRIAL generated tools can be promoted" }
+        require(evidence.matchesRecord(current)) { "Activation evidence does not match current generated tool record" }
         val active = current.copy(
             state = GeneratedToolState.ACTIVE,
             lastMessage = message,
@@ -109,22 +98,12 @@ class GeneratedToolRegistry(
         active
     }
 
-    /**
-     * Reverses one exact active promotion into QUARANTINED. The previous promotion evidence id is
-     * retained on the quarantined record for traceability and is cleared only if a later explicit
-     * QUARANTINED -> TRIAL transition begins a new trial cycle.
-     */
     internal suspend fun rollback(request: GeneratedToolRollbackRequest): RollbackMutation = mutationLocked {
-        val current = requireNotNull(records[request.toolId]) {
-            "Unknown generated tool ${request.toolId}"
-        }
-        require(current.state == GeneratedToolState.ACTIVE) {
-            "Only ACTIVE generated tools can be rolled back"
-        }
+        val current = requireNotNull(records[request.toolId]) { "Unknown generated tool ${request.toolId}" }
+        require(current.state == GeneratedToolState.ACTIVE) { "Only ACTIVE generated tools can be rolled back" }
         require(current.promotionEvidenceId == request.expectedPromotionEvidenceId) {
             "Rollback request does not target the active promotion evidence"
         }
-
         val quarantined = current.copy(
             state = GeneratedToolState.QUARANTINED,
             lastMessage = "rollback:${request.id}:${request.reason}",
@@ -143,27 +122,18 @@ class GeneratedToolRegistry(
     }
 
     suspend fun get(toolId: String): GeneratedToolRecord? = mutex.withLock { records[toolId] }
-
-    suspend fun snapshot(): List<GeneratedToolRecord> = mutex.withLock {
-        records.values.sortedBy { it.manifest.toolId }
-    }
-
+    suspend fun snapshot(): List<GeneratedToolRecord> = mutex.withLock { records.values.sortedBy { it.manifest.toolId } }
     suspend fun auditSnapshot(toolId: String): List<GeneratedToolAuditEntry> = mutex.withLock {
         auditEntries[toolId]?.toList().orEmpty()
     }
 
-    /** Verifies hash-chain ordering, state continuity, mutation semantics and final record binding. */
     suspend fun verifyAuditChain(toolId: String): Boolean = mutex.withLock {
-        val entries = auditEntries[toolId].orEmpty()
-        val record = records[toolId]
+        val entries = auditEntries[toolId].orEmpty(); val record = records[toolId]
         if (entries.isEmpty()) return@withLock record == null
         if (record == null) return@withLock false
-        runCatching {
-            GeneratedToolStateIntegrity.requireValidAudit(record, entries)
-        }.isSuccess
+        runCatching { GeneratedToolStateIntegrity.requireValidAudit(record, entries) }.isSuccess
     }
 
-    /** Boot-only restore: installs an already validated durable state without synthesizing audit. */
     internal suspend fun restore(state: GeneratedToolPersistentState) = mutex.withLock {
         val toolId = state.record.manifest.toolId
         require(toolId !in records) { "Generated tool $toolId is already loaded" }
@@ -180,11 +150,19 @@ class GeneratedToolRegistry(
     ) {
         val toolId = after.manifest.toolId
         val nextAudit = auditEntries[toolId]?.toList().orEmpty() + audit
-        durableState?.persistLifecycle(
-            record = after,
-            auditEntries = nextAudit,
-            promotionEvidence = promotionEvidence.j03PersistenceEvidence(),
-        )
+        val repository = durableState
+        if (repository != null) {
+            when (promotionEvidence) {
+                null -> repository.persistLifecycle(after, nextAudit, promotionEvidence = null)
+                is GeneratedToolPromotionEvidence ->
+                    repository.persistLifecycle(after, nextAudit, promotionEvidence)
+                is BoundedGeneratedToolPromotionEvidence -> {
+                    val bounded = repository as? BoundedGeneratedToolStateRepository
+                        ?: error("Bounded promotion requires a bounded durable state repository")
+                    bounded.persistBoundedLifecycle(after, nextAudit, promotionEvidence)
+                }
+            }
+        }
         records[toolId] = after
         auditEntries.getOrPut(toolId) { mutableListOf() } += audit
     }
@@ -222,20 +200,14 @@ class GeneratedToolRegistry(
             require(entry.beforeRecordFingerprint == previous.afterRecordFingerprint) {
                 "Generated-tool audit chain record continuity was broken"
             }
-            require(entry.fromState == previous.toState) {
-                "Generated-tool audit chain state continuity was broken"
-            }
+            require(entry.fromState == previous.toState) { "Generated-tool audit chain state continuity was broken" }
         }
         return entry
     }
 
     private suspend fun <T> mutationLocked(action: suspend () -> T): T {
         mutex.lock()
-        return try {
-            action()
-        } finally {
-            mutex.unlock()
-        }
+        return try { action() } finally { mutex.unlock() }
     }
 
     private fun auditActionFor(to: GeneratedToolState): GeneratedToolAuditAction = when (to) {
@@ -251,15 +223,9 @@ class GeneratedToolRegistry(
             GeneratedToolState.BUILT to setOf(GeneratedToolState.TESTED, GeneratedToolState.REJECTED),
             GeneratedToolState.TESTED to setOf(GeneratedToolState.VERIFIED, GeneratedToolState.REJECTED),
             GeneratedToolState.VERIFIED to setOf(GeneratedToolState.TRIAL, GeneratedToolState.REJECTED),
-            GeneratedToolState.TRIAL to setOf(
-                GeneratedToolState.QUARANTINED,
-                GeneratedToolState.REJECTED,
-            ),
+            GeneratedToolState.TRIAL to setOf(GeneratedToolState.QUARANTINED, GeneratedToolState.REJECTED),
             GeneratedToolState.ACTIVE to emptySet(),
-            GeneratedToolState.QUARANTINED to setOf(
-                GeneratedToolState.TRIAL,
-                GeneratedToolState.RETIRED,
-            ),
+            GeneratedToolState.QUARANTINED to setOf(GeneratedToolState.TRIAL, GeneratedToolState.RETIRED),
             GeneratedToolState.REJECTED to setOf(GeneratedToolState.RETIRED),
             GeneratedToolState.RETIRED to emptySet(),
         )
