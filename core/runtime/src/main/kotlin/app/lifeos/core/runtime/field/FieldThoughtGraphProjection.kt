@@ -110,7 +110,7 @@ interface FieldThoughtGraphProjectionOutboxRepository {
     suspend fun loadReport(): FieldThoughtGraphProjectionLoadReport
 }
 
-/** Canonical bounded codec for one immutable snapshot-bound projection envelope. */
+/** Canonical bounded binary codec for one immutable snapshot-bound projection envelope. */
 object FieldThoughtGraphProjectionCodec {
     const val MAX_PAYLOAD_BYTES: Int = ThoughtGraphDeltaCodec.MAX_PAYLOAD_BYTES + 1024 * 1024
     private const val VERSION = 1
@@ -208,29 +208,37 @@ class FieldThoughtGraphProjector {
                     )
                 )
             }
-            result.hypotheses.sortedBy { it.id.value }.forEach { hypothesis ->
+            result.hypotheses.sortedBy { it.id.value }.forEach hypothesisLoop@ { hypothesis ->
                 val hypothesisNode = hypothesisNodes.getValue(hypothesis.id)
                 hypothesis.evidenceLinks
                     .sortedWith(compareBy({ it.evidenceId.value }, { it.relation.name }))
-                    .forEach { link ->
-                        val target = evidenceNodes[link.evidenceId] ?: return@forEach
+                    .forEach evidenceLoop@ { link ->
+                        val evidenceNode = evidenceNodes[link.evidenceId] ?: return@evidenceLoop
                         val evidence = request.evidence.first { it.id == link.evidenceId }
+                        val hypothesisDerivedFromEvidence = link.relation == EvidenceRelationType.DERIVED_FROM
+                        val sourceNodeId = if (hypothesisDerivedFromEvidence) hypothesisNode.id else evidenceNode.id
+                        val targetNodeId = if (hypothesisDerivedFromEvidence) evidenceNode.id else hypothesisNode.id
+                        val explanation = if (hypothesisDerivedFromEvidence) {
+                            "Hypothesis ${hypothesis.id.value} is derived from evidence ${link.evidenceId.value}"
+                        } else {
+                            "Evidence ${link.evidenceId.value} ${link.relation.name.lowercase()} hypothesis ${hypothesis.id.value}"
+                        }
                         add(
                             ThoughtGraphEdgeVersion.create(
-                                sourceNodeId = hypothesisNode.id,
-                                targetNodeId = target.id,
+                                sourceNodeId = sourceNodeId,
+                                targetNodeId = targetNodeId,
                                 kind = link.relation.toThoughtGraphEdgeKind(),
                                 semanticKey = "hypothesis-evidence:${hypothesis.id.value}:${link.evidenceId.value}:${link.relation.name}",
                                 confidence = link.weight,
                                 authority = evidence.authority.defaultWeight,
                                 validity = evidence.validity,
                                 provenance = hypothesisNode.provenance,
-                                explanation = "${hypothesis.id.value} ${link.relation.name.lowercase()} ${link.evidenceId.value}",
+                                explanation = explanation,
                             )
                         )
                     }
-                hypothesis.conflicts.sortedBy { it.competingHypothesisId.value }.forEach { conflict ->
-                    val target = hypothesisNodes[conflict.competingHypothesisId] ?: return@forEach
+                hypothesis.conflicts.sortedBy { it.competingHypothesisId.value }.forEach conflictLoop@ { conflict ->
+                    val target = hypothesisNodes[conflict.competingHypothesisId] ?: return@conflictLoop
                     add(
                         ThoughtGraphEdgeVersion.create(
                             sourceNodeId = hypothesisNode.id,
