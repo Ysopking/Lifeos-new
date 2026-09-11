@@ -66,6 +66,7 @@ data class LearningAdaptation(
     val id: LearningAdaptationId,
     val target: LearningAdaptationTarget,
     val predecessorId: LearningAdaptationId?,
+    val outcomePredictionId: OutcomePredictionId,
     val outcomeScoreId: OutcomeScoreId,
     val outcomeScoreFingerprint: String,
     val baselineValue: Double,
@@ -94,6 +95,7 @@ data class LearningAdaptation(
     fun contentFingerprint(): String = fingerprint(
         target = target,
         predecessorId = predecessorId,
+        outcomePredictionId = outcomePredictionId,
         outcomeScoreId = outcomeScoreId,
         outcomeScoreFingerprint = outcomeScoreFingerprint,
         baselineValue = baselineValue,
@@ -114,6 +116,7 @@ data class LearningAdaptation(
         fun create(
             target: LearningAdaptationTarget,
             predecessorId: LearningAdaptationId?,
+            outcomePredictionId: OutcomePredictionId,
             outcomeScoreId: OutcomeScoreId,
             outcomeScoreFingerprint: String,
             baselineValue: Double,
@@ -129,6 +132,7 @@ data class LearningAdaptation(
             val fingerprint = fingerprint(
                 target = target,
                 predecessorId = predecessorId,
+                outcomePredictionId = outcomePredictionId,
                 outcomeScoreId = outcomeScoreId,
                 outcomeScoreFingerprint = outcomeScoreFingerprint,
                 baselineValue = baselineValue,
@@ -143,6 +147,7 @@ data class LearningAdaptation(
                 id = LearningAdaptationId("${LearningAdaptationId.PREFIX}$fingerprint"),
                 target = target,
                 predecessorId = predecessorId,
+                outcomePredictionId = outcomePredictionId,
                 outcomeScoreId = outcomeScoreId,
                 outcomeScoreFingerprint = outcomeScoreFingerprint,
                 baselineValue = baselineValue,
@@ -158,6 +163,7 @@ data class LearningAdaptation(
         private fun fingerprint(
             target: LearningAdaptationTarget,
             predecessorId: LearningAdaptationId?,
+            outcomePredictionId: OutcomePredictionId,
             outcomeScoreId: OutcomeScoreId,
             outcomeScoreFingerprint: String,
             baselineValue: Double,
@@ -168,10 +174,11 @@ data class LearningAdaptation(
             createdAt: Instant,
             rollbackOf: LearningAdaptationId?,
         ): String = StableFieldIds.fingerprint(
-            "learning-adaptation/v2",
+            "learning-adaptation/v3",
             target.kind.name,
             target.key,
             predecessorId?.value.orEmpty(),
+            outcomePredictionId.value,
             outcomeScoreId.value,
             outcomeScoreFingerprint,
             java.lang.Double.toHexString(baselineValue),
@@ -225,6 +232,7 @@ class LearningAdaptationPlanner(
         return LearningAdaptation.create(
             target = target,
             predecessorId = previousAdaptation?.id,
+            outcomePredictionId = score.predictionId,
             outcomeScoreId = score.id,
             outcomeScoreFingerprint = score.contentFingerprint(),
             baselineValue = baselineValue,
@@ -245,9 +253,13 @@ class LearningAdaptationPlanner(
         require(abs(currentEffectiveValue - adaptation.resultingEffectiveValue) <= EPSILON) {
             "Only the current latest adaptation can be rolled back exactly"
         }
+        require(rollbackScore.predictionId != adaptation.outcomePredictionId) {
+            "Rollback requires a distinct independently verified prediction/outcome"
+        }
         return LearningAdaptation.create(
             target = adaptation.target,
             predecessorId = adaptation.id,
+            outcomePredictionId = rollbackScore.predictionId,
             outcomeScoreId = rollbackScore.id,
             outcomeScoreFingerprint = rollbackScore.contentFingerprint(),
             baselineValue = adaptation.baselineValue,
@@ -277,7 +289,7 @@ data class LearningAdaptationState(
     }
 
     val fingerprint: String = StableFieldIds.fingerprint(
-        "learning-adaptation-state/v2",
+        "learning-adaptation-state/v3",
         revision.toString(),
         *events.map { "event:${it.id.value}" }.sorted().toTypedArray(),
         *effectiveValues.entries.sortedBy { it.key.stableKey }.map { (target, value) ->
@@ -304,8 +316,10 @@ class LearningAdaptationReducer {
             require(existing == event) { "Learning adaptation identity collision" }
             return LearningAdaptationApplyResult(state, replayed = true)
         }
-        require(state.events.none { it.target == event.target && it.outcomeScoreId == event.outcomeScoreId }) {
-            "Outcome score has already adapted this target"
+        require(state.events.none {
+            it.target == event.target && it.outcomePredictionId == event.outcomePredictionId
+        }) {
+            "Outcome prediction has already adapted this target"
         }
 
         val previousForTarget = state.latestFor(event.target)
