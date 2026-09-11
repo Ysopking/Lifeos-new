@@ -66,8 +66,8 @@ data class FieldWorldSignalProjection(
 }
 
 /**
- * Pure V4 boundary from immutable Field/ThoughtGraph outputs into sparse typed world vectors.
- * It never writes stores, changes Field scores, or collapses dimensions into one truth value.
+ * Pure informational V4 projection from immutable Field/ThoughtGraph outputs into sparse world
+ * vectors. It has no write authority over cognition, goals, tasks, hypotheses or capabilities.
  */
 class FieldWorldSignalProjector(
     calibration: WorldSignalCalibrationProfile = WorldSignalCalibrationProfile.V1,
@@ -272,7 +272,7 @@ class FieldWorldSignalProjector(
                 value(WorldSignalDimension.SEMANTIC_RELEVANCE, hypothesis.score.context, hypothesis.score.total, provenance),
                 value(WorldSignalDimension.CONTEXT_RELEVANCE, hypothesis.score.context, hypothesis.score.total, provenance),
                 value(WorldSignalDimension.GOAL_RELEVANCE, goalRelevance, hypothesis.score.total, provenance),
-                value(WorldSignalDimension.COGNITIVE_PRIORITY, hypothesis.score.total, hypothesis.score.total, provenance),
+                value(WorldSignalDimension.ANALYTIC_SALIENCE, hypothesis.score.total, hypothesis.score.total, provenance),
             ),
             source = StableFieldIds.fingerprint(
                 "world-input/hypothesis/v1",
@@ -293,14 +293,14 @@ class FieldWorldSignalProjector(
     ): WorldFormulaInputSnapshot {
         val hypotheses = result.hypotheses
         val linkedEvidence = hypotheses.flatMap { it.evidenceLinks }.mapNotNull { evidenceById[it.evidenceId] }.distinctBy { it.id }
-        val maxPriority = hypotheses.maxOfOrNull { it.score.total } ?: 0.0
+        val maxSalience = hypotheses.maxOfOrNull { it.score.total } ?: 0.0
         val maxConflict = result.conflicts.maxOfOrNull { it.severity } ?: 0.0
         val context = hypotheses.averageOr(0.0) { it.score.context }
         val reliability = linkedEvidence.averageOr(0.0) { it.reliability.score }
         val authority = linkedEvidence.averageOr(0.0) { it.authority.defaultWeight }
         val uncertainty = when (result.status) {
-            ConvergenceStatus.CONVERGED -> 1.0 - maxPriority
-            ConvergenceStatus.UNRESOLVED -> maxOf(1.0 - maxPriority, 0.5)
+            ConvergenceStatus.CONVERGED -> 1.0 - maxSalience
+            ConvergenceStatus.UNRESOLVED -> maxOf(1.0 - maxSalience, 0.5)
             ConvergenceStatus.MAX_ITERATIONS -> 1.0
         }
         val provenance = buildSet {
@@ -312,14 +312,14 @@ class FieldWorldSignalProjector(
         return input(
             target = WorldTargetRef(WorldNodeKind.DOMAIN_FIELD, request.domainId.value),
             values = listOf(
-                value(WorldSignalDimension.EVIDENCE_SUPPORT, maxPriority, maxPriority, provenance),
-                value(WorldSignalDimension.RELIABILITY, reliability, maxPriority, provenance),
-                value(WorldSignalDimension.AUTHORITY, authority, maxPriority, provenance),
-                value(WorldSignalDimension.UNCERTAINTY, uncertainty, maxPriority, provenance),
-                value(WorldSignalDimension.CONFLICT_PRESSURE, maxConflict, maxPriority, provenance),
-                value(WorldSignalDimension.SEMANTIC_RELEVANCE, context, maxPriority, provenance),
-                value(WorldSignalDimension.CONTEXT_RELEVANCE, context, maxPriority, provenance),
-                value(WorldSignalDimension.COGNITIVE_PRIORITY, maxPriority, maxPriority, provenance),
+                value(WorldSignalDimension.EVIDENCE_SUPPORT, maxSalience, maxSalience, provenance),
+                value(WorldSignalDimension.RELIABILITY, reliability, maxSalience, provenance),
+                value(WorldSignalDimension.AUTHORITY, authority, maxSalience, provenance),
+                value(WorldSignalDimension.UNCERTAINTY, uncertainty, maxSalience, provenance),
+                value(WorldSignalDimension.CONFLICT_PRESSURE, maxConflict, maxSalience, provenance),
+                value(WorldSignalDimension.SEMANTIC_RELEVANCE, context, maxSalience, provenance),
+                value(WorldSignalDimension.CONTEXT_RELEVANCE, context, maxSalience, provenance),
+                value(WorldSignalDimension.ANALYTIC_SALIENCE, maxSalience, maxSalience, provenance),
             ),
             source = StableFieldIds.fingerprint("world-input/domain-field/v1", request.domainId.value, *provenance.sorted().toTypedArray()),
         )
@@ -341,7 +341,7 @@ class FieldWorldSignalProjector(
                 value(WorldSignalDimension.EVIDENCE_SUPPORT, confidence, confidence, provenance),
                 value(WorldSignalDimension.AUTHORITY, authority, confidence, provenance),
                 value(WorldSignalDimension.GOAL_RELEVANCE, goalRelevance, confidence, provenance),
-                value(WorldSignalDimension.COGNITIVE_PRIORITY, goalRelevance, confidence, provenance),
+                value(WorldSignalDimension.ANALYTIC_SALIENCE, goalRelevance, confidence, provenance),
             ),
             source = StableFieldIds.fingerprint("world-input/goal/v1", sourceId, *provenance.sorted().toTypedArray()),
         )
