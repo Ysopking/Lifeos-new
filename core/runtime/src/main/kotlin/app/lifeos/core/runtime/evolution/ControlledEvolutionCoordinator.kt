@@ -8,11 +8,15 @@ import app.lifeos.core.runtime.policy.OwnerPolicyDecision
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import app.lifeos.core.runtime.resource.ResourceBudgetDemand
+import app.lifeos.core.runtime.resource.ResourceBudgetDomain
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetReservation
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationResult
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
+import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
+import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
 
 /** One bounded candidate execution observation that becomes durable J07 evidence. */
 data class ControlledEvolutionCandidateObservation(
@@ -71,12 +75,13 @@ sealed interface ControlledEvolutionExecutionResult {
  * Order is deliberate and restart-safe:
  * 1. initialize/verify the immutable hard V16 account when a process-owned quota is configured;
  * 2. recover a previously persisted outcome before any candidate callback can run again;
- * 3. reserve shared V16 resources under a stable idempotency key;
- * 4. re-read V14 owner policy;
- * 5. let the existing trusted canary router replay J05 and reserve its bounded invocation;
- * 6. re-read owner policy immediately before candidate execution;
- * 7. persist J07 outcome/kill-switch evidence;
- * 8. settle the shared resource reservation only after durable outcome evidence exists.
+ * 3. obtain the EVOLUTION share from the persisted World Formula budget broker when installed;
+ * 4. reserve V16 resources under a stable idempotency key;
+ * 5. re-read V14 owner policy;
+ * 6. let the existing trusted canary router replay J05 and reserve its bounded invocation;
+ * 7. re-read owner policy immediately before candidate execution;
+ * 8. persist J07 outcome/kill-switch evidence;
+ * 9. settle the shared resource reservation only after durable outcome evidence exists.
  *
  * A crash after J07 persistence but before V16 settlement is repaired by the recovery path and
  * cannot cause the candidate invocation to execute twice.
@@ -90,6 +95,7 @@ class ControlledEvolutionCoordinator(
     private val actorId: OwnerActorId,
     private val ownerScope: String,
     private val accountQuota: ResourceBudgetQuota? = null,
+    private val sharedBudgets: SharedResourceBudgetGate? = null,
 ) {
     init { require(ownerScope.isNotBlank()) }
 
@@ -112,11 +118,43 @@ class ControlledEvolutionCoordinator(
             return ControlledEvolutionExecutionResult.Completed(existingOutcome, recovered = true)
         }
 
+        val effectiveUsage = when (val gate = sharedBudgets) {
+            null -> reservedUsage
+            else -> {
+                val quota = requireNotNull(accountQuota) {
+                    "World Formula evolution allocation requires an explicit hard account quota"
+                }
+                val demand = ResourceBudgetDemand(
+                    domain = ResourceBudgetDomain.EVOLUTION,
+                    requested = reservedUsage,
+                    goalRelevance = 0.75,
+                    priority = 0.60,
+                    expectedUtility = 0.70,
+                    confidence = 1.0,
+                )
+                when (val decision = gate.allocate(quota, listOf(demand))) {
+                    is SharedResourceBudgetDecision.Blocked ->
+                        return ControlledEvolutionExecutionResult.Blocked(decision.reason)
+                    is SharedResourceBudgetDecision.Ready -> {
+                        val allocation = requireNotNull(
+                            decision.allocation.allocation(ResourceBudgetDomain.EVOLUTION)
+                        ) { "World Formula budget allocation omitted EVOLUTION domain" }
+                        if (!reservedUsage.isWithin(allocation.allocated)) {
+                            return ControlledEvolutionExecutionResult.Blocked(
+                                "evolution-request-exceeds-world-formula-allocation"
+                            )
+                        }
+                        allocation.allocated
+                    }
+                }
+            }
+        }
+
         val resourceReservation = when (
             val reservation = budgets.reserve(
                 accountId = budgetAccountId,
                 idempotencyKey = idempotencyKey,
-                usage = reservedUsage,
+                usage = effectiveUsage,
             )
         ) {
             is ResourceBudgetReservationResult.Denied ->
@@ -186,7 +224,7 @@ class ControlledEvolutionCoordinator(
         budgets.commit(
             accountId = budgetAccountId,
             reservationId = resourceReservation.id,
-            actualUsage = reservedUsage,
+            actualUsage = effectiveUsage,
         )
         return ControlledEvolutionExecutionResult.Completed(recorded.outcome, recovered = false)
     }
