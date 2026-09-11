@@ -1,7 +1,14 @@
 package app.lifeos.core.runtime.capability
 
+import app.lifeos.core.runtime.policy.OwnerActorId
+import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
+import app.lifeos.core.runtime.policy.OwnerEffectRequest
+import app.lifeos.core.runtime.policy.OwnerEffectType
+import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
+import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import app.lifeos.core.runtime.resource.ResourceBudgetReservationId
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
 
 data class HotSwapBootReconciliationReport(
@@ -11,18 +18,30 @@ data class HotSwapBootReconciliationReport(
     val revertsCompleted: Int = 0,
     val budgetsCommitted: Int = 0,
     val budgetsReleased: Int = 0,
+    val ownerPolicyBlocked: Int = 0,
 )
 
 /**
  * Runs after generated-tool state rehydration and before normal runtime execution.
  * Initial cutovers and post-commit reverts are both replayed from durable intent. Resource
  * reservations are settled to the same durable outcome so crashes cannot leak held budget.
+ *
+ * V14 invariant: a durable hot-swap state is evidence, not evergreen routing authority. Every boot
+ * routing mutation is exposed through the current Owner Policy immediately around the registry
+ * mutation. Missing/revoked/corrupt authority removes both transaction providers from routing while
+ * preserving the durable transaction for diagnostics/recovery.
  */
 class HotSwapBootReconciler(
     private val ledger: HotSwapLedger,
     private val capabilities: CapabilityRegistry,
     private val budgets: ResourceBudgetCoordinator? = null,
+    private val ownerPolicy: OwnerPolicyLedger? = null,
+    private val tools: GeneratedToolRegistry? = null,
+    private val actorId: OwnerActorId? = null,
+    private val ownerScope: String? = null,
 ) {
+    init { require(ownerScope == null || ownerScope.isNotBlank()) }
+
     suspend fun reconcile(): HotSwapBootReconciliationReport {
         var committed = 0
         var rolledBack = 0
@@ -30,38 +49,58 @@ class HotSwapBootReconciler(
         var revertsCompleted = 0
         var budgetsCommitted = 0
         var budgetsReleased = 0
+        var policyBlocked = 0
         ledger.all().forEach { transaction ->
             when (transaction.state) {
                 HotSwapState.COMMITTED -> {
-                    applyCommitted(transaction)
+                    if (applyRouting(transaction, committed = true, useRevertBudget = false)) {
+                        committed += 1
+                    } else {
+                        policyBlocked += 1
+                    }
                     if (settleInitialBudget(transaction, committed = true)) budgetsCommitted += 1
-                    committed += 1
                 }
                 HotSwapState.REVERT_PREPARED -> {
-                    applyReverted(transaction)
                     if (settleInitialBudget(transaction, committed = true)) budgetsCommitted += 1
-                    val reverted = ledger.markReverted(transaction, "boot-completed-authorized-hot-swap-revert")
-                    if (settleRevertBudget(reverted, committed = true)) budgetsCommitted += 1
-                    revertsCompleted += 1
+                    if (applyRouting(transaction, committed = false, useRevertBudget = true)) {
+                        val reverted = ledger.markReverted(
+                            transaction,
+                            "boot-completed-owner-authorized-hot-swap-revert",
+                        )
+                        if (settleRevertBudget(reverted, committed = true)) budgetsCommitted += 1
+                        revertsCompleted += 1
+                    } else {
+                        // Keep the durable revert intent and its reservation intact. It may only
+                        // complete after a future boot/exposure sees current owner authority.
+                        policyBlocked += 1
+                    }
                 }
                 HotSwapState.REVERTED -> {
-                    applyReverted(transaction)
+                    if (applyRouting(transaction, committed = false, useRevertBudget = true)) {
+                        revertsCompleted += 1
+                    } else {
+                        policyBlocked += 1
+                    }
                     if (settleInitialBudget(transaction, committed = true)) budgetsCommitted += 1
                     if (settleRevertBudget(transaction, committed = true)) budgetsCommitted += 1
-                    revertsCompleted += 1
                 }
                 HotSwapState.PREPARED,
                 HotSwapState.CANDIDATE_PROMOTED -> {
-                    applyReverted(transaction)
+                    if (!applyRouting(transaction, committed = false, useRevertBudget = false)) {
+                        policyBlocked += 1
+                    }
                     val rolled = ledger.markRolledBack(transaction, "boot-rollback-uncommitted-hot-swap")
                     if (settleInitialBudget(rolled, committed = false)) budgetsReleased += 1
                     rolledBack += 1
                 }
                 HotSwapState.ROLLED_BACK,
                 HotSwapState.BLOCKED -> {
-                    applyReverted(transaction)
+                    if (applyRouting(transaction, committed = false, useRevertBudget = false)) {
+                        terminalStandby += 1
+                    } else {
+                        policyBlocked += 1
+                    }
                     if (settleInitialBudget(transaction, committed = false)) budgetsReleased += 1
-                    terminalStandby += 1
                 }
             }
         }
@@ -72,25 +111,80 @@ class HotSwapBootReconciler(
             revertsCompleted = revertsCompleted,
             budgetsCommitted = budgetsCommitted,
             budgetsReleased = budgetsReleased,
+            ownerPolicyBlocked = policyBlocked,
         )
     }
 
-    private suspend fun applyCommitted(transaction: HotSwapSnapshot) {
-        capabilities.applyRestoredHotSwap(
-            capabilityId = transaction.capabilityId,
-            previousProviderId = transaction.previousToolId,
-            candidateProviderId = transaction.candidateToolId,
-            committed = true,
+    private suspend fun applyRouting(
+        transaction: HotSwapSnapshot,
+        committed: Boolean,
+        useRevertBudget: Boolean,
+    ): Boolean {
+        val policy = ownerPolicy
+        val generatedTools = tools
+        val actor = actorId
+        val scope = ownerScope
+        if (policy == null || generatedTools == null || actor == null || scope == null) {
+            unregisterPair(transaction)
+            return false
+        }
+
+        val targetToolId = if (committed) transaction.candidateToolId else transaction.previousToolId
+        val targetRecord = requireNotNull(generatedTools.get(targetToolId)) {
+            "Hot-swap boot restore target tool is missing: $targetToolId"
+        }
+        val binding = budgetBinding(transaction, useRevertBudget)
+        val request = OwnerEffectRequest(
+            actorId = actor,
+            effect = OwnerEffectType.PROVIDER_ACTIVATION,
+            resource = "hot-swap:${transaction.capabilityId.value}:${transaction.previousToolId}->${transaction.candidateToolId}",
+            scope = scope,
+            capabilityId = targetRecord.manifest.sourceCapability,
+            providerVersion = targetRecord.manifest.buildHash ?: targetRecord.manifest.sourceHash,
+            budgetAccountId = binding?.accountId,
+            budgetReservationId = binding?.reservationId,
         )
+        return when (
+            OwnerPolicyEffectGate(policy).expose(request) {
+                capabilities.applyRestoredHotSwap(
+                    capabilityId = transaction.capabilityId,
+                    previousProviderId = transaction.previousToolId,
+                    candidateProviderId = transaction.candidateToolId,
+                    committed = committed,
+                )
+            }
+        ) {
+            is OwnerEffectExposureResult.Exposed -> true
+            is OwnerEffectExposureResult.Blocked -> {
+                unregisterPair(transaction)
+                false
+            }
+        }
     }
 
-    private suspend fun applyReverted(transaction: HotSwapSnapshot) {
-        capabilities.applyRestoredHotSwap(
-            capabilityId = transaction.capabilityId,
-            previousProviderId = transaction.previousToolId,
-            candidateProviderId = transaction.candidateToolId,
-            committed = false,
-        )
+    private suspend fun unregisterPair(transaction: HotSwapSnapshot) {
+        capabilities.unregister(transaction.capabilityId, transaction.previousToolId)
+        capabilities.unregister(transaction.capabilityId, transaction.candidateToolId)
+    }
+
+    private suspend fun budgetBinding(
+        transaction: HotSwapSnapshot,
+        revert: Boolean,
+    ): BudgetBinding? {
+        val coordinator = budgets ?: return null
+        val accountId = if (revert) {
+            ResourceBudgetAccountId("hot-swap-revert:${transaction.transactionId.value}")
+        } else {
+            ResourceBudgetAccountId("hot-swap:${transaction.transactionId.value}")
+        }
+        val key = if (revert) {
+            "revert:${transaction.transactionId.value}"
+        } else {
+            transaction.transactionId.value
+        }
+        val account = coordinator.currentOrNull(accountId) ?: return null
+        val reservation = account.reservations.singleOrNull { it.idempotencyKey == key } ?: return null
+        return BudgetBinding(accountId, reservation.id)
     }
 
     private suspend fun settleInitialBudget(transaction: HotSwapSnapshot, committed: Boolean): Boolean =
@@ -141,4 +235,9 @@ class HotSwapBootReconciler(
             else -> error("Non-committed hot-swap phase cannot retain committed V16 usage")
         }
     }
+
+    private data class BudgetBinding(
+        val accountId: ResourceBudgetAccountId,
+        val reservationId: ResourceBudgetReservationId,
+    )
 }
