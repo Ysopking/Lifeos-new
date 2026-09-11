@@ -5,6 +5,7 @@ import app.lifeos.core.language.IntentType
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
+import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import kotlinx.coroutines.CancellationException
 
 /** Immutable input for one already-resolved goal action. */
@@ -43,6 +44,15 @@ class GoalActionDispatcher(
         DurableGoalPlanRuntimeRegistry::currentOrNull,
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
+        // V15 is observational only: project the already-computed router result into the shared
+        // trace before any capability expansion. The recorder owns no routing or execution authority.
+        DecisionTraceRuntimeRegistry.currentOrNull()?.recordCapabilityRouting(
+            goalPhotonId = context.goalPhotonId,
+            goalPhotonRevision = context.goalPhotonRevision,
+            recordedAt = context.sourcePhoton.provenance.createdAt,
+            resolution = context.routing,
+        )
+
         // Capability expansion must run before V7/V5 action admission. Otherwise a real missing
         // capability can become WAITING_CAPABILITY before V11 ever sees the gap.
         if (!context.routing.ready) {
@@ -53,11 +63,31 @@ class GoalActionDispatcher(
                 when (val result = AutonomousToolWorkshopRuntimeRegistry.processIfInstalled(context)) {
                     null,
                     AutonomousToolWorkshopResult.NotNeeded -> "workshop-not-needed"
-                    is AutonomousToolWorkshopResult.Progressed -> result.jobs.joinToString(",") {
-                        "${it.definition.capabilityId.value}:${it.state.name}"
-                    }.ifBlank { "workshop-progressed" }
-                    is AutonomousToolWorkshopResult.Blocked ->
+                    is AutonomousToolWorkshopResult.Progressed -> {
+                        result.jobs.forEach { snapshot ->
+                            DecisionTraceRuntimeRegistry.currentOrNull()?.recordToolWorkshop(
+                                goalPhotonId = context.goalPhotonId,
+                                goalPhotonRevision = context.goalPhotonRevision,
+                                recordedAt = context.sourcePhoton.provenance.createdAt,
+                                snapshot = snapshot,
+                            )
+                        }
+                        result.jobs.joinToString(",") {
+                            "${it.definition.capabilityId.value}:${it.state.name}"
+                        }.ifBlank { "workshop-progressed" }
+                    }
+                    is AutonomousToolWorkshopResult.Blocked -> {
+                        result.jobs.forEach { snapshot ->
+                            DecisionTraceRuntimeRegistry.currentOrNull()?.recordToolWorkshop(
+                                goalPhotonId = context.goalPhotonId,
+                                goalPhotonRevision = context.goalPhotonRevision,
+                                recordedAt = context.sourcePhoton.provenance.createdAt,
+                                snapshot = snapshot,
+                                explicitReason = result.reason,
+                            )
+                        }
                         "workshop-blocked:${result.reason}"
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
