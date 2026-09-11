@@ -1,12 +1,13 @@
 package app.lifeos.core.runtime.capability
 
+import app.lifeos.core.runtime.evolution.NovelCapabilityPromotionStore
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Process-boot adapter around the strict J10 rehydrator. The first invocation restores an empty
- * runtime. A later bootstrap retry never restores twice; it verifies that the already loaded RAM
- * registry, audit chains and trial ledger still exactly match the durable vault.
+ * Process-boot adapter around generated-tool rehydration. Legacy J03 states keep their established
+ * path; snapshots containing bounded ACTIVE tools use the stricter V1.5 artifact/seal replay gate.
+ * A later bootstrap retry never restores twice and verifies RAM against the durable source of truth.
  */
 class GeneratedToolBootStateRehydrator(
     private val repository: GeneratedToolStateRepository,
@@ -14,6 +15,8 @@ class GeneratedToolBootStateRehydrator(
     private val trialLedger: GeneratedToolTrialLedger,
     private val capabilityRegistry: CapabilityRegistry? = null,
     private val promotionPolicy: GeneratedToolPromotionPolicy = GeneratedToolPromotionPolicy(),
+    private val artifactRepository: GeneratedToolArtifactRepository? = null,
+    private val novelPromotionStore: NovelCapabilityPromotionStore? = null,
 ) {
     private val mutex = Mutex()
 
@@ -26,13 +29,32 @@ class GeneratedToolBootStateRehydrator(
             .orEmpty()
 
         if (loaded.isEmpty() && trialLedger.isEmpty() && generatedProviders.isEmpty()) {
-            return@withLock GeneratedToolStateRehydrator(
-                repository = repository,
-                tools = tools,
-                trialLedger = trialLedger,
-                capabilityRegistry = capabilityRegistry,
-                promotionPolicy = promotionPolicy,
-            ).rehydrate()
+            val hasBoundedActive = durable.any { state ->
+                state.record.state == GeneratedToolState.ACTIVE && state.boundedPromotionReceipt != null
+            }
+            return@withLock if (hasBoundedActive) {
+                BoundedGeneratedToolStateRehydrator(
+                    repository = repository,
+                    tools = tools,
+                    trialLedger = trialLedger,
+                    capabilityRegistry = capabilityRegistry,
+                    artifacts = requireNotNull(artifactRepository) {
+                        "Bounded ACTIVE boot restore requires the generated-tool artifact repository"
+                    },
+                    novelPromotionStore = requireNotNull(novelPromotionStore) {
+                        "Bounded ACTIVE boot restore requires the durable Novel Canary promotion store"
+                    },
+                    promotionPolicy = promotionPolicy,
+                ).rehydrate(durable)
+            } else {
+                GeneratedToolStateRehydrator(
+                    repository = repository,
+                    tools = tools,
+                    trialLedger = trialLedger,
+                    capabilityRegistry = capabilityRegistry,
+                    promotionPolicy = promotionPolicy,
+                ).rehydrate()
+            }
         }
 
         require(loaded == durable.map { it.record }) {
