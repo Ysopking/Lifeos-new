@@ -17,7 +17,12 @@ import java.nio.charset.StandardCharsets
 
 @JvmInline
 value class ConvergenceDecisionCheckpointId(val value: String) {
-    init { require(value.startsWith(PREFIX)) { "Invalid convergence checkpoint id" } }
+    init {
+        require(value.startsWith(PREFIX)) { "Invalid convergence checkpoint id" }
+        require(value.removePrefix(PREFIX).matches(Regex("[0-9a-f]{64}"))) {
+            "Invalid convergence checkpoint digest"
+        }
+    }
     override fun toString(): String = value
 
     companion object {
@@ -47,26 +52,18 @@ data class ConvergenceDecisionCheckpoint(
         require(sourceFingerprint.isNotBlank())
         require(policyFingerprint.isNotBlank())
         require(workingSetFingerprint == null || workingSetFingerprint.isNotBlank())
-        require(snapshots.isNotEmpty())
         require(snapshots.map { it.domainId }.distinct().size == snapshots.size)
         require(decision.sourceFingerprint == sourceFingerprint)
         require(id == expectedId()) { "Convergence checkpoint id/content mismatch" }
     }
 
-    fun contentFingerprint(): String = StableFieldIds.fingerprint(
-        "convergence-decision-checkpoint/v1",
-        sourceRequestId,
-        sourceFingerprint,
-        policyFingerprint,
-        workingSetFingerprint.orEmpty(),
-        decision.id.value,
-        *snapshots.sortedBy { it.domainId.value }.flatMap { reference ->
-            listOf(
-                reference.domainId.value,
-                reference.snapshotId.value,
-                reference.contentFingerprint,
-            )
-        }.toTypedArray(),
+    fun contentFingerprint(): String = computeContentFingerprint(
+        sourceRequestId = sourceRequestId,
+        sourceFingerprint = sourceFingerprint,
+        policyFingerprint = policyFingerprint,
+        workingSetFingerprint = workingSetFingerprint,
+        snapshots = snapshots,
+        decisionId = decision.id,
     )
 
     private fun expectedId(): ConvergenceDecisionCheckpointId =
@@ -87,26 +84,51 @@ data class ConvergenceDecisionCheckpoint(
                         contentFingerprint = result.snapshot.contentFingerprint(),
                     )
                 }
-            val provisional = ConvergenceDecisionCheckpoint(
+            val sourceFingerprint = decision.sourceFingerprint
+            val policyFingerprint = policy.fingerprint()
+            val fingerprint = computeContentFingerprint(
+                sourceRequestId = request.source.id,
+                sourceFingerprint = sourceFingerprint,
+                policyFingerprint = policyFingerprint,
+                workingSetFingerprint = request.workingSetFingerprint,
+                snapshots = snapshots,
+                decisionId = decision.id,
+            )
+            return ConvergenceDecisionCheckpoint(
                 id = ConvergenceDecisionCheckpointId(
-                    "${ConvergenceDecisionCheckpointId.PREFIX}${StableFieldIds.fingerprint(
-                        "convergence-checkpoint-provisional/v1",
-                        request.source.id,
-                        decision.id.value,
-                    )}"
+                    "${ConvergenceDecisionCheckpointId.PREFIX}$fingerprint"
                 ),
                 sourceRequestId = request.source.id,
-                sourceFingerprint = decision.sourceFingerprint,
-                policyFingerprint = policy.fingerprint(),
+                sourceFingerprint = sourceFingerprint,
+                policyFingerprint = policyFingerprint,
                 workingSetFingerprint = request.workingSetFingerprint,
                 snapshots = snapshots,
                 decision = decision,
             )
-            val correctId = ConvergenceDecisionCheckpointId(
-                "${ConvergenceDecisionCheckpointId.PREFIX}${provisional.contentFingerprint()}"
-            )
-            return provisional.copy(id = correctId)
         }
+
+        private fun computeContentFingerprint(
+            sourceRequestId: String,
+            sourceFingerprint: String,
+            policyFingerprint: String,
+            workingSetFingerprint: String?,
+            snapshots: List<ConvergenceSnapshotReference>,
+            decisionId: ConvergenceDecisionId,
+        ): String = StableFieldIds.fingerprint(
+            "convergence-decision-checkpoint/v1",
+            sourceRequestId,
+            sourceFingerprint,
+            policyFingerprint,
+            workingSetFingerprint.orEmpty(),
+            decisionId.value,
+            *snapshots.sortedBy { it.domainId.value }.flatMap { reference ->
+                listOf(
+                    reference.domainId.value,
+                    reference.snapshotId.value,
+                    reference.contentFingerprint,
+                )
+            }.toTypedArray(),
+        )
     }
 }
 
