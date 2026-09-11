@@ -96,6 +96,7 @@ class ControlledEvolutionCoordinator(
     private val ownerScope: String,
     private val accountQuota: ResourceBudgetQuota? = null,
     private val sharedBudgets: SharedResourceBudgetGate? = null,
+    private val outcomes: EvolutionCanaryOutcomeStore? = null,
 ) {
     init { require(ownerScope.isNotBlank()) }
 
@@ -112,7 +113,8 @@ class ControlledEvolutionCoordinator(
         accountQuota?.let { quota -> budgets.createAccount(budgetAccountId, quota) }
 
         val idempotencyKey = resourceIdempotencyKey(evidence, context)
-        val existingOutcome = router.durableOutcome(evidence.adoptionEvidence.id, context.invocationId)
+        val existingOutcome = outcomes?.outcome(evidence.adoptionEvidence.id, context.invocationId)
+            ?: router.durableOutcome(evidence.adoptionEvidence.id, context.invocationId)
         if (existingOutcome != null) {
             settleRecoveredBudget(idempotencyKey, reservedUsage)
             return ControlledEvolutionExecutionResult.Completed(existingOutcome, recovered = true)
