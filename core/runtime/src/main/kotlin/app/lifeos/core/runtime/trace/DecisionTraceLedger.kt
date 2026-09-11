@@ -32,13 +32,28 @@ class DecisionTraceLedger(private val repository: DecisionTraceRepository) {
         require(nodes.isNotEmpty() || links.isNotEmpty())
         repeat(MAX_CAS_ATTEMPTS) {
             val current = snapshot(id)
-            val mergedNodes = (current?.nodes.orEmpty() + nodes).associateBy { it.id }.values.sortedBy { it.id.value }
+            val mergedNodes = mergeNodes(current?.nodes.orEmpty(), nodes)
             val mergedLinks = (current?.links.orEmpty() + links).distinct()
                 .sortedWith(compareBy({ it.from.value }, { it.to.value }, { it.type.name }))
             val next = DecisionTrace(id, (current?.revision ?: 0L) + 1L, mergedNodes, mergedLinks)
             if (repository.save(current?.revision ?: 0L, next)) return next
         }
         error("Decision trace CAS retry limit exceeded")
+    }
+
+    private fun mergeNodes(
+        existing: List<DecisionTraceNode>,
+        additions: List<DecisionTraceNode>,
+    ): List<DecisionTraceNode> {
+        val merged = existing.associateByTo(linkedMapOf()) { it.id }
+        additions.forEach { incoming ->
+            val previous = merged[incoming.id]
+            require(previous == null || previous == incoming) {
+                "Decision trace node identity collision: ${incoming.id.value}"
+            }
+            if (previous == null) merged[incoming.id] = incoming
+        }
+        return merged.values.sortedBy { it.id.value }
     }
 
     private companion object { const val MAX_CAS_ATTEMPTS = 32 }
