@@ -22,6 +22,7 @@ data class ThoughtGraphRehydrateReport(
 class DurableThoughtGraph(
     private val repository: ThoughtGraphDeltaRepository,
     private val reducer: ThoughtGraphReducer = ThoughtGraphReducer(),
+    private val attention: ThoughtGraphAttentionProjector = ThoughtGraphAttentionProjector(),
 ) {
     private val mutex = Mutex()
     private val mutableState = MutableStateFlow(ThoughtGraphState())
@@ -57,4 +58,16 @@ class DurableThoughtGraph(
 
     suspend fun snapshot(capturedAt: Instant = Instant.now()): ThoughtGraphSnapshot =
         mutex.withLock { reducer.snapshot(mutableState.value, capturedAt) }
+
+    /**
+     * Returns a bounded, deterministic working set without mutating or persisting any graph state.
+     * The evaluation instant is explicit so identical graph state + asOf yields identical attention.
+     */
+    suspend fun workingSet(
+        asOf: Instant,
+        policy: ThoughtGraphAttentionPolicy = ThoughtGraphAttentionPolicy(),
+    ): ThoughtGraphWorkingSet = mutex.withLock {
+        val snapshot = reducer.snapshot(mutableState.value, asOf)
+        attention.project(snapshot = snapshot, policy = policy, asOf = asOf)
+    }
 }
