@@ -22,11 +22,19 @@ import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.ResourceBudgetRepository
 import app.lifeos.core.runtime.resource.ResourceBudgetRepositoryLoadReport
+import app.lifeos.core.runtime.trace.DecisionTrace
+import app.lifeos.core.runtime.trace.DecisionTraceId
+import app.lifeos.core.runtime.trace.DecisionTraceLedger
+import app.lifeos.core.runtime.trace.DecisionTraceNodeType
+import app.lifeos.core.runtime.trace.DecisionTraceRepository
+import app.lifeos.core.runtime.trace.DecisionTraceRepositoryLoadReport
+import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class GoalActionExecutionGuardTest {
@@ -105,9 +113,89 @@ class GoalActionExecutionGuardTest {
         assertTrue(owner.snapshot().activeGrants.none { it.id == reminderGrant.id })
     }
 
+    @Test
+    fun ownerPolicyAndReservationAreRecordedOnSameGoalTrace() = runTest {
+        val ownerRepository = MemoryOwnerPolicyRepository()
+        val budgetRepository = MemoryResourceBudgetRepository()
+        val traceRepository = MemoryDecisionTraceRepository()
+        val context = context(IntentType.SCHEDULE, "goal-traced-reminder")
+        val guard = guard(ownerRepository, budgetRepository, traceRepository)
+
+        val permit = assertIs<GoalActionExecutionPermit.Reserved>(guard.prepare(context))
+        val trace = assertNotNull(
+            DecisionTraceLedger(traceRepository).snapshot(
+                DecisionTraceId.create("goal-photon", context.goalPhotonId.value)
+            )
+        )
+
+        assertTrue(
+            trace.nodes.any { node ->
+                node.type == DecisionTraceNodeType.POLICY_CONSTRAINT &&
+                    node.sourceId == permit.ownerPolicyDecisionId?.value
+            }
+        )
+        assertTrue(
+            trace.nodes.any { node ->
+                node.type == DecisionTraceNodeType.RESOURCE_CONSTRAINT &&
+                    node.sourceId == permit.reservation.id.value &&
+                    "RESERVED" in node.reasonCodes
+            }
+        )
+    }
+
+    @Test
+    fun committedReservationAddsSettlementEvidenceWithoutReplacingReservationEvidence() = runTest {
+        val ownerRepository = MemoryOwnerPolicyRepository()
+        val budgetRepository = MemoryResourceBudgetRepository()
+        val traceRepository = MemoryDecisionTraceRepository()
+        val context = context(IntentType.QUERY, "goal-traced-settlement")
+        val guard = guard(ownerRepository, budgetRepository, traceRepository)
+
+        val permit = assertIs<GoalActionExecutionPermit.Reserved>(guard.prepare(context))
+        guard.settle(permit, successfulKnowledgeResult())
+
+        val trace = assertNotNull(
+            DecisionTraceLedger(traceRepository).snapshot(
+                DecisionTraceId.create("goal-photon", context.goalPhotonId.value)
+            )
+        )
+        val reservationNodes = trace.nodes.filter { node ->
+            node.type == DecisionTraceNodeType.RESOURCE_CONSTRAINT &&
+                node.sourceId == permit.reservation.id.value
+        }
+        assertEquals(setOf("RESERVED", "COMMITTED"), reservationNodes.flatMap { it.reasonCodes }.toSet())
+        assertEquals(setOf(1L, 2L), reservationNodes.map { it.sourceRevision }.toSet())
+    }
+
+    @Test
+    fun unreadableTraceStoreCannotChangeAuthoritativeGuardDecision() = runTest {
+        val ownerRepository = MemoryOwnerPolicyRepository()
+        val budgetRepository = MemoryResourceBudgetRepository()
+        val traceRepository = MemoryDecisionTraceRepository(unreadable = true)
+        val allowed = guard(ownerRepository, budgetRepository, traceRepository)
+
+        assertIs<GoalActionExecutionPermit.Reserved>(
+            allowed.prepare(context(IntentType.QUERY, "goal-trace-unavailable"))
+        )
+
+        val blocked = PrivateGoalActionExecutionGuard(
+            ownerPolicy = OwnerPolicyLedger(ownerRepository),
+            budgets = ResourceBudgetCoordinator(budgetRepository),
+            hardware = HardwareExecutionBudgetGate { _, _, _ ->
+                HardwareExecutionBudgetDecision.Blocked("thermal-suspended")
+            },
+            traces = GoalDecisionTraceRecorder(DecisionTraceLedger(traceRepository)),
+        )
+        val result = assertIs<GoalActionExecutionPermit.Blocked>(
+            blocked.prepare(context(IntentType.QUERY, "goal-trace-unavailable-blocked"))
+        )
+        assertEquals("thermal-suspended", result.reason)
+    }
+
     private fun guard(
         ownerRepository: OwnerPolicyRepository,
         budgetRepository: ResourceBudgetRepository,
+        traceRepository: DecisionTraceRepository? = null,
     ): PrivateGoalActionExecutionGuard = PrivateGoalActionExecutionGuard(
         ownerPolicy = OwnerPolicyLedger(ownerRepository),
         budgets = ResourceBudgetCoordinator(budgetRepository),
@@ -132,6 +220,9 @@ class GoalActionExecutionGuardTest {
                     priority = priority,
                 )
             )
+        },
+        traces = traceRepository?.let { repository ->
+            GoalDecisionTraceRecorder(DecisionTraceLedger(repository))
         },
     )
 
@@ -213,6 +304,25 @@ class GoalActionExecutionGuardTest {
             val current = accounts[accountId] ?: return false
             if (current.revision != expectedRevision) return false
             accounts[accountId] = updated
+            return true
+        }
+    }
+
+    private class MemoryDecisionTraceRepository(
+        private val unreadable: Boolean = false,
+    ) : DecisionTraceRepository {
+        private val traces = mutableListOf<DecisionTrace>()
+
+        override suspend fun loadReport(): DecisionTraceRepositoryLoadReport =
+            DecisionTraceRepositoryLoadReport(
+                traces = traces.toList(),
+                unreadableEntries = if (unreadable) listOf("trace-corrupt") else emptyList(),
+            )
+
+        override suspend fun save(expectedRevision: Long, trace: DecisionTrace): Boolean {
+            val current = traces.filter { it.id == trace.id }.maxOfOrNull { it.revision } ?: 0L
+            if (current != expectedRevision) return false
+            traces += trace
             return true
         }
     }
