@@ -18,6 +18,8 @@ import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolGenesisResult
 import app.lifeos.core.runtime.capability.GeneratedToolRequestExecutionResult
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
+import app.lifeos.core.runtime.capability.GeneratedToolState
+import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.next.kernel.GoalResumeExecutionResult
 import app.lifeos.next.kernel.ImageGenerationResult
@@ -52,6 +54,8 @@ data class LifeOsState(
     val lastCapabilityGaps: List<CapabilityGap> = emptyList(),
     val capabilityRequestSaving: Boolean = false,
     val capabilityRequestStatus: String? = null,
+    val capabilityActivationSaving: Boolean = false,
+    val capabilityActivationStatus: String? = null,
     val generatedToolStatus: GeneratedToolRuntimeStatus? = null,
     val generatedToolStatusLoading: Boolean = false,
     val generatedToolStatusError: String? = null,
@@ -131,11 +135,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { loadGeneratedToolStatus() }
     }
 
-    /**
-     * One explicit button press approves exactly one currently blocking capability gap for bounded
-     * local Genesis. The generated tool can only become TRIAL or REJECTED on this path; it is never
-     * activated by the UI action.
-     */
+    /** One explicit press approves exactly one blocking gap for bounded local Genesis. */
     fun requestCapabilityGaps() {
         val current = mutableState.value
         val gap = current.lastCapabilityGaps.firstOrNull()
@@ -143,6 +143,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
             current.loading ||
             current.loadFailed ||
             current.capabilityRequestSaving ||
+            current.capabilityActivationSaving ||
             gap == null
         ) return
 
@@ -184,8 +185,58 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Separate explicit owner action: five non-productive canaries, review, seal, then guarded ACTIVE. */
+    fun reviewAndActivateFirstTrialTool() {
+        val current = mutableState.value
+        val trial = current.generatedToolStatus?.tools?.firstOrNull { it.state == GeneratedToolState.TRIAL }
+        if (
+            current.loading ||
+            current.loadFailed ||
+            current.capabilityRequestSaving ||
+            current.capabilityActivationSaving ||
+            trial == null
+        ) return
+
+        mutableState.update {
+            it.copy(
+                capabilityActivationSaving = true,
+                capabilityActivationStatus = null,
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val result = kernel.reviewAndActivateGeneratedTool(trial.toolId)
+                val status = when (result) {
+                    is PrivateNovelCapabilityActivationResult.Activated ->
+                        "${result.promotion.activeRecord.manifest.toolId} hat fünf getrennte lokale Novel-Canaries, Readiness, den dauerhaften Promotion-Seal und die getrennte Review-/Owner-Prüfung bestanden. Das Tool ist jetzt ACTIVE mit LOW Trust und wird nach Neustart nur mit exakt passender Evidence wiederhergestellt."
+                    is PrivateNovelCapabilityActivationResult.AlreadyActive ->
+                        "${result.record.manifest.toolId} ist bereits ACTIVE. Es wurden keine weiteren Canary-Trials ausgeführt."
+                    is PrivateNovelCapabilityActivationResult.Blocked ->
+                        "Aktivierung von ${result.toolId} wurde sicher blockiert: ${result.reasons.joinToString("; ")}"
+                }
+                mutableState.update { it.copy(capabilityActivationStatus = status) }
+                loadGeneratedToolStatus()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                mutableState.update {
+                    it.copy(
+                        capabilityActivationStatus =
+                            "Tool-Aktivierung konnte nicht sicher abgeschlossen werden: ${error.message ?: error::class.simpleName ?: "unbekannter Fehler"}"
+                    )
+                }
+            } finally {
+                mutableState.update { it.copy(capabilityActivationSaving = false) }
+            }
+        }
+    }
+
     fun dismissCapabilityRequestStatus() {
         mutableState.update { it.copy(capabilityRequestStatus = null) }
+    }
+
+    fun dismissCapabilityActivationStatus() {
+        mutableState.update { it.copy(capabilityActivationStatus = null) }
     }
 
     fun voicePermissionDenied() {
@@ -289,6 +340,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                         lastGoal = result.effectiveGoal ?: it.lastGoal,
                         lastCapabilityGaps = result.effectiveRouting?.blockingGaps.orEmpty(),
                         capabilityRequestStatus = null,
+                        capabilityActivationStatus = null,
                         pendingShare = (result.localCommunication as? LocalCommunicationExecutionResult.Prepared)?.share,
                         shareStatus = null,
                         error = when {
@@ -302,48 +354,37 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                                 "Das vorherige Ziel konnte nicht sicher fortgesetzt werden: ${result.goalResume.message}"
                             result.goalResume is GoalResumeExecutionResult.Failed ->
                                 "Das vorherige Ziel konnte nicht fortgesetzt werden: ${result.goalResume.message}"
-                            result.goalResume is GoalResumeExecutionResult.Resumed &&
-                                !result.goalResume.resumedGoal.processingQueued ->
+                            result.goalResume is GoalResumeExecutionResult.Resumed && !result.goalResume.resumedGoal.processingQueued ->
                                 "Das vorherige Ziel wurde wiederaufgenommen und gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.localKnowledge is LocalKnowledgeExecutionResult.Failed ->
                                 "Die lokale Wissensaktion ist fehlgeschlagen: ${result.localKnowledge.message}"
-                            result.localKnowledge is LocalKnowledgeExecutionResult.Produced &&
-                                !result.localKnowledge.output.processingQueued ->
+                            result.localKnowledge is LocalKnowledgeExecutionResult.Produced && !result.localKnowledge.output.processingQueued ->
                                 "Die lokale Wissensantwort wurde gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.localDeepSearch is LocalDeepSearchExecutionResult.Failed ->
                                 "Die lokale DeepSearch-Suche ist fehlgeschlagen: ${result.localDeepSearch.message}"
-                            result.localDeepSearch is LocalDeepSearchExecutionResult.Produced &&
-                                !result.localDeepSearch.output.processingQueued ->
+                            result.localDeepSearch is LocalDeepSearchExecutionResult.Produced && !result.localDeepSearch.output.processingQueued ->
                                 "Das lokale DeepSearch-Ergebnis wurde gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.localSchedule is LocalScheduleExecutionResult.Blocked -> when (result.localSchedule.reason) {
-                                "notification-permission-required" ->
-                                    "Für lokale Erinnerungen muss die Benachrichtigungsberechtigung erteilt werden."
-                                "reminder-time-missing" ->
-                                    "Für die Erinnerung fehlt eine Uhrzeit. Der Entwurf bleibt zum Ergänzen erhalten."
+                                "notification-permission-required" -> "Für lokale Erinnerungen muss die Benachrichtigungsberechtigung erteilt werden."
+                                "reminder-time-missing" -> "Für die Erinnerung fehlt eine Uhrzeit. Der Entwurf bleibt zum Ergänzen erhalten."
                                 else -> "Die lokale Erinnerung konnte nicht geplant werden: ${result.localSchedule.reason}"
                             }
                             result.localSchedule is LocalScheduleExecutionResult.Failed ->
                                 "Die lokale Erinnerung ist fehlgeschlagen: ${result.localSchedule.message}"
-                            result.localSchedule is LocalScheduleExecutionResult.Scheduled &&
-                                !result.localSchedule.output.processingQueued ->
+                            result.localSchedule is LocalScheduleExecutionResult.Scheduled && !result.localSchedule.output.processingQueued ->
                                 "Die Erinnerung wurde lokal geplant, ihr Photon konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.localImageTransform is LocalImageTransformExecutionResult.Blocked -> when (result.localImageTransform.reason) {
                                 "image-transform-operation-unsupported" ->
                                     "Unterstützte lokale Bildänderungen sind heller, dunkler, wärmer, kühler, schärfer oder Graustufen."
-                                "image-transform-reference-unresolved",
-                                "goal-is-not-action-ready" ->
+                                "image-transform-reference-unresolved", "goal-is-not-action-ready" ->
                                     "Welches lokale Bild bearbeitet werden soll, ist nicht eindeutig. Der Entwurf bleibt zum Ergänzen erhalten."
-                                "image-transform-source-missing" ->
-                                    "Es ist kein lokales Bild zum Bearbeiten vorhanden."
-                                "image-transform-pixel-budget-exceeded" ->
-                                    "Das Bild ist für die lokale Bearbeitung zu groß."
-                                else ->
-                                    "Die lokale Bildbearbeitung ist blockiert: ${result.localImageTransform.reason}"
+                                "image-transform-source-missing" -> "Es ist kein lokales Bild zum Bearbeiten vorhanden."
+                                "image-transform-pixel-budget-exceeded" -> "Das Bild ist für die lokale Bearbeitung zu groß."
+                                else -> "Die lokale Bildbearbeitung ist blockiert: ${result.localImageTransform.reason}"
                             }
                             result.localImageTransform is LocalImageTransformExecutionResult.Failed ->
                                 "Die lokale Bildbearbeitung ist fehlgeschlagen: ${result.localImageTransform.message}"
-                            result.localImageTransform is LocalImageTransformExecutionResult.Transformed &&
-                                !result.localImageTransform.output.processingQueued ->
+                            result.localImageTransform is LocalImageTransformExecutionResult.Transformed && !result.localImageTransform.output.processingQueued ->
                                 "Das bearbeitete Bild wurde lokal gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.localCommunication is LocalCommunicationExecutionResult.Blocked ->
                                 "Es gibt kein eindeutig teilbares lokales Ergebnis."
@@ -361,9 +402,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                 throw cancelled
             } catch (_: Exception) {
                 mutableState.update {
-                    it.copy(
-                        error = "Gedanke konnte nicht gespeichert werden. Die Eingabe bleibt im Textfeld.",
-                    )
+                    it.copy(error = "Gedanke konnte nicht gespeichert werden. Die Eingabe bleibt im Textfeld.")
                 }
             } finally {
                 mutableState.update { it.copy(saving = false) }
