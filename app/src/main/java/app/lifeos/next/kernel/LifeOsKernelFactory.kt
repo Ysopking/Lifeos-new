@@ -60,6 +60,7 @@ import app.lifeos.core.runtime.cognition.CognitiveScheduler
 import app.lifeos.core.runtime.cognition.CompositeDurableTaskExecutionObserver
 import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
 import app.lifeos.core.runtime.cognition.DurableCognitionDispatcher
+import app.lifeos.core.runtime.cognition.DurableCognitionReconciler
 import app.lifeos.core.runtime.cognition.DurableCognitiveTriggerSink
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveEventJournal
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveOutcomeJournal
@@ -303,6 +304,11 @@ class LifeOsKernelFactory(
             scheduler = cognitiveScheduler,
             durableDispatcher = DurableCognitionDispatcher(taskEngine),
         )
+        val cognitionReconciler = DurableCognitionReconciler(
+            photons = store,
+            tasks = taskRepository,
+            cognition = continuousCognition,
+        )
         val photonTransactions = InMemoryPhotonTransactionJournal()
         val cognitiveOutcomes = InMemoryCognitiveOutcomeJournal()
         val cognitiveTriggers = DurableCognitiveTriggerSink(
@@ -395,6 +401,12 @@ class LifeOsKernelFactory(
         val stateRehydrator = ChainedStateRehydrator(
             primary = primaryStateRehydrator,
             additionalSteps = listOf(
+                RuntimeStateRehydrationStep {
+                    while (true) {
+                        val reconciliation = cognitionReconciler.reconcile()
+                        if (reconciliation.deferred == 0) break
+                    }
+                },
                 RuntimeStateRehydrationStep {
                     // Read-only full-vault decode: a corrupt evolution vault must fail before runtime start.
                     evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
