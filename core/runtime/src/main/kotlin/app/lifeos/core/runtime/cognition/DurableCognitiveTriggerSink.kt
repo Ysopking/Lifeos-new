@@ -37,8 +37,16 @@ class DurableCognitiveTriggerSink(
     private val photons: PhotonRepository,
     private val taskEngine: DurableTaskEngine,
     private val policy: CognitiveTriggerDispatchPolicy = CognitiveTriggerDispatchPolicy(),
-    private val admissionController: DurableCognitionAdmissionController? = null,
+    admissionController: DurableCognitionAdmissionController? = null,
 ) : CognitiveTriggerSink {
+    private val admissionController = admissionController
+        ?: taskEngine.cognitionSnapshotRepository?.let { tasks ->
+            DurableCognitionAdmissionController(
+                tasks = tasks,
+                taskEngine = taskEngine,
+            )
+        }
+
     override suspend fun emit(trigger: CognitiveTrigger): Boolean {
         if (trigger.type in policy.durableFeedbackTypes && !durabilize(trigger)) {
             return false
