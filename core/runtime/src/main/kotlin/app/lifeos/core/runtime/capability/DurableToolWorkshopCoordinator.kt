@@ -1,9 +1,10 @@
 package app.lifeos.core.runtime.capability
 
 import app.lifeos.core.runtime.policy.OwnerActorId
+import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
 import app.lifeos.core.runtime.policy.OwnerEffectRequest
 import app.lifeos.core.runtime.policy.OwnerEffectType
-import app.lifeos.core.runtime.policy.OwnerPolicyDecision
+import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
@@ -140,23 +141,25 @@ class DurableToolWorkshopCoordinator(
         )
         jobs.snapshot(definition.id)?.let { return ToolWorkshopAdmissionResult.Ready(it) }
 
-        val decision = ownerPolicy.evaluate(
-            OwnerEffectRequest(
-                actorId = actorId,
-                effect = OwnerEffectType.TOOL_REQUEST,
-                resource = "tool-workshop:${definition.id.value}:request",
-                scope = ownerScope,
-                capabilityId = definition.capabilityId,
-                providerVersion = definition.workshopVersion,
-            )
+        val ownerRequest = OwnerEffectRequest(
+            actorId = actorId,
+            effect = OwnerEffectType.TOOL_REQUEST,
+            resource = "tool-workshop:${definition.id.value}:request",
+            scope = ownerScope,
+            capabilityId = definition.capabilityId,
+            providerVersion = definition.workshopVersion,
         )
-        if (decision is OwnerPolicyDecision.Blocked) {
-            return ToolWorkshopAdmissionResult.Blocked(
+        return when (
+            val exposure = OwnerPolicyEffectGate(ownerPolicy).expose(ownerRequest) {
+                jobs.create(definition)
+            }
+        ) {
+            is OwnerEffectExposureResult.Exposed -> ToolWorkshopAdmissionResult.Ready(exposure.value)
+            is OwnerEffectExposureResult.Blocked -> ToolWorkshopAdmissionResult.Blocked(
                 definition,
-                "owner-policy:${decision.reasons.joinToString("|")}",
+                "owner-policy:${exposure.assessment.reasonCodes.joinToString("|") { it.name }}",
             )
         }
-        return ToolWorkshopAdmissionResult.Ready(jobs.create(definition))
     }
 
     suspend fun runNext(
@@ -199,29 +202,35 @@ class DurableToolWorkshopCoordinator(
             )
         }
 
-        val owner = ownerPolicy.evaluate(
-            OwnerEffectRequest(
-                actorId = actorId,
-                effect = OwnerEffectType.TOOL_EXECUTION,
-                resource = stageResource(jobId, target),
-                scope = ownerScope,
-                capabilityId = snapshot.definition.capabilityId,
-                providerVersion = snapshot.definition.workshopVersion,
-                budgetAccountId = accountId,
-                budgetReservationId = reservation.id,
-            )
+        val ownerRequest = OwnerEffectRequest(
+            actorId = actorId,
+            effect = OwnerEffectType.TOOL_EXECUTION,
+            resource = stageResource(jobId, target),
+            scope = ownerScope,
+            capabilityId = snapshot.definition.capabilityId,
+            providerVersion = snapshot.definition.workshopVersion,
+            budgetAccountId = accountId,
+            budgetReservationId = reservation.id,
         )
-        if (owner is OwnerPolicyDecision.Blocked) {
-            budgets.release(accountId, reservation.id)
-            snapshot = jobs.interrupt(
-                snapshot,
-                "owner-policy:${owner.reasons.joinToString("|")}",
-            )
-            return ToolWorkshopStageResult.Rejected(snapshot, requireNotNull(snapshot.lastDetail))
-        }
-
         val artifact = try {
-            executeStage(snapshot, target)
+            when (
+                val exposure = OwnerPolicyEffectGate(ownerPolicy).expose(ownerRequest) {
+                    executeStage(snapshot, target)
+                }
+            ) {
+                is OwnerEffectExposureResult.Exposed -> exposure.value
+                is OwnerEffectExposureResult.Blocked -> {
+                    budgets.release(accountId, reservation.id)
+                    snapshot = jobs.interrupt(
+                        snapshot,
+                        "owner-policy:${exposure.assessment.reasonCodes.joinToString("|") { it.name }}",
+                    )
+                    return ToolWorkshopStageResult.Rejected(
+                        snapshot,
+                        requireNotNull(snapshot.lastDetail),
+                    )
+                }
+            }
         } catch (error: Exception) {
             budgets.release(accountId, reservation.id)
             return ToolWorkshopStageResult.Blocked(

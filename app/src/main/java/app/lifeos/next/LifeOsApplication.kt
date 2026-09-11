@@ -10,6 +10,8 @@ import app.lifeos.core.data.resource.EncryptedResourceBudgetRepository
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
+import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
+import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
 import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
 import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointStore
@@ -31,6 +33,7 @@ import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
+import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +75,16 @@ class LifeOsApplication : Application() {
                     SharedResourceBudgetRuntimeRegistry.install(hardwareResourceIntelligence)
                     ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(this))
                     resourceBudgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(this))
+                    runBlocking {
+                        PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
+                    }
+                    GeneratedProviderRestoreAuthorityRuntimeRegistry.install(
+                        GeneratedProviderRestoreAuthority(
+                            ownerPolicy = ownerPolicy,
+                            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+                            scope = PrivateOwnerPolicyBaseline.GENERATED_PROVIDER_RESTORE_SCOPE,
+                        )
+                    )
                 },
                 installGoalExecutionRuntime = {
                     GoalExecutionRuntimeRegistry.install(

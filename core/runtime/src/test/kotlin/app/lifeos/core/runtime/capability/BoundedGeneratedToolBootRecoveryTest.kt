@@ -26,6 +26,12 @@ class BoundedGeneratedToolBootRecoveryTest {
         val tools = GeneratedToolRegistry()
         val trials = GeneratedToolTrialLedger()
         val capabilities = CapabilityRegistry()
+        val policy = v14AllowProviderRestore(t0)
+        val restoreAuthority = GeneratedProviderRestoreAuthority(
+            ownerPolicy = policy.ledger,
+            actorId = V14_TEST_OWNER,
+            scope = V14_TEST_RESTORE_SCOPE,
+        )
 
         val report = GeneratedToolBootStateRehydrator(
             repository = fixture.states,
@@ -34,6 +40,7 @@ class BoundedGeneratedToolBootRecoveryTest {
             capabilityRegistry = capabilities,
             artifactRepository = fixture.artifacts,
             novelPromotionStore = fixture.promotionStore,
+            providerRestoreAuthority = restoreAuthority,
         ).rehydrateOrVerify()
 
         assertEquals(1, report.restoredTools)
@@ -54,6 +61,7 @@ class BoundedGeneratedToolBootRecoveryTest {
             capabilityRegistry = capabilities,
             artifactRepository = fixture.artifacts,
             novelPromotionStore = fixture.promotionStore,
+            providerRestoreAuthority = restoreAuthority,
         ).rehydrateOrVerify()
         assertEquals(report, retry)
     }
@@ -64,6 +72,7 @@ class BoundedGeneratedToolBootRecoveryTest {
         val tools = GeneratedToolRegistry()
         val trials = GeneratedToolTrialLedger()
         val capabilities = CapabilityRegistry()
+        val policy = v14AllowProviderRestore(t0)
 
         val failure = assertFailsWith<IllegalArgumentException> {
             GeneratedToolBootStateRehydrator(
@@ -73,6 +82,11 @@ class BoundedGeneratedToolBootRecoveryTest {
                 capabilityRegistry = capabilities,
                 artifactRepository = fixture.artifacts,
                 novelPromotionStore = InMemoryNovelCapabilityPromotionStore(),
+                providerRestoreAuthority = GeneratedProviderRestoreAuthority(
+                    ownerPolicy = policy.ledger,
+                    actorId = V14_TEST_OWNER,
+                    scope = V14_TEST_RESTORE_SCOPE,
+                ),
             ).rehydrateOrVerify()
         }
 

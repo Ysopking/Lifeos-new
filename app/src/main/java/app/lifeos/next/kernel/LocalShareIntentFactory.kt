@@ -7,6 +7,7 @@ import androidx.core.content.FileProvider
 import app.lifeos.core.image.ImagePhotonFactory
 import app.lifeos.core.runtime.goal.LocalShareKind
 import app.lifeos.core.runtime.goal.LocalSharePreparation
+import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
@@ -15,6 +16,7 @@ import kotlinx.coroutines.withContext
 /**
  * Materializes an explicit Android ACTION_SEND handoff. Image bytes are decrypted only into the
  * app's private cache and exposed through a narrow FileProvider grant to the user-selected target.
+ * The cache materialization itself is a productive FILE_WRITE and therefore executes inside V14.
  */
 class LocalShareIntentFactory(
     context: Context,
@@ -38,12 +40,23 @@ class LocalShareIntentFactory(
         }
         val bytes = kernel.loadImageAsset(share.target)
             ?: throw IllegalStateException("Shared image asset is unavailable")
-        val target = withContext(Dispatchers.IO) {
-            ensureShareDirectory()
-            removeExpiredFiles()
-            File(shareDirectory, "${stableName(share.target.id.value)}.png").also { file ->
-                file.writeBytes(bytes)
+        val exposure = PrivateOwnerEffectAuthority.expose(
+            context = appContext,
+            request = PrivateOwnerEffectAuthority.shareCacheWriteRequest(),
+        ) {
+            withContext(Dispatchers.IO) {
+                ensureShareDirectory()
+                removeExpiredFiles()
+                File(shareDirectory, "${stableName(share.target.id.value)}.png").also { file ->
+                    file.writeBytes(bytes)
+                }
             }
+        }
+        val target = when (exposure) {
+            is OwnerEffectExposureResult.Exposed -> exposure.value
+            is OwnerEffectExposureResult.Blocked -> throw SecurityException(
+                "owner-policy:${exposure.assessment.reasonCodes.joinToString(",") { it.name }}"
+            )
         }
         val uri = FileProvider.getUriForFile(
             appContext,

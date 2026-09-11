@@ -10,6 +10,11 @@ import kotlinx.coroutines.sync.withLock
  * A later bootstrap retry never restores twice and verifies RAM against the durable source of truth.
  * V10 routing cutovers and V11 workshop jobs are reconciled only after promoted/generated tool
  * records have been restored into the productive process registries.
+ *
+ * V14 invariant: durable ACTIVE state is evidence only. Legacy/bounded rehydrators reconstruct
+ * lifecycle and trial evidence with no CapabilityRegistry attached. A single common step then makes
+ * each ACTIVE provider routable only inside a fresh GeneratedProviderRestoreAuthority exposure.
+ * Missing/revoked/corrupt authority leaves durable state readable but the provider unroutable.
  */
 class GeneratedToolBootStateRehydrator(
     private val repository: GeneratedToolStateRepository,
@@ -19,6 +24,8 @@ class GeneratedToolBootStateRehydrator(
     private val promotionPolicy: GeneratedToolPromotionPolicy = GeneratedToolPromotionPolicy(),
     private val artifactRepository: GeneratedToolArtifactRepository? = null,
     private val novelPromotionStore: NovelCapabilityPromotionStore? = null,
+    private val providerRestoreAuthority: GeneratedProviderRestoreAuthority? =
+        GeneratedProviderRestoreAuthorityRuntimeRegistry.current(),
 ) {
     private val mutex = Mutex()
 
@@ -34,12 +41,12 @@ class GeneratedToolBootStateRehydrator(
             val hasBoundedActive = durable.any { state ->
                 state.record.state == GeneratedToolState.ACTIVE && state.boundedPromotionReceipt != null
             }
-            if (hasBoundedActive) {
+            val stateReport = if (hasBoundedActive) {
                 BoundedGeneratedToolStateRehydrator(
                     repository = repository,
                     tools = tools,
                     trialLedger = trialLedger,
-                    capabilityRegistry = capabilityRegistry,
+                    capabilityRegistry = null,
                     artifacts = requireNotNull(artifactRepository) {
                         "Bounded ACTIVE boot restore requires the generated-tool artifact repository"
                     },
@@ -53,10 +60,11 @@ class GeneratedToolBootStateRehydrator(
                     repository = repository,
                     tools = tools,
                     trialLedger = trialLedger,
-                    capabilityRegistry = capabilityRegistry,
+                    capabilityRegistry = null,
                     promotionPolicy = promotionPolicy,
                 ).rehydrate()
             }
+            stateReport.copy(restoredActiveProviders = restoreAuthorizedProviders(durable))
         } else {
             require(loaded == durable.map { it.record }) {
                 "Generated-tool boot retry found RAM records different from durable state"
@@ -70,21 +78,25 @@ class GeneratedToolBootStateRehydrator(
                 }
             }
 
-            val activeIds = durable
-                .filter { it.record.state == GeneratedToolState.ACTIVE }
-                .map { it.record.manifest.toolId }
-                .toSet()
+            val expectedProviderIds = if (capabilityRegistry == null) {
+                emptySet()
+            } else {
+                durable.filter { it.record.state == GeneratedToolState.ACTIVE }
+                    .filter { state -> providerRestoreAuthority?.allowedNow(state.record) == true }
+                    .map { it.record.manifest.toolId }
+                    .toSet()
+            }
             if (capabilityRegistry != null) {
                 val providerIds = generatedProviders.map { it.providerId }.toSet()
-                require(providerIds == activeIds) {
-                    "Generated-tool boot retry found generated providers different from ACTIVE durable tools"
+                require(providerIds == expectedProviderIds) {
+                    "Generated-tool boot retry found generated providers different from currently owner-authorized ACTIVE durable tools"
                 }
             }
 
             GeneratedToolRehydrationReport(
                 restoredTools = durable.size,
                 restoredTrialResults = durable.sumOf { it.trialEvidence.stats.trials },
-                restoredActiveProviders = if (capabilityRegistry == null) 0 else activeIds.size,
+                restoredActiveProviders = expectedProviderIds.size,
             )
         }
 
@@ -92,4 +104,41 @@ class GeneratedToolBootStateRehydrator(
         ToolWorkshopBootRuntimeRegistry.reconcileIfInstalled()
         report
     }
+
+    private suspend fun restoreAuthorizedProviders(
+        durable: List<GeneratedToolPersistentState>,
+    ): Int {
+        val registry = capabilityRegistry ?: return 0
+        val authority = providerRestoreAuthority ?: return 0
+        var restored = 0
+        for (state in durable.filter { it.record.state == GeneratedToolState.ACTIVE }) {
+            val descriptor = state.toCapabilityDescriptor()
+            val exposed = authority.expose(state.record) {
+                state.promotionReceipt?.let { legacy ->
+                    registry.registerGeneratedRestored(
+                        descriptor = descriptor,
+                        activeRecord = state.record,
+                        receipt = legacy,
+                    )
+                } ?: registry.registerGeneratedRestoredBounded(
+                    descriptor = descriptor,
+                    activeRecord = state.record,
+                    receipt = requireNotNull(state.boundedPromotionReceipt),
+                )
+            }
+            if (exposed) restored += 1
+        }
+        return restored
+    }
+
+    private fun GeneratedToolPersistentState.toCapabilityDescriptor() = CapabilityDescriptor(
+        capabilityId = record.manifest.sourceCapability,
+        providerId = record.manifest.toolId,
+        providerType = ProviderType.GENERATED_TOOL,
+        contract = CapabilityContract(record.manifest.requiredInputs, record.manifest.requiredOutputs),
+        state = ProviderState.ACTIVE,
+        trustLevel = TrustLevel.LOW,
+        reliability = trialEvidence.stats.successRate,
+        cost = 0.0,
+    )
 }

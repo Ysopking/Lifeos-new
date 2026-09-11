@@ -4,9 +4,16 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
+import app.lifeos.core.data.policy.EncryptedOwnerPolicyRepository
 import app.lifeos.core.model.AssetId
 import app.lifeos.core.model.AssetRef
 import app.lifeos.core.model.BinaryAssetStore
+import app.lifeos.core.runtime.policy.OwnerActorId
+import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
+import app.lifeos.core.runtime.policy.OwnerEffectRequest
+import app.lifeos.core.runtime.policy.OwnerEffectType
+import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
+import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -24,11 +31,42 @@ import kotlinx.coroutines.withContext
 
 /** Encrypted storage for binary artifacts that must not be embedded into Photon.content. */
 class EncryptedBinaryAssetStore(context: Context) : BinaryAssetStore {
-    private val directory = context.filesDir.resolve("asset-vault")
+    private val appContext = context.applicationContext
+    private val directory = appContext.filesDir.resolve("asset-vault")
     private val key: SecretKey by lazy { loadOrCreateKey() }
     private val mutex = Mutex()
 
-    override suspend fun save(bytes: ByteArray, mediaType: String): AssetRef =
+    /**
+     * Binary asset persistence is a productive FILE_WRITE effect. A fresh durable policy view is
+     * deliberately constructed for every save so a revoke or policy mutation from another process
+     * is visible immediately before the AtomicFile write. Authority is never cached in this store.
+     */
+    override suspend fun save(bytes: ByteArray, mediaType: String): AssetRef {
+        val request = OwnerEffectRequest(
+            actorId = OwnerActorId(OWNER_ACTOR_ID),
+            effect = OwnerEffectType.FILE_WRITE,
+            resource = OWNER_RESOURCE,
+            scope = OWNER_SCOPE,
+        )
+        val exposure = OwnerPolicyEffectGate(
+            OwnerPolicyLedger(EncryptedOwnerPolicyRepository(appContext))
+        ).expose(request) {
+            saveAuthorized(bytes, mediaType)
+        }
+        return when (exposure) {
+            is OwnerEffectExposureResult.Exposed -> exposure.value
+            is OwnerEffectExposureResult.Blocked -> throw IllegalStateException(
+                buildString {
+                    append("owner-policy-blocked:")
+                    append(exposure.assessment.decisionId.value)
+                    append(':')
+                    append(exposure.assessment.reasonCodes.joinToString(",") { it.name })
+                }
+            )
+        }
+    }
+
+    private suspend fun saveAuthorized(bytes: ByteArray, mediaType: String): AssetRef =
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 require(bytes.isNotEmpty()) { "Asset must not be empty" }
@@ -80,6 +118,7 @@ class EncryptedBinaryAssetStore(context: Context) : BinaryAssetStore {
         }
     }
 
+    /** Compensating cleanup is intentionally not a new productive exposure and remains ungated. */
     override suspend fun delete(id: AssetId): Unit = withContext(Dispatchers.IO) {
         mutex.withLock {
             ensureDirectory()
@@ -161,11 +200,15 @@ class EncryptedBinaryAssetStore(context: Context) : BinaryAssetStore {
         }
     }
 
-    private companion object {
-        const val KEY_ALIAS = "lifeos.asset.v1"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
-        const val FORMAT_VERSION = 1
-        const val MAX_ASSET_BYTES = 32 * 1024 * 1024
-        const val MAX_CONTAINER_BYTES = MAX_ASSET_BYTES + 64 * 1024
+    companion object {
+        const val OWNER_ACTOR_ID = "private-owner"
+        const val OWNER_SCOPE = "private-apk-goal-action"
+        const val OWNER_RESOURCE = "file://private-asset-vault"
+
+        private const val KEY_ALIAS = "lifeos.asset.v1"
+        private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val FORMAT_VERSION = 1
+        private const val MAX_ASSET_BYTES = 32 * 1024 * 1024
+        private const val MAX_CONTAINER_BYTES = MAX_ASSET_BYTES + 64 * 1024
     }
 }
