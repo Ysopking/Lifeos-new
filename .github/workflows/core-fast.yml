@@ -1,0 +1,46 @@
+name: Core Fast Gate
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - "core/**"
+      - "app/src/main/**"
+      - "build.gradle*"
+      - "settings.gradle*"
+      - "gradle/**"
+      - "gradle.properties"
+      - ".github/workflows/core-fast.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+      - name: Core tests and Kotlin integration compile
+        run: >-
+          gradle
+          :core:model:test
+          :core:field:test
+          :core:runtime:test
+          :core:language:test
+          :core:scene:test
+          :core:data:testDebugUnitTest
+          :app:compileDebugKotlin
+          --stacktrace
