@@ -21,6 +21,7 @@ import app.lifeos.core.runtime.goal.GoalStepDecisionProjector
 import app.lifeos.core.runtime.goal.GoalStepExecutionKind
 import app.lifeos.core.runtime.goal.GoalStepState
 import app.lifeos.core.runtime.goal.LocalSharePreparation
+import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import java.time.Instant
 
 sealed interface DurableGoalPlanAdmission {
@@ -51,6 +52,7 @@ class DurableGoalPlanRuntime(
     private val builder: GoalPlanBuilder = GoalPlanBuilder(),
     private val coordinator: GoalPlanExecutionCoordinator = GoalPlanExecutionCoordinator(ledger),
     private val projector: GoalStepDecisionProjector = GoalStepDecisionProjector(),
+    private val traces: GoalDecisionTraceRecorder? = null,
     private val now: () -> Instant = Instant::now,
 ) {
     suspend fun prepare(context: GoalActionContext): DurableGoalPlanAdmission {
@@ -65,6 +67,7 @@ class DurableGoalPlanRuntime(
             is GoalPlanBuildResult.Built -> built.blueprint
         }
         var state = ledger.create(blueprint.definition)
+        traces?.recordPlan(blueprint.definition)
         val actionStep = blueprint.contracts.values.single { it.kind == GoalStepExecutionKind.ACTION }
         val actionState = state.stepStates.getValue(actionStep.stepId)
 
@@ -75,7 +78,7 @@ class DurableGoalPlanRuntime(
                 if (persistedOutcome != null) {
                     completeWithPersistedOutcome(
                         DurableGoalPlanPermit(blueprint, recovered),
-                        persistedOutcome.id,
+                        persistedOutcome,
                     )
                     return DurableGoalPlanAdmission.Completed(blueprint.definition.id.value)
                 }
@@ -93,6 +96,7 @@ class DurableGoalPlanRuntime(
             goalPhotonId = context.goalPhotonId,
             at = now(),
         )
+        traces?.recordConvergence(blueprint.definition, checkpoint)
         val decision = checkpoint.decision
         if (actionState in CONVERGENCE_MUTABLE_STATES) {
             when (val projection = projector.project(state, actionStep.stepId, decision, now())) {
@@ -126,23 +130,28 @@ class DurableGoalPlanRuntime(
         permit: DurableGoalPlanPermit,
         result: GoalActionDispatchResult,
     ) {
-        val outcomeId = persistedOutcome(result) ?: return
-        completeWithPersistedOutcome(permit, outcomeId)
+        val outcome = persistedOutcome(result) ?: return
+        completeWithPersistedOutcome(permit, outcome)
     }
 
     private suspend fun completeWithPersistedOutcome(
         permit: DurableGoalPlanPermit,
-        outcomePhotonId: PhotonId,
+        outcomePhoton: Photon,
     ) {
         val action = permit.preparation.action
         coordinator.recordOutcome(
             blueprint = permit.blueprint,
             stepId = action.stepId,
             actionIdempotencyKey = action.idempotencyKey,
-            outcomePhotonId = outcomePhotonId,
+            outcomePhotonId = outcomePhoton.id,
             succeeded = true,
             sourceFingerprint = action.decisionSourceFingerprint,
             at = now(),
+        )
+        traces?.recordOutcome(
+            definition = permit.blueprint.definition,
+            outcome = outcomePhoton,
+            succeeded = true,
         )
         // The verification step is internal and may complete immediately once the persisted outcome exists.
         val verification = coordinator.prepareNext(permit.blueprint, emptyMap(), now())
@@ -198,20 +207,20 @@ class DurableGoalPlanRuntime(
         else -> false
     }
 
-    private suspend fun persistedOutcome(result: GoalActionDispatchResult): PhotonId? = when {
+    private suspend fun persistedOutcome(result: GoalActionDispatchResult): Photon? = when {
         result.imageGeneration is ImageGenerationResult.Generated ->
-            result.imageGeneration.value.image.photon.id
+            result.imageGeneration.value.image.photon
         result.localImageTransform is LocalImageTransformExecutionResult.Transformed ->
-            result.localImageTransform.output.photon.id
+            result.localImageTransform.output.photon
         result.localKnowledge is LocalKnowledgeExecutionResult.Produced ->
-            result.localKnowledge.output.photon.id
+            result.localKnowledge.output.photon
         result.localDeepSearch is LocalDeepSearchExecutionResult.Produced ->
-            result.localDeepSearch.output.photon.id
+            result.localDeepSearch.output.photon
         result.localSchedule is LocalScheduleExecutionResult.Scheduled ->
-            result.localSchedule.output.photon.id
+            result.localSchedule.output.photon
         result.localCommunication is LocalCommunicationExecutionResult.Prepared -> {
             val outcome = communicationPreparationOutcome(result.localCommunication.share)
-            persistDerivedOutcome(outcome)?.photon?.id
+            persistDerivedOutcome(outcome)?.photon
         }
         else -> null
     }
