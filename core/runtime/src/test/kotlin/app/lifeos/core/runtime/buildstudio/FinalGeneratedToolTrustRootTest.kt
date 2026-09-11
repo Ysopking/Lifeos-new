@@ -13,6 +13,7 @@ class FinalGeneratedToolTrustRootTest {
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolArtifact.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolArtifactBootVerifier.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolTrialRunner.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolActivationEvidence.kt",
         ).forEach { path -> assertTrue(policy.isProtected(path), path) }
     }
 }

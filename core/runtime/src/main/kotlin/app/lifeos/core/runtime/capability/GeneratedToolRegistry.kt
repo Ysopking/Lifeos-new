@@ -70,10 +70,10 @@ class GeneratedToolRegistry(
         updated
     }
 
-    /** Internal mutation primitive. Public activation is owned by the J08 evolution bridge. */
+    /** Internal mutation primitive. Public activation remains owned by guarded promotion coordinators. */
     internal suspend fun promote(
         toolId: String,
-        evidence: GeneratedToolPromotionEvidence,
+        evidence: GeneratedToolActivationEvidence,
         activationEvidenceRef: String = evidence.id,
         actorId: String? = null,
         message: String = "trial-promoted:${evidence.id}",
@@ -81,12 +81,15 @@ class GeneratedToolRegistry(
         require(activationEvidenceRef.isNotBlank()) { "Promotion requires activation evidence reference" }
         require(actorId == null || actorId.isNotBlank()) { "Promotion actor id must not be blank" }
         require(message.isNotBlank()) { "Promotion message must not be blank" }
+        require(!evidence.activationAllowed) {
+            "Activation evidence must remain non-authoritative"
+        }
         val current = requireNotNull(records[toolId]) { "Unknown generated tool $toolId" }
         require(current.state == GeneratedToolState.TRIAL) {
             "Only TRIAL generated tools can be promoted"
         }
         require(evidence.matchesRecord(current)) {
-            "J03 promotion evidence does not match current generated tool record"
+            "Activation evidence does not match current generated tool record"
         }
         val active = current.copy(
             state = GeneratedToolState.ACTIVE,
@@ -99,7 +102,7 @@ class GeneratedToolRegistry(
             action = GeneratedToolAuditAction.PROMOTED,
             actorId = actorId,
             evidenceRef = activationEvidenceRef,
-            reason = "j03-promotion-evidence:${evidence.id}",
+            reason = evidence.promotionAuditReason(),
             occurredAt = now(),
         )
         persistAndCommitLocked(active, audit, promotionEvidence = evidence)
@@ -173,14 +176,14 @@ class GeneratedToolRegistry(
     private suspend fun persistAndCommitLocked(
         after: GeneratedToolRecord,
         audit: GeneratedToolAuditEntry,
-        promotionEvidence: GeneratedToolPromotionEvidence? = null,
+        promotionEvidence: GeneratedToolActivationEvidence? = null,
     ) {
         val toolId = after.manifest.toolId
         val nextAudit = auditEntries[toolId]?.toList().orEmpty() + audit
         durableState?.persistLifecycle(
             record = after,
             auditEntries = nextAudit,
-            promotionEvidence = promotionEvidence,
+            promotionEvidence = promotionEvidence.j03PersistenceEvidence(),
         )
         records[toolId] = after
         auditEntries.getOrPut(toolId) { mutableListOf() } += audit

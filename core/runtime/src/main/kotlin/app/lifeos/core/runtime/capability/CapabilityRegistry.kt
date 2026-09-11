@@ -29,9 +29,12 @@ class CapabilityRegistry(
     internal suspend fun registerGenerated(
         descriptor: CapabilityDescriptor,
         activeRecord: GeneratedToolRecord,
-        evidence: GeneratedToolPromotionEvidence,
+        evidence: GeneratedToolActivationEvidence,
     ): CapabilityDescriptor = mutex.withLock {
         requireGeneratedDescriptor(descriptor, activeRecord)
+        require(!evidence.activationAllowed) {
+            "Generated capability registration requires non-authoritative activation evidence"
+        }
         require(activeRecord.promotionEvidenceId == evidence.id) {
             "Generated capability registration requires the accepted promotion evidence"
         }
