@@ -1,6 +1,5 @@
 package app.lifeos.core.runtime.artifact
 
-import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
@@ -96,25 +95,56 @@ class ArtifactCoordinator(
                 { it.id },
             )
         )
-        val photon = createPhoton(request, canonicalContributions, finalizedAt)
-        val existing = photons.load(photon.id)
-        when {
-            existing == null -> photons.save(photon)
-            existing != photon -> error("Artifact Photon id collision for ${photon.id.value}")
+        val photonId = artifactPhotonId(request, canonicalContributions)
+        val existing = photons.load(photonId)
+        val photon: Photon
+        val effectiveFinalizedAt: Instant
+        if (existing == null) {
+            photon = createPhoton(
+                photonId = photonId,
+                request = request,
+                contributions = canonicalContributions,
+                finalizedAt = finalizedAt,
+            )
+            photons.save(photon)
+            effectiveFinalizedAt = finalizedAt
+        } else {
+            requireOwnedArtifact(existing)
+            photon = existing
+            effectiveFinalizedAt = existing.provenance.createdAt
         }
+
         val receipt = reentry.submit(photon)
         return ArtifactFinalizationResult(
             artifact = CollaborativeArtifact(
                 request = request,
                 contributions = canonicalContributions,
                 photon = photon,
-                finalizedAt = finalizedAt,
+                finalizedAt = effectiveFinalizedAt,
             ),
             reentry = receipt,
         )
     }
 
+    private fun artifactPhotonId(
+        request: CollaborativeArtifactRequest,
+        contributions: List<ArtifactContribution>,
+    ): PhotonId {
+        val identity = ArtifactFingerprints.fingerprint(
+            "collaborative-artifact-photon/v1",
+            request.id.value,
+            request.kind.name,
+            request.title,
+            request.targetMimeType,
+            request.requestedAt.toString(),
+            *request.requiredFields.sorted().toTypedArray(),
+            *contributions.map { it.contentFingerprint() }.toTypedArray(),
+        )
+        return PhotonId("artifact:${request.id.value}:$identity")
+    }
+
     private fun createPhoton(
+        photonId: PhotonId,
         request: CollaborativeArtifactRequest,
         contributions: List<ArtifactContribution>,
         finalizedAt: Instant,
@@ -122,20 +152,7 @@ class ArtifactCoordinator(
         val parentIds = contributions
             .flatMap { it.provenance.parentIds }
             .toSortedSet(compareBy { it.value })
-        val contributionFingerprints = contributions.map { it.contentFingerprint() }
-        val identity = StableFieldIds.fingerprint(
-            "collaborative-artifact-photon/v1",
-            request.id.value,
-            request.kind.name,
-            request.title,
-            request.targetMimeType,
-            request.requestedAt.toString(),
-            finalizedAt.toString(),
-            *request.requiredFields.sorted().toTypedArray(),
-            *contributionFingerprints.toTypedArray(),
-        )
         val confidence = contributions.minOf { it.confidence }
-        val photonId = PhotonId("artifact:${request.id.value}:$identity")
         val content = envelopeJson(request, contributions, finalizedAt)
         return Photon(
             id = photonId,
@@ -167,6 +184,18 @@ class ArtifactCoordinator(
                 }
             },
         )
+    }
+
+    private fun requireOwnedArtifact(photon: Photon) {
+        require(photon.mimeType == ArtifactCoordinatorContract.ENVELOPE_MIME_TYPE) {
+            "Artifact Photon id collision for ${photon.id.value}: unexpected MIME type"
+        }
+        require(photon.provenance.source == ArtifactCoordinatorContract.PROVENANCE_SOURCE) {
+            "Artifact Photon id collision for ${photon.id.value}: unexpected provenance source"
+        }
+        require(photon.revision == 1L) {
+            "Artifact Photon ${photon.id.value} has unsupported revision ${photon.revision}"
+        }
     }
 
     private fun envelopeJson(

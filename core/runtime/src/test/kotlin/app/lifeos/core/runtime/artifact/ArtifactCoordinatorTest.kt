@@ -10,6 +10,7 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 
@@ -68,12 +69,18 @@ class ArtifactCoordinatorTest {
         )
 
         val first = coordinator.finalize(request, listOf(validation, analysis), finalizedAt)
-        val replay = coordinator.finalize(request, listOf(analysis, validation), finalizedAt)
+        val replay = coordinator.finalize(
+            request,
+            listOf(analysis, validation),
+            finalizedAt.plusSeconds(60),
+        )
         val photon = first.artifact.photon
 
         assertEquals(first.artifact, replay.artifact)
+        assertEquals(finalizedAt, replay.artifact.finalizedAt)
         assertEquals(1, repository.saveCount)
         assertEquals(2, reentered.size)
+        assertEquals(photon, reentered[1])
         assertEquals(0.74, photon.confidence)
         assertEquals(setOf(firstParent, secondParent), photon.provenance.parentIds)
         assertEquals(setOf(firstParent, secondParent), photon.relations.map { it.target }.toSet())
@@ -125,7 +132,7 @@ class ArtifactCoordinatorTest {
     }
 
     @Test
-    fun `contribution identity is deterministic and includes collaboration metadata`() {
+    fun `contribution identity is deterministic and case sensitive for payload content`() {
         val provenance = Provenance(
             source = "source",
             actor = "module-a",
@@ -139,7 +146,7 @@ class ArtifactCoordinatorTest {
             source = "source",
             provenance = provenance,
             confidence = 0.8,
-            content = "content",
+            content = "Content",
         )
         val second = ArtifactContribution.create(
             module = "module-a",
@@ -147,10 +154,18 @@ class ArtifactCoordinatorTest {
             source = "source",
             provenance = provenance,
             confidence = 0.8,
-            content = "content",
+            content = "Content",
         )
-        val changed = ArtifactContribution.create(
+        val changedModule = ArtifactContribution.create(
             module = "module-b",
+            field = "draft",
+            source = "source",
+            provenance = provenance,
+            confidence = 0.8,
+            content = "Content",
+        )
+        val changedCase = ArtifactContribution.create(
+            module = "module-a",
             field = "draft",
             source = "source",
             provenance = provenance,
@@ -160,7 +175,9 @@ class ArtifactCoordinatorTest {
 
         assertEquals(first, second)
         assertEquals(first.contentFingerprint(), second.contentFingerprint())
-        assertTrue(first.id != changed.id)
+        assertNotEquals(first.id, changedModule.id)
+        assertNotEquals(first.id, changedCase.id)
+        assertNotEquals(first.contentFingerprint(), changedCase.contentFingerprint())
     }
 
     private class RecordingPhotonRepository : PhotonRepository {

@@ -1,8 +1,34 @@
 package app.lifeos.core.runtime.artifact
 
-import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.model.Provenance
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.time.Instant
+
+/**
+ * Case-sensitive, length-prefixed hashing for artifact payloads. Field ids intentionally
+ * canonicalize text for semantic matching; artifact identity must instead preserve exact bytes so
+ * content that differs only by case remains distinct.
+ */
+internal object ArtifactFingerprints {
+    fun fingerprint(vararg parts: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        parts.forEach { raw ->
+            val bytes = raw.toByteArray(StandardCharsets.UTF_8)
+            val length = bytes.size
+            digest.update(
+                byteArrayOf(
+                    ((length ushr 24) and 0xff).toByte(),
+                    ((length ushr 16) and 0xff).toByte(),
+                    ((length ushr 8) and 0xff).toByte(),
+                    (length and 0xff).toByte(),
+                )
+            )
+            digest.update(bytes)
+        }
+        return digest.digest().joinToString(separator = "") { byte -> "%02x".format(byte) }
+    }
+}
 
 data class ArtifactContribution(
     val id: String,
@@ -30,7 +56,7 @@ data class ArtifactContribution(
         }
     }
 
-    fun contentFingerprint(): String = StableFieldIds.fingerprint(
+    fun contentFingerprint(): String = ArtifactFingerprints.fingerprint(
         "artifact-contribution/v1",
         id,
         module,
@@ -55,14 +81,17 @@ data class ArtifactContribution(
             content: String,
             contributedAt: Instant = provenance.createdAt,
         ): ArtifactContribution {
+            val canonicalModule = module.trim()
+            val canonicalField = field.trim()
+            val canonicalSource = source.trim()
             val canonicalParents = provenance.parentIds.map { it.value }.sorted()
-            val id = StableFieldIds.fingerprint(
+            val id = ArtifactFingerprints.fingerprint(
                 "artifact-contribution-id/v1",
-                module.trim(),
-                field.trim(),
-                source.trim(),
-                provenance.source.trim(),
-                provenance.actor.trim(),
+                canonicalModule,
+                canonicalField,
+                canonicalSource,
+                provenance.source,
+                provenance.actor,
                 provenance.createdAt.toString(),
                 contributedAt.toString(),
                 java.lang.Double.toString(confidence),
@@ -71,9 +100,9 @@ data class ArtifactContribution(
             )
             return ArtifactContribution(
                 id = "artifact-contribution:$id",
-                module = module.trim(),
-                field = field.trim(),
-                source = source.trim(),
+                module = canonicalModule,
+                field = canonicalField,
+                source = canonicalSource,
                 provenance = provenance,
                 confidence = confidence,
                 content = content,
