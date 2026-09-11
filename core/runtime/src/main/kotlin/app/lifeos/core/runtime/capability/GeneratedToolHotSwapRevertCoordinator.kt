@@ -122,7 +122,7 @@ class GeneratedToolHotSwapRevertCoordinator(
                 OwnerEffectRequest(
                     actorId = actorId,
                     effect = OwnerEffectType.PROVIDER_ACTIVATION,
-                    resource = "hot-swap-revert:${transaction.capabilityId.value}:${transaction.candidateToolId}->${transaction.previousToolId}",
+                    resource = "hot-swap:revert:${transaction.capabilityId.value}:${transaction.candidateToolId}->${transaction.previousToolId}",
                     scope = ownerScope,
                     capabilityId = previous.manifest.sourceCapability,
                     providerVersion = previous.manifest.buildHash,
