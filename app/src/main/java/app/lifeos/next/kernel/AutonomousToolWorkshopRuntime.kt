@@ -8,6 +8,7 @@ import app.lifeos.core.runtime.capability.ToolWorkshopExecutionProfile
 import app.lifeos.core.runtime.capability.ToolWorkshopJobLedger
 import app.lifeos.core.runtime.capability.ToolWorkshopJobSnapshot
 import app.lifeos.core.runtime.capability.ToolWorkshopJobState
+import app.lifeos.core.runtime.capability.ToolWorkshopOutcomePhoton
 import app.lifeos.core.runtime.capability.ToolWorkshopStageResult
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
@@ -82,16 +83,35 @@ class AutonomousToolWorkshopRuntime(
     private suspend fun progress(initial: ToolWorkshopJobSnapshot): Pair<ToolWorkshopJobSnapshot, String?> {
         var snapshot = initial
         repeat(MAX_STAGE_ADVANCES) {
-            if (snapshot.terminal) return snapshot to null
+            if (snapshot.terminal) {
+                persistTerminalEvidence(snapshot)
+                return snapshot to null
+            }
             when (val result = workshop.runNext(snapshot.definition.id, profile)) {
                 is ToolWorkshopStageResult.Advanced -> snapshot = result.snapshot
-                is ToolWorkshopStageResult.TrialReady -> return result.snapshot to null
-                is ToolWorkshopStageResult.Rejected -> return result.snapshot to result.reason
+                is ToolWorkshopStageResult.TrialReady -> {
+                    persistTerminalEvidence(result.snapshot)
+                    return result.snapshot to null
+                }
+                is ToolWorkshopStageResult.Rejected -> {
+                    persistTerminalEvidence(result.snapshot)
+                    return result.snapshot to result.reason
+                }
                 is ToolWorkshopStageResult.Blocked -> return result.snapshot to result.reason
-                is ToolWorkshopStageResult.AlreadyTerminal -> return result.snapshot to null
+                is ToolWorkshopStageResult.AlreadyTerminal -> {
+                    persistTerminalEvidence(result.snapshot)
+                    return result.snapshot to null
+                }
             }
         }
+        if (snapshot.terminal) persistTerminalEvidence(snapshot)
         return snapshot to if (snapshot.terminal) null else "tool-workshop-stage-bound-exhausted"
+    }
+
+    private suspend fun persistTerminalEvidence(snapshot: ToolWorkshopJobSnapshot) {
+        val expected = ToolWorkshopOutcomePhoton.create(snapshot)
+        val stored = persistPhoton(expected)
+        require(stored == expected) { "ToolWorkshop terminal evidence changed during persistence" }
     }
 
     companion object {
