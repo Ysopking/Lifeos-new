@@ -27,18 +27,29 @@ class DecisionTraceCodecTest {
             reasonCodes = listOf("EFFECT_NOT_GRANTED", "RESOURCE_NOT_GRANTED"),
             recordedAt = NOW.plusSeconds(1),
         )
-        val revisions = listOf(
-            DecisionTrace(firstId, 1, listOf(firstNode), emptyList()),
-            DecisionTrace(firstId, 2, listOf(firstNode, secondNode), listOf(
-                DecisionTraceLink(firstNode.id, secondNode.id, DecisionTraceLinkType.REJECTED_BY),
-            )),
-            DecisionTrace(secondId, 1, listOf(secondNode), emptyList()),
+        val firstRevision = DecisionTrace(firstId, 1, listOf(firstNode), emptyList())
+        val secondRevision = DecisionTrace(
+            firstId,
+            2,
+            listOf(firstNode, secondNode),
+            listOf(DecisionTraceLink(firstNode.id, secondNode.id, DecisionTraceLinkType.REJECTED_BY)),
         )
+        val otherTrace = DecisionTrace(secondId, 1, listOf(secondNode), emptyList())
+        val revisions = listOf(firstRevision, secondRevision, otherTrace)
 
         val firstEncoding = DecisionTraceLogCodec.encode(revisions.reversed())
         val secondEncoding = DecisionTraceLogCodec.encode(revisions)
         assertContentEquals(secondEncoding, firstEncoding)
-        assertEquals(revisions, DecisionTraceLogCodec.decode(secondEncoding))
+
+        val expected = revisions
+            .sortedWith(compareBy<DecisionTrace>({ it.id.value }, { it.revision }))
+            .map { trace ->
+                trace.copy(
+                    nodes = trace.nodes.sortedBy { it.id.value },
+                    links = trace.links.sortedWith(compareBy({ it.from.value }, { it.to.value }, { it.type.name })),
+                )
+            }
+        assertEquals(expected, DecisionTraceLogCodec.decode(secondEncoding))
     }
 
     @Test
