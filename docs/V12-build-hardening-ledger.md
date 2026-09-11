@@ -19,19 +19,30 @@ Scope: finish V12-E only after code, recovery and build evidence are all explici
 11. `DeepSearchMissionRecoveryAuditor` audits cross-store consistency without executing search sources.
 12. `LifeOsApplication` installs `DeepSearchMissionRuntimeRegistry` before `kernel.start()`.
 13. PR #170 must not merge until a real build reaches checkout, Gradle and test execution.
+14. Recovery-audit coverage includes a healthy terminal mission, missing result Photon, missing checkpoint and a planned mission with no premature checkpoint/result requirement.
+15. Recovery-audit coverage includes a crash-window `VERIFYING` mission with persisted result evidence and asserts the audit does not re-run a search source.
+16. Recovery-audit coverage rejects a `SYNTHESIZING` mission whose checkpoint is not terminal.
+17. Recovery-audit coverage rejects a terminal result whose durable Photon status tag diverges from the checkpoint-derived result.
+
+## Recovery-audit implementation state
+
+Implemented in source, pending execution on a real runner:
+
+01. File: `core/runtime/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt`; healthy terminal audit; expects `healthy=true`, one terminal mission, zero active missions.
+02. Same file; missing result Photon audit; expects deterministic issue code.
+03. Same file; missing checkpoint audit; expects deterministic issue code.
+04. Same file; planned mission audit; no checkpoint/result is required before exploration.
+05. Same file; `VERIFYING` mission with persisted result; expects healthy audit and unchanged search-source execution count.
+06. Same file; `SYNTHESIZING` mission with non-terminal checkpoint; expects `synthesis-checkpoint-not-terminal`.
+07. Same file; terminal Photon status-tag mismatch; expects deterministic fail-closed verification issue.
+
+These items are code-complete only. They are not acceptance evidence until Gradle executes them on a real runner or trusted local checkout.
 
 ## Remaining code hardening steps
 
-01. File: `core/runtime/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt`; implement healthy terminal audit; verify `healthy=true`, one terminal mission, zero active missions.
-02. File: `core/runtime/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt`; implement missing result Photon audit; verify deterministic issue code.
-03. File: `core/runtime/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt`; implement missing checkpoint audit; verify deterministic issue code.
-04. File: `core/runtime/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt`; implement planned mission audit; verify no checkpoint/result is required before exploration.
-05. File: `core/runtime/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt`; next implement VERIFYING mission with persisted result; verify auditor accepts and no source runs.
-06. File: `core/runtime/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt`; next implement SYNTHESIZING mission with non-terminal checkpoint; verify fail-closed issue code.
-07. File: `core/runtime/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt`; next implement terminal result status mismatch; verify fail-closed issue code.
-08. File: `app/src/test/java/app/lifeos/next`; next add application composition unit seam if Android test cannot run; verify registry install ordering through a JVM-safe factory boundary.
-09. File: `app/src/androidTest/java/app/lifeos`; next add cold-start smoke test for V12 registry plus self-healing startup; verify app reaches ACTIVE without destructive recovery.
-10. File: `core/data/src/test`; next add encrypted repository corruption tests when Android/JVM test infrastructure allows file-backed crypto; verify unreadable entries block recovery.
+01. File: `app/src/test/java/app/lifeos/next`; add application composition unit seam if Android test cannot run; verify registry install ordering through a JVM-safe factory boundary.
+02. File: `app/src/androidTest/java/app/lifeos`; add cold-start smoke test for V12 registry plus self-healing startup; verify app reaches ACTIVE without destructive recovery.
+03. File: `core/data/src/test`; add encrypted repository corruption tests when Android/JVM test infrastructure allows file-backed crypto; verify unreadable entries block recovery.
 
 ## Remaining build hardening steps
 
