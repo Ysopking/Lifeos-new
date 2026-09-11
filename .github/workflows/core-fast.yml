@@ -12,6 +12,7 @@ on:
       - "settings.gradle*"
       - "gradle/**"
       - "gradle.properties"
+      - ".github/scripts/ci-core-fast.sh"
       - ".github/workflows/core-fast.yml"
   workflow_dispatch:
 
@@ -25,25 +26,16 @@ concurrency:
 jobs:
   core-fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
-      - name: Core tests and Kotlin integration compile
-        run: >-
-          gradle
-          :core:model:test
-          :core:field:test
-          :core:runtime:test
-          :core:language:test
-          :core:scene:test
-          :core:data:testDebugUnitTest
-          :app:testDebugUnitTest
-          :app:compileDebugKotlin
-          --stacktrace
+      - name: Core fast gate
+        shell: bash
+        run: bash .github/scripts/ci-core-fast.sh
