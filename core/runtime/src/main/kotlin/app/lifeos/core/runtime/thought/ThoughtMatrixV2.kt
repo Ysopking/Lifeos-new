@@ -241,6 +241,11 @@ class ThoughtMatrixV2(
         )
     }
 
+    /** Restores an already validated durable projection without re-projecting unrelated Photons. */
+    suspend fun restore(snapshot: ThoughtMatrixSnapshot) = mutex.withLock {
+        mutableState.value = snapshot
+    }
+
     suspend fun snapshot(capturedAt: Instant = now()): ThoughtMatrixSnapshot = mutex.withLock {
         mutableState.value.copy(capturedAt = capturedAt)
     }
