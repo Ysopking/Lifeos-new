@@ -1,14 +1,10 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.language.IntentType
-import app.lifeos.core.runtime.policy.OwnerActorId
 import app.lifeos.core.runtime.policy.OwnerEffectRequest
 import app.lifeos.core.runtime.policy.OwnerEffectType
 import app.lifeos.core.runtime.policy.OwnerPolicyDecision
-import app.lifeos.core.runtime.policy.OwnerPolicyGrant
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
-import app.lifeos.core.runtime.policy.OwnerResourceSelector
-import app.lifeos.core.runtime.policy.OwnerResourceSelectorType
 import app.lifeos.core.runtime.resource.HardwareWorkPriority
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
@@ -21,9 +17,6 @@ import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
 import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
 import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
-import java.time.Instant
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 sealed interface GoalActionExecutionPermit {
     data object Unmetered : GoalActionExecutionPermit
@@ -77,13 +70,11 @@ class PrivateGoalActionExecutionGuard(
     private val hardware: HardwareExecutionBudgetGate,
     private val sharedBudgets: SharedResourceBudgetGate? = null,
 ) : GoalActionExecutionGuard {
-    private val bootstrapMutex = Mutex()
-
     override suspend fun prepare(context: GoalActionContext): GoalActionExecutionPermit {
         val profile = profile(context.goal.intent) ?: return GoalActionExecutionPermit.Unmetered
         val policy = policyRequest(context)
         val firstPolicyDecision = if (policy != null) {
-            ensurePrivateOwnerBaseline()
+            PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
             ownerPolicy.evaluate(policy)
         } else null
         if (firstPolicyDecision is OwnerPolicyDecision.Blocked) {
@@ -221,30 +212,19 @@ class PrivateGoalActionExecutionGuard(
         else -> null
     }
 
-    /**
-     * Default private reminder/share authority is seeded only on a pristine policy ledger. Once any
-     * policy history exists, especially a revoke, startup/retry must never silently recreate it.
-     * An interrupted first bootstrap therefore fails closed rather than restoring authority.
-     */
-    private suspend fun ensurePrivateOwnerBaseline() = bootstrapMutex.withLock {
-        val snapshot = ownerPolicy.snapshot()
-        if (snapshot.revision != 0L) return@withLock
-        DEFAULT_GRANTS.forEach { ownerPolicy.grant(it) }
-    }
-
     private fun policyRequest(context: GoalActionContext): OwnerEffectRequest? = when (context.goal.intent) {
         IntentType.SCHEDULE -> OwnerEffectRequest(
-            actorId = PRIVATE_OWNER,
+            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
             effect = OwnerEffectType.REMINDER,
             resource = REMINDER_RESOURCE,
-            scope = OWNER_SCOPE,
+            scope = PrivateOwnerPolicyBaseline.GOAL_SCOPE,
             capabilityId = context.routing.plan.requirements.firstOrNull()?.capabilityId,
         )
         IntentType.COMMUNICATE -> OwnerEffectRequest(
-            actorId = PRIVATE_OWNER,
+            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
             effect = OwnerEffectType.COMMUNICATION,
             resource = COMMUNICATION_RESOURCE,
-            scope = OWNER_SCOPE,
+            scope = PrivateOwnerPolicyBaseline.GOAL_SCOPE,
             capabilityId = context.routing.plan.requirements.firstOrNull()?.capabilityId,
         )
         else -> null
@@ -338,25 +318,7 @@ class PrivateGoalActionExecutionGuard(
 
     private companion object {
         const val MIB = 1024L * 1024L
-        const val OWNER_SCOPE = "private-apk-goal-action"
         const val REMINDER_RESOURCE = "goal://local-reminder"
         const val COMMUNICATION_RESOURCE = "goal://local-share-preparation"
-        val PRIVATE_OWNER = OwnerActorId("private-owner")
-        val DEFAULT_GRANTS = listOf(
-            OwnerPolicyGrant.create(
-                actorId = PRIVATE_OWNER,
-                effect = OwnerEffectType.REMINDER,
-                resource = OwnerResourceSelector(OwnerResourceSelectorType.EXACT, REMINDER_RESOURCE),
-                scope = OWNER_SCOPE,
-                validFrom = Instant.EPOCH,
-            ),
-            OwnerPolicyGrant.create(
-                actorId = PRIVATE_OWNER,
-                effect = OwnerEffectType.COMMUNICATION,
-                resource = OwnerResourceSelector(OwnerResourceSelectorType.EXACT, COMMUNICATION_RESOURCE),
-                scope = OWNER_SCOPE,
-                validFrom = Instant.EPOCH,
-            ),
-        )
     }
 }
