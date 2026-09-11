@@ -172,6 +172,23 @@ data class ConvergenceDecisionRequest(
             "Decision source request must match convergence result"
         }
         require(workingSetFingerprint == null || workingSetFingerprint.isNotBlank())
+        convergence.domainResults.forEach { result ->
+            require(result.status == result.snapshot.status) {
+                "Convergence result status must match authoritative FieldSnapshot"
+            }
+            require(result.state == result.snapshot.state) {
+                "Convergence result state must match authoritative FieldSnapshot"
+            }
+            val resultHypotheses = result.hypotheses
+                .sortedBy { it.id.value }
+                .map { Triple(it.id, it.state, it.score) }
+            val snapshotHypotheses = result.snapshot.hypotheses
+                .sortedBy { it.id.value }
+                .map { Triple(it.id, it.state, it.score) }
+            require(resultHypotheses == snapshotHypotheses) {
+                "Convergence result hypotheses must exactly match authoritative FieldSnapshot"
+            }
+        }
     }
 
     fun sourceFingerprint(): String = StableFieldIds.fingerprint(
