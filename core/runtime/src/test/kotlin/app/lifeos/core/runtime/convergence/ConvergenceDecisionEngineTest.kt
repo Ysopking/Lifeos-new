@@ -33,6 +33,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
 
 class ConvergenceDecisionEngineTest {
     private val now = Instant.parse("2026-09-11T08:00:00Z")
@@ -155,6 +156,40 @@ class ConvergenceDecisionEngineTest {
         assertNotEquals(first.sourceFingerprint, second.sourceFingerprint)
     }
 
+    @Test
+    fun `checkpoint codec round trips exact decision and snapshot lineage`() {
+        val fixture = fixture("codec", hypothesisCount = 1)
+        val request = decisionRequest(fixture)
+        val policy = ConvergenceDecisionPolicy(minTotalScore = 0.65)
+        val decision = ConvergenceDecisionEngine(policy).decide(request)
+        val checkpoint = ConvergenceDecisionCheckpoint.create(request, decision, policy)
+
+        val decoded = ConvergenceDecisionCheckpointCodec.decode(
+            ConvergenceDecisionCheckpointCodec.encode(checkpoint)
+        )
+
+        assertEquals(checkpoint, decoded)
+        assertEquals(checkpoint.contentFingerprint(), decoded.contentFingerprint())
+        assertEquals(request.convergence.domainResults.single().snapshot.id, decoded.snapshots.single().snapshotId)
+    }
+
+    @Test
+    fun `durable coordinator replays identical decision as duplicate without identity drift`() = runBlocking {
+        val fixture = fixture("durable", hypothesisCount = 1)
+        val request = decisionRequest(fixture)
+        val policy = ConvergenceDecisionPolicy(minTotalScore = 0.65)
+        val repository = InMemoryCheckpointRepository()
+        val coordinator = DurableConvergenceDecisionCoordinator(repository, policy)
+
+        val first = coordinator.decide(request)
+        val second = coordinator.decide(request)
+
+        assertEquals(first, second)
+        assertEquals(2, repository.saveCalls)
+        assertEquals(1, repository.checkpoints.size)
+        assertEquals(listOf(first), coordinator.loadVerified())
+    }
+
     private data class Fixture(
         val input: ConvergenceDomainInput,
         val hypotheses: List<FieldHypothesis>,
@@ -240,5 +275,34 @@ class ConvergenceDecisionEngineTest {
             convergence = convergence,
             workingSetFingerprint = "working-set-test",
         )
+    }
+
+    private class InMemoryCheckpointRepository : ConvergenceDecisionCheckpointRepository {
+        val checkpoints = linkedMapOf<ConvergenceDecisionCheckpointId, ConvergenceDecisionCheckpoint>()
+        var saveCalls: Int = 0
+            private set
+
+        override suspend fun save(
+            checkpoint: ConvergenceDecisionCheckpoint,
+        ): ConvergenceDecisionCheckpointWriteResult {
+            saveCalls += 1
+            val previous = checkpoints.putIfAbsent(checkpoint.id, checkpoint)
+            return if (previous == null) {
+                ConvergenceDecisionCheckpointWriteResult.Stored(checkpoint)
+            } else {
+                require(previous == checkpoint)
+                ConvergenceDecisionCheckpointWriteResult.Duplicate(previous)
+            }
+        }
+
+        override suspend fun load(
+            id: ConvergenceDecisionCheckpointId,
+        ): ConvergenceDecisionCheckpoint? = checkpoints[id]
+
+        override suspend fun loadReport(): ConvergenceDecisionCheckpointLoadReport =
+            ConvergenceDecisionCheckpointLoadReport(
+                checkpoints = checkpoints.values.toList(),
+                unreadableEntries = emptyList(),
+            )
     }
 }
