@@ -19,7 +19,11 @@ import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootContext
 import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootRunResult
+import app.lifeos.core.runtime.capability.CapabilityGap
+import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
+import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
+import app.lifeos.core.runtime.capability.PrivateGeneratedToolTrialSuite
 import app.lifeos.core.runtime.cognition.CognitiveOutcomeJournal
 import app.lifeos.core.runtime.cognition.CognitivePriority
 import app.lifeos.core.runtime.cognition.CognitiveTriggerSink
@@ -31,10 +35,13 @@ import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.goal.GoalResumeEngine
 import app.lifeos.core.runtime.goal.GoalResumeResult
+import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
+import app.lifeos.core.runtime.goal.LocalCommunicationGoalResult
 import app.lifeos.core.runtime.goal.LocalDeepSearchGoalEngine
 import app.lifeos.core.runtime.goal.LocalDeepSearchGoalResult
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
+import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.SceneGraphPhotonFactory
 import app.lifeos.core.scene.SceneRasterizer
@@ -72,6 +79,8 @@ class LifeOsKernel internal constructor(
     private val goalPhotonFactory: GoalPhotonFactory,
     private val languageContextBuilder: PhotonLanguageContextBuilder,
     private val goalCapabilityRouter: LanguageGoalCapabilityRouter,
+    private val privateGeneratedToolRuntime: PrivateGeneratedToolRuntimeResources,
+    private val localReminderScheduler: LocalReminderScheduler,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
@@ -79,6 +88,7 @@ class LifeOsKernel internal constructor(
     private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
     private val localDeepSearchGoalEngine: LocalDeepSearchGoalEngine = LocalDeepSearchGoalEngine(),
+    private val localCommunicationGoalEngine: LocalCommunicationGoalEngine = LocalCommunicationGoalEngine(),
     private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
     private val imagePhotonFactory: ImagePhotonFactory = ImagePhotonFactory(),
     private val sceneGraphPhotonFactory: SceneGraphPhotonFactory = SceneGraphPhotonFactory(),
@@ -88,6 +98,64 @@ class LifeOsKernel internal constructor(
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
     val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
+
+    private val generatedToolUserActions = GeneratedToolUserActionCoordinator(
+        requests = privateGeneratedToolRuntime.requests,
+        persist = { photon ->
+            persistAndIngest(photon)
+            Unit
+        },
+        load = photonStore::load,
+        trialSuite = PrivateGeneratedToolTrialSuite(
+            runner = privateGeneratedToolRuntime.trialRunner,
+            artifacts = privateGeneratedToolRuntime.artifactRepository,
+        ),
+    )
+
+    private val localImageTransformExecutor = LocalImageTransformActionExecutor(
+        photons = photonStore,
+        assets = imageAssets,
+        persistAndIngest = ::persistAndIngest,
+    )
+
+    private val localScheduleExecutor = LocalScheduleActionExecutor(
+        scheduler = localReminderScheduler,
+        persistAndIngest = ::persistAndIngest,
+    )
+
+    private val goalActionDispatcher = GoalActionDispatcher(
+        executeKnowledge = { context ->
+            executeLocalKnowledge(
+                goal = context.goal,
+                sourcePhoton = context.sourcePhoton,
+                goalPhotonId = context.goalPhotonId,
+            )
+        },
+        executeDeepSearch = { context ->
+            executeLocalDeepSearch(
+                goal = context.goal,
+                sourcePhoton = context.sourcePhoton,
+                goalPhotonId = context.goalPhotonId,
+            )
+        },
+        executeImageGeneration = { context ->
+            generateImage(
+                goal = context.goal,
+                sourcePhotonId = context.sourcePhoton.id,
+                goalPhotonId = context.goalPhotonId,
+                referenceInstant = context.sourcePhoton.provenance.createdAt,
+            )
+        },
+        executeImageTransform = localImageTransformExecutor::execute,
+        executeSchedule = localScheduleExecutor::execute,
+        prepareCommunication = { context ->
+            executeLocalCommunication(
+                goal = context.goal,
+                sourcePhoton = context.sourcePhoton,
+                goalPhotonId = context.goalPhotonId,
+            )
+        },
+    )
 
     fun start(): Job = synchronized(startLock) {
         bootstrapJob ?: scope.launch {
@@ -150,39 +218,15 @@ class LifeOsKernel internal constructor(
             val effectiveRouting = resumed?.routing ?: routing
             val effectiveSource = resumed?.sourcePhoton ?: photon
             val effectiveGoalPhotonId = resumed?.resumedGoal?.photon?.id ?: goalPhoton.photon.id
+            val actions = goalActionDispatcher.execute(
+                GoalActionContext(
+                    goal = effectiveGoal,
+                    routing = effectiveRouting,
+                    sourcePhoton = effectiveSource,
+                    goalPhotonId = effectiveGoalPhotonId,
+                )
+            )
 
-            val localKnowledge = when {
-                !effectiveRouting.ready -> null
-                !localKnowledgeGoalEngine.supports(effectiveGoal.intent) -> null
-                else -> executeLocalKnowledge(
-                    goal = effectiveGoal,
-                    sourcePhoton = effectiveSource,
-                    goalPhotonId = effectiveGoalPhotonId,
-                )
-            }
-            val localDeepSearch = when {
-                !effectiveRouting.ready -> null
-                !localDeepSearchGoalEngine.supports(effectiveGoal.intent) -> null
-                else -> executeLocalDeepSearch(
-                    goal = effectiveGoal,
-                    sourcePhoton = effectiveSource,
-                    goalPhotonId = effectiveGoalPhotonId,
-                )
-            }
-            val imageGeneration = when {
-                effectiveGoal.intent != IntentType.CREATE_IMAGE -> null
-                !effectiveRouting.ready -> ImageGenerationResult.Blocked(
-                    effectiveRouting.blockingGaps
-                        .map { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
-                        .ifEmpty { listOf("image goal is not action-ready") },
-                )
-                else -> generateImage(
-                    goal = effectiveGoal,
-                    sourcePhotonId = effectiveSource.id,
-                    goalPhotonId = effectiveGoalPhotonId,
-                    referenceInstant = effectiveSource.provenance.createdAt,
-                )
-            }
             LanguageSubmissionResult(
                 source = source,
                 understanding = understanding,
@@ -190,9 +234,12 @@ class LifeOsKernel internal constructor(
                 goal = goal,
                 routing = routing,
                 goalResume = goalResume,
-                imageGeneration = imageGeneration,
-                localKnowledge = localKnowledge,
-                localDeepSearch = localDeepSearch,
+                imageGeneration = actions.imageGeneration,
+                localImageTransform = actions.localImageTransform,
+                localKnowledge = actions.localKnowledge,
+                localDeepSearch = actions.localDeepSearch,
+                localSchedule = actions.localSchedule,
+                localCommunication = actions.localCommunication,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -203,6 +250,23 @@ class LifeOsKernel internal constructor(
             )
         }
     }
+
+    /**
+     * Explicit private-user action for one blocking gap. It persists a typed request and a separate
+     * exact approval before bounded Genesis runs. The result can only become TRIAL or REJECTED here;
+     * ACTIVE still requires the independent evolution/canary promotion path.
+     */
+    suspend fun generateExplicitlyApprovedTool(gap: CapabilityGap): GeneratedToolUserActionResult {
+        require(
+            mutableBootstrapState.value.status == KernelBootstrapStatus.READY ||
+                mutableBootstrapState.value.status == KernelBootstrapStatus.DEGRADED
+        ) { "Generated-tool action requires a completed kernel boot" }
+        return generatedToolUserActions.generateExplicitlyApproved(gap)
+    }
+
+    /** Records only local handoff to Android's chooser; it never claims external delivery. */
+    suspend fun recordCommunicationHandoff(share: LocalSharePreparation): PhotonSubmissionResult =
+        persistAndIngest(localCommunicationGoalEngine.createHandoffReceipt(share))
 
     /** Reads and integrity-verifies an image asset referenced by a generated image photon. */
     suspend fun loadImageAsset(photon: Photon): ByteArray? {
@@ -363,6 +427,38 @@ class LifeOsKernel internal constructor(
         } catch (error: Exception) {
             LocalDeepSearchExecutionResult.Failed(
                 error.message ?: error::class.simpleName ?: "local DeepSearch execution failed",
+            )
+        }
+    }
+
+    private suspend fun executeLocalCommunication(
+        goal: GoalFrame,
+        sourcePhoton: Photon,
+        goalPhotonId: PhotonId,
+    ): LocalCommunicationExecutionResult {
+        return try {
+            when (
+                val result = localCommunicationGoalEngine.prepare(
+                    goal = goal,
+                    sourcePhoton = sourcePhoton,
+                    goalPhotonId = goalPhotonId,
+                    photons = photonStore.loadAll(),
+                )
+            ) {
+                is LocalCommunicationGoalResult.Prepared ->
+                    LocalCommunicationExecutionResult.Prepared(result.share)
+                is LocalCommunicationGoalResult.Blocked ->
+                    LocalCommunicationExecutionResult.Blocked(result.reason)
+                is LocalCommunicationGoalResult.Unsupported ->
+                    LocalCommunicationExecutionResult.Failed(
+                        "Local communication executor does not support ${result.intent.name}",
+                    )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            LocalCommunicationExecutionResult.Failed(
+                error.message ?: error::class.simpleName ?: "local communication preparation failed",
             )
         }
     }

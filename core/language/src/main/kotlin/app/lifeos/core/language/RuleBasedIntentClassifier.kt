@@ -42,8 +42,13 @@ class RuleBasedIntentClassifier {
             w.any { it in scheduleWords } ||
                 ("erinnere" in w && ("mich" in w || temporalCueRegex.containsMatchIn(text)))
         },
-        Rule(IntentType.COMMUNICATE, 0.72, "communication verb") { w, _, _ ->
-            w.any { it in setOf("schreibe", "sende", "antworte", "mail", "email", "nachricht", "send", "reply", "message") }
+        Rule(IntentType.COMMUNICATE, 0.82, "explicit communication or share verb") { w, _, _ ->
+            w.any {
+                it in setOf(
+                    "schreibe", "sende", "antworte", "mail", "email", "nachricht",
+                    "teile", "teilen", "share", "send", "reply", "message",
+                )
+            }
         },
         Rule(IntentType.STORE_OR_REMEMBER, 0.80, "memory request vocabulary") { w, _, _ ->
             w.any { it in setOf("merke", "speichere", "remember", "store", "save") } ||

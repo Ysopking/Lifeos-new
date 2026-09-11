@@ -107,14 +107,21 @@ class GeneratedToolTrialLedger(
 
     suspend fun stats(toolId: String): GeneratedToolTrialStats = evidence(toolId).stats
 
-    /** Boot-only restore of exact durable evidence without creating a new trial event. */
+    /**
+     * Boot-only restore of the exact durable evidence without creating a new trial event.
+     *
+     * Preserve the persisted result order in RAM. GeneratedToolTrialEvidence already derives its
+     * fingerprint and statistics from orderedResults, so canonical identity remains deterministic;
+     * re-sorting here would silently change the primary data-class value and make an idempotent
+     * boot retry compare unequal to the durable source of truth.
+     */
     internal suspend fun restore(evidence: GeneratedToolTrialEvidence) = mutex.withLock {
         require(results[evidence.toolId].isNullOrEmpty()) {
             "Generated-tool trial ledger ${evidence.toolId} is already loaded"
         }
-        if (evidence.orderedResults.isNotEmpty()) {
+        if (evidence.results.isNotEmpty()) {
             results[evidence.toolId] = linkedMapOf<String, GeneratedToolTrialResult>().apply {
-                evidence.orderedResults.forEach { put(it.invocationId, it) }
+                evidence.results.forEach { put(it.invocationId, it) }
             }
         }
     }

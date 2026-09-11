@@ -14,9 +14,11 @@ data class LanguageSubmissionResult(
     val routing: GoalCapabilityResolution? = null,
     val goalResume: GoalResumeExecutionResult? = null,
     val imageGeneration: ImageGenerationResult? = null,
+    val localImageTransform: LocalImageTransformExecutionResult? = null,
     val localKnowledge: LocalKnowledgeExecutionResult? = null,
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
     val localSchedule: LocalScheduleExecutionResult? = null,
+    val localCommunication: LocalCommunicationExecutionResult? = null,
     val languageFailure: String? = null,
 ) {
     val sourceStored: Boolean get() = true
@@ -35,6 +37,7 @@ data class LanguageSubmissionResult(
             ((goalResume as? GoalResumeExecutionResult.Resumed)?.resumedGoal?.processingQueued != false) &&
             ((localKnowledge as? LocalKnowledgeExecutionResult.Produced)?.output?.processingQueued != false) &&
             ((localDeepSearch as? LocalDeepSearchExecutionResult.Produced)?.output?.processingQueued != false) &&
+            ((localImageTransform as? LocalImageTransformExecutionResult.Transformed)?.output?.processingQueued != false) &&
             ((localSchedule as? LocalScheduleExecutionResult.Scheduled)?.output?.processingQueued != false)
     val actionReady: Boolean get() = effectiveRouting?.ready == true
     val generatedImage: GeneratedImageResult? get() =

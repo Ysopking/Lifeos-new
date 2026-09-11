@@ -2,6 +2,7 @@ package app.lifeos.next
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -60,6 +61,18 @@ private fun LifeOsApp(model: LifeOsViewModel) {
     }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) model.saveDraft() else model.notificationPermissionDenied()
+    }
+    val pendingShare = state.pendingShare
+    LaunchedEffect(pendingShare) {
+        if (pendingShare != null) {
+            try {
+                val shareIntent = model.createShareIntent(pendingShare)
+                context.startActivity(Intent.createChooser(shareIntent, "Mit App teilen"))
+                model.communicationShareOpened(pendingShare)
+            } catch (_: Exception) {
+                model.communicationShareFailed(pendingShare)
+            }
+        }
     }
     val visible = remember(state.photons, query) {
         val term = query.trim()
@@ -142,12 +155,12 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                                 enabled = !state.capabilityRequestSaving && !state.loading && !state.loadFailed,
                             ) {
                                 Text(
-                                    if (state.capabilityRequestSaving) "Anforderung wird gespeichert …"
-                                    else "Für ToolWorkshop anfordern"
+                                    if (state.capabilityRequestSaving) "Tool wird lokal geprüft …"
+                                    else "Erstes Tool genehmigen & lokal erzeugen"
                                 )
                             }
                             Text(
-                                "Die Anforderung wird lokal und dauerhaft vorgemerkt; sie startet noch keine automatische Codegenerierung.",
+                                "Der Klick genehmigt genau die erste fehlende Fähigkeit für den beschränkten lokalen ToolWorkshop. Das Ergebnis bleibt TRIAL oder REJECTED; Aktivierung braucht weiterhin die separaten Canary-/Promotion-Gates.",
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
@@ -156,7 +169,13 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                 state.capabilityRequestStatus?.let { status ->
                     Text(status, style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = model::dismissCapabilityRequestStatus) {
-                        Text("Tool-Anforderungsstatus schließen")
+                        Text("Tool-Status schließen")
+                    }
+                }
+                state.shareStatus?.let { status ->
+                    Text(status, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = model::dismissShareStatus) {
+                        Text("Teilen-Status schließen")
                     }
                 }
                 state.voiceStatus?.let { status ->
@@ -358,16 +377,17 @@ private fun GeneratedImageContent(
 
         is ImagePreviewState.Ready -> {
             val preview = current.preview
+            val transformed = "transformed" in photon.tags
             Image(
                 bitmap = preview.bitmap.asImageBitmap(),
-                contentDescription = "Lokal erzeugtes Bild",
+                contentDescription = if (transformed) "Lokal bearbeitetes Bild" else "Lokal erzeugtes Bild",
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(preview.width.toFloat() / preview.height.toFloat()),
                 contentScale = ContentScale.Fit,
             )
             Text(
-                "Offline erzeugt · ${preview.width}×${preview.height} · ${preview.rendererId}",
+                "${if (transformed) "Offline bearbeitet" else "Offline erzeugt"} · ${preview.width}×${preview.height} · ${preview.rendererId}",
                 style = MaterialTheme.typography.labelSmall,
             )
         }

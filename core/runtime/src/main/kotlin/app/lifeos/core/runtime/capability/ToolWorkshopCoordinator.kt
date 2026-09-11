@@ -50,6 +50,7 @@ class ToolWorkshopCoordinator(
     private val registry: GeneratedToolRegistry,
     private val now: () -> Instant = Instant::now,
     private val newToolId: () -> String = { "generated-${UUID.randomUUID()}" },
+    private val artifactRepository: GeneratedToolArtifactRepository? = null,
 ) {
     suspend fun generate(gap: CapabilityGap): ToolWorkshopResult {
         val specification = specificationBuilder.build(gap)
@@ -91,6 +92,21 @@ class ToolWorkshopCoordinator(
             val rejected = registry.transition(toolId, GeneratedToolState.REJECTED, message = reason)
             return ToolWorkshopResult.Rejected(rejected, reason)
         }
+
+        artifactRepository?.let { repository ->
+            val artifact = GeneratedToolArtifact.create(
+                toolId = toolId,
+                canonicalProgram = source.source,
+                createdAt = now(),
+            )
+            require(artifact.sourceHash == build.sourceHash) {
+                "Generated-tool artifact source hash differs from build result"
+            }
+            require(artifact.buildHash == build.buildHash) {
+                "Generated-tool artifact build hash differs from build result"
+            }
+            repository.persist(artifact)
+        }
         registry.transition(toolId, GeneratedToolState.BUILT, message = "build-succeeded")
 
         val tests = testRunner.test(build)
@@ -111,6 +127,15 @@ class ToolWorkshopCoordinator(
                 message = reason,
             )
             return ToolWorkshopResult.Rejected(rejected, reason)
+        }
+
+        artifactRepository?.let { repository ->
+            val artifact = requireNotNull(repository.load(toolId)) {
+                "Verified generated tool lost its durable artifact"
+            }
+            require(artifact.matches(registry.get(toolId) ?: initial)) {
+                "Verified generated tool artifact no longer matches lifecycle record"
+            }
         }
 
         val verified = registry.transition(

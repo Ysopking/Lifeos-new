@@ -1,6 +1,7 @@
 package app.lifeos.next
 
 import android.app.Application
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
@@ -14,15 +15,19 @@ import app.lifeos.core.language.LanguageContextItem
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.capability.CapabilityGap
+import app.lifeos.core.runtime.capability.GeneratedToolGenesisResult
+import app.lifeos.core.runtime.capability.GeneratedToolRequestExecutionResult
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
-import app.lifeos.next.kernel.AndroidLocalReminderScheduler
+import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.next.kernel.GoalResumeExecutionResult
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.kernel.LocalCommunicationExecutionResult
 import app.lifeos.next.kernel.LocalDeepSearchExecutionResult
+import app.lifeos.next.kernel.LocalImageTransformExecutionResult
 import app.lifeos.next.kernel.LocalKnowledgeExecutionResult
-import app.lifeos.next.kernel.LocalScheduleActionExecutor
 import app.lifeos.next.kernel.LocalScheduleExecutionResult
+import app.lifeos.next.kernel.LocalShareIntentFactory
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +55,8 @@ data class LifeOsState(
     val generatedToolStatus: GeneratedToolRuntimeStatus? = null,
     val generatedToolStatusLoading: Boolean = false,
     val generatedToolStatusError: String? = null,
+    val pendingShare: LocalSharePreparation? = null,
+    val shareStatus: String? = null,
     val voicePhase: VoiceCapturePhase = VoiceCapturePhase.IDLE,
     val voiceStatus: String? = null,
 )
@@ -72,9 +79,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private val kernel = owner.kernel
     private val generatedToolStatusReader = owner.generatedToolStatusReader
     private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
-    private val localScheduleExecutor = LocalScheduleActionExecutor(
-        AndroidLocalReminderScheduler(application.applicationContext)
-    )
+    private val localShareIntentFactory = LocalShareIntentFactory(application.applicationContext, kernel)
     private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
     private val previewCache = object : LruCache<String, Bitmap>(IMAGE_PREVIEW_CACHE_KIB) {
@@ -126,14 +131,19 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { loadGeneratedToolStatus() }
     }
 
+    /**
+     * One explicit button press approves exactly one currently blocking capability gap for bounded
+     * local Genesis. The generated tool can only become TRIAL or REJECTED on this path; it is never
+     * activated by the UI action.
+     */
     fun requestCapabilityGaps() {
         val current = mutableState.value
-        val gaps = current.lastCapabilityGaps
+        val gap = current.lastCapabilityGaps.firstOrNull()
         if (
             current.loading ||
             current.loadFailed ||
             current.capabilityRequestSaving ||
-            gaps.isEmpty()
+            gap == null
         ) return
 
         mutableState.update {
@@ -144,30 +154,29 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             try {
-                val results = gaps.map { gap ->
-                    kernel.persistAndIngest(
-                        Photon(
-                            content = gap.toToolRequestContent(),
-                            provenance = Provenance("local-capability-gap-request", "user"),
-                            tags = setOf("capability-gap", "tool-request", "user-approved"),
-                        )
-                    )
+                val result = kernel.generateExplicitlyApprovedTool(gap)
+                val status = when (val execution = result.execution) {
+                    is GeneratedToolRequestExecutionResult.Blocked ->
+                        "Tool-Erzeugung wurde vor Genesis blockiert: ${execution.reason}"
+
+                    is GeneratedToolRequestExecutionResult.Completed -> when (val genesis = execution.genesis) {
+                        is GeneratedToolGenesisResult.TrialReady ->
+                            "${genesis.record.manifest.toolId} wurde lokal erzeugt, gebaut, getestet und verifiziert. Das Tool ist jetzt isoliert in TRIAL und noch nicht aktiv."
+
+                        is GeneratedToolGenesisResult.Rejected ->
+                            "Der lokale ToolWorkshop hat ${genesis.record.manifest.toolId} sicher abgelehnt: ${genesis.reasons.joinToString("; ")}"
+                    }
                 }
-                val allQueued = results.all { it.processingQueued }
-                mutableState.update {
-                    it.copy(
-                        capabilityRequestStatus = if (allQueued) {
-                            "${gaps.size} Tool-Anforderung(en) wurden lokal gespeichert und dauerhaft zur Verarbeitung eingereiht."
-                        } else {
-                            "Die Tool-Anforderung wurde lokal gespeichert, konnte aber nicht vollständig zur Verarbeitung eingereiht werden."
-                        },
-                    )
-                }
+                mutableState.update { it.copy(capabilityRequestStatus = status) }
+                loadGeneratedToolStatus()
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 mutableState.update {
-                    it.copy(capabilityRequestStatus = "Tool-Anforderung konnte nicht gespeichert werden.")
+                    it.copy(
+                        capabilityRequestStatus =
+                            "Tool-Erzeugung konnte nicht sicher abgeschlossen werden: ${error.message ?: error::class.simpleName ?: "unbekannter Fehler"}"
+                    )
                 }
             } finally {
                 mutableState.update { it.copy(capabilityRequestSaving = false) }
@@ -227,6 +236,36 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         mutableState.update { it.copy(voiceStatus = null) }
     }
 
+    suspend fun createShareIntent(share: LocalSharePreparation): Intent =
+        localShareIntentFactory.create(share)
+
+    fun communicationShareOpened(share: LocalSharePreparation) {
+        if (mutableState.value.pendingShare != share) return
+        mutableState.update { it.copy(pendingShare = null, shareStatus = "Android-Teilen wurde geöffnet.") }
+        viewModelScope.launch {
+            val receipt = kernel.recordCommunicationHandoff(share)
+            if (!receipt.processingQueued) {
+                mutableState.update {
+                    it.copy(shareStatus = "Android-Teilen wurde geöffnet; der lokale Handoff-Beleg konnte aber nicht vollständig eingereiht werden.")
+                }
+            }
+        }
+    }
+
+    fun communicationShareFailed(share: LocalSharePreparation) {
+        if (mutableState.value.pendingShare != share) return
+        mutableState.update {
+            it.copy(
+                pendingShare = null,
+                error = "Das Android-Teilen konnte nicht geöffnet werden.",
+            )
+        }
+    }
+
+    fun dismissShareStatus() {
+        mutableState.update { it.copy(shareStatus = null) }
+    }
+
     fun saveDraft() {
         val current = mutableState.value
         if (current.loading || current.loadFailed || current.saving || current.voicePhase != VoiceCapturePhase.IDLE || current.draft.isBlank()) return
@@ -240,16 +279,18 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                val baseResult = kernel.persistUserUtterance(photon)
-                val schedule = localScheduleExecutor.execute(kernel, baseResult)
-                val result = if (schedule == null) baseResult else baseResult.copy(localSchedule = schedule)
-                val retainDraft = result.localSchedule is LocalScheduleExecutionResult.Blocked
+                val result = kernel.persistUserUtterance(photon)
+                val retainDraft =
+                    result.localSchedule is LocalScheduleExecutionResult.Blocked ||
+                        result.localImageTransform is LocalImageTransformExecutionResult.Blocked
                 mutableState.update {
                     it.copy(
                         draft = if (retainDraft) photon.content else "",
                         lastGoal = result.effectiveGoal ?: it.lastGoal,
                         lastCapabilityGaps = result.effectiveRouting?.blockingGaps.orEmpty(),
                         capabilityRequestStatus = null,
+                        pendingShare = (result.localCommunication as? LocalCommunicationExecutionResult.Prepared)?.share,
+                        shareStatus = null,
                         error = when {
                             result.languageFailure != null ->
                                 "Gedanke wurde gespeichert, aber das lokale Sprachverständnis ist fehlgeschlagen."
@@ -286,6 +327,28 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                             result.localSchedule is LocalScheduleExecutionResult.Scheduled &&
                                 !result.localSchedule.output.processingQueued ->
                                 "Die Erinnerung wurde lokal geplant, ihr Photon konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
+                            result.localImageTransform is LocalImageTransformExecutionResult.Blocked -> when (result.localImageTransform.reason) {
+                                "image-transform-operation-unsupported" ->
+                                    "Unterstützte lokale Bildänderungen sind heller, dunkler, wärmer, kühler, schärfer oder Graustufen."
+                                "image-transform-reference-unresolved",
+                                "goal-is-not-action-ready" ->
+                                    "Welches lokale Bild bearbeitet werden soll, ist nicht eindeutig. Der Entwurf bleibt zum Ergänzen erhalten."
+                                "image-transform-source-missing" ->
+                                    "Es ist kein lokales Bild zum Bearbeiten vorhanden."
+                                "image-transform-pixel-budget-exceeded" ->
+                                    "Das Bild ist für die lokale Bearbeitung zu groß."
+                                else ->
+                                    "Die lokale Bildbearbeitung ist blockiert: ${result.localImageTransform.reason}"
+                            }
+                            result.localImageTransform is LocalImageTransformExecutionResult.Failed ->
+                                "Die lokale Bildbearbeitung ist fehlgeschlagen: ${result.localImageTransform.message}"
+                            result.localImageTransform is LocalImageTransformExecutionResult.Transformed &&
+                                !result.localImageTransform.output.processingQueued ->
+                                "Das bearbeitete Bild wurde lokal gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
+                            result.localCommunication is LocalCommunicationExecutionResult.Blocked ->
+                                "Es gibt kein eindeutig teilbares lokales Ergebnis."
+                            result.localCommunication is LocalCommunicationExecutionResult.Failed ->
+                                "Das lokale Teilen konnte nicht vorbereitet werden: ${result.localCommunication.message}"
                             result.imageGeneration is ImageGenerationResult.Blocked ->
                                 "Das Bildziel wurde verstanden, kann mit den lokalen Fähigkeiten aber noch nicht vollständig ausgeführt werden."
                             result.imageGeneration is ImageGenerationResult.Failed ->
@@ -296,7 +359,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (error: Exception) {
+            } catch (_: Exception) {
                 mutableState.update {
                     it.copy(
                         error = "Gedanke konnte nicht gespeichert werden. Die Eingabe bleibt im Textfeld.",
@@ -368,16 +431,6 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         } finally {
             mutableState.update { it.copy(generatedToolStatusLoading = false) }
         }
-    }
-
-    private fun CapabilityGap.toToolRequestContent(): String = buildString {
-        appendLine("LIFEOS_CAPABILITY_GAP_REQUEST_V1")
-        append("capability=").appendLine(requirement.capabilityId.value)
-        append("severity=").appendLine(requirement.severity.name)
-        append("gapType=").appendLine(type.name)
-        append("requiredInputs=").appendLine(requirement.requiredInputs.sorted().joinToString(","))
-        append("requiredOutputs=").appendLine(requirement.requiredOutputs.sorted().joinToString(","))
-        append("candidateProviders=").append(candidateProviderIds.sorted().joinToString(","))
     }
 
     private fun applyVoiceResult(state: LifeOsState, result: LocalVoiceCaptureResult): LifeOsState = when (result) {
@@ -470,7 +523,10 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun Photon.isUserVisiblePhoton(): Boolean =
-        "goal" !in tags && "scene-graph" !in tags
+        "goal" !in tags &&
+            "scene-graph" !in tags &&
+            "tool-request" !in tags &&
+            "tool-generation-approval" !in tags
 
     private companion object {
         const val LOAD_ERROR_MESSAGE = "Speicher konnte nicht geladen werden. Bitte erneut versuchen."

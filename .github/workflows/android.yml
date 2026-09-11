@@ -21,12 +21,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
-      - run: gradle test :app:lintDebug :app:assembleDebug --stacktrace
+      - run: gradle test :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: LIFEOS-Next-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Android test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIFEOS-android-test-debug
+          path: app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           if-no-files-found: error
           retention-days: 14
       - name: Upload test and lint reports
@@ -37,4 +44,61 @@ jobs:
           path: |
             **/build/reports/tests/
             app/build/reports/lint-results-debug.*
+          retention-days: 14
+
+  android-emulator-recovery:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Download debug APK
+        uses: actions/download-artifact@v4
+        with:
+          name: LIFEOS-Next-debug
+          path: app/build/outputs/apk/debug
+      - name: Download Android test APK
+        uses: actions/download-artifact@v4
+        with:
+          name: LIFEOS-android-test-debug
+          path: app/build/outputs/apk/androidTest/debug
+      - name: Enable KVM acceleration when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 0666 /dev/kvm
+            test -r /dev/kvm
+            test -w /dev/kvm
+            ls -l /dev/kvm
+          else
+            echo "KVM device is unavailable; emulator runner may fall back to software acceleration."
+          fi
+      - name: Free disk for Android emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          sudo rm -rf "$sdk_root/ndk" "$sdk_root/cmake"
+          df -h /
+      - name: Private v1 Android emulator cold-restart and generated-tool recovery
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: aosp_atd
+          arch: x86_64
+          disk-size: 4096M
+          disable-animations: true
+          script: sh .github/scripts/android-emulator-recovery.sh
+      - name: Upload Android emulator recovery reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIFEOS-android-emulator-recovery
+          path: android-emulator-recovery/
+          if-no-files-found: warn
           retention-days: 14
