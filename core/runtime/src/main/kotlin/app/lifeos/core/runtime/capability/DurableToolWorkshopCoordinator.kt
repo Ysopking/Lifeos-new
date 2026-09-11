@@ -43,7 +43,9 @@ data class ToolWorkshopExecutionProfile(
         EXECUTABLE_STAGES.forEach { stage ->
             val requested = requireNotNull(stageRequests[stage]) { "Missing resource profile for $stage" }
             require(!requested.isZero()) { "$stage must reserve non-zero resources" }
-            require(requested.networkBytes == 0L) { "Private ToolWorkshop stages cannot request network access" }
+            require(requested.networkBytes == 0L) {
+                "Private ToolWorkshop stages cannot request network access"
+            }
         }
     }
 
@@ -70,16 +72,35 @@ sealed interface ToolWorkshopAdmissionResult {
 
 sealed interface ToolWorkshopStageResult {
     data class Advanced(val snapshot: ToolWorkshopJobSnapshot) : ToolWorkshopStageResult
-    data class TrialReady(val snapshot: ToolWorkshopJobSnapshot, val record: GeneratedToolRecord) : ToolWorkshopStageResult
-    data class Rejected(val snapshot: ToolWorkshopJobSnapshot, val reason: String) : ToolWorkshopStageResult
-    data class Blocked(val snapshot: ToolWorkshopJobSnapshot, val reason: String) : ToolWorkshopStageResult
+    data class TrialReady(
+        val snapshot: ToolWorkshopJobSnapshot,
+        val record: GeneratedToolRecord,
+    ) : ToolWorkshopStageResult
+
+    data class Rejected(
+        val snapshot: ToolWorkshopJobSnapshot,
+        val reason: String,
+    ) : ToolWorkshopStageResult
+
+    data class Blocked(
+        val snapshot: ToolWorkshopJobSnapshot,
+        val reason: String,
+    ) : ToolWorkshopStageResult
+
     data class AlreadyTerminal(val snapshot: ToolWorkshopJobSnapshot) : ToolWorkshopStageResult
 }
 
 /**
- * V11 stage executor. Every completed stage has two durable witnesses: the immutable stage artifact
- * and the append-only job ledger transition. Artifact persistence happens before the ledger transition
- * and before V16 settlement, which closes the crash window where completed work could otherwise run twice.
+ * Restart-safe V11 stage executor.
+ *
+ * A completed stage is made authoritative in this order:
+ * 1. persist immutable stage artifact,
+ * 2. settle the durable V16 reservation from that artifact,
+ * 3. append the job-ledger transition.
+ *
+ * Therefore a crash can only leave an artifact/reservation that must be rebound; it cannot cause a
+ * completed stage to be executed again. Generated-tool lifecycle changes are reconstructed from the
+ * same persisted stage evidence before the ledger advances.
  */
 class DurableToolWorkshopCoordinator(
     private val jobs: ToolWorkshopJobLedger,
@@ -99,7 +120,8 @@ class DurableToolWorkshopCoordinator(
     private val ownerScope: String,
     private val generatedArtifacts: GeneratedToolArtifactRepository? = null,
     private val buildStateRehydrator: ToolWorkshopBuildStateRehydrator? = null,
-    private val sharedBudgets: () -> SharedResourceBudgetGate? = { SharedResourceBudgetRuntimeRegistry.current() },
+    private val sharedBudgets: () -> SharedResourceBudgetGate? =
+        { SharedResourceBudgetRuntimeRegistry.current() },
     private val now: () -> Instant = Instant::now,
 ) {
     init { require(ownerScope.isNotBlank()) }
@@ -117,6 +139,7 @@ class DurableToolWorkshopCoordinator(
             workshopVersion = workshopVersion,
         )
         jobs.snapshot(definition.id)?.let { return ToolWorkshopAdmissionResult.Ready(it) }
+
         val decision = ownerPolicy.evaluate(
             OwnerEffectRequest(
                 actorId = actorId,
@@ -141,39 +164,22 @@ class DurableToolWorkshopCoordinator(
         profile: ToolWorkshopExecutionProfile,
     ): ToolWorkshopStageResult {
         var snapshot = requireNotNull(jobs.snapshot(jobId)) { "Unknown ToolWorkshop job $jobId" }
+
+        // Compatibility/recovery for a crash from a previously appended stage with an open budget.
+        settleDurableCurrentStageIfNeeded(snapshot)
         if (snapshot.terminal) return ToolWorkshopStageResult.AlreadyTerminal(snapshot)
 
-        settleDurableCurrentStageIfNeeded(snapshot)
         val target = nextStage(snapshot.state)
         val existingArtifact = stageArtifacts.load(jobId, target)
         if (existingArtifact != null) {
+            settlePersistedTargetStage(snapshot, target, existingArtifact, profile)
             return bindPersistedStage(snapshot, target, existingArtifact)
         }
 
         val requested = profile.requested(target)
-        val gate = sharedBudgets()
-            ?: return ToolWorkshopStageResult.Blocked(snapshot, "shared-world-budget-gate-not-installed")
-        val allocationDecision = gate.allocate(
-            hardQuota = profile.hardQuota,
-            demands = listOf(
-                ResourceBudgetDemand(
-                    domain = ResourceBudgetDomain.TOOL_WORKSHOP,
-                    requested = requested,
-                    goalRelevance = profile.goalRelevance,
-                    priority = profile.priority,
-                    expectedUtility = profile.expectedUtility,
-                    confidence = profile.confidence,
-                )
-            ),
-        )
-        val ready = allocationDecision as? SharedResourceBudgetDecision.Ready
-            ?: return ToolWorkshopStageResult.Blocked(
-                snapshot,
-                "tool-workshop-world-budget:${(allocationDecision as SharedResourceBudgetDecision.Blocked).reason}",
-            )
-        val allocation = ready.allocation.allocation(ResourceBudgetDomain.TOOL_WORKSHOP)
-            ?: return ToolWorkshopStageResult.Blocked(snapshot, "tool-workshop-world-budget-missing-allocation")
-        if (!requested.isWithin(allocation.allocated)) {
+        val allocation = allocate(snapshot, target, requested, profile)
+            ?: return ToolWorkshopStageResult.Blocked(snapshot, "tool-workshop-world-budget-unavailable")
+        if (!requested.isWithin(allocation)) {
             return ToolWorkshopStageResult.Blocked(snapshot, "tool-workshop-world-budget-insufficient")
         }
 
@@ -181,11 +187,16 @@ class DurableToolWorkshopCoordinator(
         budgets.createAccount(accountId, profile.hardQuota)
         val reservation = reserve(accountId, jobId, target, requested)
             ?: return ToolWorkshopStageResult.Blocked(snapshot, "tool-workshop-resource-budget-exhausted")
-        if (reservation.state == ResourceBudgetReservationState.COMMITTED) {
-            error("ToolWorkshop stage has committed budget but no durable stage artifact")
-        }
-        if (reservation.state == ResourceBudgetReservationState.RELEASED) {
-            return ToolWorkshopStageResult.Blocked(snapshot, "tool-workshop-stage-reservation-released")
+
+        when (reservation.state) {
+            ResourceBudgetReservationState.RESERVED -> Unit
+            ResourceBudgetReservationState.COMMITTED -> error(
+                "ToolWorkshop stage has committed budget but no durable stage artifact"
+            )
+            ResourceBudgetReservationState.RELEASED -> return ToolWorkshopStageResult.Blocked(
+                snapshot,
+                "tool-workshop-stage-reservation-released",
+            )
         }
 
         val owner = ownerPolicy.evaluate(
@@ -202,21 +213,63 @@ class DurableToolWorkshopCoordinator(
         )
         if (owner is OwnerPolicyDecision.Blocked) {
             budgets.release(accountId, reservation.id)
-            snapshot = jobs.interrupt(snapshot, "owner-policy:${owner.reasons.joinToString("|")}")
+            snapshot = jobs.interrupt(
+                snapshot,
+                "owner-policy:${owner.reasons.joinToString("|")}",
+            )
             return ToolWorkshopStageResult.Rejected(snapshot, requireNotNull(snapshot.lastDetail))
         }
 
-        return try {
-            val artifact = executeStage(snapshot, target)
-            stageArtifacts.persist(artifact)
-            val result = bindPersistedStage(snapshot, target, artifact)
-            settle(accountId, reservation, requested)
-            result
+        val artifact = try {
+            executeStage(snapshot, target)
         } catch (error: Exception) {
-            ToolWorkshopStageResult.Blocked(
+            budgets.release(accountId, reservation.id)
+            return ToolWorkshopStageResult.Blocked(
                 snapshot,
                 "tool-workshop-stage-failed:${error::class.simpleName}:${error.message.orEmpty().take(160)}",
             )
+        }
+
+        try {
+            stageArtifacts.persist(artifact)
+        } catch (error: Exception) {
+            budgets.release(accountId, reservation.id)
+            return ToolWorkshopStageResult.Blocked(
+                snapshot,
+                "tool-workshop-stage-persist-failed:${error::class.simpleName}:${error.message.orEmpty().take(160)}",
+            )
+        }
+
+        // The persisted artifact is now the authoritative proof that this stage completed.
+        settle(accountId, reservation, requested)
+        return bindPersistedStage(snapshot, target, artifact)
+    }
+
+    private suspend fun allocate(
+        snapshot: ToolWorkshopJobSnapshot,
+        target: ToolWorkshopJobState,
+        requested: ResourceBudgetUsage,
+        profile: ToolWorkshopExecutionProfile,
+    ): ResourceBudgetUsage? {
+        val gate = sharedBudgets() ?: return null
+        return when (
+            val decision = gate.allocate(
+                hardQuota = profile.hardQuota,
+                demands = listOf(
+                    ResourceBudgetDemand(
+                        domain = ResourceBudgetDomain.TOOL_WORKSHOP,
+                        requested = requested,
+                        goalRelevance = profile.goalRelevance,
+                        priority = profile.priority,
+                        expectedUtility = profile.expectedUtility,
+                        confidence = profile.confidence,
+                    )
+                ),
+            )
+        ) {
+            is SharedResourceBudgetDecision.Ready ->
+                decision.allocation.allocation(ResourceBudgetDomain.TOOL_WORKSHOP)?.allocated
+            is SharedResourceBudgetDecision.Blocked -> null
         }
     }
 
@@ -226,39 +279,50 @@ class DurableToolWorkshopCoordinator(
     ): ToolWorkshopStageArtifact {
         val definition = snapshot.definition
         val payload = when (target) {
-            ToolWorkshopJobState.SPECIFIED -> {
+            ToolWorkshopJobState.SPECIFIED ->
                 ToolWorkshopStagePayloadCodec.encode(specificationBuilder.build(definition.toGap()))
-            }
+
             ToolWorkshopJobState.DESIGNED -> {
                 val specification = loadSpecification(definition.id)
                 val design = designer.design(snapshot.toolId, specification)
-                require(design.toolId == snapshot.toolId) { "Tool designer changed deterministic V11 tool id" }
+                require(design.toolId == snapshot.toolId) {
+                    "Tool designer changed deterministic V11 tool id"
+                }
                 ToolWorkshopStagePayloadCodec.encode(design)
             }
+
             ToolWorkshopJobState.IMPLEMENTED -> {
                 val design = loadDesign(definition.id)
                 val source = implementationEngine.implement(design)
-                require(source.toolId == snapshot.toolId) { "Tool implementation changed deterministic V11 tool id" }
+                require(source.toolId == snapshot.toolId) {
+                    "Tool implementation changed deterministic V11 tool id"
+                }
                 require(source.source.toByteArray(Charsets.UTF_8).size <= design.specification.maxSourceBytes)
                 ToolWorkshopStagePayloadCodec.encode(source)
             }
+
             ToolWorkshopJobState.BUILT -> {
                 val source = loadSource(definition.id)
                 val build = buildRunner.build(source)
-                require(build.toolId == snapshot.toolId) { "Build runner changed deterministic V11 tool id" }
+                require(build.toolId == snapshot.toolId) {
+                    "Build runner changed deterministic V11 tool id"
+                }
                 ToolWorkshopStagePayloadCodec.encode(build)
             }
+
             ToolWorkshopJobState.TESTED -> {
                 val source = loadSource(definition.id)
                 val build = loadBuild(definition.id)
                 buildStateRehydrator?.restore(source, build, tests = null)
                 ToolWorkshopStagePayloadCodec.encode(testRunner.test(build))
             }
+
             ToolWorkshopJobState.SECURITY_VALIDATED -> {
                 val specification = loadSpecification(definition.id)
                 val source = loadSource(definition.id)
                 ToolWorkshopStagePayloadCodec.encode(securityValidator.validate(specification, source))
             }
+
             ToolWorkshopJobState.VERIFIED -> {
                 val specification = loadSpecification(definition.id)
                 val source = loadSource(definition.id)
@@ -267,14 +331,16 @@ class DurableToolWorkshopCoordinator(
                 buildStateRehydrator?.restore(source, build, tests)
                 ToolWorkshopStagePayloadCodec.encode(capabilityVerifier.verify(specification, build))
             }
+
             ToolWorkshopJobState.TRIAL_READY -> {
-                val record = requireNotNull(tools.get(snapshot.toolId)) { "Verified generated tool missing before trial" }
+                val record = requireNotNull(tools.get(snapshot.toolId)) {
+                    "Verified generated tool missing before trial"
+                }
                 val trial = when (record.state) {
                     GeneratedToolState.VERIFIED -> lifecycle.admitToTrial(snapshot.toolId)
                     GeneratedToolState.TRIAL -> null
                     else -> error("ToolWorkshop trial handoff found unexpected state ${record.state}")
                 }
-                val updated = requireNotNull(tools.get(snapshot.toolId))
                 when (trial) {
                     null,
                     is GeneratedToolTrialAdmissionResult.TrialStarted -> Unit
@@ -282,9 +348,11 @@ class DurableToolWorkshopCoordinator(
                         "sandbox-trial-rejected:${trial.reasons.joinToString("|")}"
                     )
                 }
+                val updated = requireNotNull(tools.get(snapshot.toolId))
                 require(updated.state == GeneratedToolState.TRIAL)
                 "TRIAL|${updated.manifest.toolId}|${updated.lastMessage.orEmpty()}"
             }
+
             ToolWorkshopJobState.REQUESTED,
             ToolWorkshopJobState.REJECTED,
             ToolWorkshopJobState.INTERRUPTED -> error("$target is not an executable ToolWorkshop stage")
@@ -304,74 +372,109 @@ class DurableToolWorkshopCoordinator(
     ): ToolWorkshopStageResult {
         require(artifact.jobId == snapshot.definition.id && artifact.stage == target)
         return when (target) {
-            ToolWorkshopJobState.BUILT -> {
-                val build = ToolWorkshopStagePayloadCodec.decodeBuild(artifact.payload)
-                if (!build.success || build.artifactRef.isNullOrBlank() || build.buildHash.isNullOrBlank()) {
-                    val reason = build.diagnostics.joinToString(";").ifBlank { "build-failed" }
-                    val rejected = jobs.reject(snapshot, reason)
-                    ToolWorkshopStageResult.Rejected(rejected, reason)
-                } else {
-                    ensureBuiltTool(snapshot, build)
-                    ToolWorkshopStageResult.Advanced(jobs.advance(snapshot, target, artifact.fingerprint))
-                }
-            }
-            ToolWorkshopJobState.TESTED -> {
-                val tests = ToolWorkshopStagePayloadCodec.decodeTest(artifact.payload)
-                if (!tests.success || tests.failed > 0) {
-                    val reason = tests.diagnostics.joinToString(";").ifBlank { "tests-failed:${tests.failed}" }
-                    val rejected = jobs.reject(snapshot, reason)
-                    ToolWorkshopStageResult.Rejected(rejected, reason)
-                } else {
-                    ensureToolState(snapshot.toolId, GeneratedToolState.TESTED, "tests-passed:${tests.passed}")
-                    ToolWorkshopStageResult.Advanced(jobs.advance(snapshot, target, artifact.fingerprint))
-                }
-            }
-            ToolWorkshopJobState.SECURITY_VALIDATED -> {
-                val security = ToolWorkshopStagePayloadCodec.decodeSecurity(artifact.payload)
-                if (!security.accepted) {
-                    val reason = security.violations.joinToString(";").ifBlank { "security-rejected" }
-                    rejectGeneratedToolIfPossible(snapshot.toolId, reason)
-                    val rejected = jobs.reject(snapshot, reason)
-                    ToolWorkshopStageResult.Rejected(rejected, reason)
-                } else {
-                    ToolWorkshopStageResult.Advanced(jobs.advance(snapshot, target, artifact.fingerprint))
-                }
-            }
-            ToolWorkshopJobState.VERIFIED -> {
-                val verification = ToolWorkshopStagePayloadCodec.decodeVerification(artifact.payload)
-                if (!verification.verified) {
-                    val reason = verification.diagnostics.joinToString(";").ifBlank { "capability-verification-failed" }
-                    rejectGeneratedToolIfPossible(snapshot.toolId, reason)
-                    val rejected = jobs.reject(snapshot, reason)
-                    ToolWorkshopStageResult.Rejected(rejected, reason)
-                } else {
-                    ensureToolState(
-                        snapshot.toolId,
-                        GeneratedToolState.VERIFIED,
-                        "capability-verified",
-                        verification.confidence,
-                    )
-                    ToolWorkshopStageResult.Advanced(jobs.advance(snapshot, target, artifact.fingerprint))
-                }
-            }
+            ToolWorkshopJobState.SPECIFIED,
+            ToolWorkshopJobState.DESIGNED,
+            ToolWorkshopJobState.IMPLEMENTED ->
+                ToolWorkshopStageResult.Advanced(jobs.advance(snapshot, target, artifact.fingerprint))
+
+            ToolWorkshopJobState.BUILT -> bindBuild(snapshot, artifact)
+            ToolWorkshopJobState.TESTED -> bindTests(snapshot, artifact)
+            ToolWorkshopJobState.SECURITY_VALIDATED -> bindSecurity(snapshot, artifact)
+            ToolWorkshopJobState.VERIFIED -> bindVerification(snapshot, artifact)
+
             ToolWorkshopJobState.TRIAL_READY -> {
                 val record = requireNotNull(tools.get(snapshot.toolId)) { "Trial-ready tool missing" }
-                require(record.state == GeneratedToolState.TRIAL) { "Trial-ready artifact requires TRIAL tool state" }
+                require(record.state == GeneratedToolState.TRIAL) {
+                    "Trial-ready artifact requires TRIAL tool state"
+                }
                 val advanced = jobs.advance(snapshot, target, artifact.fingerprint)
                 ToolWorkshopStageResult.TrialReady(advanced, record)
             }
-            ToolWorkshopJobState.SPECIFIED,
-            ToolWorkshopJobState.DESIGNED,
-            ToolWorkshopJobState.IMPLEMENTED -> {
-                ToolWorkshopStageResult.Advanced(jobs.advance(snapshot, target, artifact.fingerprint))
-            }
+
             ToolWorkshopJobState.REQUESTED,
             ToolWorkshopJobState.REJECTED,
             ToolWorkshopJobState.INTERRUPTED -> error("Cannot bind non-stage artifact $target")
         }
     }
 
-    private suspend fun ensureBuiltTool(snapshot: ToolWorkshopJobSnapshot, build: ToolBuildResult) {
+    private suspend fun bindBuild(
+        snapshot: ToolWorkshopJobSnapshot,
+        artifact: ToolWorkshopStageArtifact,
+    ): ToolWorkshopStageResult {
+        val build = ToolWorkshopStagePayloadCodec.decodeBuild(artifact.payload)
+        if (!build.success || build.artifactRef.isNullOrBlank() || build.buildHash.isNullOrBlank()) {
+            val reason = build.diagnostics.joinToString(";").ifBlank { "build-failed" }
+            rejectGeneratedToolIfPossible(snapshot.toolId, reason)
+            val rejected = jobs.reject(snapshot, reason)
+            return ToolWorkshopStageResult.Rejected(rejected, reason)
+        }
+        ensureBuiltTool(snapshot, build)
+        return ToolWorkshopStageResult.Advanced(
+            jobs.advance(snapshot, ToolWorkshopJobState.BUILT, artifact.fingerprint)
+        )
+    }
+
+    private suspend fun bindTests(
+        snapshot: ToolWorkshopJobSnapshot,
+        artifact: ToolWorkshopStageArtifact,
+    ): ToolWorkshopStageResult {
+        val tests = ToolWorkshopStagePayloadCodec.decodeTest(artifact.payload)
+        if (!tests.success || tests.failed > 0) {
+            val reason = tests.diagnostics.joinToString(";").ifBlank { "tests-failed:${tests.failed}" }
+            rejectGeneratedToolIfPossible(snapshot.toolId, reason)
+            val rejected = jobs.reject(snapshot, reason)
+            return ToolWorkshopStageResult.Rejected(rejected, reason)
+        }
+        ensureToolState(snapshot.toolId, GeneratedToolState.TESTED, "tests-passed:${tests.passed}")
+        return ToolWorkshopStageResult.Advanced(
+            jobs.advance(snapshot, ToolWorkshopJobState.TESTED, artifact.fingerprint)
+        )
+    }
+
+    private suspend fun bindSecurity(
+        snapshot: ToolWorkshopJobSnapshot,
+        artifact: ToolWorkshopStageArtifact,
+    ): ToolWorkshopStageResult {
+        val security = ToolWorkshopStagePayloadCodec.decodeSecurity(artifact.payload)
+        if (!security.accepted) {
+            val reason = security.violations.joinToString(";").ifBlank { "security-rejected" }
+            rejectGeneratedToolIfPossible(snapshot.toolId, reason)
+            val rejected = jobs.reject(snapshot, reason)
+            return ToolWorkshopStageResult.Rejected(rejected, reason)
+        }
+        return ToolWorkshopStageResult.Advanced(
+            jobs.advance(snapshot, ToolWorkshopJobState.SECURITY_VALIDATED, artifact.fingerprint)
+        )
+    }
+
+    private suspend fun bindVerification(
+        snapshot: ToolWorkshopJobSnapshot,
+        artifact: ToolWorkshopStageArtifact,
+    ): ToolWorkshopStageResult {
+        val verification = ToolWorkshopStagePayloadCodec.decodeVerification(artifact.payload)
+        if (!verification.verified) {
+            val reason = verification.diagnostics.joinToString(";").ifBlank {
+                "capability-verification-failed"
+            }
+            rejectGeneratedToolIfPossible(snapshot.toolId, reason)
+            val rejected = jobs.reject(snapshot, reason)
+            return ToolWorkshopStageResult.Rejected(rejected, reason)
+        }
+        ensureToolState(
+            snapshot.toolId,
+            GeneratedToolState.VERIFIED,
+            "capability-verified",
+            verification.confidence,
+        )
+        return ToolWorkshopStageResult.Advanced(
+            jobs.advance(snapshot, ToolWorkshopJobState.VERIFIED, artifact.fingerprint)
+        )
+    }
+
+    private suspend fun ensureBuiltTool(
+        snapshot: ToolWorkshopJobSnapshot,
+        build: ToolBuildResult,
+    ) {
         val source = loadSource(snapshot.definition.id)
         val buildHash = requireNotNull(build.buildHash)
         generatedArtifacts?.let { repository ->
@@ -380,12 +483,16 @@ class DurableToolWorkshopCoordinator(
                 canonicalProgram = source.source,
                 createdAt = snapshot.definition.createdAt,
             )
-            require(artifact.sourceHash == build.sourceHash) { "V11 generated artifact source hash mismatch" }
-            require(artifact.buildHash == buildHash) { "V11 generated artifact build hash mismatch" }
+            require(artifact.sourceHash == build.sourceHash) {
+                "V11 generated artifact source hash mismatch"
+            }
+            require(artifact.buildHash == buildHash) {
+                "V11 generated artifact build hash mismatch"
+            }
             repository.persist(artifact)
         }
-        val existing = tools.get(snapshot.toolId)
-        if (existing == null) {
+
+        if (tools.get(snapshot.toolId) == null) {
             val specification = loadSpecification(snapshot.definition.id)
             tools.register(
                 GeneratedToolRecord(
@@ -444,18 +551,28 @@ class DurableToolWorkshopCoordinator(
     private suspend fun rejectGeneratedToolIfPossible(toolId: String, reason: String) {
         val record = tools.get(toolId) ?: return
         if (record.state == GeneratedToolState.REJECTED) return
-        if (record.state in setOf(GeneratedToolState.GENERATED, GeneratedToolState.BUILT, GeneratedToolState.TESTED, GeneratedToolState.VERIFIED)) {
+        if (
+            record.state in setOf(
+                GeneratedToolState.GENERATED,
+                GeneratedToolState.BUILT,
+                GeneratedToolState.TESTED,
+                GeneratedToolState.VERIFIED,
+                GeneratedToolState.TRIAL,
+            )
+        ) {
             tools.transition(toolId, GeneratedToolState.REJECTED, message = reason)
         }
     }
 
+    /** Reconciles the old crash window: ledger advanced but its stage reservation stayed RESERVED. */
     private suspend fun settleDurableCurrentStageIfNeeded(snapshot: ToolWorkshopJobSnapshot) {
         if (snapshot.state == ToolWorkshopJobState.REQUESTED) return
         if (snapshot.state == ToolWorkshopJobState.REJECTED || snapshot.state == ToolWorkshopJobState.INTERRUPTED) return
         val accountId = accountId(snapshot.definition.id, snapshot.state)
         val account = budgets.currentOrNull(accountId) ?: return
-        val reservation = account.reservations.singleOrNull { it.idempotencyKey == idempotencyKey(snapshot.definition.id, snapshot.state) }
-            ?: return
+        val reservation = account.reservations.singleOrNull {
+            it.idempotencyKey == idempotencyKey(snapshot.definition.id, snapshot.state)
+        } ?: return
         if (reservation.state == ResourceBudgetReservationState.RESERVED) {
             val artifact = requireNotNull(stageArtifacts.load(snapshot.definition.id, snapshot.state)) {
                 "Durable ToolWorkshop stage has reserved budget but no stage artifact"
@@ -465,6 +582,33 @@ class DurableToolWorkshopCoordinator(
             }
             budgets.commit(accountId, reservation.id, reservation.reserved)
         }
+    }
+
+    /** Reconciles the new crash window: artifact persisted, but settlement/ledger binding did not finish. */
+    private suspend fun settlePersistedTargetStage(
+        snapshot: ToolWorkshopJobSnapshot,
+        target: ToolWorkshopJobState,
+        artifact: ToolWorkshopStageArtifact,
+        profile: ToolWorkshopExecutionProfile,
+    ) {
+        require(artifact.jobId == snapshot.definition.id && artifact.stage == target)
+        val accountId = accountId(snapshot.definition.id, target)
+        val account = requireNotNull(budgets.currentOrNull(accountId)) {
+            "Persisted ToolWorkshop stage artifact has no durable V16 account"
+        }
+        require(account.quota == profile.hardQuota) {
+            "Persisted ToolWorkshop stage changed its hard resource quota"
+        }
+        val reservation = requireNotNull(
+            account.reservations.singleOrNull {
+                it.idempotencyKey == idempotencyKey(snapshot.definition.id, target)
+            }
+        ) { "Persisted ToolWorkshop stage artifact has no durable V16 reservation" }
+        val requested = profile.requested(target)
+        require(reservation.reserved == requested) {
+            "Persisted ToolWorkshop stage changed its reserved resource envelope"
+        }
+        settle(accountId, reservation, requested)
     }
 
     private suspend fun reserve(
@@ -488,24 +632,36 @@ class DurableToolWorkshopCoordinator(
         when (reservation.state) {
             ResourceBudgetReservationState.RESERVED -> budgets.commit(accountId, reservation.id, actual)
             ResourceBudgetReservationState.COMMITTED -> require(reservation.settledUsage == actual)
-            ResourceBudgetReservationState.RELEASED -> error("Completed ToolWorkshop stage has released V16 reservation")
+            ResourceBudgetReservationState.RELEASED -> error(
+                "Completed ToolWorkshop stage has released V16 reservation"
+            )
         }
     }
 
     private suspend fun loadSpecification(jobId: ToolWorkshopJobId): ToolSpecification =
-        ToolWorkshopStagePayloadCodec.decodeSpecification(requireArtifact(jobId, ToolWorkshopJobState.SPECIFIED).payload)
+        ToolWorkshopStagePayloadCodec.decodeSpecification(
+            requireArtifact(jobId, ToolWorkshopJobState.SPECIFIED).payload
+        )
 
     private suspend fun loadDesign(jobId: ToolWorkshopJobId): ToolDesign =
-        ToolWorkshopStagePayloadCodec.decodeDesign(requireArtifact(jobId, ToolWorkshopJobState.DESIGNED).payload)
+        ToolWorkshopStagePayloadCodec.decodeDesign(
+            requireArtifact(jobId, ToolWorkshopJobState.DESIGNED).payload
+        )
 
     private suspend fun loadSource(jobId: ToolWorkshopJobId): GeneratedSource =
-        ToolWorkshopStagePayloadCodec.decodeSource(requireArtifact(jobId, ToolWorkshopJobState.IMPLEMENTED).payload)
+        ToolWorkshopStagePayloadCodec.decodeSource(
+            requireArtifact(jobId, ToolWorkshopJobState.IMPLEMENTED).payload
+        )
 
     private suspend fun loadBuild(jobId: ToolWorkshopJobId): ToolBuildResult =
-        ToolWorkshopStagePayloadCodec.decodeBuild(requireArtifact(jobId, ToolWorkshopJobState.BUILT).payload)
+        ToolWorkshopStagePayloadCodec.decodeBuild(
+            requireArtifact(jobId, ToolWorkshopJobState.BUILT).payload
+        )
 
     private suspend fun loadTests(jobId: ToolWorkshopJobId): ToolTestResult =
-        ToolWorkshopStagePayloadCodec.decodeTest(requireArtifact(jobId, ToolWorkshopJobState.TESTED).payload)
+        ToolWorkshopStagePayloadCodec.decodeTest(
+            requireArtifact(jobId, ToolWorkshopJobState.TESTED).payload
+        )
 
     private suspend fun requireArtifact(
         jobId: ToolWorkshopJobId,
