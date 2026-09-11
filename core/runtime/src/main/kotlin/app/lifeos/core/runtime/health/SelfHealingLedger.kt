@@ -101,6 +101,8 @@ data class SelfHealingIncidentSnapshot(
     val lastDetail: String? = null,
     val lastEvidenceSummary: String? = null,
     val ledgerRevision: Long,
+    /** Timestamp of the durable event represented by ledgerRevision. */
+    val lastRecordedAt: Instant = Instant.EPOCH,
 ) {
     init {
         require(planFingerprint.isNotBlank())
@@ -303,6 +305,15 @@ class SelfHealingLedger(
         error("Self-healing ledger CAS retries exhausted")
     }
 
+    private suspend fun loadEvents(): List<SelfHealingEvent> {
+        val report = repository.loadReport()
+        check(report.unreadableEntries.isEmpty()) {
+            "Cannot reconstruct self-healing ledger with unreadable entries"
+        }
+        validateContiguous(report.events)
+        return report.events
+    }
+
     private fun replay(events: List<SelfHealingEvent>): SelfHealingIncidentSnapshot? {
         if (events.isEmpty()) return null
         val first = events.first()
@@ -381,6 +392,7 @@ class SelfHealingLedger(
             lastDetail = lastDetail,
             lastEvidenceSummary = lastEvidence,
             ledgerRevision = events.last().revision,
+            lastRecordedAt = events.last().recordedAt,
         )
     }
 
