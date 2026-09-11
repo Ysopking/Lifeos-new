@@ -68,6 +68,8 @@ class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolSta
             }
         }
 
+        val existingLegacyReceipt = existing?.promotionReceipt
+        val existingBoundedReceipt = existing?.boundedPromotionReceipt
         val legacyReceipt: GeneratedToolPromotionReceipt?
         val boundedReceipt = when {
             record.promotionEvidenceId == null -> {
@@ -80,17 +82,17 @@ class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolSta
                 }
                 null
             }
-            existing?.promotionReceipt != null -> {
-                legacyReceipt = existing.promotionReceipt.also {
+            existingLegacyReceipt != null -> {
+                legacyReceipt = existingLegacyReceipt.also {
                     require(it.evidenceId == record.promotionEvidenceId) {
                         "Durable promotion receipt does not match current record"
                     }
                 }
                 null
             }
-            existing?.boundedPromotionReceipt != null -> {
+            existingBoundedReceipt != null -> {
                 legacyReceipt = null
-                existing.boundedPromotionReceipt.also {
+                existingBoundedReceipt.also {
                     require(it.evidenceId == record.promotionEvidenceId) {
                         "Durable bounded promotion receipt does not match current record"
                     }
