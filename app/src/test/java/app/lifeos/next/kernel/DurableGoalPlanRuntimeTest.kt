@@ -26,6 +26,8 @@ import app.lifeos.core.runtime.goal.GoalPlanTransitionWriteResult
 import app.lifeos.core.runtime.goal.GoalStepState
 import app.lifeos.core.runtime.goal.GoalTransitionId
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalKind
+import app.lifeos.core.runtime.goal.LocalShareKind
+import app.lifeos.core.runtime.goal.LocalSharePreparation
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -41,28 +43,9 @@ class DurableGoalPlanRuntimeTest {
         val goalRepository = MemoryGoalPlanRepository()
         val checkpointRepository = MemoryCheckpointRepository()
         val ledger = DurableGoalPlanLedger(goalRepository)
-        val durableRuntime = DurableGoalPlanRuntime(
-            ledger = ledger,
-            convergence = GoalConvergenceDecisionProvider(
-                DurableConvergenceDecisionCoordinator(checkpointRepository)
-            ),
-            now = { at },
-        )
-        val goal = GoalFrame(
-            intent = IntentType.QUERY,
-            objective = "Resolve the local query",
-            entities = emptyList(),
-            references = emptyList(),
-            constraints = emptyList(),
-            ambiguities = emptyList(),
-            confidence = 1.0,
-            language = LanguageCode.EN,
-        )
-        val routing = GoalCapabilityResolution(
-            plan = LanguageGoalCapabilityMapper().plan(goal),
-            selectedProviders = emptyMap(),
-            gaps = emptyList(),
-        )
+        val durableRuntime = runtime(ledger, checkpointRepository)
+        val goal = goal(IntentType.QUERY, "Resolve the local query")
+        val routing = routing(goal)
         val source = photon("source-e2e", tags = setOf("chat"))
         val outcome = photon("outcome-e2e", tags = setOf("answer", "result"))
         val context = GoalActionContext(
@@ -113,6 +96,92 @@ class DurableGoalPlanRuntimeTest {
             it == GoalStepState.COMPLETED
         })
     }
+
+    @Test
+    fun `communication completes on persisted preparation and never claims delivery`() = runTest {
+        val goalRepository = MemoryGoalPlanRepository()
+        val checkpointRepository = MemoryCheckpointRepository()
+        val ledger = DurableGoalPlanLedger(goalRepository)
+        val persisted = mutableListOf<Photon>()
+        val durableRuntime = runtime(
+            ledger = ledger,
+            checkpoints = checkpointRepository,
+            persistDerivedOutcome = { photon ->
+                persisted += photon
+                PhotonSubmissionResult(photon, processingQueued = true)
+            },
+        )
+        val goal = goal(IntentType.COMMUNICATE, "Prepare this result for sharing")
+        val source = photon("source-share", tags = setOf("chat"))
+        val target = photon("share-target", tags = setOf("answer", "result"))
+        val goalId = PhotonId("goal-share")
+        val share = LocalSharePreparation(
+            requestSourceId = source.id,
+            requestGoalId = goalId,
+            target = target,
+            kind = LocalShareKind.TEXT,
+        )
+        val dispatcher = GoalActionDispatcher(
+            executeKnowledge = { error("unexpected knowledge") },
+            executeDeepSearch = { error("unexpected DeepSearch") },
+            executeImageGeneration = { error("unexpected image generation") },
+            executeImageTransform = { error("unexpected image transform") },
+            executeSchedule = { error("unexpected schedule") },
+            prepareCommunication = { LocalCommunicationExecutionResult.Prepared(share) },
+            executionGuard = PassThroughGoalActionExecutionGuard,
+            durableRuntimeProvider = { durableRuntime },
+        )
+
+        val result = dispatcher.execute(
+            GoalActionContext(
+                goal = goal,
+                routing = routing(goal),
+                sourcePhoton = source,
+                goalPhotonId = goalId,
+            )
+        )
+
+        assertNotNull(result.localCommunication as? LocalCommunicationExecutionResult.Prepared)
+        assertEquals(1, persisted.size)
+        val preparation = persisted.single()
+        assertTrue("share-preparation" in preparation.tags)
+        assertTrue("status=prepared" in preparation.content)
+        assertTrue("delivered" !in preparation.content)
+        assertTrue(ledger.states.value.values.single().stepStates.values.all {
+            it == GoalStepState.COMPLETED
+        })
+        assertTrue(ledger.states.value.values.single().outcomePhotonIds.values.contains(preparation.id))
+    }
+
+    private fun runtime(
+        ledger: DurableGoalPlanLedger,
+        checkpoints: MemoryCheckpointRepository,
+        persistDerivedOutcome: suspend (Photon) -> PhotonSubmissionResult? = { null },
+    ) = DurableGoalPlanRuntime(
+        ledger = ledger,
+        convergence = GoalConvergenceDecisionProvider(
+            DurableConvergenceDecisionCoordinator(checkpoints)
+        ),
+        persistDerivedOutcome = persistDerivedOutcome,
+        now = { at },
+    )
+
+    private fun goal(intent: IntentType, objective: String) = GoalFrame(
+        intent = intent,
+        objective = objective,
+        entities = emptyList(),
+        references = emptyList(),
+        constraints = emptyList(),
+        ambiguities = emptyList(),
+        confidence = 1.0,
+        language = LanguageCode.EN,
+    )
+
+    private fun routing(goal: GoalFrame) = GoalCapabilityResolution(
+        plan = LanguageGoalCapabilityMapper().plan(goal),
+        selectedProviders = emptyMap(),
+        gaps = emptyList(),
+    )
 
     private fun photon(id: String, tags: Set<String>) = Photon(
         id = PhotonId(id),
