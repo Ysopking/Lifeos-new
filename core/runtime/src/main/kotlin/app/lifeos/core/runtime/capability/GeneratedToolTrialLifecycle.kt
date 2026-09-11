@@ -53,19 +53,13 @@ data class GeneratedToolTrialEvidence(
     }
 
     val orderedResults: List<GeneratedToolTrialResult> = results.sortedBy { it.invocationId }
-
     val stats: GeneratedToolTrialStats = GeneratedToolTrialStats(
         trials = orderedResults.size,
         successes = orderedResults.count { it.success },
         expectedOutputs = orderedResults.count { it.producedExpectedOutput },
         safetyViolations = orderedResults.count { it.safetyViolation },
-        averageLatencyMs = orderedResults
-            .map { it.latencyMs.toDouble() }
-            .takeIf { it.isNotEmpty() }
-            ?.average()
-            ?: 0.0,
+        averageLatencyMs = orderedResults.map { it.latencyMs.toDouble() }.takeIf { it.isNotEmpty() }?.average() ?: 0.0,
     )
-
     val id: String = StableFieldIds.fingerprint(
         "generated-tool-trial-evidence/v1",
         toolId,
@@ -83,15 +77,10 @@ class GeneratedToolTrialLedger(
         require(toolId.isNotBlank()) { "Tool id must not be blank" }
         val currentResults = results[toolId]
         currentResults?.get(result.invocationId)?.let { existing ->
-            require(existing == result) {
-                "Conflicting generated-tool trial retry for ${result.invocationId}"
-            }
+            require(existing == result) { "Conflicting generated-tool trial retry for ${result.invocationId}" }
             return@mutationLocked false
         }
-        val evidence = GeneratedToolTrialEvidence(
-            toolId = toolId,
-            results = currentResults?.values?.toList().orEmpty() + result,
-        )
+        val evidence = GeneratedToolTrialEvidence(toolId, currentResults?.values?.toList().orEmpty() + result)
         durableState?.persistTrialEvidence(evidence)
         results.getOrPut(toolId) { linkedMapOf() }[result.invocationId] = result
         true
@@ -99,26 +88,13 @@ class GeneratedToolTrialLedger(
 
     suspend fun evidence(toolId: String): GeneratedToolTrialEvidence = mutex.withLock {
         require(toolId.isNotBlank()) { "Tool id must not be blank" }
-        GeneratedToolTrialEvidence(
-            toolId = toolId,
-            results = results[toolId]?.values?.toList().orEmpty(),
-        )
+        GeneratedToolTrialEvidence(toolId, results[toolId]?.values?.toList().orEmpty())
     }
 
     suspend fun stats(toolId: String): GeneratedToolTrialStats = evidence(toolId).stats
 
-    /**
-     * Boot-only restore of the exact durable evidence without creating a new trial event.
-     *
-     * Preserve the persisted result order in RAM. GeneratedToolTrialEvidence already derives its
-     * fingerprint and statistics from orderedResults, so canonical identity remains deterministic;
-     * re-sorting here would silently change the primary data-class value and make an idempotent
-     * boot retry compare unequal to the durable source of truth.
-     */
     internal suspend fun restore(evidence: GeneratedToolTrialEvidence) = mutex.withLock {
-        require(results[evidence.toolId].isNullOrEmpty()) {
-            "Generated-tool trial ledger ${evidence.toolId} is already loaded"
-        }
+        require(results[evidence.toolId].isNullOrEmpty()) { "Generated-tool trial ledger ${evidence.toolId} is already loaded" }
         if (evidence.results.isNotEmpty()) {
             results[evidence.toolId] = linkedMapOf<String, GeneratedToolTrialResult>().apply {
                 evidence.results.forEach { put(it.invocationId, it) }
@@ -130,11 +106,7 @@ class GeneratedToolTrialLedger(
 
     private suspend fun <T> mutationLocked(action: suspend () -> T): T {
         mutex.lock()
-        return try {
-            action()
-        } finally {
-            mutex.unlock()
-        }
+        return try { action() } finally { mutex.unlock() }
     }
 }
 
@@ -145,14 +117,10 @@ data class GeneratedToolPromotionPolicy(
     val minimumVerificationConfidence: Double = 0.90,
 ) {
     init {
-        require(minimumTrials > 0) { "Minimum trial count must be positive" }
-        require(minimumSuccessRate in 0.0..1.0) { "Minimum success rate must be normalized" }
-        require(minimumExpectedOutputRate in 0.0..1.0) {
-            "Minimum expected-output rate must be normalized"
-        }
-        require(minimumVerificationConfidence in 0.0..1.0) {
-            "Minimum promotion confidence must be normalized"
-        }
+        require(minimumTrials > 0)
+        require(minimumSuccessRate in 0.0..1.0)
+        require(minimumExpectedOutputRate in 0.0..1.0)
+        require(minimumVerificationConfidence in 0.0..1.0)
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
@@ -165,28 +133,13 @@ data class GeneratedToolPromotionPolicy(
 }
 
 sealed interface GeneratedToolTrialAdmissionResult {
-    data class TrialStarted(
-        val record: GeneratedToolRecord,
-        val sandbox: GeneratedToolSandboxDecision.Admitted,
-    ) : GeneratedToolTrialAdmissionResult
-
-    data class Rejected(
-        val record: GeneratedToolRecord,
-        val reasons: List<String>,
-    ) : GeneratedToolTrialAdmissionResult
+    data class TrialStarted(val record: GeneratedToolRecord, val sandbox: GeneratedToolSandboxDecision.Admitted) : GeneratedToolTrialAdmissionResult
+    data class Rejected(val record: GeneratedToolRecord, val reasons: List<String>) : GeneratedToolTrialAdmissionResult
 }
 
 sealed interface GeneratedToolTrialRecordResult {
-    data class Recorded(
-        val record: GeneratedToolRecord,
-        val stats: GeneratedToolTrialStats,
-    ) : GeneratedToolTrialRecordResult
-
-    data class Quarantined(
-        val record: GeneratedToolRecord,
-        val stats: GeneratedToolTrialStats,
-        val reason: String,
-    ) : GeneratedToolTrialRecordResult
+    data class Recorded(val record: GeneratedToolRecord, val stats: GeneratedToolTrialStats) : GeneratedToolTrialRecordResult
+    data class Quarantined(val record: GeneratedToolRecord, val stats: GeneratedToolTrialStats, val reason: String) : GeneratedToolTrialRecordResult
 }
 
 sealed interface GeneratedToolPromotionEvaluation {
@@ -239,19 +192,14 @@ class GeneratedToolLifecycleCoordinator(
     suspend fun recordTrial(toolId: String, result: GeneratedToolTrialResult): GeneratedToolTrialRecordResult {
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
         require(record.state == GeneratedToolState.TRIAL) { "Trial results may only be recorded for TRIAL tools" }
-
         if (result.safetyViolation) {
-            // Fail closed first: durable quarantine precedes persistence of the detailed trial result.
             val reason = "sandbox-safety-violation:${result.invocationId}"
             val quarantined = tools.transition(toolId, GeneratedToolState.QUARANTINED, message = reason)
             trialLedger.record(toolId, result)
-            val stats = trialLedger.stats(toolId)
-            return GeneratedToolTrialRecordResult.Quarantined(quarantined, stats, reason)
+            return GeneratedToolTrialRecordResult.Quarantined(quarantined, trialLedger.stats(toolId), reason)
         }
-
         trialLedger.record(toolId, result)
-        val stats = trialLedger.stats(toolId)
-        return GeneratedToolTrialRecordResult.Recorded(record, stats)
+        return GeneratedToolTrialRecordResult.Recorded(record, trialLedger.stats(toolId))
     }
 
     suspend fun evaluatePromotion(toolId: String): GeneratedToolPromotionEvaluation {
@@ -289,21 +237,16 @@ class GeneratedToolLifecycleCoordinator(
         error("J08 EvolutionPromotionBridge activation is required for $toolId")
     }
 
-    /**
-     * Internal activation primitive. Evidence is non-authoritative: current state, exact trials and
-     * the exact promotion policy are replayed under the activation mutex before registry mutation.
-     */
     internal suspend fun promote(
         toolId: String,
         evidence: GeneratedToolActivationEvidence,
         activationEvidenceRef: String = evidence.id,
         actorId: String? = null,
+        novelClaim: GeneratedToolNovelActivationClaim? = null,
     ): GeneratedToolRecord = activationMutex.withLock {
-        require(activationEvidenceRef.isNotBlank()) { "Activation evidence reference must not be blank" }
-        require(actorId == null || actorId.isNotBlank()) { "Activation actor id must not be blank" }
-        require(!evidence.activationAllowed) {
-            "Activation evidence must remain non-authoritative"
-        }
+        require(activationEvidenceRef.isNotBlank())
+        require(actorId == null || actorId.isNotBlank())
+        require(!evidence.activationAllowed)
         val evaluation = evaluatePromotion(toolId)
         require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
             "Generated tool is not eligible for promotion: $evaluation"
@@ -314,31 +257,55 @@ class GeneratedToolLifecycleCoordinator(
         require(evidence.matches(record, exactTrials, promotionPolicy)) {
             "Activation evidence is stale or belongs to another tool/trial/policy"
         }
+
+        val descriptor = record.copy(
+            state = GeneratedToolState.ACTIVE,
+            promotionEvidenceId = evidence.id,
+        ).toCapabilityDescriptor(exactTrials.stats)
+        val capabilities = capabilityRegistry
+        when (evidence) {
+            is GeneratedToolPromotionEvidence -> {
+                require(novelClaim == null) { "J03 promotion cannot consume a novel activation claim" }
+            }
+            is BoundedGeneratedToolPromotionEvidence -> {
+                val claim = requireNotNull(novelClaim) { "Bounded promotion requires a novel activation claim" }
+                requireNotNull(capabilities) { "Bounded promotion requires a capability registry" }
+                    .preflightGeneratedNovel(descriptor, record.copy(state = GeneratedToolState.ACTIVE, promotionEvidenceId = evidence.id), evidence, claim)
+            }
+        }
+
         val active = tools.promote(
             toolId = toolId,
             evidence = evidence,
             activationEvidenceRef = activationEvidenceRef,
             actorId = actorId,
         )
-        capabilityRegistry?.registerGenerated(active.toCapabilityDescriptor(exactTrials.stats), active, evidence)
+        if (capabilities != null) {
+            when (evidence) {
+                is GeneratedToolPromotionEvidence -> capabilities.registerGenerated(
+                    active.toCapabilityDescriptor(exactTrials.stats), active, evidence
+                )
+                is BoundedGeneratedToolPromotionEvidence -> capabilities.registerGeneratedNovel(
+                    active.toCapabilityDescriptor(exactTrials.stats),
+                    active,
+                    evidence,
+                    requireNotNull(novelClaim),
+                )
+            }
+        }
         active
     }
 
-    suspend fun rollback(request: GeneratedToolRollbackRequest): GeneratedToolRollbackResult =
-        activationMutex.withLock {
-            val current = requireNotNull(tools.get(request.toolId)) { "Unknown generated tool ${request.toolId}" }
-            require(current.state == GeneratedToolState.ACTIVE) { "Only ACTIVE generated tools can be rolled back" }
-            require(current.promotionEvidenceId == request.expectedPromotionEvidenceId) {
-                "Rollback request does not match current promotion evidence"
-            }
-
-            val removed = capabilityRegistry?.unregister(
-                capabilityId = current.manifest.sourceCapability,
-                providerId = current.manifest.toolId,
-            )
-            val mutation = tools.rollback(request)
-            GeneratedToolRollbackResult(mutation.record, request, removed, mutation.auditEntry)
+    suspend fun rollback(request: GeneratedToolRollbackRequest): GeneratedToolRollbackResult = activationMutex.withLock {
+        val current = requireNotNull(tools.get(request.toolId)) { "Unknown generated tool ${request.toolId}" }
+        require(current.state == GeneratedToolState.ACTIVE) { "Only ACTIVE generated tools can be rolled back" }
+        require(current.promotionEvidenceId == request.expectedPromotionEvidenceId) {
+            "Rollback request does not match current promotion evidence"
         }
+        val removed = capabilityRegistry?.unregister(current.manifest.sourceCapability, current.manifest.toolId)
+        val mutation = tools.rollback(request)
+        GeneratedToolRollbackResult(mutation.record, request, removed, mutation.auditEntry)
+    }
 
     private fun GeneratedToolRecord.toCapabilityDescriptor(stats: GeneratedToolTrialStats) = CapabilityDescriptor(
         capabilityId = manifest.sourceCapability,
