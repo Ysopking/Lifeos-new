@@ -114,10 +114,11 @@ class ThoughtGraphAttentionProjector {
         policy: ThoughtGraphAttentionPolicy = ThoughtGraphAttentionPolicy(),
         asOf: Instant = snapshot.capturedAt,
     ): ThoughtGraphWorkingSet {
-        val nodesById = snapshot.activeNodes.associateBy { it.id }
+        val attentionNodes = canonicalAttentionNodes(snapshot.activeNodes)
+        val nodesById = attentionNodes.associateBy { it.id }
         val adjacency = buildAdjacency(snapshot.activeNodes, snapshot.activeEdges)
         val goalDistances = goalDistances(
-            goalIds = snapshot.activeNodes
+            goalIds = attentionNodes
                 .filter(::isGoalNode)
                 .map { it.id }
                 .sortedBy { it.value },
@@ -126,7 +127,7 @@ class ThoughtGraphAttentionProjector {
         )
         val conflictContext = conflictContextNodeIds(snapshot)
 
-        val entries = snapshot.activeNodes
+        val entries = attentionNodes
             .map { node ->
                 attentionEntry(
                     node = node,
@@ -169,6 +170,18 @@ class ThoughtGraphAttentionProjector {
             edges = selectedEdges,
             conflicts = selectedConflicts,
         )
+    }
+
+    private fun canonicalAttentionNodes(nodes: List<ThoughtGraphNodeVersion>): List<ThoughtGraphNodeVersion> {
+        val firstClassGoalSourceIds = nodes
+            .asSequence()
+            .filter { it.kind == ThoughtGraphNodeKind.GOAL }
+            .map { it.provenance.sourceId }
+            .toSet()
+        if (firstClassGoalSourceIds.isEmpty()) return nodes
+        return nodes.filterNot { node ->
+            isLegacyGoalNode(node) && node.provenance.sourceId in firstClassGoalSourceIds
+        }
     }
 
     private fun attentionEntry(
@@ -233,8 +246,10 @@ class ThoughtGraphAttentionProjector {
     }
 
     private fun isGoalNode(node: ThoughtGraphNodeVersion): Boolean =
-        node.kind == ThoughtGraphNodeKind.GOAL ||
-            (node.kind == ThoughtGraphNodeKind.PHOTON && node.attributes["mimeType"] == GOAL_PHOTON_MIME_TYPE)
+        node.kind == ThoughtGraphNodeKind.GOAL || isLegacyGoalNode(node)
+
+    private fun isLegacyGoalNode(node: ThoughtGraphNodeVersion): Boolean =
+        node.kind == ThoughtGraphNodeKind.PHOTON && node.attributes["mimeType"] == GOAL_PHOTON_MIME_TYPE
 
     private fun buildAdjacency(
         nodes: List<ThoughtGraphNodeVersion>,
