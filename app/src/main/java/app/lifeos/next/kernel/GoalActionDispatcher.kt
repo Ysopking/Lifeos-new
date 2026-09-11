@@ -42,16 +42,8 @@ class GoalActionDispatcher(
         DurableGoalPlanRuntimeRegistry::currentOrNull,
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
-        // Production installs this runtime after kernel construction. Resolve it per execution rather than
-        // capturing the registry in the constructor so the kernel cannot accidentally bypass late wiring.
-        val durableRuntime = durableRuntimeProvider()
-        val durablePermit = when (val admission = durableRuntime?.prepare(context)) {
-            null -> null // unit/legacy composition only; production installs V7-F runtime.
-            is DurableGoalPlanAdmission.Ready -> admission.permit
-            is DurableGoalPlanAdmission.Completed -> return GoalActionDispatchResult()
-            is DurableGoalPlanAdmission.Blocked -> return blocked(context.goal.intent, admission.reason)
-        }
-
+        // Capability expansion must run before V7/V5 action admission. Otherwise a real missing
+        // capability can become WAITING_CAPABILITY before V11 ever sees the gap.
         if (!context.routing.ready) {
             val gapReason = context.routing.blockingGaps
                 .joinToString(",") { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
@@ -70,6 +62,16 @@ class GoalActionDispatcher(
                 "workshop-failed:${error::class.simpleName}:${error.message.orEmpty().take(120)}"
             }
             return blocked(context.goal.intent, "$gapReason;$workshopReason")
+        }
+
+        // Production installs this runtime after kernel construction. Resolve it per execution rather than
+        // capturing the registry in the constructor so the kernel cannot accidentally bypass late wiring.
+        val durableRuntime = durableRuntimeProvider()
+        val durablePermit = when (val admission = durableRuntime?.prepare(context)) {
+            null -> null // unit/legacy composition only; production installs V7-F runtime.
+            is DurableGoalPlanAdmission.Ready -> admission.permit
+            is DurableGoalPlanAdmission.Completed -> return GoalActionDispatchResult()
+            is DurableGoalPlanAdmission.Blocked -> return blocked(context.goal.intent, admission.reason)
         }
 
         val permit = executionGuard.prepare(context)
