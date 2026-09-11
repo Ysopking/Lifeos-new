@@ -37,6 +37,33 @@ class HotSwapLedgerTest {
     }
 
     @Test
+    fun `committed transaction can enter one durable revert flow and replay reverted`() = runTest {
+        val repository = MemoryHotSwapRepository()
+        val ledger = HotSwapLedger(repository) { NOW }
+        val prepared = ledger.prepare(
+            CAPABILITY,
+            "tool-old",
+            "tool-new",
+            "promotion-old",
+            "promotion-new",
+        )
+        val promoted = ledger.markCandidatePromoted(prepared, 7L, "world:forward")
+        val committed = ledger.markCommitted(promoted)
+        val revertPrepared = ledger.markRevertPrepared(committed, 8L, "world:revert")
+        val reverted = ledger.markReverted(revertPrepared)
+
+        val restored = requireNotNull(HotSwapLedger(repository).snapshot(prepared.transactionId))
+        assertEquals(HotSwapState.REVERTED, restored.state)
+        assertEquals(reverted, restored)
+        assertEquals(8L, restored.ownerPolicyRevision)
+        assertEquals("world:revert", restored.worldSnapshotId)
+        assertTrue(restored.terminal)
+        assertFailsWith<IllegalArgumentException> {
+            ledger.markRevertPrepared(restored, 9L, "world:second-revert")
+        }
+    }
+
+    @Test
     fun `terminal transaction cannot transition again`() = runTest {
         val ledger = HotSwapLedger(MemoryHotSwapRepository()) { NOW }
         val prepared = ledger.prepare(
