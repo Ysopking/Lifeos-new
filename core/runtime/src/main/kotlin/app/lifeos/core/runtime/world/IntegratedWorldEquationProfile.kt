@@ -4,7 +4,6 @@ import app.lifeos.core.field.world.WorldEquationSpec
 import app.lifeos.core.field.world.WorldSignalDimension
 import app.lifeos.core.field.world.WorldTransferCoefficient
 import app.lifeos.core.model.PhotonId
-import app.lifeos.core.model.task.TaskId
 import app.lifeos.core.runtime.field.FieldWorldSignalLink
 import app.lifeos.core.runtime.field.FieldWorldSignalLinkKind
 import app.lifeos.core.runtime.field.FieldWorldSignalProjection
@@ -13,7 +12,8 @@ import java.time.Instant
 /**
  * Explicit informational V4 analysis profile. It computes reproducible field-of-fields relations
  * for reporting only. Nothing in this profile grants write authority over cognition, tasks, goals,
- * hypothesis state, capability routing or actions.
+ * hypothesis state, capability routing or actions. Requests deliberately carry no sourceTaskId, so
+ * the default WorldFormula trigger policy cannot turn this analysis into a cognition trigger.
  */
 class IntegratedWorldEquationProfile {
     val spec: WorldEquationSpec = WorldEquationSpec(
@@ -31,7 +31,6 @@ class IntegratedWorldEquationProfile {
         links: List<FieldWorldSignalLink>,
         observedAt: Instant,
         config: WorldFormulaConfig = WorldFormulaConfig(),
-        sourceTaskId: TaskId? = null,
         photonId: PhotonId? = null,
     ): WorldFormulaRequest = WorldFormulaRequest(
         inputs = projection.inputs,
@@ -39,7 +38,7 @@ class IntegratedWorldEquationProfile {
         equationVersion = spec.version,
         observedAt = observedAt,
         config = config,
-        sourceTaskId = sourceTaskId,
+        sourceTaskId = null,
         photonId = photonId,
     )
 
