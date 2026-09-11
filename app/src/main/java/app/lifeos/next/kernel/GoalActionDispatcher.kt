@@ -56,7 +56,20 @@ class GoalActionDispatcher(
             val gapReason = context.routing.blockingGaps
                 .joinToString(",") { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
                 .ifBlank { "goal-is-not-action-ready" }
-            return blocked(context.goal.intent, gapReason)
+            val workshopReason = try {
+                when (val result = AutonomousToolWorkshopRuntimeRegistry.processIfInstalled(context)) {
+                    null,
+                    AutonomousToolWorkshopResult.NotNeeded -> "workshop-not-needed"
+                    is AutonomousToolWorkshopResult.Progressed -> result.jobs.joinToString(",") {
+                        "${it.definition.capabilityId.value}:${it.state.name}"
+                    }.ifBlank { "workshop-progressed" }
+                    is AutonomousToolWorkshopResult.Blocked ->
+                        "workshop-blocked:${result.reason}"
+                }
+            } catch (error: Exception) {
+                "workshop-failed:${error::class.simpleName}:${error.message.orEmpty().take(120)}"
+            }
+            return blocked(context.goal.intent, "$gapReason;$workshopReason")
         }
 
         val permit = executionGuard.prepare(context)
