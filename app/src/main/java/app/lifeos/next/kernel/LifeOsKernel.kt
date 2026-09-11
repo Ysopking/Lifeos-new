@@ -625,7 +625,9 @@ class LifeOsKernel internal constructor(
         supervisor.start()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
-        runtimePhotons.forEach { runtime.ingest(it) }
+        // Restore the process-local read model without enqueuing a second task family.
+        // Durable reconciliation has already restored missing work; terminal work stays terminal.
+        runtimePhotons.forEach { matrix.influence(it) }
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = if (degraded) KernelBootstrapStatus.DEGRADED else KernelBootstrapStatus.READY,
