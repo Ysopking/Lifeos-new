@@ -59,8 +59,10 @@ import app.lifeos.core.runtime.capability.TrustLevel
 import app.lifeos.core.runtime.cognition.CognitiveScheduler
 import app.lifeos.core.runtime.cognition.CompositeDurableTaskExecutionObserver
 import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
+import app.lifeos.core.runtime.cognition.DurableCognitionAdmissionController
 import app.lifeos.core.runtime.cognition.DurableCognitionDispatcher
 import app.lifeos.core.runtime.cognition.DurableCognitionReconciler
+import app.lifeos.core.runtime.cognition.DurableCognitionRecoveryObserver
 import app.lifeos.core.runtime.cognition.DurableCognitiveTriggerSink
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveEventJournal
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveOutcomeJournal
@@ -299,10 +301,17 @@ class LifeOsKernelFactory(
 
         val cognitiveEventJournal = InMemoryCognitiveEventJournal()
         val cognitiveScheduler = CognitiveScheduler()
+        val cognitionAdmission = DurableCognitionAdmissionController(
+            tasks = taskRepository,
+            taskEngine = taskEngine,
+        )
         val continuousCognition = ContinuousCognitionEngine(
             journal = cognitiveEventJournal,
             scheduler = cognitiveScheduler,
-            durableDispatcher = DurableCognitionDispatcher(taskEngine),
+            durableDispatcher = DurableCognitionDispatcher(
+                taskEngine = taskEngine,
+                admissionController = cognitionAdmission,
+            ),
         )
         val cognitionReconciler = DurableCognitionReconciler(
             photons = store,
@@ -348,6 +357,7 @@ class LifeOsKernelFactory(
                         triggers = cognitiveTriggers,
                     ),
                     healthTaskObserver,
+                    DurableCognitionRecoveryObserver(cognitionReconciler),
                 )
             ),
         )
@@ -403,10 +413,7 @@ class LifeOsKernelFactory(
             primary = primaryStateRehydrator,
             additionalSteps = listOf(
                 RuntimeStateRehydrationStep {
-                    while (true) {
-                        val reconciliation = cognitionReconciler.reconcile()
-                        if (reconciliation.deferred == 0) break
-                    }
+                    cognitionReconciler.reconcile()
                 },
                 RuntimeStateRehydrationStep {
                     // Read-only full-vault decode: a corrupt evolution vault must fail before runtime start.

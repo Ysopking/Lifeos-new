@@ -3,7 +3,8 @@ package app.lifeos.core.runtime.tasks
 import app.lifeos.core.model.task.CreateTaskResult
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskId
-import app.lifeos.core.model.task.TaskRepository
+import app.lifeos.core.model.task.TaskLoadReport
+import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskStateMachine
 import app.lifeos.core.model.worker.WorkerId
@@ -11,7 +12,7 @@ import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class InMemoryTaskRepository : TaskRepository {
+class InMemoryTaskRepository : TaskSnapshotRepository {
     private val mutex = Mutex()
     private val tasks = linkedMapOf<TaskId, LifeTask>()
     private val idempotencyIndex = mutableMapOf<String, TaskId>()
@@ -31,6 +32,13 @@ class InMemoryTaskRepository : TaskRepository {
 
     override suspend fun get(id: TaskId): LifeTask? = mutex.withLock {
         tasks[id]
+    }
+
+    override suspend fun loadReport(): TaskLoadReport = mutex.withLock {
+        TaskLoadReport(
+            tasks = tasks.values.toList(),
+            unreadableEntries = emptyList(),
+        )
     }
 
     override suspend fun findByIdempotencyKey(key: String): LifeTask? = mutex.withLock {

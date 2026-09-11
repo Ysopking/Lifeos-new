@@ -4,10 +4,10 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.task.TaskDraft
-import app.lifeos.core.model.task.TaskState
-import app.lifeos.core.runtime.tasks.DurableTaskEngine
 import app.lifeos.core.model.task.TaskSnapshotRepository
+import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskType
+import app.lifeos.core.runtime.tasks.DurableTaskEngine
 
 data class DurableCognitionReconciliationResult(
     val scannedPhotons: Int,
@@ -22,6 +22,10 @@ data class DurableCognitionReconciliationResult(
  * Repairs the only non-atomic boundary in live cognition: a photon can be durably saved before its
  * PROCESS_PHOTON task is durably created. Existing task records, including terminal records, are
  * the cross-process coverage ledger. Reconciliation therefore never creates a second queue/vault.
+ *
+ * Each pass is deliberately bounded. Durable admission may stop a pass earlier when TaskStore
+ * capacity is exhausted; uncovered photons remain in the photon vault and are therefore the
+ * recovery source of truth for a later pass.
  */
 class DurableCognitionReconciler(
     private val photons: PhotonRepository,
@@ -79,10 +83,10 @@ class DurableCognitionReconciler(
         val uncovered = orderedPhotons.filter { photon ->
             PhotonRevision(photon.id, photon.revision) !in coveredRevisions
         }
-        val batch = uncovered.take(maxSubmissionsPerPass - createdBatch.size)
-        val taskIds = ArrayList<String>(batch.size)
+        val candidates = uncovered.take((maxSubmissionsPerPass - createdBatch.size).coerceAtLeast(0))
+        val taskIds = ArrayList<String>(candidates.size)
 
-        for (photon in batch) {
+        for (photon in candidates) {
             val submission = cognition.submit(
                 delta = PhotonDelta(
                     deltaId = CognitiveDeltaIdentity.photonRevision(photon.id, photon.revision),
@@ -106,17 +110,16 @@ class DurableCognitionReconciler(
                 targetModules = setOf(THOUGHT_MATRIX_MODULE),
                 budget = RECONCILIATION_BUDGET,
             )
-            check(submission.accepted && submission.durableTaskId != null) {
-                "Reconciled cognitive work was not durabilized for ${photon.id.value}@${photon.revision}"
-            }
-            taskIds += submission.durableTaskId
+            val durableTaskId = submission.durableTaskId ?: break
+            if (!submission.accepted) break
+            taskIds += durableTaskId
         }
 
         return DurableCognitionReconciliationResult(
             scannedPhotons = orderedPhotons.size,
             alreadyCovered = orderedPhotons.size - uncovered.size,
-            submitted = batch.size,
-            deferred = uncovered.size - batch.size + created.size - createdBatch.size,
+            submitted = taskIds.size,
+            deferred = uncovered.size - taskIds.size + created.size - createdBatch.size,
             durableTaskIds = taskIds,
             resumedCreated = createdBatch.size,
         )

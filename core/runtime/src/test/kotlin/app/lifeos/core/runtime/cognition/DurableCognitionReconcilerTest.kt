@@ -12,6 +12,7 @@ import app.lifeos.core.model.task.TaskRepository
 import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskType
+import app.lifeos.core.model.worker.WorkerId
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
 import app.lifeos.core.runtime.tasks.InMemoryTaskRepository
 import app.lifeos.core.runtime.tasks.TaskSchedulerSignal
@@ -134,6 +135,66 @@ class DurableCognitionReconcilerTest {
         assertEquals(listOf(3, 1, 0), listOf(first.deferred, second.deferred, third.deferred))
         assertEquals(5, tasks.snapshot().size)
         assertEquals(0, reconciler.reconcile().submitted)
+    }
+
+    @Test
+    fun durableCapacityDefersThenRefillsAfterTerminalTask() = runTest {
+        val photons = TestPhotonRepository((1..2).map { photon("capacity-$it", revision = 1) })
+        val tasks = SnapshotTaskRepository()
+        val now = Instant.parse("2026-09-11T10:00:00Z")
+        val taskEngine = DurableTaskEngine(
+            tasks = tasks,
+            schedulerSignal = TaskSchedulerSignal { },
+            now = { now },
+        )
+        val admission = DurableCognitionAdmissionController(
+            tasks = tasks,
+            taskEngine = taskEngine,
+            maxActiveTasks = 1,
+        )
+        val cognition = ContinuousCognitionEngine(
+            journal = InMemoryCognitiveEventJournal(),
+            scheduler = CognitiveScheduler(),
+            durableDispatcher = DurableCognitionDispatcher(
+                taskEngine = taskEngine,
+                admissionController = admission,
+            ),
+        )
+        val reconciler = DurableCognitionReconciler(
+            photons = photons,
+            tasks = tasks,
+            cognition = cognition,
+            taskEngine = taskEngine,
+        )
+
+        val firstPass = reconciler.reconcile()
+        assertEquals(1, firstPass.submitted)
+        assertEquals(1, firstPass.deferred)
+
+        val firstTask = tasks.snapshot().single()
+        val worker = WorkerId("test-worker")
+        val claimed = assertNotNull(
+            tasks.claim(
+                id = firstTask.id,
+                workerId = worker,
+                acquiredAt = now.plusSeconds(1),
+                leaseUntil = now.plusSeconds(30),
+            )
+        )
+        assertNotNull(tasks.startExecution(claimed.id, worker, now.plusSeconds(2)))
+        assertNotNull(
+            tasks.finishExecution(
+                id = claimed.id,
+                workerId = worker,
+                finalState = TaskState.COMPLETED,
+                finishedAt = now.plusSeconds(3),
+            )
+        )
+
+        val refillPass = reconciler.reconcile()
+        assertEquals(1, refillPass.submitted)
+        assertEquals(0, refillPass.deferred)
+        assertEquals(2, tasks.snapshot().size)
     }
 
     @Test
