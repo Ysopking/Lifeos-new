@@ -10,6 +10,8 @@ import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationId
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
+import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
+import java.time.Instant
 
 data class HotSwapBootReconciliationReport(
     val committedRestored: Int,
@@ -102,6 +104,14 @@ class HotSwapBootReconciler(
                     }
                     if (settleInitialBudget(transaction, committed = false)) budgetsReleased += 1
                 }
+            }
+            // V15 observes the post-reconciliation durable state. It never supplies authority to
+            // applyRouting and cannot turn a blocked restore into a successful one.
+            ledger.snapshot(transaction.transactionId)?.let { current ->
+                DecisionTraceRuntimeRegistry.currentOrNull()?.recordHotSwap(
+                    snapshot = current,
+                    recordedAt = Instant.now(),
+                )
             }
         }
         return HotSwapBootReconciliationReport(
