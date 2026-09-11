@@ -24,6 +24,10 @@ run_test \
   'app.lifeos.next.PrivateV1DeviceSmokeTest#seedGeneratedToolAndAssertRuntime' \
   "$report_dir/seed-active.txt"
 
+run_test \
+  'app.lifeos.next.ThoughtGraphCompactionDeviceTest#seedCompactedGraphHistory' \
+  "$report_dir/seed-graph-compaction.txt"
+
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.MainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
@@ -31,6 +35,10 @@ pid="$(adb shell pidof app.lifeos.next | tr -d '\r')"
 test -n "$pid"
 activities="$(adb shell dumpsys activity activities)"
 printf '%s\n' "$activities" | grep -q 'app.lifeos.next/.MainActivity'
+
+run_test \
+  'app.lifeos.next.ThoughtGraphCompactionDeviceTest#recoverCompactedGraphHistory' \
+  "$report_dir/recovered-graph-compaction.txt"
 
 run_test \
   'app.lifeos.next.PrivateV1DeviceSmokeTest#assertRecoveredRuntimeAndToolEvidence' \
