@@ -22,9 +22,7 @@ data class ConvergenceActionGateResult(
     }
 }
 
-/**
- * Pure V5 policy gate. Stable ids order results but never resolve score ties.
- */
+/** Pure V5 policy gate. Stable ids order results but never resolve score ties. */
 class ConvergenceActionGate(
     private val policy: ConvergenceDecisionPolicy = ConvergenceDecisionPolicy(),
 ) {
@@ -74,13 +72,22 @@ class ConvergenceActionGate(
                     )
                 }
 
-                val topAssessment = assessments.last { it.hypothesisId == top.id && it.domainId == result.state.domainId }
+                val domainAssessments = assessments.filter { it.domainId == result.state.domainId }
+                val topAssessment = domainAssessments.first { it.hypothesisId == top.id }
+                val runnerAssessment = runnerUp?.let { runner ->
+                    domainAssessments.first { it.hypothesisId == runner.id }
+                }
+                val confidenceBandsOverlap = runnerAssessment != null &&
+                    topAssessment.confidenceBand.lower <= runnerAssessment.confidenceBand.upper
                 val domainReasons = buildList {
                     if (result.status != ConvergenceStatus.CONVERGED) add("domain-not-converged:${result.state.domainId.value}:${result.status.name}")
                     if (top.score.total < policy.minTotalScore) add("total-score-below-threshold:${top.id.value}")
                     if (top.score.evidence < policy.minEvidenceScore) add("evidence-score-below-threshold:${top.id.value}")
                     if (runnerUp != null && topAssessment.marginToRunnerUp < policy.minWinnerMargin) {
                         add("winner-margin-below-threshold:${top.id.value}:${runnerUp.id.value}")
+                    }
+                    if (runnerUp != null && confidenceBandsOverlap) {
+                        add("confidence-bands-overlap:${top.id.value}:${runnerUp.id.value}")
                     }
                     if (top.score.contradiction > policy.maxContradiction) add("contradiction-above-threshold:${top.id.value}")
                     if (topAssessment.conflictSeverity > policy.maxConflictSeverity) add("conflict-above-threshold:${top.id.value}")
@@ -111,7 +118,11 @@ class ConvergenceActionGate(
             actionable = actionable,
             conflicted = conflicted,
             selectedHypothesisIds = if (actionable) selected.distinct().sortedBy { it.value } else emptyList(),
-            candidates = assessments.sortedWith(compareBy({ it.domainId.value }, { -it.totalScore }, { it.hypothesisId.value })),
+            candidates = assessments.sortedWith(
+                compareBy<ConvergenceCandidateAssessment> { it.domainId.value }
+                    .thenByDescending { it.totalScore }
+                    .thenBy { it.hypothesisId.value }
+            ),
             reasons = if (actionable) listOf("all-convergence-action-gates-satisfied") else reasons.distinct().sorted(),
         )
     }
