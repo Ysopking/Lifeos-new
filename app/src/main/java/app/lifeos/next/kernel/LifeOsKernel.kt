@@ -36,6 +36,7 @@ import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.goal.GoalResumeEngine
+import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
 import app.lifeos.core.runtime.goal.GoalResumeResult
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalResult
@@ -68,6 +69,8 @@ class LifeOsKernel internal constructor(
     val photonTransactions: PhotonTransactionJournal,
     val cognitiveOutcomes: CognitiveOutcomeJournal,
     val cognitiveTriggers: CognitiveTriggerSink,
+    /** Durable V7 state, verified and replayed before the runtime is started. */
+    val goalPlans: DurableGoalPlanLedger,
     /** Lazily probes and selects the strongest offline MMSI execution path supported by this device. */
     val mmsiRuntime: MmsiRuntimeBackendProbe,
     /** Deterministic GoalFrame -> SceneGraph compiler used by image action execution. */

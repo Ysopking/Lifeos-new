@@ -13,9 +13,11 @@ on:
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/workers/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/thought/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/capability/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/evolution/**"
+      - "core/data/src/main/kotlin/app/lifeos/core/data/goal/**"
 permissions:
   contents: read
 concurrency:

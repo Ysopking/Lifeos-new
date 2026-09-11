@@ -56,6 +56,7 @@ class DurableCognitionReconcilerTest {
                 type = TaskType.PROCESS_PHOTON,
                 inputPhotonIds = setOf(photon.id),
                 inputPhotonRevisions = mapOf(photon.id to photon.revision),
+                createdAt = photon.provenance.createdAt,
                 idempotencyKey = "legacy-random-delta-key",
             )
         )
@@ -92,6 +93,7 @@ class DurableCognitionReconcilerTest {
             state = TaskState.FAILED,
             inputPhotonIds = setOf(photon.id),
             inputPhotonRevisions = mapOf(photon.id to photon.revision),
+            createdAt = photon.provenance.createdAt,
             idempotencyKey = "failed-existing",
         )
         val tasks = SnapshotTaskRepository(snapshotExtras = listOf(failed))
@@ -205,6 +207,7 @@ class DurableCognitionReconcilerTest {
             type = TaskType.PROCESS_PHOTON,
             inputPhotonIds = setOf(photon.id),
             inputPhotonRevisions = mapOf(photon.id to photon.revision),
+            createdAt = photon.provenance.createdAt,
             idempotencyKey = "legacy-created-key",
         )
         tasks.create(created)

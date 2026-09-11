@@ -9,6 +9,8 @@ import app.lifeos.core.data.evolution.EncryptedEvolutionStore
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.learning.EncryptedLearningAdaptationRepository
+import app.lifeos.core.data.goal.EncryptedGoalPlanRepository
+import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
 import app.lifeos.core.data.task.EncryptedTaskRepository
 import app.lifeos.core.data.thought.EncryptedFieldThoughtGraphProjectionOutboxRepository
 import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
@@ -129,6 +131,8 @@ class LifeOsKernelFactory(
         val store = EncryptedPhotonStore(appContext)
         val learningAdaptationRepository = EncryptedLearningAdaptationRepository(appContext)
         val learningAdaptations = DurableLearningAdaptationLedger(learningAdaptationRepository)
+        val goalPlanRepository = EncryptedGoalPlanRepository(appContext)
+        val goalPlans = DurableGoalPlanLedger(goalPlanRepository)
         val learnedProviderReliability = LearnedProviderReliabilityResolver(learningAdaptations)
         val learnedFieldCalibration = LearnedFieldCalibration(learningAdaptations)
         val assetStore = EncryptedBinaryAssetStore(appContext)
@@ -441,6 +445,9 @@ class LifeOsKernelFactory(
             primary = primaryStateRehydrator,
             additionalSteps = listOf(
                 RuntimeStateRehydrationStep {
+                    goalPlans.rehydrate()
+                },
+                RuntimeStateRehydrationStep {
                     learningAdaptations.rehydrate()
                 },
                 RuntimeStateRehydrationStep {
@@ -476,6 +483,18 @@ class LifeOsKernelFactory(
             },
             storeVerifier = CompositeStoreVerifier(
                 probes = listOf(
+                    object : StoreProbe {
+                        override val storeId: String = "goal-plan-ledger"
+
+                        override suspend fun probe(): StoreStatus {
+                            val report = goalPlanRepository.loadReport()
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.isCorrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
+                                message = if (report.isCorrupted) "unreadable:${report.unreadableEntries.size}" else null,
+                            )
+                        }
+                    },
                     object : StoreProbe {
                         override val storeId: String = "photon-store"
 
@@ -728,6 +747,7 @@ class LifeOsKernelFactory(
             mmsiRuntime = mmsiRuntime,
             languageUnderstanding = languageUnderstanding,
             goalPhotonFactory = goalPhotonFactory,
+            goalPlans = goalPlans,
             languageContextBuilder = languageContextBuilder,
             goalCapabilityRouter = goalCapabilityRouter,
             privateGeneratedToolRuntime = privateGeneratedToolRuntime,
