@@ -33,6 +33,7 @@ import app.lifeos.core.runtime.cognition.PhotonDelta
 import app.lifeos.core.runtime.cognition.PhotonDeltaType
 import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
+import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.goal.GoalResumeEngine
 import app.lifeos.core.runtime.goal.GoalResumeResult
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
@@ -80,6 +81,7 @@ class LifeOsKernel internal constructor(
     private val languageContextBuilder: PhotonLanguageContextBuilder,
     private val goalCapabilityRouter: LanguageGoalCapabilityRouter,
     private val privateGeneratedToolRuntime: PrivateGeneratedToolRuntimeResources,
+    private val evolutionRuntime: EvolutionRuntimeResources,
     private val localReminderScheduler: LocalReminderScheduler,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
@@ -253,15 +255,23 @@ class LifeOsKernel internal constructor(
 
     /**
      * Explicit private-user action for one blocking gap. It persists a typed request and a separate
-     * exact approval before bounded Genesis runs. The result can only become TRIAL or REJECTED here;
-     * ACTIVE still requires the independent evolution/canary promotion path.
+     * exact approval before bounded Genesis runs. The result can only become TRIAL or REJECTED here.
      */
     suspend fun generateExplicitlyApprovedTool(gap: CapabilityGap): GeneratedToolUserActionResult {
-        require(
-            mutableBootstrapState.value.status == KernelBootstrapStatus.READY ||
-                mutableBootstrapState.value.status == KernelBootstrapStatus.DEGRADED
-        ) { "Generated-tool action requires a completed kernel boot" }
+        requireCompletedBoot("Generated-tool action")
         return generatedToolUserActions.generateExplicitlyApproved(gap)
+    }
+
+    /**
+     * Separate explicit private-owner action for one already-TRIAL bounded tool. It runs the five
+     * non-productive Novel Canary probes and the independent evidence gates before guarded ACTIVE.
+     */
+    suspend fun reviewAndActivateGeneratedTool(toolId: String): PrivateNovelCapabilityActivationResult {
+        requireCompletedBoot("Generated-tool review and activation")
+        return evolutionRuntime.privateNovelActivation.reviewAndActivate(
+            toolId = toolId,
+            ownerActorId = PRIVATE_OWNER_ACTOR_ID,
+        )
     }
 
     /** Records only local handoff to Android's chooser; it never claims external delivery. */
@@ -323,6 +333,13 @@ class LifeOsKernel internal constructor(
                 processingFailure = error.message ?: error::class.simpleName,
             )
         }
+    }
+
+    private fun requireCompletedBoot(action: String) {
+        require(
+            mutableBootstrapState.value.status == KernelBootstrapStatus.READY ||
+                mutableBootstrapState.value.status == KernelBootstrapStatus.DEGRADED
+        ) { "$action requires a completed kernel boot" }
     }
 
     private suspend fun executeGoalResume(
@@ -620,6 +637,7 @@ class LifeOsKernel internal constructor(
     }
 
     private companion object {
+        const val PRIVATE_OWNER_ACTOR_ID = "private-owner"
         val LIVE_SUBMISSION_BUDGET = CognitiveWorkBudget(
             maxDurationMs = 30_000,
             maxModuleInvocations = 16,
