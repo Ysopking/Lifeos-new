@@ -21,3 +21,19 @@ fun interface SharedResourceBudgetGate {
         demands: List<ResourceBudgetDemand>,
     ): SharedResourceBudgetDecision
 }
+
+/**
+ * Process-level bridge installed by the private APK before kernel construction. Core modules can use
+ * the exact same broker instance without depending on Android or constructing parallel World Formula
+ * repositories. If no gate is installed, legacy/local tests remain deterministic through null.
+ */
+object SharedResourceBudgetRuntimeRegistry {
+    @Volatile
+    private var installed: SharedResourceBudgetGate? = null
+
+    fun install(gate: SharedResourceBudgetGate) {
+        installed = gate
+    }
+
+    fun current(): SharedResourceBudgetGate? = installed
+}
