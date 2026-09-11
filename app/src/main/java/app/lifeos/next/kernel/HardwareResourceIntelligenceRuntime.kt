@@ -20,7 +20,7 @@ import app.lifeos.core.runtime.world.WorldFormulaStatus
  * and persisted before it may influence a resource recommendation. The World Formula stays
  * informational: hard owner/system quotas remain absolute and this bridge can only reduce them.
  */
-class HardwareResourceIntelligenceRuntime(
+class HardwareResourceIntelligenceRuntime internal constructor(
     context: Context,
     private val reader: AndroidHardwareStateReader = AndroidHardwareStateReader(context),
     private val optimizer: HardwareAdaptiveResourceOptimizer = HardwareAdaptiveResourceOptimizer(),
