@@ -5,6 +5,7 @@ import app.lifeos.core.language.IntentType
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
+import kotlinx.coroutines.CancellationException
 
 /** Immutable input for one already-resolved goal action. */
 data class GoalActionContext(
@@ -58,6 +59,8 @@ class GoalActionDispatcher(
                     is AutonomousToolWorkshopResult.Blocked ->
                         "workshop-blocked:${result.reason}"
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 "workshop-failed:${error::class.simpleName}:${error.message.orEmpty().take(120)}"
             }
