@@ -7,6 +7,7 @@ import app.lifeos.core.runtime.capability.CapabilityId
 import app.lifeos.core.runtime.capability.CapabilityRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolArtifact
 import app.lifeos.core.runtime.capability.GeneratedToolArtifactRepository
+import app.lifeos.core.runtime.capability.GeneratedToolAuditAction
 import app.lifeos.core.runtime.capability.GeneratedToolAuditEntry
 import app.lifeos.core.runtime.capability.GeneratedToolInstruction
 import app.lifeos.core.runtime.capability.GeneratedToolLifecycleCoordinator
@@ -18,6 +19,7 @@ import app.lifeos.core.runtime.capability.GeneratedToolProgramCodec
 import app.lifeos.core.runtime.capability.GeneratedToolPromotionEvidence
 import app.lifeos.core.runtime.capability.GeneratedToolRecord
 import app.lifeos.core.runtime.capability.GeneratedToolRegistry
+import app.lifeos.core.runtime.capability.GeneratedToolRollbackRequest
 import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.capability.GeneratedToolStateRepository
 import app.lifeos.core.runtime.capability.GeneratedToolTrialEvidence
@@ -33,12 +35,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class PrivateNovelCapabilityActivationCoordinatorTest {
     private val t0 = Instant.parse("2026-09-11T06:00:00Z")
 
     @Test
-    fun `explicit private activation adds five novel trials activates once and is idempotent`() = runTest {
+    fun `explicit private activation adds five novel trials activates once and rollback preserves trace`() = runTest {
         val durable = MemoryBoundedStateRepository()
         val artifacts = MemoryArtifactRepository(createArtifact())
         val capabilities = CapabilityRegistry()
@@ -109,6 +112,25 @@ class PrivateNovelCapabilityActivationCoordinatorTest {
         )
         assertEquals(TOOL_ID, second.record.manifest.toolId)
         assertEquals(8, trials.stats(TOOL_ID).trials)
+
+        val rollback = lifecycle.rollback(
+            GeneratedToolRollbackRequest(
+                toolId = TOOL_ID,
+                expectedPromotionEvidenceId = activated.promotion.evidence.id,
+                actorId = "private-owner",
+                evidenceRef = "owner-explicit-rollback",
+                reason = "bounded-regression-rollback",
+                occurredAt = t0.plusSeconds(120),
+            )
+        )
+        assertEquals(GeneratedToolState.QUARANTINED, rollback.record.state)
+        assertEquals(activated.promotion.evidence.id, rollback.record.promotionEvidenceId)
+        assertTrue(capabilities.providersFor(CAPABILITY, includeUnavailable = true).isEmpty())
+        val persisted = assertNotNull(durable.state)
+        assertEquals(GeneratedToolAuditAction.ROLLED_BACK, persisted.auditEntries.last().action)
+        val preservedReceipt = assertNotNull(persisted.boundedPromotionReceipt)
+        assertEquals(activated.promotion.evidence.id, preservedReceipt.evidenceId)
+        assertEquals(activated.promotion.seal.id, preservedReceipt.promotionSealId)
     }
 
     private fun createArtifact(): GeneratedToolArtifact {
@@ -161,12 +183,19 @@ class PrivateNovelCapabilityActivationCoordinatorTest {
             auditEntries: List<GeneratedToolAuditEntry>,
             promotionEvidence: GeneratedToolPromotionEvidence?,
         ) {
-            val trials = state?.trialEvidence ?: GeneratedToolTrialEvidence(record.manifest.toolId, emptyList())
+            val existing = state
+            val trials = existing?.trialEvidence ?: GeneratedToolTrialEvidence(record.manifest.toolId, emptyList())
+            val legacyReceipt = promotionEvidence
+                ?.let { app.lifeos.core.runtime.capability.GeneratedToolPromotionReceipt.from(it) }
+                ?: existing?.promotionReceipt?.takeIf { record.promotionEvidenceId == it.evidenceId }
+            val boundedReceipt = existing?.boundedPromotionReceipt
+                ?.takeIf { record.promotionEvidenceId == it.evidenceId && promotionEvidence == null }
             state = GeneratedToolPersistentState(
                 record = record,
                 auditEntries = auditEntries,
                 trialEvidence = trials,
-                promotionReceipt = promotionEvidence?.let { app.lifeos.core.runtime.capability.GeneratedToolPromotionReceipt.from(it) },
+                promotionReceipt = legacyReceipt,
+                boundedPromotionReceipt = boundedReceipt,
             )
         }
 
