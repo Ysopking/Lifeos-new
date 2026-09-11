@@ -21,12 +21,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
-      - run: gradle test :app:lintDebug :app:assembleDebug --stacktrace
+      - run: gradle test :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: LIFEOS-Next-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Android test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIFEOS-android-test-debug
+          path: app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           if-no-files-found: error
           retention-days: 14
       - name: Upload test and lint reports
@@ -49,9 +56,16 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Download debug APK
+        uses: actions/download-artifact@v4
         with:
-          gradle-version: "9.3.1"
+          name: LIFEOS-Next-debug
+          path: app/build/outputs/apk/debug
+      - name: Download Android test APK
+        uses: actions/download-artifact@v4
+        with:
+          name: LIFEOS-android-test-debug
+          path: app/build/outputs/apk/androidTest/debug
       - name: Free disk for Android emulator
         shell: bash
         run: |
@@ -70,13 +84,14 @@ jobs:
           script: |
             set -eu
             mkdir -p android-emulator-recovery
-            gradle :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+            test -s app/build/outputs/apk/debug/app-debug.apk
+            test -s app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 
             run_test() {
-              local test_name="$1"
-              local report="$2"
+              test_name="$1"
+              report="$2"
               adb shell am instrument -w \
                 -e class "$test_name" \
                 app.lifeos.next.test/androidx.test.runner.AndroidJUnitRunner \
