@@ -73,6 +73,27 @@ class DeepSearchMissionCoordinatorTest {
         }
     }
 
+    @Test
+    fun `unverified result photon is rejected before persistence`() = runTest {
+        val missionRepo = MemoryMissionRepository()
+        val checkpointRepo = MemoryCheckpointRepository()
+        val photons = MemoryResultPhotons()
+        val coordinator = DeepSearchMissionCoordinator(
+            DeepSearchMissionLedger(missionRepo, now = { now }),
+            DeepSearchCheckpointStore(checkpointRepo, now = { now }),
+            photons,
+        )
+        val definition = definition()
+
+        assertFailsWith<IllegalArgumentException> {
+            coordinator.run(definition) { _, sink, missionId ->
+                val valid = searchProduct(missionId, sink)
+                valid.copy(photon = valid.photon.copy(tags = valid.photon.tags - "deepsearch-status:resolved"))
+            }
+        }
+        assertEquals(null, photons.findForMission(definition.id))
+    }
+
     private suspend fun searchProduct(
         missionId: DeepSearchMissionId,
         sink: DeepSearchCheckpointSink,
@@ -94,22 +115,32 @@ class DeepSearchMissionCoordinatorTest {
             checkpointSink = sink,
         )
         assertEquals(DeepSearchStatus.RESOLVED, result.status)
+        val evidenceIds = result.evidence.mapNotNull { it.sourcePhotonId }
         val photon = Photon(
             id = PhotonId("deep-search-result_${missionId.value.removePrefix(DeepSearchMissionId.PREFIX)}"),
             content = "LIFEOS photon evidence",
             phase = PhotonPhase.CONVERGED,
             confidence = 0.95,
-            provenance = Provenance("test-deepsearch-v2", "test", now),
+            provenance = Provenance(
+                source = "test-deepsearch-v2",
+                actor = "test",
+                createdAt = now,
+                parentIds = setOf(
+                    PhotonId("source-chat"),
+                    PhotonId("goal-deepsearch"),
+                ) + evidenceIds,
+            ),
             tags = setOf(
                 "deepsearch-answer",
                 "deepsearch-status:resolved",
+                "deepsearch-work:${result.workUnitsUsed}",
                 "deepsearch-mission:${missionId.value}",
             ),
         )
         return DeepSearchMissionProduct(
             photon = photon,
             result = result,
-            evidencePhotonIds = result.evidence.mapNotNull { it.sourcePhotonId },
+            evidencePhotonIds = evidenceIds,
             missionId = missionId,
         )
     }
