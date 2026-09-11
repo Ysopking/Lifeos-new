@@ -11,6 +11,7 @@ import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
 import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
 import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
+import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
 import kotlinx.coroutines.sync.withLock
 
@@ -27,7 +28,7 @@ class DurableCognitionAdmissionController(
     private val tasks: TaskSnapshotRepository,
     private val taskEngine: DurableTaskEngine,
     private val maxActiveTasks: Int = DEFAULT_MAX_ACTIVE_TASKS,
-    private val sharedBudgets: SharedResourceBudgetGate? = null,
+    private val sharedBudgets: SharedResourceBudgetGate? = SharedResourceBudgetRuntimeRegistry.current(),
 ) {
     private val mutex = taskEngine.cognitionAdmissionMutex
 
