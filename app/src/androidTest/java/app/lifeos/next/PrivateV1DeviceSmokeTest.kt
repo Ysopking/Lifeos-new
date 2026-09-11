@@ -98,7 +98,7 @@ class PrivateV1DeviceSmokeTest {
             assertNotNull(activeTool.boundedReadinessEvidenceId)
             assertNotNull(activeTool.boundedPromotionSealId)
             assertEquals(activated.promotion.evidence.id, activeTool.promotionEvidenceId)
-            assertEquals(activated.promotion.admission.id, activeTool.boundedAdmissionEvidenceId)
+            assertEquals(activated.promotion.evidence.novelAdmissionEvidenceId, activeTool.boundedAdmissionEvidenceId)
             assertEquals(activated.promotion.readiness.id, activeTool.boundedReadinessEvidenceId)
             assertEquals(activated.promotion.seal.id, activeTool.boundedPromotionSealId)
 
