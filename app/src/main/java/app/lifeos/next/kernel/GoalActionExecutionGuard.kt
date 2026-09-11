@@ -185,17 +185,18 @@ class PrivateGoalActionExecutionGuard(
         }
         result.localSchedule is LocalScheduleExecutionResult.Scheduled -> reservation.reserved
         result.localCommunication is LocalCommunicationExecutionResult.Prepared -> reservation.reserved
-        else -> null // keep reservation open for an idempotent retry
+        else -> null
     }
 
+    /**
+     * Default private reminder/share authority is seeded only on a pristine policy ledger. Once any
+     * policy history exists, especially a revoke, startup/retry must never silently recreate it.
+     * An interrupted first bootstrap therefore fails closed rather than restoring authority.
+     */
     private suspend fun ensurePrivateOwnerBaseline() = bootstrapMutex.withLock {
         val snapshot = ownerPolicy.snapshot()
-        if (snapshot.revision > DEFAULT_GRANTS.size.toLong()) return@withLock
-        DEFAULT_GRANTS.forEach { grant ->
-            if (ownerPolicy.snapshot().activeGrants.none { it.id == grant.id }) {
-                ownerPolicy.grant(grant)
-            }
-        }
+        if (snapshot.revision != 0L) return@withLock
+        DEFAULT_GRANTS.forEach { ownerPolicy.grant(it) }
     }
 
     private fun policyRequest(context: GoalActionContext): OwnerEffectRequest? = when (context.goal.intent) {
