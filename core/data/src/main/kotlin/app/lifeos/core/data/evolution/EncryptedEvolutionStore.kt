@@ -13,6 +13,14 @@ import app.lifeos.core.runtime.evolution.EvolutionCanaryReservation
 import app.lifeos.core.runtime.evolution.EvolutionCanaryReserveResult
 import app.lifeos.core.runtime.evolution.EvolutionCanaryStopReason
 import app.lifeos.core.runtime.evolution.EvolutionPromotionRuntimeStore
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryKillSwitchEvidence
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryOutcome
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryOutcomeWriteResult
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReservation
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReservationRequest
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReserveResult
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryStopReason
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryStore
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -28,13 +36,16 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * J09 durable evolution safety boundary.
+ * Durable evolution safety boundary.
  *
- * Reservations, kill-switch state, promotion seals and Canary outcomes share one encrypted
- * AtomicFile snapshot. Every mutation reloads, validates and atomically replaces the whole snapshot
- * before returning, so process restarts cannot reset a stop/seal or split safety state across files.
+ * Replacement-evolution and novel-capability Canary state share one encrypted AtomicFile and one
+ * process mutex. Codec v1 remains readable; every successful mutation rewrites the whole validated
+ * snapshot with the current codec before returning.
  */
-class EncryptedEvolutionStore(context: Context) : EvolutionPromotionRuntimeStore, EvolutionCanaryOutcomeStore {
+class EncryptedEvolutionStore(context: Context) :
+    EvolutionPromotionRuntimeStore,
+    EvolutionCanaryOutcomeStore,
+    NovelCapabilityCanaryStore {
     private val directory = context.filesDir.resolve("evolution-vault")
     private val target = AtomicFile(directory.resolve(VAULT_FILE_NAME))
     private val key: SecretKey by lazy { loadOrCreateKey() }
@@ -207,6 +218,128 @@ class EncryptedEvolutionStore(context: Context) : EvolutionPromotionRuntimeStore
         readSnapshotLocked().bucket(adoptionEvidenceId).outcomes.sortedBy { it.invocationId }
     }
 
+    override suspend fun reserveNovel(
+        request: NovelCapabilityCanaryReservationRequest,
+    ): NovelCapabilityCanaryReserveResult = ioLocked {
+        val snapshot = readSnapshotLocked()
+        val bucket = snapshot.novelBucket(request.admissionEvidenceId)
+        bucket.killSwitch?.let { return@ioLocked NovelCapabilityCanaryReserveResult.Stopped(it) }
+        bucket.reservations.firstOrNull { it.invocationId == request.invocationId }?.let { existing ->
+            require(existing.toolId == request.toolId)
+            require(existing.candidateRecordFingerprint == request.candidateRecordFingerprint)
+            require(existing.inputFingerprint == request.inputFingerprint)
+            require(existing.expectedOutputFingerprint == request.expectedOutputFingerprint)
+            return@ioLocked NovelCapabilityCanaryReserveResult.Reserved(existing, duplicate = true)
+        }
+        if (bucket.reservations.size >= request.maxInvocations) {
+            return@ioLocked NovelCapabilityCanaryReserveResult.Exhausted(bucket.reservations.size)
+        }
+        val knownToolIds = bucket.reservations.map { it.toolId }.toSet()
+        require(knownToolIds.isEmpty() || knownToolIds == setOf(request.toolId)) {
+            "Novel canary reservation tool conflicts with persisted bucket"
+        }
+        val knownRecords = bucket.reservations.map { it.candidateRecordFingerprint }.toSet()
+        require(knownRecords.isEmpty() || knownRecords == setOf(request.candidateRecordFingerprint)) {
+            "Novel canary reservation record conflicts with persisted bucket"
+        }
+        val reservation = NovelCapabilityCanaryReservation(
+            admissionEvidenceId = request.admissionEvidenceId,
+            toolId = request.toolId,
+            candidateRecordFingerprint = request.candidateRecordFingerprint,
+            invocationId = request.invocationId,
+            inputFingerprint = request.inputFingerprint,
+            expectedOutputFingerprint = request.expectedOutputFingerprint,
+            sequence = bucket.reservations.size + 1,
+            reservedAt = request.reservedAt,
+        )
+        writeSnapshotLocked(snapshot.withNovelBucket(bucket.copy(reservations = bucket.reservations + reservation)))
+        NovelCapabilityCanaryReserveResult.Reserved(reservation, duplicate = false)
+    }
+
+    override suspend fun novelReservation(
+        admissionEvidenceId: String,
+        invocationId: String,
+    ): NovelCapabilityCanaryReservation? = ioLocked {
+        readSnapshotLocked().novelBucket(admissionEvidenceId).reservations
+            .firstOrNull { it.invocationId == invocationId }
+    }
+
+    override suspend fun novelReservations(admissionEvidenceId: String): List<NovelCapabilityCanaryReservation> = ioLocked {
+        readSnapshotLocked().novelBucket(admissionEvidenceId).reservations.sortedBy { it.sequence }
+    }
+
+    override suspend fun recordNovelOutcome(
+        outcome: NovelCapabilityCanaryOutcome,
+    ): NovelCapabilityCanaryOutcomeWriteResult = ioLocked {
+        val snapshot = readSnapshotLocked()
+        val bucket = snapshot.novelBucket(outcome.admissionEvidenceId)
+        bucket.outcomes.firstOrNull { it.invocationId == outcome.invocationId }?.let { existing ->
+            return@ioLocked if (existing == outcome) {
+                NovelCapabilityCanaryOutcomeWriteResult.Duplicate(existing, bucket.killSwitch)
+            } else {
+                NovelCapabilityCanaryOutcomeWriteResult.Conflict(existing.id)
+            }
+        }
+        require(bucket.killSwitch == null) { "Cannot persist novel Canary outcome after stop" }
+        val reservation = requireNotNull(
+            bucket.reservations.firstOrNull { it.invocationId == outcome.invocationId }
+        ) { "Novel Canary outcome requires a persisted reservation" }
+        require(reservation.id == outcome.reservationId)
+        require(reservation.toolId == outcome.toolId)
+        require(reservation.candidateRecordFingerprint == outcome.candidateRecordFingerprint)
+        val stop = outcome.takeIf { it.safetyViolation }?.let {
+            NovelCapabilityCanaryKillSwitchEvidence(
+                admissionEvidenceId = it.admissionEvidenceId,
+                toolId = it.toolId,
+                reason = NovelCapabilityCanaryStopReason.SAFETY_VIOLATION,
+                triggerEvidenceId = it.id,
+                trippedAt = it.recordedAt,
+            )
+        }
+        val updated = bucket.copy(
+            outcomes = bucket.outcomes + outcome,
+            killSwitch = stop,
+        )
+        writeSnapshotLocked(snapshot.withNovelBucket(updated))
+        NovelCapabilityCanaryOutcomeWriteResult.Recorded(outcome, stop)
+    }
+
+    override suspend fun novelOutcome(
+        admissionEvidenceId: String,
+        invocationId: String,
+    ): NovelCapabilityCanaryOutcome? = ioLocked {
+        readSnapshotLocked().novelBucket(admissionEvidenceId).outcomes
+            .firstOrNull { it.invocationId == invocationId }
+    }
+
+    override suspend fun novelOutcomes(admissionEvidenceId: String): List<NovelCapabilityCanaryOutcome> = ioLocked {
+        readSnapshotLocked().novelBucket(admissionEvidenceId).outcomes.sortedBy { it.invocationId }
+    }
+
+    override suspend fun tripNovel(
+        evidence: NovelCapabilityCanaryKillSwitchEvidence,
+    ): NovelCapabilityCanaryKillSwitchEvidence = ioLocked {
+        val snapshot = readSnapshotLocked()
+        val bucket = snapshot.novelBucket(evidence.admissionEvidenceId)
+        bucket.killSwitch?.let { existing ->
+            require(existing.toolId == evidence.toolId)
+            return@ioLocked existing
+        }
+        val knownToolIds = buildSet {
+            bucket.reservations.mapTo(this) { it.toolId }
+            bucket.outcomes.mapTo(this) { it.toolId }
+        }
+        require(knownToolIds.isEmpty() || knownToolIds == setOf(evidence.toolId)) {
+            "Novel canary stop tool conflicts with persisted bucket"
+        }
+        writeSnapshotLocked(snapshot.withNovelBucket(bucket.copy(killSwitch = evidence)))
+        evidence
+    }
+
+    override suspend fun novelKillSwitch(admissionEvidenceId: String): NovelCapabilityCanaryKillSwitchEvidence? = ioLocked {
+        readSnapshotLocked().novelBucket(admissionEvidenceId).killSwitch
+    }
+
     private suspend fun <T> ioLocked(block: () -> T): T = withContext(Dispatchers.IO) {
         processMutex.withLock { block() }
     }
@@ -261,7 +394,10 @@ class EncryptedEvolutionStore(context: Context) : EvolutionPromotionRuntimeStore
         require(container.size <= MAX_CONTAINER_BYTES) { "Evolution vault file too large" }
         return DataInputStream(ByteArrayInputStream(container)).use { data ->
             require(data.readInt() == CONTAINER_VERSION) { "Unsupported evolution vault container" }
-            require(data.readInt() == EvolutionVaultCodec.VERSION) { "Unsupported evolution vault codec" }
+            val storedCodecVersion = data.readInt()
+            require(EvolutionVaultCodec.supportsVersion(storedCodecVersion)) {
+                "Unsupported evolution vault codec"
+            }
             val ivSize = data.readInt()
             require(ivSize in 12..32) { "Invalid evolution vault IV length" }
             val iv = ByteArray(ivSize).also(data::readFully)
@@ -270,7 +406,10 @@ class EncryptedEvolutionStore(context: Context) : EvolutionPromotionRuntimeStore
             val cipher = Cipher.getInstance(TRANSFORMATION).apply {
                 init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
             }
-            EvolutionVaultCodec.decode(cipher.doFinal(encrypted))
+            EvolutionVaultCodec.decode(
+                bytes = cipher.doFinal(encrypted),
+                expectedVersion = storedCodecVersion,
+            )
         }
     }
 
