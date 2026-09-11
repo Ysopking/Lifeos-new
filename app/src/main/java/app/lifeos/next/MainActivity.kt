@@ -28,6 +28,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.core.image.ImagePhotonFactory
 import app.lifeos.core.model.Photon
+import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.goal.LocalReminderRecord
 import app.lifeos.core.runtime.goal.LocalScheduleGoalEngine
 import java.time.ZoneId
@@ -84,6 +85,7 @@ private fun LifeOsApp(model: LifeOsViewModel) {
     val dateFormat = remember {
         DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm").withZone(ZoneId.systemDefault())
     }
+    val firstTrialTool = state.generatedToolStatus?.tools?.firstOrNull { it.state == GeneratedToolState.TRIAL }
 
     MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
         Surface(Modifier.fillMaxSize()) {
@@ -152,7 +154,10 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                             OutlinedButton(
                                 onClick = model::requestCapabilityGaps,
                                 modifier = Modifier.fillMaxWidth(),
-                                enabled = !state.capabilityRequestSaving && !state.loading && !state.loadFailed,
+                                enabled = !state.capabilityRequestSaving &&
+                                    !state.capabilityActivationSaving &&
+                                    !state.loading &&
+                                    !state.loadFailed,
                             ) {
                                 Text(
                                     if (state.capabilityRequestSaving) "Tool wird lokal geprüft …"
@@ -160,7 +165,38 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                                 )
                             }
                             Text(
-                                "Der Klick genehmigt genau die erste fehlende Fähigkeit für den beschränkten lokalen ToolWorkshop. Das Ergebnis bleibt TRIAL oder REJECTED; Aktivierung braucht weiterhin die separaten Canary-/Promotion-Gates.",
+                                "Der Klick genehmigt genau die erste fehlende Fähigkeit für den beschränkten lokalen ToolWorkshop. Das Ergebnis bleibt TRIAL oder REJECTED; Aktivierung ist ein eigener Nutzerlauf.",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                }
+                if (firstTrialTool != null) {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(
+                            Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("TRIAL-Tool zur Aktivierung", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "${firstTrialTool.toolId} · ${firstTrialTool.capabilityId} · ${firstTrialTool.trials} Trial(s)",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Button(
+                                onClick = model::reviewAndActivateFirstTrialTool,
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !state.capabilityActivationSaving &&
+                                    !state.capabilityRequestSaving &&
+                                    !state.loading &&
+                                    !state.loadFailed,
+                            ) {
+                                Text(
+                                    if (state.capabilityActivationSaving) "Canary & Review laufen lokal …"
+                                    else "TRIAL prüfen & lokal aktivieren"
+                                )
+                            }
+                            Text(
+                                "Dieser zweite Klick führt fünf getrennte, nicht-produktive Novel-Canaries aus. ACTIVE wird nur nach Readiness, dauerhaftem Promotion-Seal und getrennter Reviewer-/Owner-Evidence erreicht; der Provider startet mit LOW Trust.",
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
@@ -170,6 +206,12 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                     Text(status, style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = model::dismissCapabilityRequestStatus) {
                         Text("Tool-Status schließen")
+                    }
+                }
+                state.capabilityActivationStatus?.let { status ->
+                    Text(status, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = model::dismissCapabilityActivationStatus) {
+                        Text("Aktivierungsstatus schließen")
                     }
                 }
                 state.shareStatus?.let { status ->
