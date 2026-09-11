@@ -12,11 +12,15 @@ import app.lifeos.core.runtime.policy.OwnerResourceSelectorType
 import app.lifeos.core.runtime.resource.HardwareWorkPriority
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import app.lifeos.core.runtime.resource.ResourceBudgetDemand
+import app.lifeos.core.runtime.resource.ResourceBudgetDomain
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetReservation
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationResult
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
+import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
+import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -62,14 +66,16 @@ object PassThroughGoalActionExecutionGuard : GoalActionExecutionGuard {
 }
 
 /**
- * Shared private-APK execution gate. Every currently executable goal action is hardware-checked and
- * durably reserved before work. Host-facing reminder/share effects additionally pass the revocable
- * V14 owner ledger immediately before execution. All current actions reserve zero network bytes.
+ * Shared private-APK execution gate. Every currently executable goal action is first routed through
+ * V16 World Formula budget distribution when the shared broker is installed, then durably reserved.
+ * Host-facing reminder/share effects additionally pass the revocable V14 owner ledger immediately
+ * before execution. All current actions reserve zero network bytes.
  */
 class PrivateGoalActionExecutionGuard(
     private val ownerPolicy: OwnerPolicyLedger,
     private val budgets: ResourceBudgetCoordinator,
     private val hardware: HardwareExecutionBudgetGate,
+    private val sharedBudgets: SharedResourceBudgetGate? = null,
 ) : GoalActionExecutionGuard {
     private val bootstrapMutex = Mutex()
 
@@ -87,19 +93,46 @@ class PrivateGoalActionExecutionGuard(
         }
         val policyRevision = firstPolicyDecision?.policyRevision
 
-        val hardwareDecision = hardware.plan(
-            hardQuota = profile.hardQuota,
-            requested = profile.requested,
-            priority = profile.priority,
-        )
-        val ready = hardwareDecision as? HardwareExecutionBudgetDecision.Ready
-            ?: return GoalActionExecutionPermit.Blocked(
-                (hardwareDecision as HardwareExecutionBudgetDecision.Blocked).reason,
+        val reservationUsage = sharedBudgets?.let { broker ->
+            val demand = ResourceBudgetDemand(
+                domain = profile.domain,
+                requested = profile.requested,
+                goalRelevance = 1.0,
+                priority = profile.priority.asWorldPriority(),
+                expectedUtility = profile.expectedUtility,
+                confidence = 1.0,
             )
-        if (!ready.plan.requestedFits) {
-            return GoalActionExecutionPermit.Blocked(
-                "requested-work-exceeds-current-hardware-envelope",
+            when (val decision = broker.allocate(profile.hardQuota, listOf(demand))) {
+                is SharedResourceBudgetDecision.Blocked ->
+                    return GoalActionExecutionPermit.Blocked(decision.reason)
+                is SharedResourceBudgetDecision.Ready -> {
+                    val allocation = requireNotNull(decision.allocation.allocation(profile.domain)) {
+                        "World Formula budget allocation omitted requested goal domain"
+                    }
+                    if (!profile.requested.isWithin(allocation.allocated)) {
+                        return GoalActionExecutionPermit.Blocked(
+                            "requested-work-exceeds-world-formula-allocation",
+                        )
+                    }
+                    allocation.allocated
+                }
+            }
+        } ?: run {
+            val hardwareDecision = hardware.plan(
+                hardQuota = profile.hardQuota,
+                requested = profile.requested,
+                priority = profile.priority,
             )
+            val ready = hardwareDecision as? HardwareExecutionBudgetDecision.Ready
+                ?: return GoalActionExecutionPermit.Blocked(
+                    (hardwareDecision as HardwareExecutionBudgetDecision.Blocked).reason,
+                )
+            if (!ready.plan.requestedFits) {
+                return GoalActionExecutionPermit.Blocked(
+                    "requested-work-exceeds-current-hardware-envelope",
+                )
+            }
+            ready.plan.recommendedReservation
         }
 
         val accountId = ResourceBudgetAccountId("goal-action:${context.goalPhotonId.value}")
@@ -116,7 +149,7 @@ class PrivateGoalActionExecutionGuard(
             val reserved = budgets.reserve(
                 accountId = accountId,
                 idempotencyKey = idempotencyKey,
-                usage = ready.plan.recommendedReservation,
+                usage = reservationUsage,
             )
         ) {
             is ResourceBudgetReservationResult.Denied -> return GoalActionExecutionPermit.Blocked(reserved.reason)
@@ -222,26 +255,36 @@ class PrivateGoalActionExecutionGuard(
         IntentType.STORE_OR_REMEMBER -> GoalActionResourceProfile(
             hardQuota = quota(5_000, 24, 64, 8, 0, 4),
             requested = usage(3_000, 8, 24, 2, 0, 2),
+            domain = ResourceBudgetDomain.GOAL_EXECUTION,
+            expectedUtility = 0.85,
         )
         IntentType.SEARCH -> GoalActionResourceProfile(
             hardQuota = quota(6_000, 24, 96, 12, 0, 8),
             requested = usage(4_000, 16, 48, 4, 0, 6),
+            domain = ResourceBudgetDomain.DEEP_SEARCH,
+            expectedUtility = 0.90,
         )
         IntentType.CREATE_IMAGE -> GoalActionResourceProfile(
             hardQuota = quota(30_000, 256, 512, 160, 0, 8),
             requested = usage(20_000, 160, 256, 96, 0, 4),
             priority = HardwareWorkPriority.HIGH,
+            domain = ResourceBudgetDomain.GOAL_EXECUTION,
+            expectedUtility = 0.90,
         )
         IntentType.TRANSFORM_IMAGE -> GoalActionResourceProfile(
             hardQuota = quota(20_000, 160, 384, 160, 0, 4),
             requested = usage(12_000, 96, 192, 96, 0, 2),
             priority = HardwareWorkPriority.HIGH,
+            domain = ResourceBudgetDomain.GOAL_EXECUTION,
+            expectedUtility = 0.90,
         )
         IntentType.SCHEDULE,
         IntentType.COMMUNICATE -> GoalActionResourceProfile(
             hardQuota = quota(3_000, 8, 32, 4, 0, 2),
             requested = usage(1_500, 4, 16, 1, 0, 1),
             priority = HardwareWorkPriority.HIGH,
+            domain = ResourceBudgetDomain.GOAL_EXECUTION,
+            expectedUtility = 0.95,
         )
         else -> null
     }
@@ -250,7 +293,16 @@ class PrivateGoalActionExecutionGuard(
         val hardQuota: ResourceBudgetQuota,
         val requested: ResourceBudgetUsage,
         val priority: HardwareWorkPriority = HardwareWorkPriority.NORMAL,
+        val domain: ResourceBudgetDomain,
+        val expectedUtility: Double,
     )
+
+    private fun HardwareWorkPriority.asWorldPriority(): Double = when (this) {
+        HardwareWorkPriority.LOW -> 0.25
+        HardwareWorkPriority.NORMAL -> 0.55
+        HardwareWorkPriority.HIGH -> 0.80
+        HardwareWorkPriority.CRITICAL -> 1.00
+    }
 
     private fun quota(
         elapsedMillis: Long,
