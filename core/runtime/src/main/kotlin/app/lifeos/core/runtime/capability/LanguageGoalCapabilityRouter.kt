@@ -60,11 +60,14 @@ class LanguageGoalCapabilityMapper {
  * Routes every language goal through the single mutable runtime CapabilityRegistry. Local system
  * executors are composed into that registry by the kernel just like other APK-shipped modules;
  * this router never keeps a second provider catalog and therefore cannot bypass registry state.
+ * Learned reliability is a read-only overlay used only for ranking; descriptors and trust roots
+ * remain immutable and auditable.
  */
 class LanguageGoalCapabilityRouter(
     private val registry: CapabilityRegistry,
     private val mapper: LanguageGoalCapabilityMapper = LanguageGoalCapabilityMapper(),
     private val gapDetector: CapabilityGapDetector = CapabilityGapDetector(registry),
+    private val reliability: CapabilityReliabilityResolver = DescriptorCapabilityReliabilityResolver,
 ) {
     suspend fun route(goal: GoalFrame): GoalCapabilityResolution {
         val plan = mapper.plan(goal)
@@ -76,8 +79,20 @@ class LanguageGoalCapabilityRouter(
                 gaps += gap
                 continue
             }
-            registry.providersFor(requirement.capabilityId)
-                .firstOrNull { provider -> providerSatisfies(requirement, provider) }
+            val compatible = registry.providersFor(requirement.capabilityId)
+                .filter { provider -> providerSatisfies(requirement, provider) }
+            val ranked = compatible.sortedWith(
+                compareByDescending<CapabilityDescriptor> { provider ->
+                    reliability.resolve(provider).also { effective ->
+                        require(effective.isFinite() && effective in 0.0..1.0) {
+                            "Effective capability reliability must be normalized"
+                        }
+                    }
+                }
+                    .thenBy { it.cost }
+                    .thenBy { it.providerId }
+            )
+            ranked.firstOrNull()
                 ?.let { selected[requirement.capabilityId] = it }
                 ?: gaps.add(
                     CapabilityGap(
