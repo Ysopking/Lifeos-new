@@ -2,6 +2,7 @@ package app.lifeos.core.runtime.learning
 
 import app.lifeos.core.field.StableFieldIds
 import java.time.Instant
+import kotlin.math.abs
 
 enum class LearningAdaptationTargetKind {
     PROVIDER_RELIABILITY,
@@ -64,6 +65,7 @@ value class LearningAdaptationId(val value: String) {
 data class LearningAdaptation(
     val id: LearningAdaptationId,
     val target: LearningAdaptationTarget,
+    val predecessorId: LearningAdaptationId?,
     val outcomeScoreId: OutcomeScoreId,
     val outcomeScoreFingerprint: String,
     val baselineValue: Double,
@@ -80,16 +82,18 @@ data class LearningAdaptation(
         require(baselineValue in 0.0..1.0)
         require(priorEffectiveValue in 0.0..1.0)
         require(resultingEffectiveValue in 0.0..1.0)
-        require(resultingEffectiveValue == (priorEffectiveValue + delta).coerceIn(0.0, 1.0)) {
+        require(abs(resultingEffectiveValue - (priorEffectiveValue + delta).coerceIn(0.0, 1.0)) <= EPSILON) {
             "Learning adaptation result does not match prior + delta"
         }
         require(policyFingerprint.isNotBlank())
+        require(predecessorId != id) { "Learning adaptation cannot be its own predecessor" }
         require(rollbackOf != id) { "Learning adaptation cannot roll back itself" }
         require(id == expectedId()) { "Learning adaptation id/content mismatch" }
     }
 
     fun contentFingerprint(): String = fingerprint(
         target = target,
+        predecessorId = predecessorId,
         outcomeScoreId = outcomeScoreId,
         outcomeScoreFingerprint = outcomeScoreFingerprint,
         baselineValue = baselineValue,
@@ -105,8 +109,11 @@ data class LearningAdaptation(
         LearningAdaptationId("${LearningAdaptationId.PREFIX}${contentFingerprint()}")
 
     companion object {
+        private const val EPSILON = 1e-12
+
         fun create(
             target: LearningAdaptationTarget,
+            predecessorId: LearningAdaptationId?,
             outcomeScoreId: OutcomeScoreId,
             outcomeScoreFingerprint: String,
             baselineValue: Double,
@@ -121,6 +128,7 @@ data class LearningAdaptation(
             val actualDelta = result - priorEffectiveValue
             val fingerprint = fingerprint(
                 target = target,
+                predecessorId = predecessorId,
                 outcomeScoreId = outcomeScoreId,
                 outcomeScoreFingerprint = outcomeScoreFingerprint,
                 baselineValue = baselineValue,
@@ -134,6 +142,7 @@ data class LearningAdaptation(
             return LearningAdaptation(
                 id = LearningAdaptationId("${LearningAdaptationId.PREFIX}$fingerprint"),
                 target = target,
+                predecessorId = predecessorId,
                 outcomeScoreId = outcomeScoreId,
                 outcomeScoreFingerprint = outcomeScoreFingerprint,
                 baselineValue = baselineValue,
@@ -148,6 +157,7 @@ data class LearningAdaptation(
 
         private fun fingerprint(
             target: LearningAdaptationTarget,
+            predecessorId: LearningAdaptationId?,
             outcomeScoreId: OutcomeScoreId,
             outcomeScoreFingerprint: String,
             baselineValue: Double,
@@ -158,9 +168,10 @@ data class LearningAdaptation(
             createdAt: Instant,
             rollbackOf: LearningAdaptationId?,
         ): String = StableFieldIds.fingerprint(
-            "learning-adaptation/v1",
+            "learning-adaptation/v2",
             target.kind.name,
             target.key,
+            predecessorId?.value.orEmpty(),
             outcomeScoreId.value,
             outcomeScoreFingerprint,
             java.lang.Double.toHexString(baselineValue),
@@ -183,9 +194,21 @@ class LearningAdaptationPlanner(
         currentEffectiveValue: Double,
         score: OutcomeScore,
         createdAt: Instant,
+        previousAdaptation: LearningAdaptation? = null,
     ): LearningAdaptation? {
         require(baselineValue.isFinite() && baselineValue in 0.0..1.0)
         require(currentEffectiveValue.isFinite() && currentEffectiveValue in 0.0..1.0)
+        previousAdaptation?.let { previous ->
+            require(previous.target == target) { "Previous learning adaptation target mismatch" }
+            require(abs(previous.baselineValue - baselineValue) <= EPSILON) {
+                "Previous learning adaptation baseline mismatch"
+            }
+            require(abs(previous.resultingEffectiveValue - currentEffectiveValue) <= EPSILON) {
+                "Current effective value does not match previous adaptation"
+            }
+        } ?: require(abs(currentEffectiveValue - baselineValue) <= EPSILON) {
+            "First learning adaptation must start from its immutable baseline"
+        }
         if (!score.adaptationAllowed || score.signedScore == 0.0) return null
 
         val requestedDelta = if (score.signedScore > 0.0) {
@@ -197,10 +220,11 @@ class LearningAdaptationPlanner(
         val upperDriftBound = minOf(policy.absoluteCeiling, baselineValue + policy.maxAbsoluteDriftFromBaseline)
         val desired = (currentEffectiveValue + requestedDelta).coerceIn(lowerDriftBound, upperDriftBound)
         val actualDelta = desired - currentEffectiveValue
-        if (actualDelta == 0.0) return null
+        if (abs(actualDelta) <= EPSILON) return null
 
         return LearningAdaptation.create(
             target = target,
+            predecessorId = previousAdaptation?.id,
             outcomeScoreId = score.id,
             outcomeScoreFingerprint = score.contentFingerprint(),
             baselineValue = baselineValue,
@@ -218,11 +242,12 @@ class LearningAdaptationPlanner(
         createdAt: Instant,
     ): LearningAdaptation {
         require(rollbackScore.adaptationAllowed) { "Rollback requires independently verified outcome evidence" }
-        require(currentEffectiveValue == adaptation.resultingEffectiveValue) {
+        require(abs(currentEffectiveValue - adaptation.resultingEffectiveValue) <= EPSILON) {
             "Only the current latest adaptation can be rolled back exactly"
         }
         return LearningAdaptation.create(
             target = adaptation.target,
+            predecessorId = adaptation.id,
             outcomeScoreId = rollbackScore.id,
             outcomeScoreFingerprint = rollbackScore.contentFingerprint(),
             baselineValue = adaptation.baselineValue,
@@ -232,6 +257,10 @@ class LearningAdaptationPlanner(
             createdAt = createdAt,
             rollbackOf = adaptation.id,
         )
+    }
+
+    private companion object {
+        const val EPSILON = 1e-12
     }
 }
 
@@ -248,13 +277,16 @@ data class LearningAdaptationState(
     }
 
     val fingerprint: String = StableFieldIds.fingerprint(
-        "learning-adaptation-state/v1",
+        "learning-adaptation-state/v2",
         revision.toString(),
-        *events.map { "event:${it.id.value}" }.toTypedArray(),
+        *events.map { "event:${it.id.value}" }.sorted().toTypedArray(),
         *effectiveValues.entries.sortedBy { it.key.stableKey }.map { (target, value) ->
             "effective:${target.stableKey}:${java.lang.Double.toHexString(value)}"
         }.toTypedArray(),
     )
+
+    fun latestFor(target: LearningAdaptationTarget): LearningAdaptation? =
+        events.lastOrNull { it.target == target }
 }
 
 data class LearningAdaptationApplyResult(
@@ -272,14 +304,20 @@ class LearningAdaptationReducer {
             require(existing == event) { "Learning adaptation identity collision" }
             return LearningAdaptationApplyResult(state, replayed = true)
         }
+        require(state.events.none { it.target == event.target && it.outcomeScoreId == event.outcomeScoreId }) {
+            "Outcome score has already adapted this target"
+        }
 
-        val previousForTarget = state.events.lastOrNull { it.target == event.target }
+        val previousForTarget = state.latestFor(event.target)
+        require(event.predecessorId == previousForTarget?.id) {
+            "Learning adaptation predecessor does not match target head"
+        }
         val expectedCurrent = previousForTarget?.resultingEffectiveValue ?: event.baselineValue
-        require(event.priorEffectiveValue == expectedCurrent) {
+        require(abs(event.priorEffectiveValue - expectedCurrent) <= EPSILON) {
             "Learning adaptation prior value does not match replay state"
         }
         previousForTarget?.let { previous ->
-            require(previous.baselineValue == event.baselineValue) {
+            require(abs(previous.baselineValue - event.baselineValue) <= EPSILON) {
                 "Learning adaptation baseline changed for existing target"
             }
         }
@@ -290,7 +328,7 @@ class LearningAdaptationReducer {
             require(previousForTarget?.id == rollbackId) {
                 "Learning rollback must target the latest adaptation for exact restoration"
             }
-            require(event.resultingEffectiveValue == rolledBack.priorEffectiveValue) {
+            require(abs(event.resultingEffectiveValue - rolledBack.priorEffectiveValue) <= EPSILON) {
                 "Learning rollback must restore the exact previous effective value"
             }
         }
@@ -309,6 +347,36 @@ class LearningAdaptationReducer {
         )
     }
 
-    fun replay(events: List<LearningAdaptation>): LearningAdaptationState =
-        events.fold(LearningAdaptationState()) { state, event -> apply(state, event).state }
+    fun replay(events: List<LearningAdaptation>): LearningAdaptationState {
+        require(events.map { it.id }.distinct().size == events.size) {
+            "Learning adaptation replay cannot contain duplicate physical events"
+        }
+        var state = LearningAdaptationState()
+        val remaining = events.toMutableList()
+        while (remaining.isNotEmpty()) {
+            val knownIds = state.events.mapTo(mutableSetOf()) { it.id }
+            val ready = remaining
+                .filter { it.predecessorId == null || it.predecessorId in knownIds }
+                .sortedWith(
+                    compareBy<LearningAdaptation> { it.target.stableKey }
+                        .thenBy { it.createdAt }
+                        .thenBy { it.id.value }
+                )
+            require(ready.isNotEmpty()) { "Learning adaptation history has a missing/cyclic predecessor" }
+            var progressed = false
+            for (event in ready) {
+                val previous = state.latestFor(event.target)
+                if (event.predecessorId != previous?.id) continue
+                state = apply(state, event).state
+                remaining.remove(event)
+                progressed = true
+            }
+            require(progressed) { "Learning adaptation history forks or cannot be replayed" }
+        }
+        return state
+    }
+
+    private companion object {
+        const val EPSILON = 1e-12
+    }
 }
