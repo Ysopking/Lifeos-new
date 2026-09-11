@@ -1,6 +1,7 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.field.StableFieldIds
+import app.lifeos.core.language.IntentType
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
@@ -46,6 +47,7 @@ class DurableGoalPlanRuntime(
     private val ledger: DurableGoalPlanLedger,
     private val convergence: GoalConvergenceDecisionProvider,
     private val persistDerivedOutcome: suspend (Photon) -> PhotonSubmissionResult? = { null },
+    private val loadPersistedPhotons: suspend () -> List<Photon> = { emptyList() },
     private val builder: GoalPlanBuilder = GoalPlanBuilder(),
     private val coordinator: GoalPlanExecutionCoordinator = GoalPlanExecutionCoordinator(ledger),
     private val projector: GoalStepDecisionProjector = GoalStepDecisionProjector(),
@@ -66,7 +68,21 @@ class DurableGoalPlanRuntime(
         val actionStep = blueprint.contracts.values.single { it.kind == GoalStepExecutionKind.ACTION }
         val actionState = state.stepStates.getValue(actionStep.stepId)
 
-        if (actionState == GoalStepState.RUNNING || actionState == GoalStepState.COMPLETED) {
+        if (actionState == GoalStepState.RUNNING) {
+            val recovered = coordinator.prepareNext(blueprint, emptyMap(), now())
+            if (recovered is GoalPlanExecutionPreparation.PreparedAction) {
+                val persistedOutcome = recoverPersistedOutcome(context)
+                if (persistedOutcome != null) {
+                    completeWithPersistedOutcome(
+                        DurableGoalPlanPermit(blueprint, recovered),
+                        persistedOutcome.id,
+                    )
+                    return DurableGoalPlanAdmission.Completed(blueprint.definition.id.value)
+                }
+            }
+            return normalizePreparation(blueprint, recovered)
+        }
+        if (actionState == GoalStepState.COMPLETED) {
             return normalizePreparation(blueprint, coordinator.prepareNext(blueprint, emptyMap(), now()))
         }
 
@@ -154,6 +170,32 @@ class DurableGoalPlanRuntime(
             DurableGoalPlanAdmission.Blocked("v7-replan-required:${preparation.reason}")
         is GoalPlanExecutionPreparation.Waiting ->
             DurableGoalPlanAdmission.Blocked("v7-waiting:${preparation.reason}")
+    }
+
+    /**
+     * If a process died after an executor persisted its result but before the V7 transition was
+     * appended, the exact Goal Photon provenance lets us bind that result instead of repeating the
+     * action. Only intent-specific final-result shapes are accepted; scene/intermediate photons and
+     * archived failed reminders cannot satisfy recovery.
+     */
+    private suspend fun recoverPersistedOutcome(context: GoalActionContext): Photon? =
+        loadPersistedPhotons()
+            .asSequence()
+            .filter { it.phase != PhotonPhase.ARCHIVED }
+            .filter { context.goalPhotonId in it.provenance.parentIds }
+            .filter { candidate -> isFinalOutcomeFor(context.goal.intent, candidate) }
+            .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+            .lastOrNull()
+
+    private fun isFinalOutcomeFor(intent: IntentType, photon: Photon): Boolean = when (intent) {
+        IntentType.QUERY -> "local-query-answer" in photon.tags
+        IntentType.STORE_OR_REMEMBER -> "memory" in photon.tags
+        IntentType.SEARCH -> "deepsearch-answer" in photon.tags
+        IntentType.CREATE_IMAGE -> "image" in photon.tags && "generated" in photon.tags
+        IntentType.TRANSFORM_IMAGE -> "image" in photon.tags && "transformed" in photon.tags
+        IntentType.SCHEDULE -> "reminder" in photon.tags && "scheduled" in photon.tags
+        IntentType.COMMUNICATE -> "share-preparation" in photon.tags
+        else -> false
     }
 
     private suspend fun persistedOutcome(result: GoalActionDispatchResult): PhotonId? = when {
