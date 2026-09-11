@@ -1,8 +1,15 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.field.StableFieldIds
+import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonPhase
+import app.lifeos.core.model.PhotonRelation
+import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionState
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
+import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.goal.GoalPlanBlueprint
 import app.lifeos.core.runtime.goal.GoalPlanBuildResult
 import app.lifeos.core.runtime.goal.GoalPlanBuilder
@@ -12,9 +19,8 @@ import app.lifeos.core.runtime.goal.GoalStepDecisionProjectionResult
 import app.lifeos.core.runtime.goal.GoalStepDecisionProjector
 import app.lifeos.core.runtime.goal.GoalStepExecutionKind
 import app.lifeos.core.runtime.goal.GoalStepState
-import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.goal.LocalSharePreparation
 import java.time.Instant
-import java.util.concurrent.ConcurrentHashMap
 
 sealed interface DurableGoalPlanAdmission {
     data class Ready(val permit: DurableGoalPlanPermit) : DurableGoalPlanAdmission
@@ -39,13 +45,12 @@ data class DurableGoalPlanPermit(
 class DurableGoalPlanRuntime(
     private val ledger: DurableGoalPlanLedger,
     private val convergence: GoalConvergenceDecisionProvider,
+    private val persistDerivedOutcome: suspend (Photon) -> PhotonSubmissionResult? = { null },
     private val builder: GoalPlanBuilder = GoalPlanBuilder(),
     private val coordinator: GoalPlanExecutionCoordinator = GoalPlanExecutionCoordinator(ledger),
     private val projector: GoalStepDecisionProjector = GoalStepDecisionProjector(),
     private val now: () -> Instant = Instant::now,
 ) {
-    private val pendingByGoal = ConcurrentHashMap<PhotonId, DurableGoalPlanPermit>()
-
     suspend fun prepare(context: GoalActionContext): DurableGoalPlanAdmission {
         val built = builder.build(
             goal = context.goal,
@@ -105,17 +110,8 @@ class DurableGoalPlanRuntime(
         permit: DurableGoalPlanPermit,
         result: GoalActionDispatchResult,
     ) {
-        val outcomeId = persistedOutcome(result) ?: run {
-            pendingByGoal[permit.goalPhotonId] = permit
-            return
-        }
+        val outcomeId = persistedOutcome(result) ?: return
         completeWithPersistedOutcome(permit, outcomeId)
-    }
-
-    /** Communication becomes terminal only after Android handoff produced and persisted a receipt. */
-    suspend fun recordCommunicationOutcome(goalPhotonId: PhotonId, receiptPhotonId: PhotonId) {
-        val permit = pendingByGoal[goalPhotonId] ?: return
-        completeWithPersistedOutcome(permit, receiptPhotonId)
     }
 
     private suspend fun completeWithPersistedOutcome(
@@ -137,18 +133,14 @@ class DurableGoalPlanRuntime(
         if (verification is GoalPlanExecutionPreparation.VerificationCompleted) {
             coordinator.prepareNext(permit.blueprint, emptyMap(), now())
         }
-        pendingByGoal.remove(permit.goalPhotonId)
     }
 
     private suspend fun normalizePreparation(
         blueprint: GoalPlanBlueprint,
         preparation: GoalPlanExecutionPreparation,
     ): DurableGoalPlanAdmission = when (preparation) {
-        is GoalPlanExecutionPreparation.PreparedAction -> {
-            val permit = DurableGoalPlanPermit(blueprint, preparation)
-            pendingByGoal[permit.goalPhotonId] = permit
-            DurableGoalPlanAdmission.Ready(permit)
-        }
+        is GoalPlanExecutionPreparation.PreparedAction ->
+            DurableGoalPlanAdmission.Ready(DurableGoalPlanPermit(blueprint, preparation))
         is GoalPlanExecutionPreparation.VerificationCompleted -> {
             when (val next = coordinator.prepareNext(blueprint, emptyMap(), now())) {
                 GoalPlanExecutionPreparation.PlanCompleted ->
@@ -164,7 +156,7 @@ class DurableGoalPlanRuntime(
             DurableGoalPlanAdmission.Blocked("v7-waiting:${preparation.reason}")
     }
 
-    private fun persistedOutcome(result: GoalActionDispatchResult): PhotonId? = when {
+    private suspend fun persistedOutcome(result: GoalActionDispatchResult): PhotonId? = when {
         result.imageGeneration is ImageGenerationResult.Generated ->
             result.imageGeneration.value.image.photon.id
         result.localImageTransform is LocalImageTransformExecutionResult.Transformed ->
@@ -175,10 +167,51 @@ class DurableGoalPlanRuntime(
             result.localDeepSearch.output.photon.id
         result.localSchedule is LocalScheduleExecutionResult.Scheduled ->
             result.localSchedule.output.photon.id
+        result.localCommunication is LocalCommunicationExecutionResult.Prepared -> {
+            val outcome = communicationPreparationOutcome(result.localCommunication.share)
+            persistDerivedOutcome(outcome)?.photon?.id
+        }
         else -> null
     }
 
+    private fun communicationPreparationOutcome(share: LocalSharePreparation): Photon = Photon(
+        id = PhotonId(
+            "communication-preparation:" + StableFieldIds.fingerprint(
+                "communication-preparation/v1",
+                share.requestSourceId.value,
+                share.requestGoalId.value,
+                share.target.id.value,
+                share.mediaType,
+            )
+        ),
+        content = buildString {
+            appendLine("communication-preparation/v1")
+            appendLine("status=prepared")
+            appendLine("targetPhotonId=${share.target.id.value}")
+            append("mediaType=${share.mediaType}")
+        },
+        mimeType = COMMUNICATION_PREPARATION_MIME,
+        phase = PhotonPhase.CONVERGED,
+        semanticMass = 0.5,
+        energy = 0.5,
+        confidence = 1.0,
+        provenance = Provenance(
+            source = "local-share-preparation",
+            actor = "DurableGoalPlanRuntime",
+            createdAt = now(),
+            parentIds = setOf(share.requestSourceId, share.requestGoalId, share.target.id),
+        ),
+        relations = setOf(
+            PhotonRelation(share.requestSourceId, RelationType.DERIVED_FROM),
+            PhotonRelation(share.requestGoalId, RelationType.REFERENCES),
+            PhotonRelation(share.target.id, RelationType.REFERENCES),
+        ),
+        tags = setOf("communication", "share-preparation", "result"),
+    )
+
     private companion object {
+        const val COMMUNICATION_PREPARATION_MIME =
+            "application/vnd.lifeos.communication-preparation+text"
         val CONVERGENCE_MUTABLE_STATES = setOf(
             GoalStepState.PLANNED,
             GoalStepState.READY,
