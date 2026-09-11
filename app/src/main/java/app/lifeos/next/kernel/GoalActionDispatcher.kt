@@ -12,7 +12,10 @@ data class GoalActionContext(
     val routing: GoalCapabilityResolution,
     val sourcePhoton: Photon,
     val goalPhotonId: PhotonId,
-)
+    val goalPhotonRevision: Long = 1L,
+) {
+    init { require(goalPhotonRevision > 0L) }
+}
 
 /**
  * One action result envelope for the currently executable private-v1 goal families.
@@ -37,22 +40,21 @@ class GoalActionDispatcher(
     private val executionGuard: GoalActionExecutionGuard = GoalExecutionRuntimeRegistry.current(),
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
+        // Production installs this runtime after kernel construction. Resolve it per execution rather than
+        // capturing the registry in the constructor so the kernel cannot accidentally bypass late wiring.
+        val durableRuntime = DurableGoalPlanRuntimeRegistry.currentOrNull()
+        val durablePermit = when (val admission = durableRuntime?.prepare(context)) {
+            null -> null // unit/legacy composition only; production installs V7-F runtime.
+            is DurableGoalPlanAdmission.Ready -> admission.permit
+            is DurableGoalPlanAdmission.Completed -> return GoalActionDispatchResult()
+            is DurableGoalPlanAdmission.Blocked -> return blocked(context.goal.intent, admission.reason)
+        }
+
         if (!context.routing.ready) {
             val gapReason = context.routing.blockingGaps
                 .joinToString(",") { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
                 .ifBlank { "goal-is-not-action-ready" }
-            return when (context.goal.intent) {
-                IntentType.CREATE_IMAGE -> GoalActionDispatchResult(
-                    imageGeneration = ImageGenerationResult.Blocked(listOf(gapReason))
-                )
-                IntentType.TRANSFORM_IMAGE -> GoalActionDispatchResult(
-                    localImageTransform = LocalImageTransformExecutionResult.Blocked(gapReason)
-                )
-                IntentType.SCHEDULE -> GoalActionDispatchResult(
-                    localSchedule = LocalScheduleExecutionResult.Blocked(gapReason)
-                )
-                else -> GoalActionDispatchResult()
-            }
+            return blocked(context.goal.intent, gapReason)
         }
 
         val permit = executionGuard.prepare(context)
@@ -89,6 +91,9 @@ class GoalActionDispatcher(
             else -> GoalActionDispatchResult()
         }
         executionGuard.settle(permit, result)
+        if (durableRuntime != null && durablePermit != null) {
+            durableRuntime.complete(durablePermit, result)
+        }
         return result
     }
 
