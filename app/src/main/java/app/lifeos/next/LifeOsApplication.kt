@@ -5,7 +5,7 @@ import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.policy.EncryptedOwnerPolicyRepository
 import app.lifeos.core.data.resource.EncryptedResourceBudgetRepository
-import app.lifeos.core.runtime.RuntimeSupervisor
+import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
 import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
@@ -79,7 +79,9 @@ class LifeOsApplication : Application() {
             },
             budgets = resourceBudgets,
             runtime = kernel.runtime,
-            supervisor = RuntimeSupervisor(kernel.runtime),
+            supervisor = requireNotNull(RuntimeSupervisorProcessRegistry.current()) {
+                "Kernel did not install its RuntimeSupervisor"
+            },
         )
         runBlocking {
             selfHealingRuntime.verifyLedgerIntegrity()
