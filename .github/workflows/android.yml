@@ -66,6 +66,18 @@ jobs:
         with:
           name: LIFEOS-android-test-debug
           path: app/build/outputs/apk/androidTest/debug
+      - name: Enable KVM acceleration when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 0666 /dev/kvm
+            test -r /dev/kvm
+            test -w /dev/kvm
+            ls -l /dev/kvm
+          else
+            echo "KVM device is unavailable; emulator runner may fall back to software acceleration."
+          fi
       - name: Free disk for Android emulator
         shell: bash
         run: |
