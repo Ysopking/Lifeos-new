@@ -7,7 +7,6 @@ import app.lifeos.core.runtime.policy.OwnerEffectType
 import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
-import java.time.Instant
 
 /**
  * V14 boot-time authority for making an already-durable generated provider routable again.
@@ -38,11 +37,13 @@ class GeneratedProviderRestoreAuthority(
             is OwnerEffectExposureResult.Blocked -> exposure.assessment
         }
         val restored = exposure is OwnerEffectExposureResult.Exposed<*>
+        // The generated-tool manifest timestamp is durable and therefore makes the same boot restore
+        // projection idempotent across process restarts. The trace must never depend on wall time.
         DecisionTraceRuntimeRegistry.currentOrNull()?.recordGeneratedProviderRestore(
             record = record,
             assessment = assessment,
             restored = restored,
-            recordedAt = Instant.now(),
+            recordedAt = record.manifest.generatedAt,
         )
         return restored
     }
