@@ -1,5 +1,6 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.policy.OwnerActorId
 import app.lifeos.core.runtime.policy.OwnerEffectType
 import app.lifeos.core.runtime.policy.OwnerPolicyGrant
@@ -21,6 +22,7 @@ object PrivateOwnerPolicyBaseline {
     const val GOAL_SCOPE = "private-apk-goal-action"
     const val TOOL_WORKSHOP_SCOPE = "private-apk-tool-workshop"
     const val HOT_SWAP_SCOPE = "private-apk-hot-swap"
+    const val GENERATED_PROVIDER_RESTORE_SCOPE = "private-apk-generated-provider-restore"
 
     private val mutex = Mutex()
 
@@ -98,6 +100,16 @@ object PrivateOwnerPolicyBaseline {
                 "hot-swap:",
             ),
             scope = HOT_SWAP_SCOPE,
+            validFrom = Instant.EPOCH,
+        ),
+        OwnerPolicyGrant.create(
+            actorId = ownerActorId,
+            effect = OwnerEffectType.PROVIDER_ACTIVATION,
+            resource = OwnerResourceSelector(
+                OwnerResourceSelectorType.PREFIX,
+                GeneratedProviderRestoreAuthority.RESOURCE_PREFIX,
+            ),
+            scope = GENERATED_PROVIDER_RESTORE_SCOPE,
             validFrom = Instant.EPOCH,
         ),
     )
