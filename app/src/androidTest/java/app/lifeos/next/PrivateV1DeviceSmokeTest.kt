@@ -3,10 +3,14 @@ package app.lifeos.next
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
+import app.lifeos.core.data.thought.EncryptedFieldThoughtGraphProjectionOutboxRepository
 import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
+import app.lifeos.core.field.FieldConvergenceEngine
 import app.lifeos.core.field.TemporalValidity
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.runtime.capability.CapabilityGap
@@ -18,6 +22,10 @@ import app.lifeos.core.runtime.capability.GeneratedToolGenesisResult
 import app.lifeos.core.runtime.capability.GeneratedToolRequestExecutionResult
 import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
+import app.lifeos.core.runtime.field.DefaultPhotonFieldRequestFactory
+import app.lifeos.core.runtime.field.FieldThoughtGraphProjectionCoordinator
+import app.lifeos.core.runtime.field.FieldThoughtGraphProjectionEnvelope
+import app.lifeos.core.runtime.field.FieldThoughtGraphProjector
 import app.lifeos.core.runtime.thought.DurableThoughtGraph
 import app.lifeos.core.runtime.thought.ThoughtGraphDelta
 import app.lifeos.core.runtime.thought.ThoughtGraphNodeKind
@@ -33,17 +41,18 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Real Android/Keystore recovery contract for the private generated-tool and durable cognition path.
+ * Real Android/Keystore recovery contract for private generated tools, durable cognition and V3.
  *
  * The emulator workflow invokes seed first, force-stops and cold-starts the target app, then invokes
  * recovery. The second process must recover generated-tool evidence, cognition state, exact
- * ThoughtMatrix state, and the append-only V3 ThoughtGraph delta history without manufacturing new
- * authority or duplicate work.
+ * ThoughtMatrix state, append-only ThoughtGraph history, and a committed FieldSnapshot projection
+ * whose graph write was deliberately omitted before the process kill.
  */
 @RunWith(AndroidJUnit4::class)
 class PrivateV1DeviceSmokeTest {
@@ -145,13 +154,14 @@ class PrivateV1DeviceSmokeTest {
 
             val graphRepository = EncryptedThoughtGraphDeltaRepository(instrumentation.targetContext)
             val graph = DurableThoughtGraph(graphRepository)
+            graph.rehydrate(V3_CAPTURED_AT)
             val graphDelta = v3RecoveryDelta()
             val graphApply = graph.append(graphDelta, V3_CAPTURED_AT)
-            assertEquals(1L, graphApply.state.revision)
-            assertEquals(1, graphRepository.loadReport().deltas.size)
+            assertTrue(graphDelta.id in graphApply.state.appliedDeltaIds)
+            assertTrue(graphRepository.loadReport().deltas.any { it.id == graphDelta.id })
             assertTrue(
-                "ThoughtGraph encrypted append-only delta file must exist before process kill",
-                thoughtGraphVaultFiles().size == 1 && thoughtGraphVaultFiles().single().length() > 0L,
+                "ThoughtGraph encrypted append-only delta vault must exist before process kill",
+                thoughtGraphVaultFiles().isNotEmpty() && thoughtGraphVaultFiles().all { it.length() > 0L },
             )
 
             assertTrue(app.kernel.persistAndIngest(sentinel).processingQueued)
@@ -173,6 +183,29 @@ class PrivateV1DeviceSmokeTest {
             app.kernel.photonStore.save(orphan)
             assertEquals(orphan, app.kernel.photonStore.load(orphan.id))
             assertTrue(cognitiveTasks(orphan).isEmpty())
+
+            // Simulate the V3 projection crash window: the immutable projection intent and its
+            // exact authoritative FieldSnapshot are durable, but the ThoughtGraph delta is not.
+            // The workflow force-stops this process after the seed method returns.
+            val projection = v3ProjectionRecoveryFixture()
+            val projectionOutbox =
+                EncryptedFieldThoughtGraphProjectionOutboxRepository(instrumentation.targetContext)
+            val projectionSnapshots = EncryptedFieldSnapshotRepository(instrumentation.targetContext)
+            projectionOutbox.save(projection.envelope)
+            projectionSnapshots.save(projection.snapshot)
+            assertTrue(
+                "Projection outbox must be fully readable before process kill",
+                projectionOutbox.loadReport().unreadableEntries.isEmpty(),
+            )
+            assertEquals(projection.snapshot, projectionSnapshots.load(projection.snapshot.id))
+            assertNull(
+                "Seed must leave projection graph delta unwritten so cold boot proves reconciliation",
+                graphRepository.load(projection.envelope.delta.id),
+            )
+            assertTrue(
+                "Encrypted projection outbox file must exist before process kill",
+                fieldProjectionOutboxFiles().any { it.length() > 0L },
+            )
         }
     }
 
@@ -185,28 +218,64 @@ class PrivateV1DeviceSmokeTest {
             val graphRepository = EncryptedThoughtGraphDeltaRepository(instrumentation.targetContext)
             val graphLoad = graphRepository.loadReport()
             assertTrue("ThoughtGraph delta vault must remain fully readable", graphLoad.unreadableEntries.isEmpty())
-            assertEquals(1, graphLoad.deltas.size)
+            val projection = v3ProjectionRecoveryFixture()
+            assertTrue(graphLoad.deltas.any { it.id == v3RecoveryDelta().id })
+            assertTrue(
+                "Cold-start boot must materialize the committed projection outbox delta",
+                graphLoad.deltas.any { it.id == projection.envelope.delta.id },
+            )
+
+            val projectionOutbox =
+                EncryptedFieldThoughtGraphProjectionOutboxRepository(instrumentation.targetContext)
+            val projectionOutboxLoad = projectionOutbox.loadReport()
+            assertTrue(projectionOutboxLoad.unreadableEntries.isEmpty())
+            assertTrue(projectionOutboxLoad.envelopes.any { it.id == projection.envelope.id })
+            val projectionSnapshots = EncryptedFieldSnapshotRepository(instrumentation.targetContext)
+            val committedSnapshot = projectionSnapshots.load(projection.snapshot.id)
+            assertNotNull("Projection FieldSnapshot must survive process kill", committedSnapshot)
+            assertEquals(
+                projection.snapshot.contentFingerprint(),
+                committedSnapshot!!.contentFingerprint(),
+            )
+
             val restoredGraph = DurableThoughtGraph(graphRepository)
             val graphRestore = restoredGraph.rehydrate(V3_CAPTURED_AT)
-            assertEquals(1, graphRestore.restoredDeltaCount)
-            assertEquals(1L, graphRestore.revision)
+            assertEquals(graphLoad.deltas.size, graphRestore.restoredDeltaCount)
+            assertEquals(graphLoad.deltas.size.toLong(), graphRestore.revision)
             assertTrue(graphRestore.snapshot.appliedDeltaIds.contains(v3RecoveryDelta().id))
+            assertTrue(graphRestore.snapshot.appliedDeltaIds.contains(projection.envelope.delta.id))
             assertEquals(
                 V3_GRAPH_SUMMARY,
-                graphRestore.snapshot.activeNodes.single().summary,
+                graphRestore.snapshot.activeNodes.single {
+                    it.provenance.sourceId == V3_GRAPH_SOURCE_ID
+                }.summary,
             )
             val recoveredHistoryFingerprint = graphRestore.snapshot.historyFingerprint
+            val revisionBeforeReplay = restoredGraph.state.value.revision
             val graphReplay = restoredGraph.append(
                 v3RecoveryDelta().copy(observedAt = V3_OBSERVED_AT.plusSeconds(30)),
                 V3_CAPTURED_AT.plusSeconds(30),
             )
             assertTrue("Cold-start graph replay must be idempotent", graphReplay.replayed)
-            assertEquals(1L, graphReplay.state.revision)
+            assertEquals(revisionBeforeReplay, graphReplay.state.revision)
             assertEquals(
                 recoveredHistoryFingerprint,
                 restoredGraph.snapshot(V3_CAPTURED_AT.plusSeconds(30)).historyFingerprint,
             )
-            assertEquals(1, graphRepository.loadReport().deltas.size)
+            assertEquals(graphLoad.deltas.size, graphRepository.loadReport().deltas.size)
+
+            val projectionCoordinator = FieldThoughtGraphProjectionCoordinator(
+                outbox = projectionOutbox,
+                snapshots = projectionSnapshots,
+                graph = restoredGraph,
+            )
+            val projectionReplayRevision = restoredGraph.state.value.revision
+            assertTrue(projectionCoordinator.materialize(projection.envelope))
+            assertEquals(
+                "Targeted outbox replay must not duplicate an already-applied graph delta",
+                projectionReplayRevision,
+                restoredGraph.state.value.revision,
+            )
 
             val sentinel = app.kernel.photonStore.loadAll()
                 .singleOrNull { SENTINEL_TAG in it.tags }
@@ -266,6 +335,29 @@ class PrivateV1DeviceSmokeTest {
         }
     }
 
+    private fun v3ProjectionRecoveryFixture(): V3ProjectionRecoveryFixture {
+        val photon = Photon(
+            id = PhotonId(V3_PROJECTION_PHOTON_ID),
+            revision = 1,
+            content = "committed field truth survives projection crash window",
+            confidence = 0.93,
+            semanticMass = 1.1,
+            energy = 0.82,
+            provenance = Provenance(
+                source = "v3-field-projection-recovery",
+                actor = "PrivateV1DeviceSmokeTest",
+                createdAt = V3_PROJECTION_AT,
+            ),
+            tags = setOf(V3_PROJECTION_TAG),
+        )
+        val request = DefaultPhotonFieldRequestFactory().create(photon)
+        val result = FieldConvergenceEngine().converge(request)
+        return V3ProjectionRecoveryFixture(
+            envelope = FieldThoughtGraphProjector().project(photon, request, result),
+            snapshot = result.snapshot,
+        )
+    }
+
     private fun v3RecoveryDelta(): ThoughtGraphDelta {
         val provenance = ThoughtGraphProvenance(
             sourceKind = ThoughtGraphSourceKind.SYSTEM,
@@ -306,6 +398,13 @@ class PrivateV1DeviceSmokeTest {
             ?.filter { it.name.endsWith(".tgdelta") }
             .orEmpty()
 
+    private fun fieldProjectionOutboxFiles() =
+        instrumentation.targetContext.filesDir
+            .resolve("field-thought-graph-projection-outbox")
+            .listFiles()
+            ?.filter { it.name.endsWith(".fgprojection") }
+            .orEmpty()
+
     private suspend fun cognitiveTasks(photon: Photon) =
         EncryptedTaskRepository(instrumentation.targetContext).loadReport().also {
             assertTrue("Task vault must remain readable", it.unreadableEntries.isEmpty())
@@ -338,6 +437,11 @@ class PrivateV1DeviceSmokeTest {
         }
     }
 
+    private data class V3ProjectionRecoveryFixture(
+        val envelope: FieldThoughtGraphProjectionEnvelope,
+        val snapshot: app.lifeos.core.field.FieldSnapshot,
+    )
+
     private companion object {
         const val BOOT_TIMEOUT_MS = 30_000L
         const val ORPHAN_TAG = "v2-cognition-orphan"
@@ -346,8 +450,11 @@ class PrivateV1DeviceSmokeTest {
         const val V3_GRAPH_SOURCE_ID = "system:v3-android-recovery"
         const val V3_GRAPH_SOURCE_FINGERPRINT = "v3-android-recovery-source-v1"
         const val V3_GRAPH_SUMMARY = "durable V3 graph survives Android process kill"
+        const val V3_PROJECTION_PHOTON_ID = "v3-field-projection-recovery-photon"
+        const val V3_PROJECTION_TAG = "v3-field-projection-recovery"
         val V3_SOURCE_AT: Instant = Instant.parse("2026-09-11T06:45:00Z")
         val V3_OBSERVED_AT: Instant = Instant.parse("2026-09-11T06:45:01Z")
         val V3_CAPTURED_AT: Instant = Instant.parse("2026-09-11T06:45:02Z")
+        val V3_PROJECTION_AT: Instant = Instant.parse("2026-09-11T06:46:00Z")
     }
 }
