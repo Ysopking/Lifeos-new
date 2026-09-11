@@ -9,6 +9,7 @@ import app.lifeos.core.data.evolution.EncryptedEvolutionStore
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
+import app.lifeos.core.data.thought.EncryptedFieldThoughtGraphProjectionOutboxRepository
 import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
 import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
@@ -81,6 +82,7 @@ import app.lifeos.core.runtime.evolution.NovelCapabilityAdmissionGate
 import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryCoordinator
 import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReadinessGate
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationCoordinator
+import app.lifeos.core.runtime.field.FieldThoughtGraphProjectionCoordinator
 import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.health.CircuitBreaker
 import app.lifeos.core.runtime.health.HealthGate
@@ -189,7 +191,7 @@ class LifeOsKernelFactory(
                     providerId = "scene-reference-rasterizer",
                     providerType = ProviderType.MODULE,
                     contract = CapabilityContract(
-                        requiredInputs = setOf("scene-graph"),
+                        requiredInputs = setOf("goal-photon"),
                         outputs = setOf("mmsi-geometry-buffers"),
                     ),
                     state = ProviderState.ACTIVE,
@@ -296,11 +298,19 @@ class LifeOsKernelFactory(
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
         val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
+        val fieldThoughtGraphProjectionOutbox =
+            EncryptedFieldThoughtGraphProjectionOutboxRepository(appContext)
+        val fieldThoughtGraphProjection = FieldThoughtGraphProjectionCoordinator(
+            outbox = fieldThoughtGraphProjectionOutbox,
+            snapshots = fieldSnapshotRepository,
+            graph = thoughtGraph,
+        )
         val worldFormulaSnapshotRepository = EncryptedWorldFormulaSnapshotRepository(appContext)
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
             snapshotRepository = fieldSnapshotRepository,
             requestEnricher = DurableContextFieldEnricher(store),
             healthGate = healthGate,
+            thoughtGraphProjection = fieldThoughtGraphProjection,
         )
         val schedulerSignal = ConflatedTaskSchedulerSignal()
         val taskEngine = DurableTaskEngine(taskRepository, schedulerSignal)
@@ -422,6 +432,9 @@ class LifeOsKernelFactory(
                     thoughtGraph.rehydrate()
                 },
                 RuntimeStateRehydrationStep {
+                    fieldThoughtGraphProjection.reconcile()
+                },
+                RuntimeStateRehydrationStep {
                     cognitionReconciler.reconcile()
                 },
                 RuntimeStateRehydrationStep {
@@ -481,6 +494,26 @@ class LifeOsKernelFactory(
 
                         override suspend fun probe(): StoreStatus {
                             val report = thoughtGraphDeltaRepository.loadReport()
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.unreadableEntries.isEmpty()) {
+                                    StoreState.HEALTHY
+                                } else {
+                                    StoreState.CORRUPTED
+                                },
+                                message = if (report.unreadableEntries.isEmpty()) {
+                                    null
+                                } else {
+                                    "unreadable:${report.unreadableEntries.size}"
+                                },
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "field-thought-graph-projection-outbox"
+
+                        override suspend fun probe(): StoreStatus {
+                            val report = fieldThoughtGraphProjectionOutbox.loadReport()
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) {
