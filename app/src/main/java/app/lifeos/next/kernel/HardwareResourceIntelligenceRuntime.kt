@@ -4,12 +4,14 @@ import android.content.Context
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.runtime.resource.HardwareAdaptiveBudgetPlan
 import app.lifeos.core.runtime.resource.HardwareAdaptiveResourceOptimizer
+import app.lifeos.core.runtime.resource.HardwareBudgetMode
 import app.lifeos.core.runtime.resource.HardwareStateSnapshot
 import app.lifeos.core.runtime.resource.HardwareWorkPriority
 import app.lifeos.core.runtime.resource.ResourceBudgetDemand
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
-import app.lifeos.core.runtime.resource.WorldFormulaBudgetAllocationPlan
+import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
+import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
 import app.lifeos.core.runtime.resource.WorldFormulaBudgetBroker
 import app.lifeos.core.runtime.resource.WorldFormulaBudgetBrokerDecision
 import app.lifeos.core.runtime.world.HardwareWorldEquationProfile
@@ -33,24 +35,6 @@ fun interface HardwareExecutionBudgetGate {
         requested: ResourceBudgetUsage,
         priority: HardwareWorkPriority,
     ): HardwareExecutionBudgetDecision
-}
-
-sealed interface SharedResourceBudgetDecision {
-    data class Ready(
-        val hardwarePlan: HardwareAdaptiveBudgetPlan,
-        val allocation: WorldFormulaBudgetAllocationPlan,
-    ) : SharedResourceBudgetDecision
-
-    data class Blocked(val reason: String) : SharedResourceBudgetDecision {
-        init { require(reason.isNotBlank()) }
-    }
-}
-
-fun interface SharedResourceBudgetGate {
-    suspend fun allocate(
-        hardQuota: ResourceBudgetQuota,
-        demands: List<ResourceBudgetDemand>,
-    ): SharedResourceBudgetDecision
 }
 
 /**
@@ -141,7 +125,7 @@ class HardwareResourceIntelligenceRuntime internal constructor(
             hardware = hardware,
             priority = aggregatePriority(demands),
         )
-        if (hardwarePlan.mode == app.lifeos.core.runtime.resource.HardwareBudgetMode.SUSPENDED) {
+        if (hardwarePlan.mode == HardwareBudgetMode.SUSPENDED) {
             return SharedResourceBudgetDecision.Blocked(
                 hardwarePlan.reasons.joinToString("|").ifBlank { "hardware-state-requires-suspension" }
             )
