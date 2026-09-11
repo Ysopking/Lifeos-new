@@ -101,7 +101,9 @@ class GeneratedToolHotSwapCoordinator(
             previousPromotionEvidenceId = requireNotNull(previous.promotionEvidenceId),
             candidatePromotionEvidenceId = evidence.id,
         )
-        if (transaction.terminal) return GeneratedToolHotSwapResult.AlreadyTerminal(transaction)
+        if (transaction.terminal || transaction.state == HotSwapState.REVERT_PREPARED) {
+            return GeneratedToolHotSwapResult.AlreadyTerminal(transaction)
+        }
 
         val gate = sharedBudgets()
             ?: return blockWithoutMutation(transaction, "shared-world-budget-gate-not-installed")
