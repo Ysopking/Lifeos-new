@@ -16,6 +16,7 @@ internal const val V14_TEST_RESTORE_SCOPE = "test-generated-provider-restore"
 internal const val V14_TEST_HOT_SWAP_SCOPE = "test-hot-swap"
 
 internal data class V14PolicyFixture(
+    val repository: V14MemoryOwnerPolicyRepository,
     val ledger: OwnerPolicyLedger,
     val grant: OwnerPolicyGrant,
 )
@@ -42,7 +43,8 @@ private suspend fun v14Allow(
     scope: String,
     now: Instant,
 ): V14PolicyFixture {
-    val ledger = OwnerPolicyLedger(V14MemoryOwnerPolicyRepository()) { now }
+    val repository = V14MemoryOwnerPolicyRepository()
+    val ledger = OwnerPolicyLedger(repository) { now }
     val grant = OwnerPolicyGrant.create(
         actorId = V14_TEST_OWNER,
         effect = effect,
@@ -51,7 +53,7 @@ private suspend fun v14Allow(
         validFrom = Instant.EPOCH,
     )
     ledger.grant(grant)
-    return V14PolicyFixture(ledger, grant)
+    return V14PolicyFixture(repository, ledger, grant)
 }
 
 internal class V14MemoryOwnerPolicyRepository : OwnerPolicyRepository {
