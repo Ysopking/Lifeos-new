@@ -15,16 +15,10 @@ import app.lifeos.core.runtime.capability.HotSwapLedger
 import app.lifeos.core.runtime.capability.HotSwapLifecycleFactory
 import app.lifeos.core.runtime.capability.HotSwapResourceProfile
 import app.lifeos.core.runtime.capability.HotSwapTransactionId
-import app.lifeos.core.runtime.policy.OwnerActorId
-import app.lifeos.core.runtime.policy.OwnerEffectType
-import app.lifeos.core.runtime.policy.OwnerPolicyGrant
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
-import app.lifeos.core.runtime.policy.OwnerResourceSelector
-import app.lifeos.core.runtime.policy.OwnerResourceSelectorType
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
-import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -36,7 +30,6 @@ class PrivateHotSwapRuntime private constructor(
     private val budgets: ResourceBudgetCoordinator,
 ) {
     private val swapMutex = Mutex()
-    private val ownerBootstrapMutex = Mutex()
 
     suspend fun verifyLedgerIntegrity() {
         ledger.all()
@@ -48,7 +41,7 @@ class PrivateHotSwapRuntime private constructor(
         evidence: GeneratedToolPromotionEvidence,
         resources: HotSwapResourceProfile = DEFAULT_RESOURCE_PROFILE,
     ): GeneratedToolHotSwapResult = swapMutex.withLock {
-        ensurePrivateOwnerBaseline()
+        PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
         val capabilities = requireNotNull(GeneratedToolRuntimeProcessRegistry.capabilities()) {
             "Generated-tool capability registry is not installed"
         }
@@ -63,8 +56,8 @@ class PrivateHotSwapRuntime private constructor(
             capabilities = capabilities,
             ownerPolicy = ownerPolicy,
             budgets = budgets,
-            actorId = PRIVATE_OWNER,
-            ownerScope = HOT_SWAP_SCOPE,
+            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+            ownerScope = PrivateOwnerPolicyBaseline.HOT_SWAP_SCOPE,
         ).swap(
             previousToolId = previousToolId,
             candidateToolId = candidateToolId,
@@ -77,7 +70,7 @@ class PrivateHotSwapRuntime private constructor(
         transactionId: HotSwapTransactionId,
         resources: HotSwapResourceProfile = DEFAULT_RESOURCE_PROFILE,
     ): GeneratedToolHotSwapRevertResult = swapMutex.withLock {
-        ensurePrivateOwnerBaseline()
+        PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
         val capabilities = requireNotNull(GeneratedToolRuntimeProcessRegistry.capabilities()) {
             "Generated-tool capability registry is not installed"
         }
@@ -90,14 +83,9 @@ class PrivateHotSwapRuntime private constructor(
             capabilities = capabilities,
             ownerPolicy = ownerPolicy,
             budgets = budgets,
-            actorId = PRIVATE_OWNER,
-            ownerScope = HOT_SWAP_SCOPE,
+            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+            ownerScope = PrivateOwnerPolicyBaseline.HOT_SWAP_SCOPE,
         ).revert(transactionId, resources)
-    }
-
-    private suspend fun ensurePrivateOwnerBaseline() = ownerBootstrapMutex.withLock {
-        if (ownerPolicy.snapshot().revision != 0L) return@withLock
-        DEFAULT_OWNER_GRANTS.forEach { ownerPolicy.grant(it) }
     }
 
     companion object {
@@ -136,11 +124,6 @@ class PrivateHotSwapRuntime private constructor(
         }
 
         private const val MIB = 1024L * 1024L
-        private const val HOT_SWAP_SCOPE = "private-apk-hot-swap"
-        private const val REMINDER_SCOPE = "private-apk-goal-action"
-        private const val REMINDER_RESOURCE = "goal://local-reminder"
-        private const val COMMUNICATION_RESOURCE = "goal://local-share-preparation"
-        private val PRIVATE_OWNER = OwnerActorId("private-owner")
 
         private val DEFAULT_RESOURCE_PROFILE = HotSwapResourceProfile(
             hardQuota = ResourceBudgetQuota(
@@ -163,30 +146,6 @@ class PrivateHotSwapRuntime private constructor(
             priority = 0.9,
             expectedUtility = 0.95,
             confidence = 1.0,
-        )
-
-        private val DEFAULT_OWNER_GRANTS = listOf(
-            OwnerPolicyGrant.create(
-                actorId = PRIVATE_OWNER,
-                effect = OwnerEffectType.REMINDER,
-                resource = OwnerResourceSelector(OwnerResourceSelectorType.EXACT, REMINDER_RESOURCE),
-                scope = REMINDER_SCOPE,
-                validFrom = Instant.EPOCH,
-            ),
-            OwnerPolicyGrant.create(
-                actorId = PRIVATE_OWNER,
-                effect = OwnerEffectType.COMMUNICATION,
-                resource = OwnerResourceSelector(OwnerResourceSelectorType.EXACT, COMMUNICATION_RESOURCE),
-                scope = REMINDER_SCOPE,
-                validFrom = Instant.EPOCH,
-            ),
-            OwnerPolicyGrant.create(
-                actorId = PRIVATE_OWNER,
-                effect = OwnerEffectType.PROVIDER_ACTIVATION,
-                resource = OwnerResourceSelector(OwnerResourceSelectorType.PREFIX, "hot-swap:"),
-                scope = HOT_SWAP_SCOPE,
-                validFrom = Instant.EPOCH,
-            ),
         )
     }
 }
