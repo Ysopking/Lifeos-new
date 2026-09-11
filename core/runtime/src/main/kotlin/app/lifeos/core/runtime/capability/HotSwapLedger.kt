@@ -107,6 +107,8 @@ data class HotSwapSnapshot(
     val worldSnapshotId: String? = null,
     val lastDetail: String? = null,
     val ledgerRevision: Long,
+    /** Timestamp of the durable event represented by ledgerRevision; never reconstructed from wall time. */
+    val lastRecordedAt: Instant = Instant.EPOCH,
 ) {
     val terminal: Boolean
         get() = state == HotSwapState.COMMITTED ||
@@ -351,6 +353,7 @@ class HotSwapLedger(
             worldSnapshotId = worldSnapshot,
             lastDetail = detail,
             ledgerRevision = events.last().revision,
+            lastRecordedAt = events.last().recordedAt,
         )
     }
 
