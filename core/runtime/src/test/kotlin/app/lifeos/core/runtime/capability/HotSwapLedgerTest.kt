@@ -33,6 +33,7 @@ class HotSwapLedgerTest {
         assertEquals(committed, restored)
         assertEquals(7L, restored.ownerPolicyRevision)
         assertEquals("world:hot-swap:1", restored.worldSnapshotId)
+        assertEquals(NOW, restored.lastRecordedAt)
         assertTrue(restored.terminal)
     }
 
@@ -57,6 +58,7 @@ class HotSwapLedgerTest {
         assertEquals(reverted, restored)
         assertEquals(8L, restored.ownerPolicyRevision)
         assertEquals("world:revert", restored.worldSnapshotId)
+        assertEquals(NOW, restored.lastRecordedAt)
         assertTrue(restored.terminal)
         assertFailsWith<IllegalArgumentException> {
             ledger.markRevertPrepared(restored, 9L, "world:second-revert")
