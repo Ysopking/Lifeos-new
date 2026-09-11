@@ -29,6 +29,9 @@ class ConvergenceEvidenceGapAnalyzer(
                 val top = ordered.firstOrNull() ?: return@forEach
                 val runnerUp = ordered.getOrNull(1)
                 val topAssessment = assessments[result.state.domainId to top.id] ?: return@forEach
+                val runnerAssessment = runnerUp?.let { assessments[result.state.domainId to it.id] }
+                val bandsOverlap = runnerAssessment != null &&
+                    topAssessment.confidenceBand.lower <= runnerAssessment.confidenceBand.upper
                 val evidenceById = source.evidence.associateBy { it.id }
                 val supportEvidence = top.evidenceLinks
                     .filter { it.relation != EvidenceRelationType.CONTRADICTS }
@@ -69,13 +72,21 @@ class ConvergenceEvidenceGapAnalyzer(
                     )
                 }
 
-                if (runnerUp != null && topAssessment.marginToRunnerUp < policy.minWinnerMargin) {
+                if (
+                    runnerUp != null &&
+                    (topAssessment.marginToRunnerUp < policy.minWinnerMargin || bandsOverlap)
+                ) {
+                    val reason = if (bandsOverlap) {
+                        "competing-confidence-bands-overlap:${java.lang.Double.toHexString(topAssessment.marginToRunnerUp)}"
+                    } else {
+                        "competing-hypotheses-within-margin:${java.lang.Double.toHexString(topAssessment.marginToRunnerUp)}"
+                    }
                     gaps += gap(
                         kind = ConvergenceEvidenceGapKind.INSUFFICIENT_MARGIN,
                         domainId = result.state.domainId,
                         hypothesisIds = listOf(top.id, runnerUp.id).sortedBy { it.value },
                         semanticKey = listOf(top.semanticKey, runnerUp.semanticKey).sorted().joinToString("|"),
-                        reason = "competing-hypotheses-within-margin:${java.lang.Double.toHexString(topAssessment.marginToRunnerUp)}",
+                        reason = reason,
                         sourceFingerprint = sourceFingerprint,
                     )
                 }
