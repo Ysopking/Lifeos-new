@@ -8,6 +8,17 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+object HealthGraphProcessRegistry {
+    @Volatile
+    private var installed: HealthGraph? = null
+
+    fun install(graph: HealthGraph) {
+        installed = graph
+    }
+
+    fun current(): HealthGraph? = installed
+}
+
 /**
  * Process-local health projection. Durable repair identity is owned by the V9 self-healing ledger;
  * this graph exposes a bounded observation stream so automatic healing can react without polling.
@@ -25,6 +36,7 @@ class HealthGraph(
         require(maxObservationsPerNode > 0) {
             "Observation history limit must be positive"
         }
+        HealthGraphProcessRegistry.install(this)
     }
 
     private val mutex = Mutex()
