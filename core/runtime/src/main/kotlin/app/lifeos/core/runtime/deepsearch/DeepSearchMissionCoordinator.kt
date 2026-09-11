@@ -24,15 +24,14 @@ interface DeepSearchResultPhotonPersistence {
  *
  * Ordering is deliberate:
  * EXPLORING -> final checkpoint -> SYNTHESIZING -> Photon.save -> VERIFYING -> terminal ledger event.
- * A terminal ledger entry therefore never points at an unpersisted result Photon. Recovery from a
- * terminal state projects the exact planner result from the final checkpoint and loads the Photon;
- * it does not execute sources again.
+ * A terminal ledger entry therefore never points at an unpersisted result Photon. Once synthesis
+ * starts the final planner checkpoint is frozen; recovery can render/project it but never mutate it.
  */
 class DeepSearchMissionCoordinator(
     private val ledger: DeepSearchMissionLedger,
     private val checkpoints: DeepSearchCheckpointStore,
     private val resultPhotons: DeepSearchResultPhotonPersistence,
-    private val evaluator: DeepSearchEvaluator = DeepSearchEvaluator(),
+    private val projector: DeepSearchCheckpointResultProjector = DeepSearchCheckpointResultProjector(),
 ) {
     suspend fun run(
         definition: DeepSearchMissionDefinition,
@@ -61,17 +60,23 @@ class DeepSearchMissionCoordinator(
             val checkpoint = requireNotNull(storedAtEntry) {
                 "DeepSearch VERIFYING mission is missing its final checkpoint"
             }.checkpoint
+            require(projector.isTerminal(checkpoint)) {
+                "DeepSearch VERIFYING mission checkpoint is not terminal"
+            }
             val status = statusFromPhoton(existing)
-            snapshot = terminalize(snapshot, existing.id, status)
+            terminalize(snapshot, existing.id, status)
             return product(existing, checkpoint, status, definition.id)
         }
 
         if (snapshot.state == DeepSearchMissionState.SYNTHESIZING) {
+            val checkpoint = requireNotNull(storedAtEntry) {
+                "DeepSearch SYNTHESIZING mission is missing its final checkpoint"
+            }.checkpoint
+            require(projector.isTerminal(checkpoint)) {
+                "DeepSearch SYNTHESIZING mission checkpoint is not terminal"
+            }
             val existing = resultPhotons.findForMission(definition.id)
             if (existing != null) {
-                val checkpoint = requireNotNull(storedAtEntry) {
-                    "DeepSearch SYNTHESIZING mission is missing its final checkpoint"
-                }.checkpoint
                 val status = statusFromPhoton(existing)
                 snapshot = ledger.startVerifying(snapshot)
                 terminalize(snapshot, existing.id, status)
@@ -87,11 +92,15 @@ class DeepSearchMissionCoordinator(
         var latestSnapshot = snapshot
         var latestStored = storedAtEntry
         val sink = DeepSearchCheckpointSink { checkpoint ->
+            if (latestSnapshot.state != DeepSearchMissionState.EXPLORING) {
+                require(latestStored?.checkpoint?.fingerprint() == checkpoint.fingerprint()) {
+                    "DeepSearch synthesis attempted to mutate its frozen final checkpoint"
+                }
+                return@DeepSearchCheckpointSink
+            }
             val stored = checkpoints.persist(definition.id, checkpoint)
             latestStored = stored
-            if (latestSnapshot.state == DeepSearchMissionState.EXPLORING) {
-                latestSnapshot = ledger.checkpoint(latestSnapshot, checkpoint.fingerprint())
-            }
+            latestSnapshot = ledger.checkpoint(latestSnapshot, checkpoint.fingerprint())
         }
 
         val searched = try {
@@ -103,11 +112,17 @@ class DeepSearchMissionCoordinator(
 
         val finalStored = checkpoints.load(definition.id)
             ?: error("DeepSearch planner completed without a durable final checkpoint")
+        require(projector.isTerminal(finalStored.checkpoint)) {
+            "DeepSearch planner returned before durable terminal checkpoint"
+        }
         if (latestSnapshot.state == DeepSearchMissionState.EXPLORING) {
             latestSnapshot = ledger.checkpoint(latestSnapshot, finalStored.checkpoint.fingerprint())
             latestSnapshot = ledger.startSynthesizing(latestSnapshot)
         }
         require(latestSnapshot.state == DeepSearchMissionState.SYNTHESIZING)
+        require(searched.result == projector.project(finalStored.checkpoint)) {
+            "DeepSearch rendered result diverges from durable terminal checkpoint"
+        }
 
         // Persist the deterministic result Photon before the ledger can enter VERIFYING/terminal.
         resultPhotons.save(searched.photon)
@@ -145,6 +160,9 @@ class DeepSearchMissionCoordinator(
         val stored = requireNotNull(checkpoints.load(snapshot.definition.id)) {
             "Terminal DeepSearch mission is missing final checkpoint"
         }
+        require(projector.isTerminal(stored.checkpoint)) {
+            "Terminal DeepSearch mission checkpoint is not terminal"
+        }
         require(
             snapshot.checkpointFingerprint == null ||
                 snapshot.checkpointFingerprint == stored.checkpoint.fingerprint()
@@ -176,35 +194,12 @@ class DeepSearchMissionCoordinator(
         status: DeepSearchStatus,
         missionId: DeepSearchMissionId,
     ): DeepSearchMissionProduct {
-        val result = projectResult(checkpoint, status)
+        val result = projector.project(checkpoint, status)
         val evidenceIds = result.evidence
             .mapNotNull { it.sourcePhotonId }
             .distinct()
             .sortedBy { it.value }
         return DeepSearchMissionProduct(photon, result, evidenceIds, missionId)
-    }
-
-    private fun projectResult(
-        checkpoint: DeepSearchPlannerCheckpoint,
-        status: DeepSearchStatus,
-    ): DeepSearchResult {
-        val frontier = DeepSearchFrontier(checkpoint.request, checkpoint.frontier)
-        val resolution = evaluator.resolve(checkpoint.request, frontier.admittedBranches())
-        val admittedEvidenceIds = frontier.admittedBranches()
-            .flatMapTo(mutableSetOf()) { it.hypothesis.evidenceIds }
-        return DeepSearchResult(
-            requestId = checkpoint.request.id,
-            status = status,
-            best = resolution.best,
-            alternatives = resolution.alternatives,
-            evidence = checkpoint.evidence
-                .filter { it.id in admittedEvidenceIds }
-                .sortedBy { it.id.value },
-            trace = checkpoint.trace,
-            workUnitsUsed = checkpoint.workUnitsUsed,
-            blockedSourceIds = checkpoint.blockedSourceIds,
-            failedSourceIds = checkpoint.failedSourceIds,
-        )
     }
 
     private fun statusFromTerminal(snapshot: DeepSearchMissionSnapshot): DeepSearchStatus {
