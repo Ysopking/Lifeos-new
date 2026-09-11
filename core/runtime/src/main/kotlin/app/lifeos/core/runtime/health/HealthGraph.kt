@@ -2,12 +2,15 @@ package app.lifeos.core.runtime.health
 
 import app.lifeos.core.runtime.RuntimeFailure
 import java.time.Instant
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Process-local health projection. Durable health persistence will be added after
- * the transition semantics are proven; this graph is intentionally action-free.
+ * Process-local health projection. Durable repair identity is owned by the V9 self-healing ledger;
+ * this graph exposes a bounded observation stream so automatic healing can react without polling.
  */
 class HealthGraph(
     private val classifier: FailureClassifier = FailureClassifier(),
@@ -27,6 +30,9 @@ class HealthGraph(
     private val mutex = Mutex()
     private val nodes = linkedMapOf<HealthNodeId, HealthNode>()
     private val history = mutableMapOf<HealthNodeId, ArrayDeque<HealthObservation>>()
+    private val mutableObservations = MutableSharedFlow<HealthObservation>(extraBufferCapacity = 128)
+
+    val observations: SharedFlow<HealthObservation> = mutableObservations.asSharedFlow()
 
     suspend fun register(id: HealthNodeId, scope: HealthScope): HealthNode = mutex.withLock {
         nodes[id]?.let { existing ->
@@ -72,40 +78,44 @@ class HealthGraph(
         )
     }
 
-    suspend fun record(observation: HealthObservation): HealthNode = mutex.withLock {
-        val current = nodes[observation.nodeId]
-            ?: HealthNode(
-                id = observation.nodeId,
-                scope = observation.classification?.scope ?: HealthScope.UNKNOWN,
+    suspend fun record(observation: HealthObservation): HealthNode {
+        val updated = mutex.withLock {
+            val current = nodes[observation.nodeId]
+                ?: HealthNode(
+                    id = observation.nodeId,
+                    scope = observation.classification?.scope ?: HealthScope.UNKNOWN,
+                )
+
+            val isFailure = observation.state == HealthState.DEGRADED ||
+                observation.state == HealthState.UNHEALTHY
+            val nextConsecutiveFailures = if (isFailure) current.consecutiveFailures + 1 else 0
+            val nextTotalFailures = current.totalFailures + if (isFailure) 1 else 0
+
+            val escalatedState = when {
+                observation.state == HealthState.DEGRADED &&
+                    nextConsecutiveFailures >= unhealthyAfterConsecutiveFailures -> HealthState.UNHEALTHY
+                else -> observation.state
+            }
+
+            val next = current.copy(
+                state = escalatedState,
+                consecutiveFailures = nextConsecutiveFailures,
+                totalFailures = nextTotalFailures,
+                lastObservationAt = observation.observedAt,
+                lastHealthyAt = if (observation.state == HealthState.HEALTHY) {
+                    observation.observedAt
+                } else {
+                    current.lastHealthyAt
+                },
+                lastMessage = observation.message,
             )
 
-        val isFailure = observation.state == HealthState.DEGRADED ||
-            observation.state == HealthState.UNHEALTHY
-        val nextConsecutiveFailures = if (isFailure) current.consecutiveFailures + 1 else 0
-        val nextTotalFailures = current.totalFailures + if (isFailure) 1 else 0
-
-        val escalatedState = when {
-            observation.state == HealthState.DEGRADED &&
-                nextConsecutiveFailures >= unhealthyAfterConsecutiveFailures -> HealthState.UNHEALTHY
-            else -> observation.state
+            nodes[observation.nodeId] = next
+            appendHistory(observation)
+            next
         }
-
-        val updated = current.copy(
-            state = escalatedState,
-            consecutiveFailures = nextConsecutiveFailures,
-            totalFailures = nextTotalFailures,
-            lastObservationAt = observation.observedAt,
-            lastHealthyAt = if (observation.state == HealthState.HEALTHY) {
-                observation.observedAt
-            } else {
-                current.lastHealthyAt
-            },
-            lastMessage = observation.message,
-        )
-
-        nodes[observation.nodeId] = updated
-        appendHistory(observation)
-        updated
+        mutableObservations.emit(observation)
+        return updated
     }
 
     suspend fun node(id: HealthNodeId): HealthNode? = mutex.withLock { nodes[id] }
