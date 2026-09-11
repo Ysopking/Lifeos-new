@@ -5,6 +5,7 @@ import app.lifeos.core.language.GoalPhoton
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingResult
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
+import app.lifeos.core.runtime.goal.GoalPlanRuntimeState
 
 data class LanguageSubmissionResult(
     val source: PhotonSubmissionResult,
@@ -12,6 +13,7 @@ data class LanguageSubmissionResult(
     val goalPhoton: GoalPhoton? = null,
     val goal: PhotonSubmissionResult? = null,
     val routing: GoalCapabilityResolution? = null,
+    val goalPlan: GoalPlanCreationResult? = null,
     val goalResume: GoalResumeExecutionResult? = null,
     val imageGeneration: ImageGenerationResult? = null,
     val localImageTransform: LocalImageTransformExecutionResult? = null,
@@ -42,4 +44,10 @@ data class LanguageSubmissionResult(
     val actionReady: Boolean get() = effectiveRouting?.ready == true
     val generatedImage: GeneratedImageResult? get() =
         (imageGeneration as? ImageGenerationResult.Generated)?.value
+}
+
+
+sealed interface GoalPlanCreationResult {
+    data class Created(val state: GoalPlanRuntimeState) : GoalPlanCreationResult
+    data class Failed(val reason: String) : GoalPlanCreationResult
 }

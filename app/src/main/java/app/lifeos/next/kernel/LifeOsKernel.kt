@@ -22,6 +22,7 @@ import app.lifeos.core.runtime.boot.BootRunResult
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
+import app.lifeos.core.runtime.capability.GoalCapabilityResolution
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.capability.PrivateGeneratedToolTrialSuite
 import app.lifeos.core.runtime.cognition.CognitiveDeltaIdentity
@@ -37,6 +38,7 @@ import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.goal.GoalResumeEngine
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
+import app.lifeos.core.runtime.goal.GoalPlanFactory
 import app.lifeos.core.runtime.goal.GoalResumeResult
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalResult
@@ -92,6 +94,7 @@ class LifeOsKernel internal constructor(
     private val bootCoordinator: BootCoordinator,
     private val continuousCognition: ContinuousCognitionEngine,
     private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
+    private val goalPlanFactory: GoalPlanFactory = GoalPlanFactory(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
     private val localDeepSearchGoalEngine: LocalDeepSearchGoalEngine = LocalDeepSearchGoalEngine(),
     private val localCommunicationGoalEngine: LocalCommunicationGoalEngine = LocalCommunicationGoalEngine(),
@@ -210,6 +213,12 @@ class LifeOsKernel internal constructor(
                 createdAt = photon.provenance.createdAt,
             )
             val goal = persistAndIngest(goalPhoton.photon)
+            val goalPlan = createGoalPlan(
+                goalPhoton = goalPhoton.photon,
+                goal = understanding.goal,
+                routing = routing,
+                createdAt = photon.provenance.createdAt,
+            )
             val goalResume = when {
                 understanding.goal.intent != IntentType.CONTINUE -> null
                 !routing.ready -> null
@@ -239,6 +248,7 @@ class LifeOsKernel internal constructor(
                 goalPhoton = goalPhoton,
                 goal = goal,
                 routing = routing,
+                goalPlan = goalPlan,
                 goalResume = goalResume,
                 imageGeneration = actions.imageGeneration,
                 localImageTransform = actions.localImageTransform,
@@ -345,6 +355,28 @@ class LifeOsKernel internal constructor(
             mutableBootstrapState.value.status == KernelBootstrapStatus.READY ||
                 mutableBootstrapState.value.status == KernelBootstrapStatus.DEGRADED
         ) { "$action requires a completed kernel boot" }
+    }
+
+    private suspend fun createGoalPlan(
+        goalPhoton: Photon,
+        goal: GoalFrame,
+        routing: GoalCapabilityResolution,
+        createdAt: Instant,
+    ): GoalPlanCreationResult = try {
+        GoalPlanCreationResult.Created(
+            goalPlans.create(
+                goalPlanFactory.create(
+                    goalPhoton = goalPhoton,
+                    goal = goal,
+                    routing = routing,
+                    createdAt = createdAt,
+                )
+            )
+        )
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        GoalPlanCreationResult.Failed(error.message ?: error::class.simpleName ?: "goal plan creation failed")
     }
 
     private suspend fun executeGoalResume(
@@ -653,3 +685,4 @@ class LifeOsKernel internal constructor(
         )
     }
 }
+
