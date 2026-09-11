@@ -38,6 +38,7 @@ data class ToolWorkshopStageArtifact(
             ToolWorkshopJobState.TESTED,
             ToolWorkshopJobState.SECURITY_VALIDATED,
             ToolWorkshopJobState.VERIFIED,
+            ToolWorkshopJobState.TRIAL_READY,
         )
     }
 }
@@ -57,9 +58,9 @@ object ToolWorkshopStageArtifactCodec {
 
     fun encode(artifacts: List<ToolWorkshopStageArtifact>): ByteArray {
         require(artifacts.size <= MAX_ARTIFACTS)
-        require(
-            artifacts.map { it.jobId to it.stage }.distinct().size == artifacts.size
-        ) { "Duplicate ToolWorkshop stage artifact key" }
+        require(artifacts.map { it.jobId to it.stage }.distinct().size == artifacts.size) {
+            "Duplicate ToolWorkshop stage artifact key"
+        }
         return ByteArrayOutputStream().let { bytes ->
             DataOutputStream(bytes).use { out ->
                 out.writeInt(MAGIC)
