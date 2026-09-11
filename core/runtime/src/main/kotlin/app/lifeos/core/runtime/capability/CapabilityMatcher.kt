@@ -208,6 +208,7 @@ class CapabilityMatcher(
     private val registry: CapabilityRegistry,
     private val workerRegistry: WorkerRegistry? = null,
     private val profiles: CapabilityProviderProfileSource = EmptyCapabilityProviderProfileSource,
+    private val reliability: CapabilityReliabilityResolver = DescriptorCapabilityReliabilityResolver,
     private val tieTolerance: Double = 1e-12,
 ) {
     init {
@@ -347,9 +348,13 @@ class CapabilityMatcher(
         profile: CapabilityProviderProfile,
         weights: CapabilityScoreWeights,
     ): CapabilityProviderScore {
+        val effectiveReliability = reliability.resolve(provider)
+        require(effectiveReliability.isFinite() && effectiveReliability in 0.0..1.0) {
+            "Effective capability reliability must be normalized"
+        }
         val raw = listOf(
             CapabilityScoreComponent.TRUST to trustScore(provider.trustLevel),
-            CapabilityScoreComponent.RELIABILITY to provider.reliability,
+            CapabilityScoreComponent.RELIABILITY to effectiveReliability,
             CapabilityScoreComponent.COST to (1.0 / (1.0 + provider.cost)),
             CapabilityScoreComponent.LATENCY to latencyScore(profile.estimatedLatencyMillis),
             CapabilityScoreComponent.HISTORY to profile.history.successRate,
