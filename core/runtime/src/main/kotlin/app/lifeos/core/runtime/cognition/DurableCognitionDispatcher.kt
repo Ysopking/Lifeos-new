@@ -23,6 +23,7 @@ data class DurableCognitiveDispatchResult(
 class DurableCognitionDispatcher(
     private val taskEngine: DurableTaskEngine,
     private val ledger: CognitiveProcessingLedger = CognitiveProcessingLedger(),
+    private val admissionController: DurableCognitionAdmissionController? = null,
 ) {
     suspend fun dispatch(item: CognitiveWorkItem): DurableCognitiveDispatchResult {
         val photonId = item.photonId
@@ -48,10 +49,14 @@ class DurableCognitionDispatcher(
                 workId = item.id,
                 skippedReason = "already-processing",
             )
-            ProcessingState.COMMITTED -> return DurableCognitiveDispatchResult(
-                workId = item.id,
-                task = taskEngine.submit(draft),
-            )
+            ProcessingState.COMMITTED -> {
+                val task = submitDurably(draft)
+                return DurableCognitiveDispatchResult(
+                    workId = item.id,
+                    task = task,
+                    skippedReason = if (task == null) BACKPRESSURE_REASON else null,
+                )
+            }
             null -> Unit
         }
 
@@ -63,9 +68,17 @@ class DurableCognitionDispatcher(
         }
 
         return try {
-            val task = taskEngine.submit(draft)
-            check(ledger.commit(key)) { "Cognitive durable ledger lost processing state" }
-            DurableCognitiveDispatchResult(workId = item.id, task = task)
+            val task = submitDurably(draft)
+            if (task == null) {
+                ledger.abort(key)
+                DurableCognitiveDispatchResult(
+                    workId = item.id,
+                    skippedReason = BACKPRESSURE_REASON,
+                )
+            } else {
+                check(ledger.commit(key)) { "Cognitive durable ledger lost processing state" }
+                DurableCognitiveDispatchResult(workId = item.id, task = task)
+            }
         } catch (cancelled: CancellationException) {
             ledger.abort(key)
             throw cancelled
@@ -74,6 +87,9 @@ class DurableCognitionDispatcher(
             throw error
         }
     }
+
+    private suspend fun submitDurably(draft: TaskDraft): LifeTask? =
+        admissionController?.submit(draft) ?: taskEngine.submit(draft)
 
     private fun CognitivePriority.toTaskPriority(): TaskPriority = when (this) {
         CognitivePriority.IDLE,
@@ -103,5 +119,6 @@ class DurableCognitionDispatcher(
         const val DURABLE_MODULE_ID = "durable-task-engine"
         const val DURABLE_OPERATION = "submit-cognitive-work"
         const val PIPELINE_VERSION = 1
+        const val BACKPRESSURE_REASON = "durable-backpressure"
     }
 }
