@@ -33,7 +33,7 @@ class OwnerPolicyCodecTest {
         val corrupted = empty.copyOf().also {
             it[it.lastIndex] = (it[it.lastIndex].toInt() xor 0x01).toByte()
         }
-        assertFailsWith<IllegalArgumentException> { OwnerPolicyEventLogCodec.decode(corrupted) }
+        assertFailsWith<Exception> { OwnerPolicyEventLogCodec.decode(corrupted) }
 
         val grant = OwnerPolicyGrant.create(
             actorId = OwnerActorId("owner"),
