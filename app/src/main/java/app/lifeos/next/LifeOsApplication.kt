@@ -60,6 +60,7 @@ class LifeOsApplication : Application() {
                 ledger = kernel.goalPlans,
                 convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
                 persistDerivedOutcome = kernel::persistAndIngest,
+                loadPersistedPhotons = kernel.photonStore::loadAll,
             )
         )
         kernel.start()
