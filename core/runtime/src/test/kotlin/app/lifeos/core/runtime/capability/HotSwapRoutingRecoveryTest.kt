@@ -94,10 +94,20 @@ class HotSwapRoutingRecoveryTest {
         budgets.createAccount(accountId, QUOTA)
         val reservation = (budgets.reserve(accountId, promoted.transactionId.value, REQUESTED) as ResourceBudgetReservationResult.Reserved)
             .reservation
+        val policy = v14AllowHotSwap(NOW)
 
-        val report = HotSwapBootReconciler(ledger, fixture.capabilities, budgets).reconcile()
+        val report = HotSwapBootReconciler(
+            ledger = ledger,
+            capabilities = fixture.capabilities,
+            budgets = budgets,
+            ownerPolicy = policy.ledger,
+            tools = fixture.tools,
+            actorId = V14_TEST_OWNER,
+            ownerScope = V14_TEST_HOT_SWAP_SCOPE,
+        ).reconcile()
 
         assertEquals(1, report.pendingRolledBack)
+        assertEquals(0, report.ownerPolicyBlocked)
         assertEquals(1, report.budgetsReleased)
         assertEquals(HotSwapState.ROLLED_BACK, ledger.snapshot(promoted.transactionId)?.state)
         assertEquals(ResourceBudgetReservationState.RELEASED, budgets.current(accountId).reservations.single().state)
@@ -131,10 +141,20 @@ class HotSwapRoutingRecoveryTest {
         val accountId = ResourceBudgetAccountId("hot-swap:${committed.transactionId.value}")
         budgets.createAccount(accountId, QUOTA)
         budgets.reserve(accountId, committed.transactionId.value, REQUESTED)
+        val policy = v14AllowHotSwap(NOW)
 
-        val report = HotSwapBootReconciler(ledger, fixture.capabilities, budgets).reconcile()
+        val report = HotSwapBootReconciler(
+            ledger = ledger,
+            capabilities = fixture.capabilities,
+            budgets = budgets,
+            ownerPolicy = policy.ledger,
+            tools = fixture.tools,
+            actorId = V14_TEST_OWNER,
+            ownerScope = V14_TEST_HOT_SWAP_SCOPE,
+        ).reconcile()
 
         assertEquals(1, report.committedRestored)
+        assertEquals(0, report.ownerPolicyBlocked)
         assertEquals(1, report.budgetsCommitted)
         val account = budgets.current(accountId)
         assertEquals(ResourceBudgetReservationState.COMMITTED, account.reservations.single().state)
