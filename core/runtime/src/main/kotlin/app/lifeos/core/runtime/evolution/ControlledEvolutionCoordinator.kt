@@ -8,6 +8,7 @@ import app.lifeos.core.runtime.policy.OwnerPolicyDecision
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetReservation
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationResult
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
@@ -68,26 +69,27 @@ sealed interface ControlledEvolutionExecutionResult {
  * V8 control boundary for replacement canaries.
  *
  * Order is deliberate and restart-safe:
- * 1. recover a previously persisted outcome before any candidate callback can run again;
- * 2. reserve shared V16 resources under a stable idempotency key;
- * 3. re-read V14 owner policy;
- * 4. let the existing trusted canary router replay J05 and reserve its bounded invocation;
- * 5. re-read owner policy immediately before candidate execution;
- * 6. persist J07 outcome/kill-switch evidence;
- * 7. settle the shared resource reservation only after durable outcome evidence exists.
+ * 1. initialize/verify the immutable hard V16 account when a process-owned quota is configured;
+ * 2. recover a previously persisted outcome before any candidate callback can run again;
+ * 3. reserve shared V16 resources under a stable idempotency key;
+ * 4. re-read V14 owner policy;
+ * 5. let the existing trusted canary router replay J05 and reserve its bounded invocation;
+ * 6. re-read owner policy immediately before candidate execution;
+ * 7. persist J07 outcome/kill-switch evidence;
+ * 8. settle the shared resource reservation only after durable outcome evidence exists.
  *
- * A crash after J07 persistence but before V16 settlement is therefore repaired by the recovery
- * path and cannot cause the candidate invocation to execute twice.
+ * A crash after J07 persistence but before V16 settlement is repaired by the recovery path and
+ * cannot cause the candidate invocation to execute twice.
  */
 class ControlledEvolutionCoordinator(
     private val ownerPolicy: OwnerPolicyLedger,
     private val budgets: ResourceBudgetCoordinator,
     private val router: EvolutionCanaryRouter,
-    private val outcomes: EvolutionCanaryOutcomeStore,
     private val outcomeRecorder: ControlledEvolutionOutcomeRecorder,
     private val budgetAccountId: ResourceBudgetAccountId,
     private val actorId: OwnerActorId,
     private val ownerScope: String,
+    private val accountQuota: ResourceBudgetQuota? = null,
 ) {
     init { require(ownerScope.isNotBlank()) }
 
@@ -101,9 +103,10 @@ class ControlledEvolutionCoordinator(
         require(reservedUsage.networkBytes == 0L) {
             "Initial controlled-evolution canaries must not reserve network access"
         }
+        accountQuota?.let { quota -> budgets.createAccount(budgetAccountId, quota) }
 
         val idempotencyKey = resourceIdempotencyKey(evidence, context)
-        val existingOutcome = outcomes.outcome(evidence.adoptionEvidence.id, context.invocationId)
+        val existingOutcome = router.durableOutcome(evidence.adoptionEvidence.id, context.invocationId)
         if (existingOutcome != null) {
             settleRecoveredBudget(idempotencyKey, reservedUsage)
             return ControlledEvolutionExecutionResult.Completed(existingOutcome, recovered = true)
