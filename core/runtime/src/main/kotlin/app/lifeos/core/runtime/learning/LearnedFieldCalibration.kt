@@ -38,7 +38,7 @@ data class LearnedFieldCalibrationProfile(
 
 /**
  * Read-only projection of the append-only learning ledger into field physics.
- * Base weights are never mutated. Every convergence run can capture a fresh profile,
+ * Base weights are never mutated. Every convergence run captures a fresh profile,
  * so later independently verified outcomes can influence later decisions without rewriting history.
  */
 class LearnedFieldCalibration(
@@ -79,7 +79,6 @@ class LearnedFieldCalibration(
             forceCalculator = FieldForceCalculator(profile.effective),
             config = config,
             registry = registry,
-            calibrationFingerprint = profile.fingerprint,
         )
     }
 
