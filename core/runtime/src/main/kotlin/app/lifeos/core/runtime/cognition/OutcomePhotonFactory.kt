@@ -33,18 +33,22 @@ class OutcomePhotonFactory {
         require(evidence.all { it.predictionId == prediction.id }) {
             "Outcome Photon evidence/prediction mismatch"
         }
+        require(recordedAt >= prediction.createdAt) { "Outcome Photon cannot predate prediction" }
         val canonicalEvidence = evidence.sortedBy { it.id.value }
         val sourcePhotonId = result.photonId
         val content = buildString {
             append('{')
-            append("\"schema\":\"lifeos.outcome.v1\",")
+            append("\"schema\":\"lifeos.outcome.v2\",")
             append("\"actionId\":"); appendJson(prediction.actionId); append(',')
             append("\"taskId\":"); appendJson(result.taskId.value); append(',')
             append("\"predictionId\":"); appendJson(prediction.id.value); append(',')
             append("\"decisionId\":"); appendJson(prediction.decisionId.value); append(',')
+            append("\"workingSetFingerprint\":"); appendJson(prediction.thoughtGraphWorkingSetFingerprint); append(',')
+            append("\"decisionPolicyFingerprint\":"); appendJson(prediction.decisionPolicyFingerprint); append(',')
             append("\"finalState\":"); appendJson(result.finalState.name); append(',')
             append("\"scoreId\":"); appendJson(score.id.value); append(',')
             append("\"scoreState\":"); appendJson(score.state.name); append(',')
+            append("\"scorePolicyFingerprint\":"); appendJson(score.policyFingerprint); append(',')
             append("\"quality\":"); append(java.lang.Double.toString(score.quality)); append(',')
             append("\"signedScore\":"); append(java.lang.Double.toString(score.signedScore)); append(',')
             append("\"sourcePhotonId\":")
@@ -54,16 +58,43 @@ class OutcomePhotonFactory {
             val snapshotId = result.fieldShadow?.snapshotId?.value
             if (snapshotId == null) append("null") else appendJson(snapshotId)
             append(',')
-            append("\"evidenceIds\":[")
+            append("\"providers\":[")
+            prediction.providerIds.forEachIndexed { index, provider ->
+                if (index > 0) append(',')
+                appendJson(provider)
+            }
+            append("],\"fieldSnapshotFingerprints\":[")
+            prediction.fieldSnapshotFingerprints.forEachIndexed { index, fingerprint ->
+                if (index > 0) append(',')
+                appendJson(fingerprint)
+            }
+            append("],\"evidence\":[")
             canonicalEvidence.forEachIndexed { index, item ->
                 if (index > 0) append(',')
-                appendJson(item.id.value)
+                append('{')
+                append("\"id\":"); appendJson(item.id.value); append(',')
+                append("\"sourceClass\":"); appendJson(item.sourceClass.name); append(',')
+                append("\"sourceId\":"); appendJson(item.sourceId); append(',')
+                append("\"sourceFingerprint\":"); appendJson(item.sourceFingerprint); append(',')
+                append("\"confidence\":"); append(java.lang.Double.toString(item.confidence)); append(',')
+                append("\"observedAt\":"); appendJson(item.observedAt.toString()); append(',')
+                append("\"reason\":"); appendJson(item.reason); append(',')
+                append("\"independentOfProviders\":[")
+                item.independentOfProviderIds.sorted().forEachIndexed { providerIndex, provider ->
+                    if (providerIndex > 0) append(',')
+                    appendJson(provider)
+                }
+                append("],\"signal\":{")
+                append("\"completion\":"); appendNullableDouble(item.signal.completion); append(',')
+                append("\"correctness\":"); appendNullableDouble(item.signal.correctness); append(',')
+                append("\"usefulness\":"); appendNullableDouble(item.signal.usefulness); append(',')
+                append("\"policyCompliance\":"); appendNullableDouble(item.signal.policyCompliance)
+                append("}}")
             }
-            append(']')
-            append('}')
+            append("]}")
         }
         val identity = StableFieldIds.fingerprint(
-            "outcome-photon/v1",
+            "outcome-photon/v2",
             prediction.contentFingerprint(),
             result.taskId.value,
             result.finalState.name,
@@ -73,7 +104,16 @@ class OutcomePhotonFactory {
             recordedAt.toString(),
             *canonicalEvidence.map { it.contentFingerprint() }.toTypedArray(),
         )
-        val parentIds = sourcePhotonId?.let(::setOf).orEmpty()
+        val parentIds = buildSet {
+            add(PhotonId(prediction.id.value))
+            sourcePhotonId?.let(::add)
+        }
+        val relations = buildSet {
+            add(PhotonRelation(target = PhotonId(prediction.id.value), type = RelationType.DERIVED_FROM))
+            sourcePhotonId?.let {
+                add(PhotonRelation(target = it, type = RelationType.DERIVED_FROM))
+            }
+        }
         return Photon(
             id = PhotonId("outcome:$identity"),
             revision = 1L,
@@ -89,9 +129,7 @@ class OutcomePhotonFactory {
                 createdAt = recordedAt,
                 parentIds = parentIds,
             ),
-            relations = sourcePhotonId?.let {
-                setOf(PhotonRelation(target = it, type = RelationType.DERIVED_FROM))
-            }.orEmpty(),
+            relations = relations,
             tags = buildSet {
                 add("outcome")
                 add("task:${result.finalState.name.lowercase()}")
@@ -99,6 +137,10 @@ class OutcomePhotonFactory {
                 if (score.adaptationAllowed) add("verified-outcome")
             },
         )
+    }
+
+    private fun StringBuilder.appendNullableDouble(value: Double?) {
+        if (value == null) append("null") else append(java.lang.Double.toString(value))
     }
 
     private fun StringBuilder.appendJson(value: String) {
