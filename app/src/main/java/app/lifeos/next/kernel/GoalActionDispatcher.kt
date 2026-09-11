@@ -34,6 +34,7 @@ class GoalActionDispatcher(
     private val executeImageTransform: suspend (GoalActionContext) -> LocalImageTransformExecutionResult,
     private val executeSchedule: suspend (GoalActionContext) -> LocalScheduleExecutionResult,
     private val prepareCommunication: suspend (GoalActionContext) -> LocalCommunicationExecutionResult,
+    private val executionGuard: GoalActionExecutionGuard = GoalExecutionRuntimeRegistry.current(),
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
         if (!context.routing.ready) {
@@ -54,7 +55,12 @@ class GoalActionDispatcher(
             }
         }
 
-        return when (context.goal.intent) {
+        val permit = executionGuard.prepare(context)
+        if (permit is GoalActionExecutionPermit.Blocked) {
+            return blocked(context.goal.intent, permit.reason)
+        }
+
+        val result = when (context.goal.intent) {
             IntentType.QUERY,
             IntentType.STORE_OR_REMEMBER -> GoalActionDispatchResult(
                 localKnowledge = executeKnowledge(context),
@@ -82,5 +88,30 @@ class GoalActionDispatcher(
 
             else -> GoalActionDispatchResult()
         }
+        executionGuard.settle(permit, result)
+        return result
+    }
+
+    private fun blocked(intent: IntentType, reason: String): GoalActionDispatchResult = when (intent) {
+        IntentType.QUERY,
+        IntentType.STORE_OR_REMEMBER -> GoalActionDispatchResult(
+            localKnowledge = LocalKnowledgeExecutionResult.Failed("blocked:$reason")
+        )
+        IntentType.SEARCH -> GoalActionDispatchResult(
+            localDeepSearch = LocalDeepSearchExecutionResult.Failed("blocked:$reason")
+        )
+        IntentType.CREATE_IMAGE -> GoalActionDispatchResult(
+            imageGeneration = ImageGenerationResult.Blocked(listOf(reason))
+        )
+        IntentType.TRANSFORM_IMAGE -> GoalActionDispatchResult(
+            localImageTransform = LocalImageTransformExecutionResult.Blocked(reason)
+        )
+        IntentType.SCHEDULE -> GoalActionDispatchResult(
+            localSchedule = LocalScheduleExecutionResult.Blocked(reason)
+        )
+        IntentType.COMMUNICATE -> GoalActionDispatchResult(
+            localCommunication = LocalCommunicationExecutionResult.Blocked(reason)
+        )
+        else -> GoalActionDispatchResult()
     }
 }
