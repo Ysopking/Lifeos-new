@@ -5,6 +5,7 @@ import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.capability.CapabilityId
+import app.lifeos.core.runtime.capability.GoalCapabilityPlan
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityMapper
 import java.time.Instant
 
@@ -104,9 +105,11 @@ sealed interface GoalPlanBuildResult {
 }
 
 /**
- * V7-B deterministic planner. It does not invent missing authority or capabilities. Every concrete
+ * V7-B/E deterministic planner. It does not invent missing authority or capabilities. Every concrete
  * goal becomes an action followed by an internal outcome-verification step. Capability requirements
  * are taken from the same mapper used by runtime routing, so planning and execution cannot drift.
+ * On restart, execution contracts are reconstructed from the durable plan and persisted GoalFrame;
+ * the durable definition itself is never silently regenerated or reshaped.
  */
 class GoalPlanBuilder(
     private val capabilityMapper: LanguageGoalCapabilityMapper = LanguageGoalCapabilityMapper(),
@@ -121,16 +124,9 @@ class GoalPlanBuilder(
     ): GoalPlanBuildResult {
         require(sourceGoalPhotonRevision > 0L)
         require(planRevision > 0L)
-        val capabilityPlan = capabilityMapper.plan(goal)
-        if (capabilityPlan.languageBlocking) {
-            return GoalPlanBuildResult.Blocked("goal-language-or-ambiguity-blocking")
-        }
-        if (goal.intent == IntentType.UNKNOWN) {
-            return GoalPlanBuildResult.Blocked("goal-intent-unknown")
-        }
-
-        val actionKey = "action:${goal.intent.name.lowercase()}"
-        val verifyKey = "verify:outcome"
+        val capabilityPlan = validatedCapabilityPlan(goal) ?: return blockedFor(goal)
+        val actionKey = actionKey(goal)
+        val verifyKey = VERIFY_KEY
         val definition = GoalPlanDefinition.create(
             sourceGoalPhotonId = sourceGoalPhotonId,
             sourceGoalPhotonRevision = sourceGoalPhotonRevision,
@@ -140,41 +136,107 @@ class GoalPlanBuilder(
                     key = actionKey,
                     objective = goal.objective,
                     deadline = deadline,
-                    priority = 100,
+                    priority = ACTION_PRIORITY,
                 ),
                 GoalStepSpec(
                     key = verifyKey,
-                    objective = "Verify persisted outcome for ${goal.intent.name.lowercase()}",
+                    objective = verificationObjective(goal),
                     dependencyKeys = setOf(actionKey),
                     deadline = deadline,
-                    priority = 50,
+                    priority = VERIFY_PRIORITY,
                 ),
             ),
             createdAt = createdAt,
         )
-        val actionStep = definition.steps.single { it.key == actionKey }
-        val verifyStep = definition.steps.single { it.key == verifyKey }
+        return GoalPlanBuildResult.Built(
+            blueprint(definition, goal, capabilityPlan)
+        )
+    }
+
+    /**
+     * Rebinds non-persisted execution contracts to an already persisted definition. Any mismatch is
+     * explicit corruption/version drift and blocks execution rather than creating a replacement plan.
+     */
+    fun bindExisting(
+        goal: GoalFrame,
+        definition: GoalPlanDefinition,
+    ): GoalPlanBuildResult {
+        val capabilityPlan = validatedCapabilityPlan(goal) ?: return blockedFor(goal)
+        val actionKey = actionKey(goal)
+        val action = definition.steps.singleOrNull { it.key == actionKey }
+            ?: return GoalPlanBuildResult.Blocked("persisted-plan-action-shape-mismatch")
+        val verify = definition.steps.singleOrNull { it.key == VERIFY_KEY }
+            ?: return GoalPlanBuildResult.Blocked("persisted-plan-verification-shape-mismatch")
+        if (
+            definition.steps.size != 2 ||
+            action.objective != goal.objective ||
+            action.priority != ACTION_PRIORITY ||
+            verify.objective != verificationObjective(goal) ||
+            verify.priority != VERIFY_PRIORITY ||
+            verify.dependencyIds != setOf(action.id) ||
+            action.dependencyIds.isNotEmpty() ||
+            action.deadline != verify.deadline
+        ) {
+            return GoalPlanBuildResult.Blocked("persisted-plan-shape-mismatch")
+        }
+        return GoalPlanBuildResult.Built(
+            blueprint(definition, goal, capabilityPlan)
+        )
+    }
+
+    private fun blueprint(
+        definition: GoalPlanDefinition,
+        goal: GoalFrame,
+        capabilityPlan: GoalCapabilityPlan,
+    ): GoalPlanBlueprint {
+        val action = definition.steps.single { it.key == actionKey(goal) }
+        val verify = definition.steps.single { it.key == VERIFY_KEY }
         val required = capabilityPlan.requirements.mapTo(sortedSetOf(compareBy { it.value })) {
             it.capabilityId
         }
-        val contracts = mapOf(
-            actionStep.id to GoalStepExecutionContract.create(
-                stepId = actionStep.id,
-                kind = GoalStepExecutionKind.ACTION,
-                actionIntent = goal.intent,
-                requiredCapabilityIds = required,
-                sourceGoalPhotonId = sourceGoalPhotonId,
-                sourceGoalPhotonRevision = sourceGoalPhotonRevision,
-            ),
-            verifyStep.id to GoalStepExecutionContract.create(
-                stepId = verifyStep.id,
-                kind = GoalStepExecutionKind.VERIFY_OUTCOME,
-                actionIntent = null,
-                requiredCapabilityIds = emptySet(),
-                sourceGoalPhotonId = sourceGoalPhotonId,
-                sourceGoalPhotonRevision = sourceGoalPhotonRevision,
+        return GoalPlanBlueprint(
+            definition = definition,
+            contracts = mapOf(
+                action.id to GoalStepExecutionContract.create(
+                    stepId = action.id,
+                    kind = GoalStepExecutionKind.ACTION,
+                    actionIntent = goal.intent,
+                    requiredCapabilityIds = required,
+                    sourceGoalPhotonId = definition.sourceGoalPhotonId,
+                    sourceGoalPhotonRevision = definition.sourceGoalPhotonRevision,
+                ),
+                verify.id to GoalStepExecutionContract.create(
+                    stepId = verify.id,
+                    kind = GoalStepExecutionKind.VERIFY_OUTCOME,
+                    actionIntent = null,
+                    requiredCapabilityIds = emptySet(),
+                    sourceGoalPhotonId = definition.sourceGoalPhotonId,
+                    sourceGoalPhotonRevision = definition.sourceGoalPhotonRevision,
+                ),
             ),
         )
-        return GoalPlanBuildResult.Built(GoalPlanBlueprint(definition, contracts))
+    }
+
+    private fun validatedCapabilityPlan(goal: GoalFrame): GoalCapabilityPlan? {
+        val plan = capabilityMapper.plan(goal)
+        return if (!plan.languageBlocking && goal.intent != IntentType.UNKNOWN) plan else null
+    }
+
+    private fun blockedFor(goal: GoalFrame): GoalPlanBuildResult.Blocked =
+        if (goal.intent == IntentType.UNKNOWN) {
+            GoalPlanBuildResult.Blocked("goal-intent-unknown")
+        } else {
+            GoalPlanBuildResult.Blocked("goal-language-or-ambiguity-blocking")
+        }
+
+    private fun actionKey(goal: GoalFrame): String = "action:${goal.intent.name.lowercase()}"
+
+    private fun verificationObjective(goal: GoalFrame): String =
+        "Verify persisted outcome for ${goal.intent.name.lowercase()}"
+
+    private companion object {
+        const val VERIFY_KEY = "verify:outcome"
+        const val ACTION_PRIORITY = 100
+        const val VERIFY_PRIORITY = 50
     }
 }
