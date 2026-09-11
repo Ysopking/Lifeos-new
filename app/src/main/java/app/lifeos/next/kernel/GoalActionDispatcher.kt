@@ -92,10 +92,13 @@ class GoalActionDispatcher(
 
             else -> GoalActionDispatchResult()
         }
-        executionGuard.settle(permit, result)
+
+        // Bind the already-persisted outcome to V7 before settling resource usage. If settlement is
+        // interrupted, restart sees a completed plan and cannot repeat the host/user-visible action.
         if (durableRuntime != null && durablePermit != null) {
             durableRuntime.complete(durablePermit, result)
         }
+        executionGuard.settle(permit, result)
         return result
     }
 
