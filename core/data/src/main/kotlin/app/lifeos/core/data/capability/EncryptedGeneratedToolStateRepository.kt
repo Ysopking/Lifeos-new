@@ -28,10 +28,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * J10 encrypted, atomic generated-tool lifecycle vault.
+ * Encrypted, atomic generated-tool lifecycle vault.
  *
- * Record/audit mutations and trial mutations share one consistency domain. The runtime commits RAM
- * only after these writes return, making this file the durable source for restart rehydration.
+ * Container v1 remains stable. The stored payload codec version is independently validated so old
+ * codec-v1 ciphertext remains readable while every successful write upgrades the payload to the
+ * current GeneratedToolStateCodec version.
  */
 class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolStateRepository {
     private val directory = context.filesDir.resolve("generated-tool-state-vault")
@@ -67,25 +68,45 @@ class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolSta
             }
         }
 
-        val receipt = when {
-            record.promotionEvidenceId == null -> null
-            promotionEvidence != null -> GeneratedToolPromotionReceipt.from(promotionEvidence).also {
-                require(it.evidenceId == record.promotionEvidenceId)
+        val existingLegacyReceipt = existing?.promotionReceipt
+        val existingBoundedReceipt = existing?.boundedPromotionReceipt
+        val legacyReceipt: GeneratedToolPromotionReceipt?
+        val boundedReceipt = when {
+            record.promotionEvidenceId == null -> {
+                legacyReceipt = null
+                null
             }
-            else -> requireNotNull(existing?.promotionReceipt) {
-                "Durable promoted generated tool lost its promotion receipt"
-            }.also {
-                require(it.evidenceId == record.promotionEvidenceId) {
-                    "Durable promotion receipt does not match current record"
+            promotionEvidence != null -> {
+                legacyReceipt = GeneratedToolPromotionReceipt.from(promotionEvidence).also {
+                    require(it.evidenceId == record.promotionEvidenceId)
+                }
+                null
+            }
+            existingLegacyReceipt != null -> {
+                legacyReceipt = existingLegacyReceipt.also {
+                    require(it.evidenceId == record.promotionEvidenceId) {
+                        "Durable promotion receipt does not match current record"
+                    }
+                }
+                null
+            }
+            existingBoundedReceipt != null -> {
+                legacyReceipt = null
+                existingBoundedReceipt.also {
+                    require(it.evidenceId == record.promotionEvidenceId) {
+                        "Durable bounded promotion receipt does not match current record"
+                    }
                 }
             }
+            else -> error("Durable promoted generated tool lost its promotion receipt")
         }
         val trials = existing?.trialEvidence ?: GeneratedToolTrialEvidence(toolId, emptyList())
         val updated = GeneratedToolPersistentState(
             record = record,
             auditEntries = auditEntries,
             trialEvidence = trials,
-            promotionReceipt = receipt,
+            promotionReceipt = legacyReceipt,
+            boundedPromotionReceipt = boundedReceipt,
         )
         writeStatesLocked(replace(states, updated))
     }
@@ -95,7 +116,7 @@ class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolSta
         val existing = requireNotNull(
             states.firstOrNull { it.record.manifest.toolId == evidence.toolId }
         ) { "Trial evidence requires a durably registered generated tool" }
-        require(existing.promotionReceipt == null) {
+        require(existing.promotionReceipt == null && existing.boundedPromotionReceipt == null) {
             "Promoted generated-tool trial evidence is sealed and cannot change"
         }
 
@@ -115,6 +136,7 @@ class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolSta
             auditEntries = existing.auditEntries,
             trialEvidence = evidence,
             promotionReceipt = null,
+            boundedPromotionReceipt = null,
         )
         writeStatesLocked(replace(states, updated))
     }
@@ -182,7 +204,8 @@ class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolSta
         require(container.size <= MAX_CONTAINER_BYTES) { "Generated-tool state vault file too large" }
         return DataInputStream(ByteArrayInputStream(container)).use { data ->
             require(data.readInt() == CONTAINER_VERSION) { "Unsupported generated-tool state container" }
-            require(data.readInt() == GeneratedToolStateCodec.VERSION) {
+            val storedCodecVersion = data.readInt()
+            require(GeneratedToolStateCodec.supportsVersion(storedCodecVersion)) {
                 "Unsupported generated-tool state codec"
             }
             val ivSize = data.readInt()
@@ -193,7 +216,10 @@ class EncryptedGeneratedToolStateRepository(context: Context) : GeneratedToolSta
             val cipher = Cipher.getInstance(TRANSFORMATION).apply {
                 init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
             }
-            GeneratedToolStateCodec.decode(cipher.doFinal(encrypted))
+            GeneratedToolStateCodec.decode(
+                bytes = cipher.doFinal(encrypted),
+                expectedVersion = storedCodecVersion,
+            )
         }
     }
 
