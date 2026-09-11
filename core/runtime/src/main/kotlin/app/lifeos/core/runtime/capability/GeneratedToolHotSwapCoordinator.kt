@@ -1,9 +1,11 @@
 package app.lifeos.core.runtime.capability
 
 import app.lifeos.core.runtime.policy.OwnerActorId
+import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
 import app.lifeos.core.runtime.policy.OwnerEffectRequest
 import app.lifeos.core.runtime.policy.OwnerEffectType
 import app.lifeos.core.runtime.policy.OwnerPolicyDecision
+import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
@@ -156,7 +158,9 @@ class GeneratedToolHotSwapCoordinator(
             }
         }
 
-        val initialOwner = ownerDecision(previous, candidate, accountId, reservation)
+        val initialOwner = ownerPolicy.evaluate(
+            ownerRequest(previous, candidate, accountId, reservation)
+        )
         if (initialOwner is OwnerPolicyDecision.Blocked) {
             budgets.release(accountId, reservation.id)
             return blockWithoutMutation(
@@ -188,7 +192,8 @@ class GeneratedToolHotSwapCoordinator(
         }
 
         val finalCandidate = requireNotNull(tools.get(candidateToolId))
-        val finalOwner = ownerDecision(previous, finalCandidate, accountId, reservation)
+        val finalRequest = ownerRequest(previous, finalCandidate, accountId, reservation)
+        val finalOwner = ownerPolicy.evaluate(finalRequest)
         if (finalOwner is OwnerPolicyDecision.Blocked) {
             capabilities.applyRestoredHotSwap(
                 capabilityId = previous.manifest.sourceCapability,
@@ -206,12 +211,34 @@ class GeneratedToolHotSwapCoordinator(
 
         val descriptor = lifecycle.activeDescriptor(candidateToolId)
         val mutation = try {
-            capabilities.hotSwapGenerated(
-                previousProviderId = previousToolId,
-                candidateDescriptor = descriptor,
-                candidateRecord = finalCandidate,
-                evidence = evidence,
-            )
+            when (
+                val exposure = OwnerPolicyEffectGate(ownerPolicy).expose(
+                    request = finalRequest,
+                ) {
+                    capabilities.hotSwapGenerated(
+                        previousProviderId = previousToolId,
+                        candidateDescriptor = descriptor,
+                        candidateRecord = finalCandidate,
+                        evidence = evidence,
+                    )
+                }
+            ) {
+                is OwnerEffectExposureResult.Exposed -> exposure.value
+                is OwnerEffectExposureResult.Blocked -> {
+                    capabilities.applyRestoredHotSwap(
+                        capabilityId = previous.manifest.sourceCapability,
+                        previousProviderId = previousToolId,
+                        candidateProviderId = candidateToolId,
+                        committed = false,
+                    )
+                    budgets.release(accountId, reservation.id)
+                    transaction = ledger.markRolledBack(
+                        transaction,
+                        "owner-policy-revoked:${exposure.assessment.reasonCodes.joinToString("|") { it.name }}",
+                    )
+                    return GeneratedToolHotSwapResult.Blocked(transaction, transaction.lastDetail!!)
+                }
+            }
         } catch (error: Exception) {
             runCatching {
                 capabilities.applyRestoredHotSwap(
@@ -243,22 +270,20 @@ class GeneratedToolHotSwapCoordinator(
         return GeneratedToolHotSwapResult.Committed(transaction, mutation)
     }
 
-    private suspend fun ownerDecision(
+    private fun ownerRequest(
         previous: GeneratedToolRecord,
         candidate: GeneratedToolRecord,
         accountId: ResourceBudgetAccountId,
         reservation: ResourceBudgetReservation,
-    ): OwnerPolicyDecision = ownerPolicy.evaluate(
-        OwnerEffectRequest(
-            actorId = actorId,
-            effect = OwnerEffectType.PROVIDER_ACTIVATION,
-            resource = "hot-swap:${previous.manifest.sourceCapability.value}:${previous.manifest.toolId}->${candidate.manifest.toolId}",
-            scope = ownerScope,
-            capabilityId = candidate.manifest.sourceCapability,
-            providerVersion = candidate.manifest.buildHash,
-            budgetAccountId = accountId,
-            budgetReservationId = reservation.id,
-        )
+    ): OwnerEffectRequest = OwnerEffectRequest(
+        actorId = actorId,
+        effect = OwnerEffectType.PROVIDER_ACTIVATION,
+        resource = "hot-swap:${previous.manifest.sourceCapability.value}:${previous.manifest.toolId}->${candidate.manifest.toolId}",
+        scope = ownerScope,
+        capabilityId = candidate.manifest.sourceCapability,
+        providerVersion = candidate.manifest.buildHash,
+        budgetAccountId = accountId,
+        budgetReservationId = reservation.id,
     )
 
     private suspend fun blockWithoutMutation(
