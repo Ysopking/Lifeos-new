@@ -18,6 +18,12 @@
         </activity>
 
         <provider
+            android:name=".kernel.HotSwapStartupProvider"
+            android:authorities="${applicationId}.hotswap-init"
+            android:exported="false"
+            android:initOrder="100" />
+
+        <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.share"
             android:exported="false"
