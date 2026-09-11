@@ -320,6 +320,26 @@ private fun LifeOsApp(model: LifeOsViewModel) {
                                             "${tool.toolId} · ${tool.state.name.lowercase()} · ${tool.trials} Trial(s)",
                                             style = MaterialTheme.typography.labelSmall,
                                         )
+                                        tool.promotionEvidenceId?.let { evidenceId ->
+                                            SelectionContainer {
+                                                Text("Promotion: $evidenceId", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                        tool.boundedAdmissionEvidenceId?.let { evidenceId ->
+                                            SelectionContainer {
+                                                Text("Admission: $evidenceId", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                        tool.boundedReadinessEvidenceId?.let { evidenceId ->
+                                            SelectionContainer {
+                                                Text("Readiness: $evidenceId", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                        tool.boundedPromotionSealId?.let { evidenceId ->
+                                            SelectionContainer {
+                                                Text("Seal: $evidenceId", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
                                     }
                                     if (toolStatus.tools.size > 6) {
                                         Text(
