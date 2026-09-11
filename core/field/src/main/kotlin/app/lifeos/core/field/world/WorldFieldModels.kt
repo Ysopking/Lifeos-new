@@ -23,21 +23,29 @@ value class WorldCoefficientId(val value: String) {
 enum class WorldNodeKind {
     DOMAIN_FIELD,
     PHOTON,
+    EVIDENCE,
+    HYPOTHESIS,
+    GOAL,
     THOUGHT,
     CAPABILITY,
     HEALTH,
 }
 
 /**
- * Independent world-field dimensions. They are never implicitly collapsed into one truth score.
- * Any transfer between two different dimensions requires an explicit versioned coefficient.
+ * Independent world-analysis dimensions. They are never implicitly collapsed into one truth score
+ * and, while V4 is informational-only, none of them grant decision authority.
  */
 enum class WorldSignalDimension {
     EVIDENCE_SUPPORT,
+    RELIABILITY,
+    AUTHORITY,
     UNCERTAINTY,
     CONFLICT_PRESSURE,
     TEMPORAL_FRESHNESS,
+    SEMANTIC_RELEVANCE,
+    GOAL_RELEVANCE,
     CONTEXT_RELEVANCE,
+    ANALYTIC_SALIENCE,
     CAPABILITY_READINESS,
     HEALTH_STABILITY,
     COGNITIVE_PRIORITY,
