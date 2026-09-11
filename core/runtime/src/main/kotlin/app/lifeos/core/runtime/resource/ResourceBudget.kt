@@ -188,13 +188,14 @@ data class ResourceBudgetAccount(
         require(reservations.all { it.accountId == id }) {
             "Resource budget reservation belongs to another account"
         }
-        val held = reservations
-            .filter { it.state == ResourceBudgetReservationState.RESERVED }
-            .fold(ResourceBudgetUsage(), ResourceBudgetUsage::plus)
-        require(quota.allows(consumed + held)) {
+        require(quota.allows(consumed + heldUsage())) {
             "Consumed plus reserved usage exceeds resource budget quota"
         }
     }
+
+    fun heldUsage(): ResourceBudgetUsage = reservations
+        .filter { it.state == ResourceBudgetReservationState.RESERVED }
+        .fold(ResourceBudgetUsage(), ResourceBudgetUsage::plus)
 }
 
 data class ResourceBudgetRepositoryLoadReport(
@@ -251,6 +252,12 @@ class ResourceBudgetCoordinator(
             account.reservations.firstOrNull { it.idempotencyKey == idempotencyKey }?.let { existing ->
                 require(existing.reserved == usage) { "Budget idempotency key reused with different usage" }
                 return ResourceBudgetReservationResult.Existing(existing)
+            }
+            if (!account.quota.allows(account.consumed + account.heldUsage() + usage)) {
+                return ResourceBudgetReservationResult.Denied(
+                    accountId = accountId,
+                    reason = "resource-budget-exhausted",
+                )
             }
             val reservation = ResourceBudgetReservation.create(
                 accountId = accountId,
