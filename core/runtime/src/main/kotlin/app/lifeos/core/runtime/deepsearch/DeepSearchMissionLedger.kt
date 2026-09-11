@@ -28,6 +28,7 @@ data class DeepSearchMissionDefinition(
     val query: String,
     val searchPolicyVersion: String,
     val sourceScopeIds: Set<String>,
+    val sourceSnapshotFingerprint: String,
     val createdAt: Instant,
 ) {
     init {
@@ -36,6 +37,9 @@ data class DeepSearchMissionDefinition(
         require(searchPolicyVersion.isNotBlank())
         require(sourceScopeIds.isNotEmpty())
         require(sourceScopeIds.none { it.isBlank() })
+        require(sourceSnapshotFingerprint.matches(Regex("[0-9a-f]{64}"))) {
+            "DeepSearch source snapshot fingerprint must be lowercase SHA-256 hex"
+        }
         require(id == createId(
             goalPhotonId = goalPhotonId,
             sourcePhotonId = sourcePhotonId,
@@ -54,6 +58,7 @@ data class DeepSearchMissionDefinition(
             query: String,
             searchPolicyVersion: String,
             sourceScopeIds: Set<String>,
+            sourceSnapshotFingerprint: String,
             createdAt: Instant,
         ): DeepSearchMissionDefinition = DeepSearchMissionDefinition(
             id = createId(
@@ -70,6 +75,7 @@ data class DeepSearchMissionDefinition(
             query = normalizeSearchText(query),
             searchPolicyVersion = searchPolicyVersion,
             sourceScopeIds = sourceScopeIds.toSortedSet(),
+            sourceSnapshotFingerprint = sourceSnapshotFingerprint,
             createdAt = createdAt,
         )
 
@@ -181,7 +187,13 @@ class DeepSearchMissionLedger(
 ) {
     suspend fun create(definition: DeepSearchMissionDefinition): DeepSearchMissionSnapshot {
         snapshot(definition.id)?.let { existing ->
-            require(existing.definition == definition) { "DeepSearch mission identity collision" }
+            if (!existing.terminal) {
+                require(existing.definition == definition) {
+                    "DeepSearch active mission evidence snapshot changed"
+                }
+            }
+            // A terminal mission is immutable and reusable for the same content-addressed mission id;
+            // later unrelated evidence changes cannot invalidate its already-persisted result.
             return existing
         }
         append(
