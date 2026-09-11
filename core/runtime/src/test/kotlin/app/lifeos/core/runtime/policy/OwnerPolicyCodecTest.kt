@@ -30,7 +30,9 @@ class OwnerPolicyCodecTest {
     @Test
     fun corruptionAndNonContiguousHistoryAreRejected() {
         val empty = OwnerPolicyEventLogCodec.encode(emptyList())
-        val corrupted = empty.copyOf().also { it[it.lastIndex] = (it.last() xor 0x01) }
+        val corrupted = empty.copyOf().also {
+            it[it.lastIndex] = (it[it.lastIndex].toInt() xor 0x01).toByte()
+        }
         assertFailsWith<IllegalArgumentException> { OwnerPolicyEventLogCodec.decode(corrupted) }
 
         val grant = OwnerPolicyGrant.create(
