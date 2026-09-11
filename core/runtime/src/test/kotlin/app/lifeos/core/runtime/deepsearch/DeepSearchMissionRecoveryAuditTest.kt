@@ -54,7 +54,7 @@ class DeepSearchMissionRecoveryAuditTest {
 
         assertFalse(report.healthy)
         assertEquals(
-            listOf("terminal-deepsearch-mission-is-missing-final-checkpoint"),
+            listOf("checkpoint-missing"),
             report.issues.map { it.code },
         )
     }
