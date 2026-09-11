@@ -32,6 +32,10 @@ run_test \
   'app.lifeos.next.ConvergenceDecisionDeviceTest#seedConvergenceDecisionCheckpoint' \
   "$report_dir/seed-convergence-decision.txt"
 
+run_test \
+  'app.lifeos.next.OutcomeLearningDeviceTest#seedOutcomeLearningAdaptation' \
+  "$report_dir/seed-outcome-learning.txt"
+
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.MainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
@@ -47,6 +51,10 @@ run_test \
 run_test \
   'app.lifeos.next.ConvergenceDecisionDeviceTest#recoverConvergenceDecisionCheckpoint' \
   "$report_dir/recovered-convergence-decision.txt"
+
+run_test \
+  'app.lifeos.next.OutcomeLearningDeviceTest#recoverOutcomeLearningAdaptationAfterColdStart' \
+  "$report_dir/recovered-outcome-learning.txt"
 
 run_test \
   'app.lifeos.next.PrivateV1DeviceSmokeTest#assertRecoveredRuntimeAndToolEvidence' \
