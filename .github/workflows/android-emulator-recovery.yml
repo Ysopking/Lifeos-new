@@ -1,0 +1,85 @@
+name: Android Emulator Recovery
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/android-emulator-recovery.yml"
+      - "app/src/androidTest/**"
+      - "app/src/main/java/app/lifeos/next/LifeOsApplication.kt"
+      - "app/src/main/java/app/lifeos/next/kernel/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/**"
+      - "core/data/src/main/kotlin/app/lifeos/core/data/capability/**"
+      - "core/data/src/main/kotlin/app/lifeos/core/data/evolution/**"
+permissions:
+  contents: read
+concurrency:
+  group: android-emulator-recovery-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  android-emulator-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+      - name: Free disk for Android emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          sudo rm -rf "$sdk_root/ndk" "$sdk_root/cmake"
+          df -h /
+      - name: Bounded ACTIVE cold-restart recovery
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          disk-size: 4096M
+          disable-animations: true
+          script: |
+            set -eu
+            mkdir -p android-emulator-recovery
+            gradle :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+
+            run_test() {
+              test_name="$1"
+              report="$2"
+              adb shell am instrument -w \
+                -e class "$test_name" \
+                app.lifeos.next.test/androidx.test.runner.AndroidJUnitRunner \
+                | tee "$report"
+              grep -q "OK (1 test)" "$report"
+            }
+
+            run_test \
+              'app.lifeos.next.PrivateV1DeviceSmokeTest#seedGeneratedToolAndAssertRuntime' \
+              android-emulator-recovery/seed-active.txt
+
+            adb shell am force-stop app.lifeos.next
+            adb shell am start -W -n app.lifeos.next/.MainActivity \
+              | tee android-emulator-recovery/cold-start.txt
+            pid="$(adb shell pidof app.lifeos.next | tr -d '\r')"
+            test -n "$pid"
+            adb shell dumpsys activity activities \
+              | grep -q 'app.lifeos.next/.MainActivity'
+
+            run_test \
+              'app.lifeos.next.PrivateV1DeviceSmokeTest#assertRecoveredRuntimeAndToolEvidence' \
+              android-emulator-recovery/recovered-active.txt
+      - name: Upload Android emulator recovery reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIFEOS-android-emulator-recovery
+          path: android-emulator-recovery/
+          if-no-files-found: warn
+          retention-days: 14
