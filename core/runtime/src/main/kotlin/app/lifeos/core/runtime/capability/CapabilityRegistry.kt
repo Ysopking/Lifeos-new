@@ -4,7 +4,6 @@ import app.lifeos.core.field.StableFieldIds
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** In-process exclusion claim that closes the missing-capability race during bounded promotion. */
 internal data class GeneratedToolNovelActivationClaim(
     val capabilityId: CapabilityId,
     val toolId: String,
@@ -21,6 +20,19 @@ internal data class GeneratedToolNovelActivationClaim(
         toolId,
         activationEvidenceId,
     )
+}
+
+data class GeneratedProviderHotSwapMutation(
+    val capabilityId: CapabilityId,
+    val previous: CapabilityDescriptor,
+    val candidate: CapabilityDescriptor,
+) {
+    init {
+        require(previous.capabilityId == capabilityId && candidate.capabilityId == capabilityId)
+        require(previous.providerId != candidate.providerId)
+        require(previous.state == ProviderState.DISABLED)
+        require(candidate.state == ProviderState.ACTIVE)
+    }
 }
 
 class CapabilityRegistry(
@@ -125,6 +137,88 @@ class CapabilityRegistry(
         if (novelActivationClaims[claim.capabilityId] == claim) {
             novelActivationClaims.remove(claim.capabilityId)
         }
+    }
+
+    internal suspend fun hotSwapGenerated(
+        previousProviderId: String,
+        candidateDescriptor: CapabilityDescriptor,
+        candidateRecord: GeneratedToolRecord,
+        evidence: GeneratedToolActivationEvidence,
+    ): GeneratedProviderHotSwapMutation = mutex.withLock {
+        require(candidateDescriptor.capabilityId !in novelActivationClaims) {
+            "Hot-swap cannot bypass an in-flight novel activation claim"
+        }
+        requireGeneratedDescriptor(candidateDescriptor, candidateRecord)
+        requireEvidenceBinding(candidateRecord, evidence)
+        val capabilityId = candidateDescriptor.capabilityId
+        val previousKey = capabilityId to previousProviderId
+        val candidateKey = capabilityId to candidateDescriptor.providerId
+        val previous = requireNotNull(providers[previousKey]) {
+            "Hot-swap previous provider is not registered"
+        }
+        require(previous.providerType == ProviderType.GENERATED_TOOL) {
+            "V10 generated hot-swap may replace generated providers only"
+        }
+        require(previous.providerId != candidateDescriptor.providerId)
+        require(previous.state == ProviderState.ACTIVE || previous.state == ProviderState.DISABLED) {
+            "Hot-swap previous provider must be ACTIVE or already-disabled replay"
+        }
+        providers[candidateKey]?.let { existing ->
+            require(existing.providerType == ProviderType.GENERATED_TOOL)
+            require(existing.contract == candidateDescriptor.contract)
+        }
+        val disabledPrevious = previous.copy(state = ProviderState.DISABLED)
+        providers[candidateKey] = candidateDescriptor.copy(state = ProviderState.ACTIVE)
+        providers[previousKey] = disabledPrevious
+        GeneratedProviderHotSwapMutation(
+            capabilityId = capabilityId,
+            previous = disabledPrevious,
+            candidate = candidateDescriptor.copy(state = ProviderState.ACTIVE),
+        )
+    }
+
+    internal suspend fun applyRestoredHotSwap(
+        capabilityId: CapabilityId,
+        previousProviderId: String,
+        candidateProviderId: String,
+        committed: Boolean,
+    ) = mutex.withLock {
+        val previousKey = capabilityId to previousProviderId
+        val candidateKey = capabilityId to candidateProviderId
+        val previous = requireNotNull(providers[previousKey]) {
+            "Hot-swap restore previous provider is missing"
+        }
+        require(previous.providerType == ProviderType.GENERATED_TOOL)
+        val candidate = providers[candidateKey]
+        if (committed) {
+            val availableCandidate = requireNotNull(candidate) {
+                "Committed hot-swap candidate provider is missing during restore"
+            }
+            require(availableCandidate.providerType == ProviderType.GENERATED_TOOL)
+            providers[previousKey] = previous.copy(state = ProviderState.DISABLED)
+            providers[candidateKey] = availableCandidate.copy(state = ProviderState.ACTIVE)
+        } else {
+            providers[previousKey] = previous.copy(state = ProviderState.ACTIVE)
+            if (candidate != null) {
+                require(candidate.providerType == ProviderType.GENERATED_TOOL)
+                providers[candidateKey] = candidate.copy(state = ProviderState.DISABLED)
+            }
+        }
+    }
+
+    internal suspend fun rollbackHotSwap(
+        capabilityId: CapabilityId,
+        previousProviderId: String,
+        candidateProviderId: String,
+    ) = mutex.withLock {
+        val previousKey = capabilityId to previousProviderId
+        val candidateKey = capabilityId to candidateProviderId
+        val previous = requireNotNull(providers[previousKey]) { "Hot-swap rollback previous provider is missing" }
+        val candidate = requireNotNull(providers[candidateKey]) { "Hot-swap rollback candidate provider is missing" }
+        require(previous.providerType == ProviderType.GENERATED_TOOL)
+        require(candidate.providerType == ProviderType.GENERATED_TOOL)
+        providers[previousKey] = previous.copy(state = ProviderState.ACTIVE)
+        providers[candidateKey] = candidate.copy(state = ProviderState.DISABLED)
     }
 
     /** Boot-only J03 restore path. */
