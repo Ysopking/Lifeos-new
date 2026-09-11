@@ -67,3 +67,7 @@ run_test \
 run_test \
   'app.lifeos.next.GoalPlanRecoveryDeviceTest#recoverGoalPlanAfterColdStart' \
   "$report_dir/recovered-goal-plan.txt"
+
+run_test \
+  'app.lifeos.next.OwnerPolicyAssetWriteDeviceTest#assetWriteIsAllowedThenFailsClosedAfterRevokeAcrossFreshStore' \
+  "$report_dir/owner-policy-asset-revoke-restart.txt"
