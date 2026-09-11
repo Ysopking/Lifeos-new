@@ -69,7 +69,7 @@ object PassThroughGoalActionExecutionGuard : GoalActionExecutionGuard {
 class PrivateGoalActionExecutionGuard(
     private val ownerPolicy: OwnerPolicyLedger,
     private val budgets: ResourceBudgetCoordinator,
-    private val hardware: HardwareResourceIntelligenceRuntime,
+    private val hardware: HardwareExecutionBudgetGate,
 ) : GoalActionExecutionGuard {
     private val bootstrapMutex = Mutex()
 
@@ -87,14 +87,14 @@ class PrivateGoalActionExecutionGuard(
         }
         val policyRevision = firstPolicyDecision?.policyRevision
 
-        val hardwareDecision = hardware.evaluate(
+        val hardwareDecision = hardware.plan(
             hardQuota = profile.hardQuota,
             requested = profile.requested,
             priority = profile.priority,
         )
-        val ready = hardwareDecision as? HardwareResourceDecision.Ready
+        val ready = hardwareDecision as? HardwareExecutionBudgetDecision.Ready
             ?: return GoalActionExecutionPermit.Blocked(
-                (hardwareDecision as HardwareResourceDecision.Blocked).reason,
+                (hardwareDecision as HardwareExecutionBudgetDecision.Blocked).reason,
             )
         if (!ready.plan.requestedFits) {
             return GoalActionExecutionPermit.Blocked(
