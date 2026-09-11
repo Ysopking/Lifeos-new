@@ -8,6 +8,7 @@ import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.evolution.EncryptedEvolutionStore
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
+import app.lifeos.core.data.learning.EncryptedLearningAdaptationRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
 import app.lifeos.core.data.thought.EncryptedFieldThoughtGraphProjectionOutboxRepository
 import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
@@ -93,6 +94,9 @@ import app.lifeos.core.runtime.health.HealthTaskExecutionObserver
 import app.lifeos.core.runtime.health.ProtectionCoordinator
 import app.lifeos.core.runtime.health.QuarantineRegistry
 import app.lifeos.core.runtime.health.RuntimeHealthMonitor
+import app.lifeos.core.runtime.learning.DurableLearningAdaptationLedger
+import app.lifeos.core.runtime.learning.LearnedFieldCalibration
+import app.lifeos.core.runtime.learning.LearnedProviderReliabilityResolver
 import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
@@ -123,6 +127,10 @@ class LifeOsKernelFactory(
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val appContext = context.applicationContext
         val store = EncryptedPhotonStore(appContext)
+        val learningAdaptationRepository = EncryptedLearningAdaptationRepository(appContext)
+        val learningAdaptations = DurableLearningAdaptationLedger(learningAdaptationRepository)
+        val learnedProviderReliability = LearnedProviderReliabilityResolver(learningAdaptations)
+        val learnedFieldCalibration = LearnedFieldCalibration(learningAdaptations)
         val assetStore = EncryptedBinaryAssetStore(appContext)
         val thoughtMatrixStateRepository = EncryptedThoughtMatrixStateRepository(appContext)
         val thoughtGraphDeltaRepository = EncryptedThoughtGraphDeltaRepository(appContext)
@@ -293,7 +301,10 @@ class LifeOsKernelFactory(
             privateNovelActivation = privateNovelActivation,
             artifactRepository = privateGeneratedToolRuntime.artifactRepository,
         )
-        val goalCapabilityRouter = LanguageGoalCapabilityRouter(capabilityRegistry)
+        val goalCapabilityRouter = LanguageGoalCapabilityRouter(
+            registry = capabilityRegistry,
+            reliability = learnedProviderReliability,
+        )
 
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
@@ -309,6 +320,7 @@ class LifeOsKernelFactory(
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
             snapshotRepository = fieldSnapshotRepository,
             requestEnricher = DurableContextFieldEnricher(store),
+            engineProvider = { learnedFieldCalibration.engine() },
             healthGate = healthGate,
             thoughtGraphProjection = fieldThoughtGraphProjection,
         )
@@ -429,6 +441,9 @@ class LifeOsKernelFactory(
             primary = primaryStateRehydrator,
             additionalSteps = listOf(
                 RuntimeStateRehydrationStep {
+                    learningAdaptations.rehydrate()
+                },
+                RuntimeStateRehydrationStep {
                     thoughtGraph.rehydrate()
                 },
                 RuntimeStateRehydrationStep {
@@ -477,6 +492,26 @@ class LifeOsKernelFactory(
                                     null
                                 } else {
                                     "unreadable:${report.unreadableFiles.size}"
+                                },
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "learning-adaptation-ledger"
+
+                        override suspend fun probe(): StoreStatus {
+                            val report = learningAdaptationRepository.loadReport()
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.unreadableEntries.isEmpty()) {
+                                    StoreState.HEALTHY
+                                } else {
+                                    StoreState.CORRUPTED
+                                },
+                                message = if (report.unreadableEntries.isEmpty()) {
+                                    null
+                                } else {
+                                    "unreadable:${report.unreadableEntries.size}"
                                 },
                             )
                         }
