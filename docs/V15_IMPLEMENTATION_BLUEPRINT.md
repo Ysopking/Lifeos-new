@@ -1,6 +1,6 @@
 # V15 — Explainability and Decision Trace implementation blueprint
 
-Status: preparation only. Productive V15 implementation begins after V14/#164 is accepted with real execution evidence.
+Status: productive implementation active on `v15/explainability-trace`, stacked on merged V14 (`734862ea2bcc370772109d764611df2b1feb98ad`).
 
 ## Design invariants
 
@@ -10,22 +10,20 @@ Status: preparation only. Productive V15 implementation begins after V14/#164 is
 - Trace projection is read-only and must have no owner-policy, provider, resource-settlement or host-effect mutation authority.
 - Facts, policy constraints, resource constraints, hypotheses, uncertainty, blocked alternatives and outcomes are typed distinctly.
 - Restart reconstruction must be deterministic and revision-bound.
+- DecisionTrace identity is exact and case-sensitive. It uses its own length-prefixed SHA-256 fingerprint and must not reuse semantic field-ID canonicalization (`trim().lowercase()`).
 
-## Planned files
-
-### New runtime package
+## Implemented runtime package
 `core/runtime/src/main/kotlin/app/lifeos/core/runtime/trace/`
 
-- `DecisionTraceId.kt`
-- `DecisionTrace.kt`
-- `DecisionTraceNode.kt`
-- `DecisionTraceLink.kt`
-- `DecisionTraceRepository.kt`
+- `DecisionTraceModels.kt`
 - `DecisionTraceLedger.kt`
-- `DecisionTraceCoverage.kt`
-- `DecisionTraceProjector.kt`
+- deterministic exact `DecisionTraceId`
+- revision-bound `DecisionTraceNodeId`
+- immutable typed graph/link validation
+- CAS-backed append and deterministic restart reconstruction
+- read-only `DecisionTraceProjector`
 
-### New encrypted data package
+## Planned encrypted data package
 `core/data/src/main/kotlin/app/lifeos/core/data/trace/`
 
 - `EncryptedDecisionTraceRepository.kt`
@@ -61,6 +59,8 @@ Each node stores only immutable IDs/revisions, reason codes and bounded display 
 ## Tests
 
 - exact case-sensitive DecisionTrace identity
+- structural tuple separation (`ab,c` != `a,bc`)
+- exact whitespace preservation in identity
 - same durable source chain reconstructs identical graph after restart
 - changed source revision produces a distinct bound node
 - blocked alternatives and exact reasons remain visible
@@ -70,8 +70,26 @@ Each node stores only immutable IDs/revisions, reason codes and bounded display 
 - projector cannot mutate owner policy, providers, resources or host effects
 - corrupted trace storage fails closed for explanation without granting or changing productive authority
 
-## Acceptance
+## Local build evidence — 2026-09-11
 
-V15 follows #165. Acceptance evidence must be recorded in #174. CI blocker #173 must be cleared before this branch can be considered accepted.
+Executed in the current chat build environment with `kotlinc-jvm 1.9.0` on JRE 21:
+
+- DecisionTrace models compile: PASS
+- case-sensitive identity (`Goal` != `goal`): PASS
+- length-prefixed structural separation: PASS
+- exact whitespace identity: PASS
+- deterministic node identity: PASS
+- DecisionTraceLedger compile: PASS
+- append/restart reconstruction: PASS
+- idempotent node merge: PASS
+- unreadable-store fail-closed behavior: PASS
+
+This is real targeted local Kotlin execution. It is not a substitute for the full repository Gradle, Android lint, APK assembly and emulator acceptance gates because the complete private repository checkout is not mounted in this container.
+
+## Full acceptance command when a complete checkout is available here
+
+`gradle test :app:lintDebug :app:assembleDebug --stacktrace`
+
+V15 follows #165. Acceptance evidence must be recorded in #174. CI blocker #173 remains relevant for GitHub-hosted execution.
 
 Related planning: #175.
