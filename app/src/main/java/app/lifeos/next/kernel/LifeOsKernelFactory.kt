@@ -9,6 +9,7 @@ import app.lifeos.core.data.evolution.EncryptedEvolutionStore
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.task.EncryptedTaskRepository
+import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
 import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
@@ -97,6 +98,7 @@ import app.lifeos.core.runtime.tasks.DurableCognitivePipeline
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
 import app.lifeos.core.runtime.tasks.TaskScheduler
 import app.lifeos.core.runtime.tasks.TaskSchedulerLoop
+import app.lifeos.core.runtime.thought.DurableThoughtGraph
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
 import app.lifeos.core.runtime.workers.CognitiveWorkerFactory
 import app.lifeos.core.runtime.workers.ReportingCognitiveTaskDispatcher
@@ -121,6 +123,8 @@ class LifeOsKernelFactory(
         val store = EncryptedPhotonStore(appContext)
         val assetStore = EncryptedBinaryAssetStore(appContext)
         val thoughtMatrixStateRepository = EncryptedThoughtMatrixStateRepository(appContext)
+        val thoughtGraphDeltaRepository = EncryptedThoughtGraphDeltaRepository(appContext)
+        val thoughtGraph = DurableThoughtGraph(thoughtGraphDeltaRepository)
         val matrix = ThoughtMatrix(durableState = thoughtMatrixStateRepository)
         val registry = StaticFieldRegistry(listOf(matrix))
         val executor = InfluenceExecutor()
@@ -415,6 +419,9 @@ class LifeOsKernelFactory(
             primary = primaryStateRehydrator,
             additionalSteps = listOf(
                 RuntimeStateRehydrationStep {
+                    thoughtGraph.rehydrate()
+                },
+                RuntimeStateRehydrationStep {
                     cognitionReconciler.reconcile()
                 },
                 RuntimeStateRehydrationStep {
@@ -467,6 +474,26 @@ class LifeOsKernelFactory(
                         override suspend fun probe(): StoreStatus {
                             thoughtMatrixStateRepository.load()
                             return StoreStatus(storeId, StoreState.HEALTHY)
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "thought-graph-delta-store"
+
+                        override suspend fun probe(): StoreStatus {
+                            val report = thoughtGraphDeltaRepository.loadReport()
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.unreadableEntries.isEmpty()) {
+                                    StoreState.HEALTHY
+                                } else {
+                                    StoreState.CORRUPTED
+                                },
+                                message = if (report.unreadableEntries.isEmpty()) {
+                                    null
+                                } else {
+                                    "unreadable:${report.unreadableEntries.size}"
+                                },
+                            )
                         }
                     },
                     object : StoreProbe {
