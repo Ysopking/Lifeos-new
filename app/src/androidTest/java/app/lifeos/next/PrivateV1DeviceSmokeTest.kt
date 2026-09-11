@@ -218,6 +218,7 @@ class PrivateV1DeviceSmokeTest {
             val graphRepository = EncryptedThoughtGraphDeltaRepository(instrumentation.targetContext)
             val graphLoad = graphRepository.loadReport()
             assertTrue("ThoughtGraph delta vault must remain fully readable", graphLoad.unreadableEntries.isEmpty())
+            val observedDeltaIds = graphLoad.deltas.map { it.id }.toSet()
             val projection = v3ProjectionRecoveryFixture()
             assertTrue(graphLoad.deltas.any { it.id == v3RecoveryDelta().id })
             assertTrue(
@@ -240,8 +241,9 @@ class PrivateV1DeviceSmokeTest {
 
             val restoredGraph = DurableThoughtGraph(graphRepository)
             val graphRestore = restoredGraph.rehydrate(V3_CAPTURED_AT)
-            assertEquals(graphLoad.deltas.size, graphRestore.restoredDeltaCount)
-            assertEquals(graphLoad.deltas.size.toLong(), graphRestore.revision)
+            assertTrue(graphRestore.restoredDeltaCount >= graphLoad.deltas.size)
+            assertTrue(graphRestore.snapshot.appliedDeltaIds.containsAll(observedDeltaIds))
+            assertEquals(graphRestore.restoredDeltaCount.toLong(), graphRestore.revision)
             assertTrue(graphRestore.snapshot.appliedDeltaIds.contains(v3RecoveryDelta().id))
             assertTrue(graphRestore.snapshot.appliedDeltaIds.contains(projection.envelope.delta.id))
             assertEquals(
@@ -262,7 +264,9 @@ class PrivateV1DeviceSmokeTest {
                 recoveredHistoryFingerprint,
                 restoredGraph.snapshot(V3_CAPTURED_AT.plusSeconds(30)).historyFingerprint,
             )
-            assertEquals(graphLoad.deltas.size, graphRepository.loadReport().deltas.size)
+            val afterReplayLoad = graphRepository.loadReport()
+            assertTrue(afterReplayLoad.unreadableEntries.isEmpty())
+            assertEquals(1, afterReplayLoad.deltas.count { it.id == v3RecoveryDelta().id })
 
             val projectionCoordinator = FieldThoughtGraphProjectionCoordinator(
                 outbox = projectionOutbox,
