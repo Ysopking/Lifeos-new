@@ -14,6 +14,14 @@ class DecisionTraceLedgerTest {
         val first = DecisionTraceId.create("goal", "Goal-7")
         assertEquals(first, DecisionTraceId.create("goal", "Goal-7"))
         assertNotEquals(first, DecisionTraceId.create("goal", "goal-7"))
+        assertNotEquals(
+            DecisionTraceId.create("ab", "c"),
+            DecisionTraceId.create("a", "bc"),
+        )
+        assertNotEquals(
+            DecisionTraceId.create("goal", " goal-7"),
+            DecisionTraceId.create("goal", "goal-7"),
+        )
     }
 
     @Test
