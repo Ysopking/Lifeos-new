@@ -118,7 +118,7 @@ class ThoughtGraphAttentionProjector {
         val adjacency = buildAdjacency(snapshot.activeNodes, snapshot.activeEdges)
         val goalDistances = goalDistances(
             goalIds = snapshot.activeNodes
-                .filter { it.kind == ThoughtGraphNodeKind.GOAL }
+                .filter(::isGoalNode)
                 .map { it.id }
                 .sortedBy { it.value },
             adjacency = adjacency,
@@ -178,15 +178,16 @@ class ThoughtGraphAttentionProjector {
         asOf: Instant,
     ): ThoughtGraphAttentionEntry {
         val reasons = mutableSetOf<ThoughtGraphAttentionReason>()
-        var score = when (node.kind) {
-            ThoughtGraphNodeKind.GOAL -> 4.0
-            ThoughtGraphNodeKind.CONFLICT -> 3.0
-            ThoughtGraphNodeKind.HYPOTHESIS -> 2.0
-            ThoughtGraphNodeKind.EVIDENCE -> 1.0
-            ThoughtGraphNodeKind.PHOTON -> 0.75
+        val goalNode = isGoalNode(node)
+        var score = when {
+            goalNode -> 4.0
+            node.kind == ThoughtGraphNodeKind.CONFLICT -> 3.0
+            node.kind == ThoughtGraphNodeKind.HYPOTHESIS -> 2.0
+            node.kind == ThoughtGraphNodeKind.EVIDENCE -> 1.0
+            else -> 0.75
         }
 
-        if (node.kind == ThoughtGraphNodeKind.GOAL) reasons += ThoughtGraphAttentionReason.GOAL
+        if (goalNode) reasons += ThoughtGraphAttentionReason.GOAL
         if (node.kind == ThoughtGraphNodeKind.HYPOTHESIS) reasons += ThoughtGraphAttentionReason.HYPOTHESIS
 
         when (node.attributes["state"]) {
@@ -231,6 +232,10 @@ class ThoughtGraphAttentionProjector {
         )
     }
 
+    private fun isGoalNode(node: ThoughtGraphNodeVersion): Boolean =
+        node.kind == ThoughtGraphNodeKind.GOAL ||
+            (node.kind == ThoughtGraphNodeKind.PHOTON && node.attributes["mimeType"] == GOAL_PHOTON_MIME_TYPE)
+
     private fun buildAdjacency(
         nodes: List<ThoughtGraphNodeVersion>,
         edges: List<ThoughtGraphEdgeVersion>,
@@ -254,7 +259,10 @@ class ThoughtGraphAttentionProjector {
         val distances = mutableMapOf<ThoughtGraphNodeId, Int>()
         val queue = ArrayDeque<ThoughtGraphNodeId>()
         goalIds.forEach { goalId ->
-            if (distances.putIfAbsent(goalId, 0) == null) queue.addLast(goalId)
+            if (goalId !in distances) {
+                distances[goalId] = 0
+                queue.addLast(goalId)
+            }
         }
         while (queue.isNotEmpty()) {
             val current = queue.removeFirst()
@@ -312,6 +320,10 @@ class ThoughtGraphAttentionProjector {
             ThoughtGraphEdgeKind.TEMPORALLY_SUPERSEDES -> 1.0
         }
         return kindPriority + edge.confidence + edge.authority + if (edge.validity.contains(asOf)) 0.25 else 0.0
+    }
+
+    private companion object {
+        const val GOAL_PHOTON_MIME_TYPE = "application/vnd.lifeos.goal+text"
     }
 }
 
