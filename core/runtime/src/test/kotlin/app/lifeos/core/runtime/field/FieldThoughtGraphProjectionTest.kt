@@ -15,6 +15,8 @@ import app.lifeos.core.runtime.thought.ThoughtGraphDeltaId
 import app.lifeos.core.runtime.thought.ThoughtGraphDeltaLoadReport
 import app.lifeos.core.runtime.thought.ThoughtGraphDeltaRepository
 import app.lifeos.core.runtime.thought.ThoughtGraphDeltaWriteResult
+import app.lifeos.core.runtime.thought.ThoughtGraphEdgeKind
+import app.lifeos.core.runtime.thought.ThoughtGraphNodeKind
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,6 +37,17 @@ class FieldThoughtGraphProjectionTest {
         assertEquals(fixture.envelope, decoded)
         assertEquals(fixture.result.snapshot.id, decoded.snapshotId)
         assertEquals(fixture.result.snapshot.contentFingerprint(), decoded.snapshotFingerprint)
+    }
+
+    @Test
+    fun `support edge runs from evidence into hypothesis`() {
+        val delta = fixture().envelope.delta
+        val support = delta.edgeVersions.single { it.kind == ThoughtGraphEdgeKind.SUPPORTS }
+        val source = delta.nodeVersions.single { it.id == support.sourceNodeId }
+        val target = delta.nodeVersions.single { it.id == support.targetNodeId }
+
+        assertEquals(ThoughtGraphNodeKind.EVIDENCE, source.kind)
+        assertEquals(ThoughtGraphNodeKind.HYPOTHESIS, target.kind)
     }
 
     @Test
@@ -59,7 +72,7 @@ class FieldThoughtGraphProjectionTest {
         val outbox = MemoryOutbox()
         val snapshots = MemorySnapshots()
         val graphDeltas = MemoryGraphDeltas()
-        val firstProcessGraph = DurableThoughtGraph(graphDeltas)
+        DurableThoughtGraph(graphDeltas)
 
         outbox.save(fixture.envelope)
         snapshots.save(fixture.result.snapshot)
