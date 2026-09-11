@@ -11,7 +11,6 @@ import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationId
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
-import java.time.Instant
 
 data class HotSwapBootReconciliationReport(
     val committedRestored: Int,
@@ -110,7 +109,7 @@ class HotSwapBootReconciler(
             ledger.snapshot(transaction.transactionId)?.let { current ->
                 DecisionTraceRuntimeRegistry.currentOrNull()?.recordHotSwap(
                     snapshot = current,
-                    recordedAt = Instant.now(),
+                    recordedAt = current.lastRecordedAt,
                 )
             }
         }
