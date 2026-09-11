@@ -24,6 +24,7 @@ import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.capability.PrivateGeneratedToolTrialSuite
+import app.lifeos.core.runtime.cognition.CognitiveDeltaIdentity
 import app.lifeos.core.runtime.cognition.CognitiveOutcomeJournal
 import app.lifeos.core.runtime.cognition.CognitivePriority
 import app.lifeos.core.runtime.cognition.CognitiveTriggerSink
@@ -297,6 +298,7 @@ class LifeOsKernel internal constructor(
         return try {
             val submission = continuousCognition.submit(
                 delta = PhotonDelta(
+                    deltaId = CognitiveDeltaIdentity.photonRevision(photon.id, photon.revision),
                     source = "kernel-live-submit",
                     photonId = photon.id,
                     revisionBefore = previous?.revision,

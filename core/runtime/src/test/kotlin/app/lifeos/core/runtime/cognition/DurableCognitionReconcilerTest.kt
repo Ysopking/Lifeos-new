@@ -110,9 +110,36 @@ class DurableCognitionReconcilerTest {
         )
     }
 
+    @Test
+    fun reconciliationRemainsCoveredWithFreshProcessState() = runTest {
+        val photons = TestPhotonRepository(listOf(photon("restart", revision = 2)))
+        val tasks = SnapshotTaskRepository()
+        val first = reconciler(photons, tasks).reconcile()
+        val afterRestart = reconciler(photons, tasks).reconcile()
+        assertEquals(1, first.submitted)
+        assertEquals(0, afterRestart.submitted)
+        assertEquals(1, afterRestart.alreadyCovered)
+        assertEquals(1, tasks.snapshot().size)
+    }
+
+    @Test
+    fun boundedPassDefersWorkAndReplayOnlySubmitsRemainingPhotons() = runTest {
+        val photons = TestPhotonRepository((1..5).map { photon("batch-$it", revision = 1) })
+        val tasks = SnapshotTaskRepository()
+        val reconciler = reconciler(photons, tasks, batchSize = 2)
+        val first = reconciler.reconcile()
+        val second = reconciler.reconcile()
+        val third = reconciler.reconcile()
+        assertEquals(listOf(2, 2, 1), listOf(first.submitted, second.submitted, third.submitted))
+        assertEquals(listOf(3, 1, 0), listOf(first.deferred, second.deferred, third.deferred))
+        assertEquals(5, tasks.snapshot().size)
+        assertEquals(0, reconciler.reconcile().submitted)
+    }
+
     private fun reconciler(
         photons: PhotonRepository,
         tasks: SnapshotTaskRepository,
+        batchSize: Int = 100,
     ): DurableCognitionReconciler {
         val taskEngine = DurableTaskEngine(
             tasks = tasks,
@@ -128,6 +155,7 @@ class DurableCognitionReconcilerTest {
             photons = photons,
             tasks = tasks,
             cognition = cognition,
+            maxSubmissionsPerPass = batchSize,
         )
     }
 

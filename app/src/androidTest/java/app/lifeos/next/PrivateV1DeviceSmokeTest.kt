@@ -3,8 +3,10 @@ package app.lifeos.next
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lifeos.core.data.task.EncryptedTaskRepository
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.CapabilityGapType
 import app.lifeos.core.runtime.capability.CapabilityId
@@ -116,11 +118,28 @@ class PrivateV1DeviceSmokeTest {
             assertEquals(sentinel, app.kernel.photonStore.load(sentinel.id))
             assertTrue("Recovery sentinel must enter durable cognition", persisted.processingQueued)
 
+            withTimeout(BOOT_TIMEOUT_MS) {
+                app.kernel.matrix.state.first { it.nodes[sentinel.id]?.revision == sentinel.revision }
+            }
+            assertTrue(app.kernel.persistAndIngest(sentinel).processingQueued)
+            assertSingleCognitiveTask(sentinel)
+
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 scenario.onActivity { activity -> assertFalse(activity.isFinishing) }
                 scenario.recreate()
                 scenario.onActivity { activity -> assertFalse(activity.isFinishing) }
             }
+
+            // Simulate the exact durable-save / missing-task crash window. The workflow kills
+            // this target process next; only cold-start reconciliation may create its task.
+            val orphan = Photon(
+                content = "saved-before-cognition-task",
+                provenance = Provenance("v2-cognition-recovery", "instrumentation"),
+                tags = setOf(ORPHAN_TAG),
+            )
+            app.kernel.photonStore.save(orphan)
+            assertEquals(orphan, app.kernel.photonStore.load(orphan.id))
+            assertTrue(cognitiveTasks(orphan).isEmpty())
         }
     }
 
@@ -133,7 +152,15 @@ class PrivateV1DeviceSmokeTest {
             val sentinel = app.kernel.photonStore.loadAll()
                 .singleOrNull { SENTINEL_TAG in it.tags }
             assertNotNull("Cold restart must preserve encrypted recovery sentinel", sentinel)
-            val expected = sentinel!!.content.split(SENTINEL_SEPARATOR)
+            assertSingleCognitiveTask(sentinel!!)
+            val orphan = app.kernel.photonStore.loadAll().single { ORPHAN_TAG in it.tags }
+            assertSingleCognitiveTask(orphan)
+            assertTrue(app.kernel.persistAndIngest(orphan).processingQueued)
+            assertSingleCognitiveTask(orphan)
+            withTimeout(BOOT_TIMEOUT_MS) {
+                app.kernel.matrix.state.first { it.nodes[orphan.id]?.revision == orphan.revision }
+            }
+            val expected = sentinel.content.split(SENTINEL_SEPARATOR)
             assertEquals("Recovery sentinel must bind tool plus exact evidence ids", 4, expected.size)
             val toolId = expected[0]
             val promotionEvidenceId = expected[1]
@@ -160,6 +187,19 @@ class PrivateV1DeviceSmokeTest {
         }
     }
 
+    private suspend fun cognitiveTasks(photon: Photon) =
+        EncryptedTaskRepository(instrumentation.targetContext).loadReport().also {
+            assertTrue("Task vault must remain readable", it.unreadableEntries.isEmpty())
+        }.tasks.filter {
+            (it.type == TaskType.PROCESS_PHOTON || it.type == TaskType.REPROCESS_PHOTON) &&
+                it.inputPhotonRevisions[photon.id] == photon.revision
+        }
+
+    private suspend fun assertSingleCognitiveTask(photon: Photon) {
+        assertEquals("Each photon revision must have exactly one durable cognition task",
+            1, cognitiveTasks(photon).size)
+    }
+
     private suspend fun awaitBoot(): KernelBootstrapState = withTimeout(BOOT_TIMEOUT_MS) {
         app.kernel.bootstrapState.first { state ->
             state.status == KernelBootstrapStatus.READY ||
@@ -174,6 +214,7 @@ class PrivateV1DeviceSmokeTest {
 
     private companion object {
         const val BOOT_TIMEOUT_MS = 30_000L
+        const val ORPHAN_TAG = "v2-cognition-orphan"
         const val SENTINEL_TAG = "private-v1-emulator-recovery"
         const val SENTINEL_SEPARATOR = "|"
     }
