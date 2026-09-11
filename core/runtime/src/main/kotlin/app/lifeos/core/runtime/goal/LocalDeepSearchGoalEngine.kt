@@ -11,6 +11,7 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.deepsearch.DeepSearchBudget
+import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointResultProjector
 import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointSink
 import app.lifeos.core.runtime.deepsearch.DeepSearchEvidenceDraft
 import app.lifeos.core.runtime.deepsearch.DeepSearchFindingDraft
@@ -56,6 +57,7 @@ sealed interface LocalDeepSearchGoalResult {
  */
 class LocalDeepSearchGoalEngine(
     private val planner: DeepSearchPlannerV2 = DeepSearchPlannerV2(),
+    private val checkpointProjector: DeepSearchCheckpointResultProjector = DeepSearchCheckpointResultProjector(),
     private val sharedBudgets: SharedResourceBudgetGate? = SharedResourceBudgetRuntimeRegistry.current(),
 ) {
     fun supports(intent: IntentType): Boolean = intent == IntentType.SEARCH
@@ -147,12 +149,18 @@ class LocalDeepSearchGoalEngine(
             // Preserve the original request identity; a looser current allocation never expands a running mission.
             resume.request
         }
-        val result = planner.search(
-            request = request,
-            sources = listOf(PhotonDeepSearchSource(candidates)),
-            resume = resume,
-            checkpointSink = checkpointSink,
-        )
+        val result = if (resume != null && checkpointProjector.isTerminal(resume)) {
+            // Synthesis/terminal recovery must never re-authorize or touch a source. The final durable
+            // planner checkpoint is sufficient to reconstruct the exact ranked result.
+            checkpointProjector.project(resume)
+        } else {
+            planner.search(
+                request = request,
+                sources = listOf(PhotonDeepSearchSource(candidates)),
+                resume = resume,
+                checkpointSink = checkpointSink,
+            )
+        }
         val evidenceIds = result.evidence
             .mapNotNull { it.sourcePhotonId }
             .distinct()
