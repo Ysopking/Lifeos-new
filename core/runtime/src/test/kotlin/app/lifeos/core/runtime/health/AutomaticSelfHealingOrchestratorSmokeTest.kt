@@ -1,7 +1,10 @@
 package app.lifeos.core.runtime.health
 
-import app.lifeos.core.runtime.resource.InMemoryResourceBudgetRepository
+import app.lifeos.core.runtime.resource.ResourceBudgetAccount
+import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import app.lifeos.core.runtime.resource.ResourceBudgetRepository
+import app.lifeos.core.runtime.resource.ResourceBudgetRepositoryLoadReport
 import java.time.Instant
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -19,7 +22,7 @@ class AutomaticSelfHealingOrchestratorSmokeTest {
             ledger = ledger,
             healthGraph = graph,
             quarantineRegistry = quarantine,
-            budgets = ResourceBudgetCoordinator(InMemoryResourceBudgetRepository()),
+            budgets = ResourceBudgetCoordinator(MemoryResourceBudgetRepository()),
             sharedBudgetProvider = { null },
             now = { NOW },
         )
@@ -62,6 +65,30 @@ class AutomaticSelfHealingOrchestratorSmokeTest {
             val current = events.lastOrNull()?.revision ?: 0L
             if (current != expectedRevision) return false
             events += event
+            return true
+        }
+    }
+
+    private class MemoryResourceBudgetRepository : ResourceBudgetRepository {
+        private val accounts = linkedMapOf<ResourceBudgetAccountId, ResourceBudgetAccount>()
+
+        override suspend fun load(accountId: ResourceBudgetAccountId): ResourceBudgetRepositoryLoadReport =
+            ResourceBudgetRepositoryLoadReport(accounts[accountId])
+
+        override suspend fun create(account: ResourceBudgetAccount): Boolean {
+            if (account.id in accounts) return false
+            accounts[account.id] = account
+            return true
+        }
+
+        override suspend fun compareAndSet(
+            accountId: ResourceBudgetAccountId,
+            expectedRevision: Long,
+            updated: ResourceBudgetAccount,
+        ): Boolean {
+            val current = accounts[accountId] ?: return false
+            if (current.revision != expectedRevision) return false
+            accounts[accountId] = updated
             return true
         }
     }
