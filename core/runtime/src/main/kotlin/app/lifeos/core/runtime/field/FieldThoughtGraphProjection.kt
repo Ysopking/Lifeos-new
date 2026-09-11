@@ -274,8 +274,9 @@ class FieldThoughtGraphProjector {
         val matchingAuthority = evidence
             .filter { it.sourcePhotonId == photon.id && it.sourceRevision == photon.revision }
             .maxOfOrNull { it.authority.defaultWeight } ?: 0.0
+        val isGoal = photon.mimeType == GOAL_PHOTON_MIME_TYPE
         val provenance = ThoughtGraphProvenance(
-            sourceKind = ThoughtGraphSourceKind.PHOTON,
+            sourceKind = if (isGoal) ThoughtGraphSourceKind.GOAL else ThoughtGraphSourceKind.PHOTON,
             sourceId = photon.id.value,
             sourceRevision = photon.revision,
             sourceFingerprint = runtimePhotonFingerprint(photon),
@@ -284,12 +285,12 @@ class FieldThoughtGraphProjector {
             createdAt = photon.provenance.createdAt,
         )
         return ThoughtGraphNodeVersion.create(
-            kind = ThoughtGraphNodeKind.PHOTON,
-            semanticKey = "photon",
+            kind = if (isGoal) ThoughtGraphNodeKind.GOAL else ThoughtGraphNodeKind.PHOTON,
+            semanticKey = if (isGoal) "goal" else "photon",
             summary = photon.content.take(MAX_SUMMARY_CHARS),
             confidence = photon.confidence,
             authority = matchingAuthority,
-            validity = TemporalValidity.at(photon.provenance.createdAt),
+            validity = if (isGoal) TemporalValidity.UNBOUNDED else TemporalValidity.at(photon.provenance.createdAt),
             provenance = provenance,
             attributes = mapOf(
                 "mimeType" to photon.mimeType,
@@ -403,6 +404,7 @@ class FieldThoughtGraphProjector {
 
     private companion object {
         const val MAX_SUMMARY_CHARS = 4096
+        const val GOAL_PHOTON_MIME_TYPE = "application/vnd.lifeos.goal+text"
     }
 }
 
