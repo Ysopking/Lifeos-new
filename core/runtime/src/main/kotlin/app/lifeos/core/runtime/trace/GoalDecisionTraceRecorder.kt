@@ -185,7 +185,7 @@ class GoalDecisionTraceRecorder(
         reservation: ResourceBudgetReservation,
     ): DecisionTraceRecordResult = record(stage = "resource-reservation") {
         val goal = goalNode(goalPhotonId, goalPhotonRevision, recordedAt)
-        val reservationNode = resourceReservationNode(reservation, recordedAt)
+        val reservationNode = resourceReservationNode(reservation)
         ledger.append(
             id = traceId(goalPhotonId),
             nodes = listOf(goal, reservationNode),
@@ -289,7 +289,6 @@ class GoalDecisionTraceRecorder(
 
     private fun resourceReservationNode(
         reservation: ResourceBudgetReservation,
-        recordedAt: Instant,
     ): DecisionTraceNode = DecisionTraceNode.create(
         type = DecisionTraceNodeType.RESOURCE_CONSTRAINT,
         sourceType = "resource-budget-reservation",
@@ -300,7 +299,7 @@ class GoalDecisionTraceRecorder(
             ResourceBudgetReservationState.RELEASED -> 3L
         },
         reasonCodes = listOf(reservation.state.name),
-        recordedAt = reservation.settledAt ?: recordedAt,
+        recordedAt = reservation.settledAt ?: reservation.createdAt,
     )
 
     private suspend fun record(
