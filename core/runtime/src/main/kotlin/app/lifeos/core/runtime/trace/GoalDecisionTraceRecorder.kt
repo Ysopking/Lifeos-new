@@ -1,13 +1,19 @@
 package app.lifeos.core.runtime.trace
 
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionCheckpoint
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionState
 import app.lifeos.core.runtime.goal.GoalPlanDefinition
+import app.lifeos.core.runtime.policy.OwnerPolicyAssessment
+import app.lifeos.core.runtime.resource.ResourceBudgetDomain
+import app.lifeos.core.runtime.resource.ResourceBudgetReservation
+import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
+import java.time.Instant
 import kotlinx.coroutines.CancellationException
 
 /**
- * Non-authoritative V15 recorder over already-durable V7/V5/outcome evidence.
+ * Non-authoritative V15 recorder over already-durable V7/V5/V14/V16/outcome evidence.
  *
  * A trace write is never allowed to upgrade, grant or reinterpret productive authority. If trace
  * persistence is unavailable the authoritative operation keeps its original result and diagnostics
@@ -85,6 +91,110 @@ class GoalDecisionTraceRecorder(
         )
     }
 
+    suspend fun recordOwnerPolicy(
+        goalPhotonId: PhotonId,
+        goalPhotonRevision: Long,
+        recordedAt: Instant,
+        assessment: OwnerPolicyAssessment,
+    ): DecisionTraceRecordResult = record(stage = "owner-policy") {
+        val goal = goalNode(goalPhotonId, goalPhotonRevision, recordedAt)
+        val policy = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.POLICY_CONSTRAINT,
+            sourceType = "owner-policy-decision",
+            sourceId = assessment.decisionId.value,
+            sourceRevision = assessment.policyRevision,
+            reasonCodes = if (assessment.allowed) {
+                listOf("ALLOWED")
+            } else {
+                assessment.reasonCodes.map { it.name }
+            },
+            recordedAt = recordedAt,
+        )
+        ledger.append(
+            id = traceId(goalPhotonId),
+            nodes = listOf(goal, policy),
+            links = listOf(
+                DecisionTraceLink(
+                    from = policy.id,
+                    to = goal.id,
+                    type = DecisionTraceLinkType.CONSTRAINS,
+                )
+            ),
+        )
+    }
+
+    suspend fun recordResourceAllocation(
+        goalPhotonId: PhotonId,
+        goalPhotonRevision: Long,
+        recordedAt: Instant,
+        domain: ResourceBudgetDomain,
+        worldSnapshotId: String,
+        demandFingerprint: String,
+    ): DecisionTraceRecordResult = record(stage = "resource-allocation") {
+        require(worldSnapshotId.isNotBlank())
+        require(demandFingerprint.isNotBlank())
+        val goal = goalNode(goalPhotonId, goalPhotonRevision, recordedAt)
+        val allocation = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.RESOURCE_CONSTRAINT,
+            sourceType = "world-formula-resource-allocation",
+            sourceId = worldSnapshotId,
+            sourceRevision = 1L,
+            reasonCodes = listOf("ALLOCATED", "DOMAIN_${domain.name}", "DEMAND_$demandFingerprint"),
+            recordedAt = recordedAt,
+        )
+        ledger.append(
+            id = traceId(goalPhotonId),
+            nodes = listOf(goal, allocation),
+            links = listOf(
+                DecisionTraceLink(allocation.id, goal.id, DecisionTraceLinkType.CONSTRAINS)
+            ),
+        )
+    }
+
+    suspend fun recordResourceBlock(
+        goalPhotonId: PhotonId,
+        goalPhotonRevision: Long,
+        recordedAt: Instant,
+        source: String,
+        reason: String,
+    ): DecisionTraceRecordResult = record(stage = "resource-block") {
+        require(source.isNotBlank())
+        require(reason.isNotBlank())
+        val goal = goalNode(goalPhotonId, goalPhotonRevision, recordedAt)
+        val blocked = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.RESOURCE_CONSTRAINT,
+            sourceType = "resource-decision",
+            sourceId = source,
+            sourceRevision = 1L,
+            reasonCodes = listOf(reason),
+            recordedAt = recordedAt,
+        )
+        ledger.append(
+            id = traceId(goalPhotonId),
+            nodes = listOf(goal, blocked),
+            links = listOf(
+                DecisionTraceLink(blocked.id, goal.id, DecisionTraceLinkType.CONSTRAINS)
+            ),
+        )
+    }
+
+    suspend fun recordResourceReservation(
+        goalPhotonId: PhotonId,
+        goalPhotonRevision: Long,
+        recordedAt: Instant,
+        reservation: ResourceBudgetReservation,
+    ): DecisionTraceRecordResult = record(stage = "resource-reservation") {
+        val goal = goalNode(goalPhotonId, goalPhotonRevision, recordedAt)
+        val reservationNode = resourceReservationNode(reservation, recordedAt)
+        ledger.append(
+            id = traceId(goalPhotonId),
+            nodes = listOf(goal, reservationNode),
+            links = listOf(
+                DecisionTraceLink(reservationNode.id, goal.id, DecisionTraceLinkType.CONSTRAINS)
+            ),
+        )
+    }
+
     suspend fun recordOutcome(
         definition: GoalPlanDefinition,
         outcome: Photon,
@@ -123,19 +233,32 @@ class GoalDecisionTraceRecorder(
         }
 
     private fun traceId(definition: GoalPlanDefinition): DecisionTraceId =
-        DecisionTraceId.create("goal-photon", definition.sourceGoalPhotonId.value)
+        traceId(definition.sourceGoalPhotonId)
+
+    private fun traceId(goalPhotonId: PhotonId): DecisionTraceId =
+        DecisionTraceId.create("goal-photon", goalPhotonId.value)
 
     private fun foundationNodes(definition: GoalPlanDefinition): List<DecisionTraceNode> =
         listOf(goalNode(definition), planNode(definition))
 
     private fun goalNode(definition: GoalPlanDefinition): DecisionTraceNode =
-        DecisionTraceNode.create(
-            type = DecisionTraceNodeType.OBSERVED_FACT,
-            sourceType = "goal-photon",
-            sourceId = definition.sourceGoalPhotonId.value,
-            sourceRevision = definition.sourceGoalPhotonRevision,
-            recordedAt = definition.createdAt,
+        goalNode(
+            definition.sourceGoalPhotonId,
+            definition.sourceGoalPhotonRevision,
+            definition.createdAt,
         )
+
+    private fun goalNode(
+        goalPhotonId: PhotonId,
+        goalPhotonRevision: Long,
+        recordedAt: Instant,
+    ): DecisionTraceNode = DecisionTraceNode.create(
+        type = DecisionTraceNodeType.OBSERVED_FACT,
+        sourceType = "goal-photon",
+        sourceId = goalPhotonId.value,
+        sourceRevision = goalPhotonRevision,
+        recordedAt = recordedAt,
+    )
 
     private fun planNode(definition: GoalPlanDefinition): DecisionTraceNode =
         DecisionTraceNode.create(
@@ -162,6 +285,22 @@ class GoalDecisionTraceRecorder(
         sourceRevision = 1L,
         reasonCodes = checkpoint.decision.reasons,
         recordedAt = definition.createdAt,
+    )
+
+    private fun resourceReservationNode(
+        reservation: ResourceBudgetReservation,
+        recordedAt: Instant,
+    ): DecisionTraceNode = DecisionTraceNode.create(
+        type = DecisionTraceNodeType.RESOURCE_CONSTRAINT,
+        sourceType = "resource-budget-reservation",
+        sourceId = reservation.id.value,
+        sourceRevision = when (reservation.state) {
+            ResourceBudgetReservationState.RESERVED -> 1L
+            ResourceBudgetReservationState.COMMITTED -> 2L
+            ResourceBudgetReservationState.RELEASED -> 3L
+        },
+        reasonCodes = listOf(reservation.state.name),
+        recordedAt = reservation.settledAt ?: recordedAt,
     )
 
     private suspend fun record(
