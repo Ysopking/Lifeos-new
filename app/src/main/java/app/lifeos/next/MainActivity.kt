@@ -31,6 +31,8 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.goal.LocalReminderRecord
 import app.lifeos.core.runtime.goal.LocalScheduleGoalEngine
+import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
+import app.lifeos.next.kernel.PrivateOwnerEffectAuthority
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -68,8 +70,17 @@ private fun LifeOsApp(model: LifeOsViewModel) {
         if (pendingShare != null) {
             try {
                 val shareIntent = model.createShareIntent(pendingShare)
-                context.startActivity(Intent.createChooser(shareIntent, "Mit App teilen"))
-                model.communicationShareOpened(pendingShare)
+                when (
+                    val exposure = PrivateOwnerEffectAuthority.expose(
+                        context = context,
+                        request = PrivateOwnerEffectAuthority.shareHandoffRequest(),
+                    ) {
+                        context.startActivity(Intent.createChooser(shareIntent, "Mit App teilen"))
+                    }
+                ) {
+                    is OwnerEffectExposureResult.Exposed -> model.communicationShareOpened(pendingShare)
+                    is OwnerEffectExposureResult.Blocked -> model.communicationShareFailed(pendingShare)
+                }
             } catch (_: Exception) {
                 model.communicationShareFailed(pendingShare)
             }
