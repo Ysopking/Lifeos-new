@@ -276,7 +276,7 @@ object ConvergenceDecisionCheckpointCodec {
         }
 
         writeCount(decision.capabilityGaps.size, MAX_CAPABILITY_GAPS)
-        decision.capabilityGaps.forEach(::writeCapabilityGap)
+        decision.capabilityGaps.forEach { gap -> writeCapabilityGap(gap) }
 
         writeBoolean(decision.escalation != null)
         decision.escalation?.let { escalation ->
@@ -287,12 +287,12 @@ object ConvergenceDecisionCheckpointCodec {
             writeCount(escalation.evidenceRequestIds.size, MAX_EVIDENCE_REQUESTS)
             escalation.evidenceRequestIds.forEach { writeString(it.value) }
             writeCount(escalation.capabilityIds.size, MAX_SET_ITEMS)
-            escalation.capabilityIds.forEach(::writeString)
+            escalation.capabilityIds.forEach { capabilityId -> writeString(capabilityId) }
             writeString(escalation.sourceFingerprint)
         }
 
         writeCount(decision.reasons.size, MAX_REASONS)
-        decision.reasons.forEach(::writeString)
+        decision.reasons.forEach { reason -> writeString(reason) }
     }
 
     private fun DataInputStream.readDecision(): ConvergenceDecision {
@@ -360,11 +360,11 @@ object ConvergenceDecisionCheckpointCodec {
         writeString(gap.requirement.severity.name)
         writeString(gap.type.name)
         writeCount(gap.requirement.requiredInputs.size, MAX_SET_ITEMS)
-        gap.requirement.requiredInputs.sorted().forEach(::writeString)
+        gap.requirement.requiredInputs.sorted().forEach { input -> writeString(input) }
         writeCount(gap.requirement.requiredOutputs.size, MAX_SET_ITEMS)
-        gap.requirement.requiredOutputs.sorted().forEach(::writeString)
+        gap.requirement.requiredOutputs.sorted().forEach { output -> writeString(output) }
         writeCount(gap.candidateProviderIds.size, MAX_SET_ITEMS)
-        gap.candidateProviderIds.sorted().forEach(::writeString)
+        gap.candidateProviderIds.sorted().forEach { providerId -> writeString(providerId) }
     }
 
     private fun DataInputStream.readCapabilityGap(): CapabilityGap = CapabilityGap(
