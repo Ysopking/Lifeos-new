@@ -65,72 +65,87 @@ class LifeOsApplication : Application() {
             EncryptedGeneratedToolStateRepository(this),
         )
         hardwareResourceIntelligence = HardwareResourceIntelligenceRuntime(this)
-        SharedResourceBudgetRuntimeRegistry.install(hardwareResourceIntelligence)
-        ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(this))
-        resourceBudgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(this))
-        GoalExecutionRuntimeRegistry.install(
-            PrivateGoalActionExecutionGuard(
-                ownerPolicy = ownerPolicy,
-                budgets = resourceBudgets,
-                hardware = hardwareResourceIntelligence,
-                sharedBudgets = hardwareResourceIntelligence,
-            )
-        )
 
-        kernel = LifeOsKernelFactory(this).create()
-        DeepSearchMissionRuntimeRegistry.install(
-            DeepSearchMissionCoordinator(
-                ledger = DeepSearchMissionLedger(EncryptedDeepSearchMissionRepository(this)),
-                checkpoints = DeepSearchCheckpointStore(EncryptedDeepSearchCheckpointRepository(this)),
-                resultPhotons = object : DeepSearchResultPhotonPersistence {
-                    override suspend fun save(photon: Photon) {
-                        kernel.photonStore.save(photon)
-                    }
-
-                    override suspend fun load(id: PhotonId): Photon? = kernel.photonStore.load(id)
-
-                    override suspend fun findForMission(missionId: DeepSearchMissionId): Photon? {
-                        val tag = "deepsearch-mission:${missionId.value}"
-                        val matches = kernel.photonStore.loadAll().filter { tag in it.tags }
-                        check(matches.size <= 1) {
-                            "DeepSearch mission resolved to multiple result Photons"
-                        }
-                        return matches.singleOrNull()
-                    }
+        LifeOsStartupComposition.start(
+            LifeOsStartupHooks(
+                installSharedResourceRuntime = {
+                    SharedResourceBudgetRuntimeRegistry.install(hardwareResourceIntelligence)
+                    ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(this))
+                    resourceBudgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(this))
                 },
-            )
-        )
-        selfHealingRuntime = PrivateSelfHealingRuntime.create(
-            context = this,
-            scope = selfHealingScope,
-            graph = requireNotNull(HealthGraphProcessRegistry.current()) {
-                "Kernel did not install its HealthGraph"
-            },
-            quarantineRegistry = requireNotNull(QuarantineRegistryProcessRegistry.current()) {
-                "Kernel did not install its QuarantineRegistry"
-            },
-            budgets = resourceBudgets,
-            runtime = kernel.runtime,
-            supervisor = requireNotNull(RuntimeSupervisorProcessRegistry.current()) {
-                "Kernel did not install its RuntimeSupervisor"
-            },
-        )
-        runBlocking {
-            selfHealingRuntime.verifyLedgerIntegrity()
-        }
-        selfHealingRuntime.orchestrator.start()
+                installGoalExecutionRuntime = {
+                    GoalExecutionRuntimeRegistry.install(
+                        PrivateGoalActionExecutionGuard(
+                            ownerPolicy = ownerPolicy,
+                            budgets = resourceBudgets,
+                            hardware = hardwareResourceIntelligence,
+                            sharedBudgets = hardwareResourceIntelligence,
+                        )
+                    )
+                },
+                createKernel = {
+                    kernel = LifeOsKernelFactory(this).create()
+                },
+                installDeepSearchRuntime = {
+                    DeepSearchMissionRuntimeRegistry.install(
+                        DeepSearchMissionCoordinator(
+                            ledger = DeepSearchMissionLedger(EncryptedDeepSearchMissionRepository(this)),
+                            checkpoints = DeepSearchCheckpointStore(EncryptedDeepSearchCheckpointRepository(this)),
+                            resultPhotons = object : DeepSearchResultPhotonPersistence {
+                                override suspend fun save(photon: Photon) {
+                                    kernel.photonStore.save(photon)
+                                }
 
-        val durableV5Decisions = DurableConvergenceDecisionCoordinator(
-            EncryptedConvergenceDecisionCheckpointRepository(this),
-        )
-        DurableGoalPlanRuntimeRegistry.install(
-            DurableGoalPlanRuntime(
-                ledger = kernel.goalPlans,
-                convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
-                persistDerivedOutcome = kernel::persistAndIngest,
-                loadPersistedPhotons = kernel.photonStore::loadAll,
+                                override suspend fun load(id: PhotonId): Photon? = kernel.photonStore.load(id)
+
+                                override suspend fun findForMission(missionId: DeepSearchMissionId): Photon? {
+                                    val tag = "deepsearch-mission:${missionId.value}"
+                                    val matches = kernel.photonStore.loadAll().filter { tag in it.tags }
+                                    check(matches.size <= 1) {
+                                        "DeepSearch mission resolved to multiple result Photons"
+                                    }
+                                    return matches.singleOrNull()
+                                }
+                            },
+                        )
+                    )
+                },
+                startSelfHealingRuntime = {
+                    selfHealingRuntime = PrivateSelfHealingRuntime.create(
+                        context = this,
+                        scope = selfHealingScope,
+                        graph = requireNotNull(HealthGraphProcessRegistry.current()) {
+                            "Kernel did not install its HealthGraph"
+                        },
+                        quarantineRegistry = requireNotNull(QuarantineRegistryProcessRegistry.current()) {
+                            "Kernel did not install its QuarantineRegistry"
+                        },
+                        budgets = resourceBudgets,
+                        runtime = kernel.runtime,
+                        supervisor = requireNotNull(RuntimeSupervisorProcessRegistry.current()) {
+                            "Kernel did not install its RuntimeSupervisor"
+                        },
+                    )
+                    runBlocking {
+                        selfHealingRuntime.verifyLedgerIntegrity()
+                    }
+                    selfHealingRuntime.orchestrator.start()
+                },
+                installDurableGoalPlanRuntime = {
+                    val durableV5Decisions = DurableConvergenceDecisionCoordinator(
+                        EncryptedConvergenceDecisionCheckpointRepository(this),
+                    )
+                    DurableGoalPlanRuntimeRegistry.install(
+                        DurableGoalPlanRuntime(
+                            ledger = kernel.goalPlans,
+                            convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
+                            persistDerivedOutcome = kernel::persistAndIngest,
+                            loadPersistedPhotons = kernel.photonStore::loadAll,
+                        )
+                    )
+                },
+                startKernel = kernel::start,
             )
         )
-        kernel.start()
     }
 }
