@@ -38,11 +38,13 @@ class GoalActionDispatcher(
     private val executeSchedule: suspend (GoalActionContext) -> LocalScheduleExecutionResult,
     private val prepareCommunication: suspend (GoalActionContext) -> LocalCommunicationExecutionResult,
     private val executionGuard: GoalActionExecutionGuard = GoalExecutionRuntimeRegistry.current(),
+    private val durableRuntimeProvider: () -> DurableGoalPlanRuntime? =
+        DurableGoalPlanRuntimeRegistry::currentOrNull,
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
         // Production installs this runtime after kernel construction. Resolve it per execution rather than
         // capturing the registry in the constructor so the kernel cannot accidentally bypass late wiring.
-        val durableRuntime = DurableGoalPlanRuntimeRegistry.currentOrNull()
+        val durableRuntime = durableRuntimeProvider()
         val durablePermit = when (val admission = durableRuntime?.prepare(context)) {
             null -> null // unit/legacy composition only; production installs V7-F runtime.
             is DurableGoalPlanAdmission.Ready -> admission.permit
