@@ -8,6 +8,7 @@ import app.lifeos.core.runtime.evolution.NovelCapabilityAdmissionSubject
 import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReadinessDecision
 import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReadinessEvidence
 import app.lifeos.core.runtime.evolution.NovelCapabilityPromotionSealEvidence
+import app.lifeos.core.runtime.evolution.evolutionFingerprint
 
 /**
  * Immutable activation evidence for a bounded generated tool that fills a genuinely missing
