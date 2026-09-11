@@ -21,7 +21,6 @@ import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
-import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -98,7 +97,7 @@ class PrivateHotSwapRuntime private constructor(
     private suspend fun recordTrace(snapshot: HotSwapSnapshot) {
         DecisionTraceRuntimeRegistry.currentOrNull()?.recordHotSwap(
             snapshot = snapshot,
-            recordedAt = Instant.now(),
+            recordedAt = snapshot.lastRecordedAt,
         )
     }
 
