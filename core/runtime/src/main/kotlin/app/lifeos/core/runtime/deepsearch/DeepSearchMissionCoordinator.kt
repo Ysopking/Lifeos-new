@@ -2,6 +2,7 @@ package app.lifeos.core.runtime.deepsearch
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import kotlinx.coroutines.CancellationException
 
 /** Durable final product returned by one V12 mission. */
@@ -44,7 +45,7 @@ class DeepSearchMissionCoordinator(
         var snapshot = ledger.create(definition)
 
         if (snapshot.terminal) {
-            return recoverTerminal(snapshot)
+            return traced(definition, recoverTerminal(snapshot))
         }
 
         if (snapshot.state == DeepSearchMissionState.PLANNED) {
@@ -64,7 +65,7 @@ class DeepSearchMissionCoordinator(
             val recovered = product(existing, checkpoint, status, definition.id)
             verifier.requireVerified(snapshot.definition, checkpoint, recovered)
             terminalize(snapshot, existing.id, status)
-            return recovered
+            return traced(definition, recovered)
         }
 
         if (snapshot.state == DeepSearchMissionState.SYNTHESIZING) {
@@ -81,7 +82,7 @@ class DeepSearchMissionCoordinator(
                 verifier.requireVerified(snapshot.definition, checkpoint, recovered)
                 snapshot = ledger.startVerifying(snapshot)
                 terminalize(snapshot, existing.id, status)
-                return recovered
+                return traced(definition, recovered)
             }
         }
 
@@ -126,7 +127,24 @@ class DeepSearchMissionCoordinator(
         resultPhotons.save(searched.photon)
         latestSnapshot = ledger.startVerifying(latestSnapshot)
         terminalize(latestSnapshot, searched.photon.id, searched.result.status)
-        return searched
+        return traced(definition, searched)
+    }
+
+    private suspend fun traced(
+        definition: DeepSearchMissionDefinition,
+        product: DeepSearchMissionProduct,
+    ): DeepSearchMissionProduct {
+        // Goal Photons are created as immutable revision-1 Photons in the current V7/V12 production
+        // path; the mission identity itself binds the exact goal Photon id. If that contract becomes
+        // revisioned, the revision must be added to DeepSearchMissionDefinition rather than inferred.
+        DecisionTraceRuntimeRegistry.currentOrNull()?.recordDeepSearch(
+            goalPhotonId = definition.goalPhotonId,
+            goalPhotonRevision = 1L,
+            recordedAt = definition.createdAt,
+            result = product.result,
+            missionId = definition.id,
+        )
+        return product
     }
 
     private suspend fun loadCheckpointStrict(
