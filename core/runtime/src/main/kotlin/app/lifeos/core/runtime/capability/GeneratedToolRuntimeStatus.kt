@@ -12,6 +12,9 @@ data class GeneratedToolRuntimeItem(
     val safetyViolations: Int,
     val averageLatencyMs: Double,
     val promotionEvidenceId: String?,
+    val boundedAdmissionEvidenceId: String? = null,
+    val boundedReadinessEvidenceId: String? = null,
+    val boundedPromotionSealId: String? = null,
     val lastMessage: String?,
 ) {
     init {
@@ -24,6 +27,19 @@ data class GeneratedToolRuntimeItem(
         require(safetyViolations in 0..trials)
         require(averageLatencyMs >= 0.0)
         require(promotionEvidenceId == null || promotionEvidenceId.isNotBlank())
+        val boundedEvidenceIds = listOf(
+            boundedAdmissionEvidenceId,
+            boundedReadinessEvidenceId,
+            boundedPromotionSealId,
+        )
+        require(boundedEvidenceIds.all { it == null } || boundedEvidenceIds.all { !it.isNullOrBlank() }) {
+            "Bounded generated-tool diagnostics require the complete admission/readiness/seal identity set"
+        }
+        if (boundedEvidenceIds.any { it != null }) {
+            require(!promotionEvidenceId.isNullOrBlank()) {
+                "Bounded generated-tool diagnostics require accepted promotion evidence"
+            }
+        }
     }
 }
 
@@ -49,9 +65,9 @@ data class GeneratedToolRuntimeStatus(
 }
 
 /**
- * J12 read-only boundary over the durable J10 source of truth. The mutable repository never leaves
- * this reader; UI callers receive immutable projections only. J11 already requires every ACTIVE
- * durable generated tool to have its exact GENERATED_TOOL provider restored before boot succeeds.
+ * Read-only boundary over the encrypted generated-tool source of truth. The mutable repository never
+ * leaves this reader; UI callers receive immutable projections including the exact bounded admission,
+ * readiness, promotion-seal and accepted promotion evidence identities when present.
  */
 class GeneratedToolRuntimeStatusReader(
     private val repository: GeneratedToolStateRepository,
@@ -62,6 +78,7 @@ class GeneratedToolRuntimeStatusReader(
             tools = states.map { state ->
                 val record = state.record
                 val stats = state.trialEvidence.stats
+                val bounded = state.boundedPromotionReceipt
                 GeneratedToolRuntimeItem(
                     toolId = record.manifest.toolId,
                     capabilityId = record.manifest.sourceCapability.value,
@@ -73,6 +90,9 @@ class GeneratedToolRuntimeStatusReader(
                     safetyViolations = stats.safetyViolations,
                     averageLatencyMs = stats.averageLatencyMs,
                     promotionEvidenceId = record.promotionEvidenceId,
+                    boundedAdmissionEvidenceId = bounded?.novelAdmissionEvidenceId,
+                    boundedReadinessEvidenceId = bounded?.canaryReadinessEvidenceId,
+                    boundedPromotionSealId = bounded?.promotionSealId,
                     lastMessage = record.lastMessage,
                 )
             },
