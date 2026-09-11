@@ -48,6 +48,7 @@ class LifeOsApplication : Application() {
                 ownerPolicy = ownerPolicy,
                 budgets = resourceBudgets,
                 hardware = hardwareResourceIntelligence,
+                sharedBudgets = hardwareResourceIntelligence,
             )
         )
 
