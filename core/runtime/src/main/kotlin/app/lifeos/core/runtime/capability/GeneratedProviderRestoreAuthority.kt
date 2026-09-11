@@ -1,10 +1,13 @@
 package app.lifeos.core.runtime.capability
 
 import app.lifeos.core.runtime.policy.OwnerActorId
+import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
 import app.lifeos.core.runtime.policy.OwnerEffectRequest
 import app.lifeos.core.runtime.policy.OwnerEffectType
 import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
+import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
+import java.time.Instant
 
 /**
  * V14 boot-time authority for making an already-durable generated provider routable again.
@@ -30,7 +33,18 @@ class GeneratedProviderRestoreAuthority(
             request = request(record),
             effect = effect,
         )
-        return exposure is app.lifeos.core.runtime.policy.OwnerEffectExposureResult.Exposed<*>
+        val assessment = when (exposure) {
+            is OwnerEffectExposureResult.Exposed -> exposure.assessment
+            is OwnerEffectExposureResult.Blocked -> exposure.assessment
+        }
+        val restored = exposure is OwnerEffectExposureResult.Exposed<*>
+        DecisionTraceRuntimeRegistry.currentOrNull()?.recordGeneratedProviderRestore(
+            record = record,
+            assessment = assessment,
+            restored = restored,
+            recordedAt = Instant.now(),
+        )
+        return restored
     }
 
     suspend fun allowedNow(record: GeneratedToolRecord): Boolean =
