@@ -3,11 +3,21 @@ package app.lifeos.next
 import android.app.Application
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
+import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
+import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
 import app.lifeos.core.data.policy.EncryptedOwnerPolicyRepository
 import app.lifeos.core.data.resource.EncryptedResourceBudgetRepository
+import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
 import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
+import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointStore
+import app.lifeos.core.runtime.deepsearch.DeepSearchMissionCoordinator
+import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
+import app.lifeos.core.runtime.deepsearch.DeepSearchMissionLedger
+import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRuntimeRegistry
+import app.lifeos.core.runtime.deepsearch.DeepSearchResultPhotonPersistence
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
@@ -68,6 +78,28 @@ class LifeOsApplication : Application() {
         )
 
         kernel = LifeOsKernelFactory(this).create()
+        DeepSearchMissionRuntimeRegistry.install(
+            DeepSearchMissionCoordinator(
+                ledger = DeepSearchMissionLedger(EncryptedDeepSearchMissionRepository(this)),
+                checkpoints = DeepSearchCheckpointStore(EncryptedDeepSearchCheckpointRepository(this)),
+                resultPhotons = object : DeepSearchResultPhotonPersistence {
+                    override suspend fun save(photon: Photon) {
+                        kernel.photonStore.save(photon)
+                    }
+
+                    override suspend fun load(id: PhotonId): Photon? = kernel.photonStore.load(id)
+
+                    override suspend fun findForMission(missionId: DeepSearchMissionId): Photon? {
+                        val tag = "deepsearch-mission:${missionId.value}"
+                        val matches = kernel.photonStore.loadAll().filter { tag in it.tags }
+                        check(matches.size <= 1) {
+                            "DeepSearch mission resolved to multiple result Photons"
+                        }
+                        return matches.singleOrNull()
+                    }
+                },
+            )
+        )
         selfHealingRuntime = PrivateSelfHealingRuntime.create(
             context = this,
             scope = selfHealingScope,
