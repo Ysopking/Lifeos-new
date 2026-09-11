@@ -6,6 +6,8 @@ on:
     paths:
       - "core/**"
       - "app/src/main/**"
+      - "app/src/test/**"
+      - "app/build.gradle*"
       - "build.gradle*"
       - "settings.gradle*"
       - "gradle/**"
@@ -42,5 +44,6 @@ jobs:
           :core:language:test
           :core:scene:test
           :core:data:testDebugUnitTest
+          :app:testDebugUnitTest
           :app:compileDebugKotlin
           --stacktrace
