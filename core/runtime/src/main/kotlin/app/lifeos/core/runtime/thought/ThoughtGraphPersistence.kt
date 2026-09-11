@@ -44,6 +44,8 @@ object ThoughtGraphDeltaCodec {
     private const val MAX_STRING_BYTES = 256 * 1024
 
     fun encode(delta: ThoughtGraphDelta): ByteArray {
+        require(delta.nodeVersions.size <= MAX_VERSIONS) { "Too many thought graph node versions" }
+        require(delta.edgeVersions.size <= MAX_VERSIONS) { "Too many thought graph edge versions" }
         val output = ByteArrayOutputStream()
         DataOutputStream(output).use { out ->
             out.writeInt(VERSION)
