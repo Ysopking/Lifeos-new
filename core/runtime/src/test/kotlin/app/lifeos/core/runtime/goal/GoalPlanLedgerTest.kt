@@ -128,6 +128,81 @@ class GoalPlanLedgerTest {
         }
     }
 
+    @Test
+    fun `recreating a persisted plan restores progress instead of resetting it`() = runBlocking {
+        val repository = RecordingRepository()
+        val ledger = DurableGoalPlanLedger(repository)
+        val plan = plan()
+        ledger.create(plan)
+        val first = plan.steps.single { it.key == "first" }
+        ledger.append(transition(plan, null, first, GoalStepState.PLANNED, GoalStepState.READY, 1))
+
+        val restarted = DurableGoalPlanLedger(repository)
+        assertEquals(ledger.state(plan.id), restarted.create(plan))
+        assertEquals(2, repository.writeOrder.size)
+    }
+
+    @Test
+    fun `invalid and stale transitions never enter durable history`() = runBlocking {
+        val repository = RecordingRepository()
+        val ledger = DurableGoalPlanLedger(repository)
+        val plan = plan()
+        ledger.create(plan)
+        val first = plan.steps.single { it.key == "first" }
+        val illegal = transition(
+            plan, null, first, GoalStepState.PLANNED, GoalStepState.RUNNING, 1,
+            actionId = "action", idempotencyKey = "key",
+        )
+        assertFailsWith<IllegalArgumentException> { ledger.append(illegal) }
+        assertTrue(repository.transitions.isEmpty())
+
+        val ready = transition(plan, null, first, GoalStepState.PLANNED, GoalStepState.READY, 2)
+        ledger.append(ready)
+        val stale = transition(plan, null, first, GoalStepState.PLANNED, GoalStepState.PAUSED, 3)
+        assertFailsWith<IllegalArgumentException> { ledger.append(stale) }
+        assertEquals(listOf(ready), repository.transitions.values.toList())
+        assertEquals(ledger.state(plan.id), DurableGoalPlanLedger(repository).create(plan))
+    }
+
+    @Test
+    fun `lost write acknowledgement cannot fork durable history on retry`() = runBlocking {
+        val repository = RecordingRepository()
+        val ledger = DurableGoalPlanLedger(repository)
+        val plan = plan()
+        ledger.create(plan)
+        val first = plan.steps.single { it.key == "first" }
+        val ready = transition(plan, null, first, GoalStepState.PLANNED, GoalStepState.READY, 1)
+        repository.failAfterTransitionWrite = true
+        assertFailsWith<IllegalStateException> { ledger.append(ready) }
+        assertEquals(0L, ledger.state(plan.id)?.revision)
+        assertEquals(listOf(ready), repository.transitions.values.toList())
+
+        val stale = transition(plan, null, first, GoalStepState.PLANNED, GoalStepState.PAUSED, 2)
+        assertFailsWith<IllegalArgumentException> { ledger.append(stale) }
+        repository.failAfterTransitionWrite = false
+        assertTrue(ledger.append(ready).replayed)
+        assertEquals(1L, ledger.state(plan.id)?.revision)
+        assertEquals(2, repository.writeOrder.size)
+        assertEquals(ledger.state(plan.id), DurableGoalPlanLedger(repository).create(plan))
+    }
+
+    @Test
+    fun `failed rehydrate keeps the last valid RAM snapshot`() = runBlocking {
+        val repository = RecordingRepository()
+        val ledger = DurableGoalPlanLedger(repository)
+        val plan = plan()
+        ledger.create(plan)
+        val first = plan.steps.single { it.key == "first" }
+        val ready = transition(plan, null, first, GoalStepState.PLANNED, GoalStepState.READY, 1)
+        ledger.append(ready)
+        val previous = ledger.states.value
+        val fork = transition(plan, null, first, GoalStepState.PLANNED, GoalStepState.PAUSED, 2)
+        repository.transitions[fork.id] = fork
+
+        assertFailsWith<IllegalArgumentException> { ledger.rehydrate() }
+        assertEquals(previous, ledger.states.value)
+    }
+
     private fun plan(): GoalPlanDefinition = GoalPlanDefinition.create(
         sourceGoalPhotonId = PhotonId("goal-source"),
         sourceGoalPhotonRevision = 2L,
@@ -176,6 +251,7 @@ class GoalPlanLedgerTest {
         val transitions = linkedMapOf<GoalTransitionId, GoalPlanTransition>()
         val writeOrder = mutableListOf<String>()
         var failTransitionWrite: Boolean = false
+        var failAfterTransitionWrite: Boolean = false
         var returnTransitionsReversed: Boolean = false
 
         override suspend fun saveDefinition(
@@ -205,6 +281,7 @@ class GoalPlanLedgerTest {
             }
             transitions[transition.id] = transition
             writeOrder += "transition:${transition.id.value}"
+            check(!failAfterTransitionWrite) { "synthetic lost write acknowledgement" }
             return GoalPlanTransitionWriteResult.Stored(transition)
         }
 

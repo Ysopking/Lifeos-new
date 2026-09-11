@@ -76,17 +76,25 @@ class DurableGoalPlanLedger(
             require(existing.definition == definition) { "Goal plan identity collision in runtime state" }
             return@withLock existing
         }
-        val initial = GoalPlanRuntimeState.initial(persisted)
-        mutableStates.value = mutableStates.value + (definition.id to initial)
-        initial
+        // A duplicate definition may already have durable progress after process death.
+        val restored = reducer.replay(persisted, repository.loadTransitions(persisted.id))
+        mutableStates.value = mutableStates.value + (definition.id to restored)
+        restored
     }
 
     suspend fun append(transition: GoalPlanTransition): GoalTransitionApplyResult = mutex.withLock {
         val current = mutableStates.value[transition.planId]
             ?: error("Goal plan must be created or rehydrated before appending transitions")
+        // A prior write can have reached disk even when its acknowledgement was lost.
+        // Validate against durable lineage before writing, so a stale/illegal event
+        // cannot poison the append-only vault or fork a successfully committed event.
+        val durable = reducer.replay(
+            current.definition,
+            repository.loadTransitions(transition.planId),
+        )
+        val applied = reducer.apply(durable, transition)
         val persisted = repository.saveTransition(transition).transition
         require(persisted == transition) { "Persisted goal transition differs from requested event" }
-        val applied = reducer.apply(current, persisted)
         mutableStates.value = mutableStates.value + (transition.planId to applied.state)
         applied
     }

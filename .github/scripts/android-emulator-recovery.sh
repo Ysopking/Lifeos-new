@@ -36,6 +36,10 @@ run_test \
   'app.lifeos.next.OutcomeLearningDeviceTest#seedOutcomeLearningAdaptation' \
   "$report_dir/seed-outcome-learning.txt"
 
+run_test \
+  'app.lifeos.next.GoalPlanRecoveryDeviceTest#seedGoalPlanProgress' \
+  "$report_dir/seed-goal-plan.txt"
+
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.MainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
@@ -59,3 +63,7 @@ run_test \
 run_test \
   'app.lifeos.next.PrivateV1DeviceSmokeTest#assertRecoveredRuntimeAndToolEvidence' \
   "$report_dir/recovered-active.txt"
+
+run_test \
+  'app.lifeos.next.GoalPlanRecoveryDeviceTest#recoverGoalPlanAfterColdStart' \
+  "$report_dir/recovered-goal-plan.txt"
