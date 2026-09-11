@@ -51,6 +51,38 @@ class GoalPlanBuilderTest {
     }
 
     @Test
+    fun persistedDefinitionRebindsIdenticalContractsWithoutRegeneratingPlan() {
+        val builder = GoalPlanBuilder()
+        val frame = goal(IntentType.SEARCH)
+        val initial = assertIs<GoalPlanBuildResult.Built>(
+            builder.build(frame, PhotonId("goal:stored"), 4, at, planRevision = 3)
+        ).blueprint
+
+        val rebound = assertIs<GoalPlanBuildResult.Built>(
+            builder.bindExisting(frame, initial.definition)
+        ).blueprint
+
+        assertEquals(initial.definition, rebound.definition)
+        assertEquals(initial.contracts, rebound.contracts)
+    }
+
+    @Test
+    fun persistedDefinitionWithDifferentShapeFailsClosed() {
+        val frame = goal(IntentType.QUERY)
+        val incompatible = GoalPlanDefinition.create(
+            sourceGoalPhotonId = PhotonId("goal:stored"),
+            sourceGoalPhotonRevision = 1,
+            stepSpecs = listOf(GoalStepSpec("legacy-step", "Old planner shape")),
+            createdAt = at,
+        )
+
+        val blocked = assertIs<GoalPlanBuildResult.Blocked>(
+            GoalPlanBuilder().bindExisting(frame, incompatible)
+        )
+        assertTrue(blocked.reason.startsWith("persisted-plan-"))
+    }
+
+    @Test
     fun sourceRevisionChangesPlanIdentity() {
         val builder = GoalPlanBuilder()
         val first = assertIs<GoalPlanBuildResult.Built>(
