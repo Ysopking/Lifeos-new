@@ -11,9 +11,10 @@ import kotlinx.coroutines.sync.withLock
  * V10 routing cutovers and V11 workshop jobs are reconciled only after promoted/generated tool
  * records have been restored into the productive process registries.
  *
- * V14 invariant: durable ACTIVE state is evidence only. Re-registering an ACTIVE generated provider
- * requires a fresh GeneratedProviderRestoreAuthority decision immediately around the registry
- * mutation. Missing/revoked/corrupt authority leaves durable tool/trial state readable but unroutable.
+ * V14 invariant: durable ACTIVE state is evidence only. Legacy/bounded rehydrators reconstruct
+ * lifecycle and trial evidence with no CapabilityRegistry attached. A single common step then makes
+ * each ACTIVE provider routable only inside a fresh GeneratedProviderRestoreAuthority exposure.
+ * Missing/revoked/corrupt authority leaves durable state readable but the provider unroutable.
  */
 class GeneratedToolBootStateRehydrator(
     private val repository: GeneratedToolStateRepository,
@@ -40,12 +41,12 @@ class GeneratedToolBootStateRehydrator(
             val hasBoundedActive = durable.any { state ->
                 state.record.state == GeneratedToolState.ACTIVE && state.boundedPromotionReceipt != null
             }
-            if (hasBoundedActive) {
+            val stateReport = if (hasBoundedActive) {
                 BoundedGeneratedToolStateRehydrator(
                     repository = repository,
                     tools = tools,
                     trialLedger = trialLedger,
-                    capabilityRegistry = capabilityRegistry,
+                    capabilityRegistry = null,
                     artifacts = requireNotNull(artifactRepository) {
                         "Bounded ACTIVE boot restore requires the generated-tool artifact repository"
                     },
@@ -53,18 +54,17 @@ class GeneratedToolBootStateRehydrator(
                         "Bounded ACTIVE boot restore requires the durable Novel Canary promotion store"
                     },
                     promotionPolicy = promotionPolicy,
-                    providerRestoreAuthority = providerRestoreAuthority,
                 ).rehydrate(durable)
             } else {
                 GeneratedToolStateRehydrator(
                     repository = repository,
                     tools = tools,
                     trialLedger = trialLedger,
-                    capabilityRegistry = capabilityRegistry,
+                    capabilityRegistry = null,
                     promotionPolicy = promotionPolicy,
-                    providerRestoreAuthority = providerRestoreAuthority,
                 ).rehydrate()
             }
+            stateReport.copy(restoredActiveProviders = restoreAuthorizedProviders(durable))
         } else {
             require(loaded == durable.map { it.record }) {
                 "Generated-tool boot retry found RAM records different from durable state"
@@ -78,13 +78,13 @@ class GeneratedToolBootStateRehydrator(
                 }
             }
 
-            val activeStates = durable.filter { it.record.state == GeneratedToolState.ACTIVE }
             val expectedProviderIds = if (capabilityRegistry == null) {
                 emptySet()
             } else {
-                activeStates.filter { state ->
-                    providerRestoreAuthority?.allowedNow(state.record) == true
-                }.map { it.record.manifest.toolId }.toSet()
+                durable.filter { it.record.state == GeneratedToolState.ACTIVE }
+                    .filter { state -> providerRestoreAuthority?.allowedNow(state.record) == true }
+                    .map { it.record.manifest.toolId }
+                    .toSet()
             }
             if (capabilityRegistry != null) {
                 val providerIds = generatedProviders.map { it.providerId }.toSet()
@@ -104,4 +104,41 @@ class GeneratedToolBootStateRehydrator(
         ToolWorkshopBootRuntimeRegistry.reconcileIfInstalled()
         report
     }
+
+    private suspend fun restoreAuthorizedProviders(
+        durable: List<GeneratedToolPersistentState>,
+    ): Int {
+        val registry = capabilityRegistry ?: return 0
+        val authority = providerRestoreAuthority ?: return 0
+        var restored = 0
+        for (state in durable.filter { it.record.state == GeneratedToolState.ACTIVE }) {
+            val descriptor = state.toCapabilityDescriptor()
+            val exposed = authority.expose(state.record) {
+                state.promotionReceipt?.let { legacy ->
+                    registry.registerGeneratedRestored(
+                        descriptor = descriptor,
+                        activeRecord = state.record,
+                        receipt = legacy,
+                    )
+                } ?: registry.registerGeneratedRestoredBounded(
+                    descriptor = descriptor,
+                    activeRecord = state.record,
+                    receipt = requireNotNull(state.boundedPromotionReceipt),
+                )
+            }
+            if (exposed) restored += 1
+        }
+        return restored
+    }
+
+    private fun GeneratedToolPersistentState.toCapabilityDescriptor() = CapabilityDescriptor(
+        capabilityId = record.manifest.sourceCapability,
+        providerId = record.manifest.toolId,
+        providerType = ProviderType.GENERATED_TOOL,
+        contract = CapabilityContract(record.manifest.requiredInputs, record.manifest.requiredOutputs),
+        state = ProviderState.ACTIVE,
+        trustLevel = TrustLevel.LOW,
+        reliability = trialEvidence.stats.successRate,
+        cost = 0.0,
+    )
 }
