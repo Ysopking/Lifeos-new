@@ -11,8 +11,9 @@ import app.lifeos.core.runtime.field.FieldWorldSignalProjection
 import java.time.Instant
 
 /**
- * Explicit V4 physics profile. All cross-dimensional influence is versioned here; there are no
- * process-global mutable weights and the existing WorldFieldEquation remains the evaluator.
+ * Explicit informational V4 analysis profile. It computes reproducible field-of-fields relations
+ * for reporting only. Nothing in this profile grants write authority over cognition, tasks, goals,
+ * hypothesis state, capability routing or actions.
  */
 class IntegratedWorldEquationProfile {
     val spec: WorldEquationSpec = WorldEquationSpec(
@@ -69,10 +70,10 @@ class IntegratedWorldEquationProfile {
             interaction(link, DUPLICATE_SUPPORT, "duplicate evidence bounded support"),
         )
         FieldWorldSignalLinkKind.HYPOTHESIS_CONFLICT -> listOf(
-            interaction(link, HYPOTHESIS_CONFLICT, "competing hypothesis pressure"),
+            interaction(link, HYPOTHESIS_CONFLICT, "competing hypothesis analysis pressure"),
         )
         FieldWorldSignalLinkKind.GOAL_CONTEXT -> listOf(
-            interaction(link, GOAL_PRIORITY, "goal relevance raises cognitive priority"),
+            interaction(link, GOAL_SALIENCE, "goal relevance raises analytic salience"),
         )
         FieldWorldSignalLinkKind.DOMAIN_CONTEXT -> listOf(
             interaction(link, DOMAIN_UNCERTAINTY, "domain uncertainty context"),
@@ -96,7 +97,7 @@ class IntegratedWorldEquationProfile {
     )
 
     companion object {
-        const val VERSION = "lifeos-world-integrated-v1"
+        const val VERSION = "lifeos-world-informational-v1"
 
         private fun coefficient(
             key: String,
@@ -110,7 +111,7 @@ class IntegratedWorldEquationProfile {
             targetDimension = target,
             multiplier = multiplier,
             maxAbsoluteContribution = cap,
-            explanation = "LIFEOS V4 integrated field coefficient $key",
+            explanation = "LIFEOS V4 informational world-analysis coefficient $key",
         )
 
         private val SOURCE_RELIABILITY = coefficient(
@@ -199,15 +200,15 @@ class IntegratedWorldEquationProfile {
         )
         private val HYPOTHESIS_CONFLICT = coefficient(
             "hypothesis-conflict",
-            WorldSignalDimension.COGNITIVE_PRIORITY,
+            WorldSignalDimension.ANALYTIC_SALIENCE,
             WorldSignalDimension.CONFLICT_PRESSURE,
             0.35,
             0.35,
         )
-        private val GOAL_PRIORITY = coefficient(
-            "goal-priority",
+        private val GOAL_SALIENCE = coefficient(
+            "goal-salience",
             WorldSignalDimension.GOAL_RELEVANCE,
-            WorldSignalDimension.COGNITIVE_PRIORITY,
+            WorldSignalDimension.ANALYTIC_SALIENCE,
             0.50,
             0.50,
         )
@@ -247,7 +248,7 @@ class IntegratedWorldEquationProfile {
             DERIVED_RELIABILITY,
             DUPLICATE_SUPPORT,
             HYPOTHESIS_CONFLICT,
-            GOAL_PRIORITY,
+            GOAL_SALIENCE,
             DOMAIN_UNCERTAINTY,
             DOMAIN_CONFLICT,
             DOMAIN_CONTEXT,
