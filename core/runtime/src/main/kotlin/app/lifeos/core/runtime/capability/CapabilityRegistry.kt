@@ -49,6 +49,7 @@ class CapabilityRegistry(
             }
             providers[descriptor.capabilityId to descriptor.providerId] = descriptor
         }
+        GeneratedToolRuntimeProcessRegistry.installCapabilities(this)
     }
 
     suspend fun register(descriptor: CapabilityDescriptor): CapabilityDescriptor = mutex.withLock {
@@ -168,12 +169,13 @@ class CapabilityRegistry(
             require(existing.contract == candidateDescriptor.contract)
         }
         val disabledPrevious = previous.copy(state = ProviderState.DISABLED)
-        providers[candidateKey] = candidateDescriptor.copy(state = ProviderState.ACTIVE)
+        val activeCandidate = candidateDescriptor.copy(state = ProviderState.ACTIVE)
+        providers[candidateKey] = activeCandidate
         providers[previousKey] = disabledPrevious
         GeneratedProviderHotSwapMutation(
             capabilityId = capabilityId,
             previous = disabledPrevious,
-            candidate = candidateDescriptor.copy(state = ProviderState.ACTIVE),
+            candidate = activeCandidate,
         )
     }
 
@@ -221,7 +223,6 @@ class CapabilityRegistry(
         providers[candidateKey] = candidate.copy(state = ProviderState.DISABLED)
     }
 
-    /** Boot-only J03 restore path. */
     internal suspend fun registerGeneratedRestored(
         descriptor: CapabilityDescriptor,
         activeRecord: GeneratedToolRecord,
@@ -238,7 +239,6 @@ class CapabilityRegistry(
         descriptor
     }
 
-    /** V1.5 boot-only bounded restore path after artifact/seal verification by the rehydrator. */
     internal suspend fun registerGeneratedRestoredBounded(
         descriptor: CapabilityDescriptor,
         activeRecord: GeneratedToolRecord,
