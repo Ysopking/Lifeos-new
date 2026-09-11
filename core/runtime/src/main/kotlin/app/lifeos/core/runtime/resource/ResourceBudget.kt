@@ -11,52 +11,47 @@ value class ResourceBudgetAccountId(val value: String) {
 
 @JvmInline
 value class ResourceBudgetReservationId(val value: String) {
-    init {
-        require(value.startsWith(PREFIX)) { "Invalid resource budget reservation id prefix" }
-        require(value.removePrefix(PREFIX).matches(Regex("[0-9a-f]{64}"))) {
-            "Invalid resource budget reservation id digest"
-        }
-    }
-
+    init { require(value.startsWith(PREFIX)) { "Invalid resource budget reservation id" } }
     override fun toString(): String = value
 
     companion object {
-        const val PREFIX = "resource-budget-reservation:"
+        const val PREFIX = "resource-reservation:"
+
+        fun create(accountId: ResourceBudgetAccountId, idempotencyKey: String): ResourceBudgetReservationId =
+            ResourceBudgetReservationId(
+                PREFIX + StableFieldIds.fingerprint(
+                    "resource-budget-reservation/v1",
+                    accountId.value,
+                    idempotencyKey,
+                )
+            )
     }
 }
 
-/**
- * Shared V16 quota dimensions. Every account carries an explicit limit for every dimension so a
- * newly introduced kind of work cannot silently become unbounded.
- */
 data class ResourceBudgetQuota(
-    val elapsedMillis: Long,
-    val workUnits: Long,
-    val memoryBytes: Long,
-    val ioBytes: Long,
-    val networkBytes: Long,
-    val candidates: Long,
+    val elapsedMillis: Long = 0L,
+    val workUnits: Long = 0L,
+    val memoryBytes: Long = 0L,
+    val ioBytes: Long = 0L,
+    val networkBytes: Long = 0L,
+    val candidates: Long = 0L,
 ) {
     init {
-        require(values().all { it >= 0L }) { "Resource budget quota values must be non-negative" }
+        require(elapsedMillis >= 0L)
+        require(workUnits >= 0L)
+        require(memoryBytes >= 0L)
+        require(ioBytes >= 0L)
+        require(networkBytes >= 0L)
+        require(candidates >= 0L)
     }
 
-    internal fun allows(usage: ResourceBudgetUsage): Boolean =
+    fun allows(usage: ResourceBudgetUsage): Boolean =
         usage.elapsedMillis <= elapsedMillis &&
             usage.workUnits <= workUnits &&
             usage.memoryBytes <= memoryBytes &&
             usage.ioBytes <= ioBytes &&
             usage.networkBytes <= networkBytes &&
             usage.candidates <= candidates
-
-    private fun values(): List<Long> = listOf(
-        elapsedMillis,
-        workUnits,
-        memoryBytes,
-        ioBytes,
-        networkBytes,
-        candidates,
-    )
 }
 
 data class ResourceBudgetUsage(
@@ -68,7 +63,12 @@ data class ResourceBudgetUsage(
     val candidates: Long = 0L,
 ) {
     init {
-        require(values().all { it >= 0L }) { "Resource budget usage values must be non-negative" }
+        require(elapsedMillis >= 0L)
+        require(workUnits >= 0L)
+        require(memoryBytes >= 0L)
+        require(ioBytes >= 0L)
+        require(networkBytes >= 0L)
+        require(candidates >= 0L)
     }
 
     operator fun plus(other: ResourceBudgetUsage): ResourceBudgetUsage = ResourceBudgetUsage(
@@ -80,24 +80,19 @@ data class ResourceBudgetUsage(
         candidates = Math.addExact(candidates, other.candidates),
     )
 
-    fun isWithin(reserved: ResourceBudgetUsage): Boolean =
-        elapsedMillis <= reserved.elapsedMillis &&
-            workUnits <= reserved.workUnits &&
-            memoryBytes <= reserved.memoryBytes &&
-            ioBytes <= reserved.ioBytes &&
-            networkBytes <= reserved.networkBytes &&
-            candidates <= reserved.candidates
+    fun isWithin(quota: ResourceBudgetQuota): Boolean = quota.allows(this)
 
-    fun isZero(): Boolean = values().all { it == 0L }
+    fun isWithin(other: ResourceBudgetUsage): Boolean =
+        elapsedMillis <= other.elapsedMillis &&
+            workUnits <= other.workUnits &&
+            memoryBytes <= other.memoryBytes &&
+            ioBytes <= other.ioBytes &&
+            networkBytes <= other.networkBytes &&
+            candidates <= other.candidates
 
-    private fun values(): List<Long> = listOf(
-        elapsedMillis,
-        workUnits,
-        memoryBytes,
-        ioBytes,
-        networkBytes,
-        candidates,
-    )
+    fun isZero(): Boolean =
+        elapsedMillis == 0L && workUnits == 0L && memoryBytes == 0L && ioBytes == 0L &&
+            networkBytes == 0L && candidates == 0L
 }
 
 enum class ResourceBudgetReservationState {
@@ -111,32 +106,30 @@ data class ResourceBudgetReservation(
     val accountId: ResourceBudgetAccountId,
     val idempotencyKey: String,
     val reserved: ResourceBudgetUsage,
+    val state: ResourceBudgetReservationState,
     val createdAt: Instant,
-    val state: ResourceBudgetReservationState = ResourceBudgetReservationState.RESERVED,
     val settledUsage: ResourceBudgetUsage? = null,
     val settledAt: Instant? = null,
 ) {
     init {
-        require(idempotencyKey.isNotBlank()) { "Budget reservation idempotency key must not be blank" }
+        require(idempotencyKey.isNotBlank())
+        require(id == ResourceBudgetReservationId.create(accountId, idempotencyKey)) {
+            "Resource budget reservation id/content mismatch"
+        }
+        require(!reserved.isZero()) { "Resource budget reservation must reserve non-zero usage" }
         when (state) {
             ResourceBudgetReservationState.RESERVED -> {
-                require(settledUsage == null && settledAt == null) {
-                    "Open budget reservation cannot contain settlement data"
-                }
+                require(settledUsage == null && settledAt == null)
             }
             ResourceBudgetReservationState.COMMITTED -> {
-                requireNotNull(settledUsage) { "Committed budget reservation requires settled usage" }
-                requireNotNull(settledAt) { "Committed budget reservation requires settlement time" }
-                require(settledUsage.isWithin(reserved)) { "Committed usage exceeds reserved budget" }
+                require(settledUsage != null && settledAt != null)
+                require(settledUsage.isWithin(reserved))
             }
             ResourceBudgetReservationState.RELEASED -> {
-                require(settledUsage == ResourceBudgetUsage()) {
-                    "Released budget reservation must settle to zero usage"
-                }
-                requireNotNull(settledAt) { "Released budget reservation requires settlement time" }
+                require(settledUsage != null && settledAt != null)
+                require(settledUsage.isZero())
             }
         }
-        require(id == expectedId(accountId, idempotencyKey)) { "Budget reservation id/content mismatch" }
     }
 
     companion object {
@@ -145,26 +138,13 @@ data class ResourceBudgetReservation(
             idempotencyKey: String,
             usage: ResourceBudgetUsage,
             createdAt: Instant,
-        ): ResourceBudgetReservation {
-            require(idempotencyKey.isNotBlank())
-            return ResourceBudgetReservation(
-                id = expectedId(accountId, idempotencyKey),
-                accountId = accountId,
-                idempotencyKey = idempotencyKey,
-                reserved = usage,
-                createdAt = createdAt,
-            )
-        }
-
-        private fun expectedId(
-            accountId: ResourceBudgetAccountId,
-            idempotencyKey: String,
-        ): ResourceBudgetReservationId = ResourceBudgetReservationId(
-            ResourceBudgetReservationId.PREFIX + StableFieldIds.fingerprint(
-                "resource-budget-reservation/v1",
-                accountId.value,
-                idempotencyKey,
-            )
+        ): ResourceBudgetReservation = ResourceBudgetReservation(
+            id = ResourceBudgetReservationId.create(accountId, idempotencyKey),
+            accountId = accountId,
+            idempotencyKey = idempotencyKey,
+            reserved = usage,
+            state = ResourceBudgetReservationState.RESERVED,
+            createdAt = createdAt,
         )
     }
 }
@@ -344,13 +324,17 @@ class ResourceBudgetCoordinator(
 
     suspend fun current(accountId: ResourceBudgetAccountId): ResourceBudgetAccount = requireAccount(accountId)
 
-    private suspend fun requireAccount(accountId: ResourceBudgetAccountId): ResourceBudgetAccount {
+    /** Missing is a valid lookup result; unreadable durable state still fails closed. */
+    suspend fun currentOrNull(accountId: ResourceBudgetAccountId): ResourceBudgetAccount? {
         val report = repository.load(accountId)
         check(report.unreadableEntries.isEmpty()) {
             "Resource budget store is unreadable: ${report.unreadableEntries.joinToString(",")}" 
         }
-        return requireNotNull(report.account) { "Unknown resource budget account: $accountId" }
+        return report.account
     }
+
+    private suspend fun requireAccount(accountId: ResourceBudgetAccountId): ResourceBudgetAccount =
+        requireNotNull(currentOrNull(accountId)) { "Unknown resource budget account: $accountId" }
 
     private companion object {
         const val MAX_CAS_ATTEMPTS = 32
