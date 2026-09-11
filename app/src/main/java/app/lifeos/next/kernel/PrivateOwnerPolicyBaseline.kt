@@ -34,7 +34,7 @@ object PrivateOwnerPolicyBaseline {
             actorId = ownerActorId,
             effect = OwnerEffectType.REMINDER,
             resource = OwnerResourceSelector(
-                OwnerResourceSelectorType.EXACT,
+                OwnerResourceSelectorType.PREFIX,
                 "goal://local-reminder",
             ),
             scope = GOAL_SCOPE,
@@ -46,6 +46,26 @@ object PrivateOwnerPolicyBaseline {
             resource = OwnerResourceSelector(
                 OwnerResourceSelectorType.EXACT,
                 "goal://local-share-preparation",
+            ),
+            scope = GOAL_SCOPE,
+            validFrom = Instant.EPOCH,
+        ),
+        OwnerPolicyGrant.create(
+            actorId = ownerActorId,
+            effect = OwnerEffectType.FILE_WRITE,
+            resource = OwnerResourceSelector(
+                OwnerResourceSelectorType.EXACT,
+                PrivateOwnerEffectAuthority.SHARE_CACHE_RESOURCE,
+            ),
+            scope = GOAL_SCOPE,
+            validFrom = Instant.EPOCH,
+        ),
+        OwnerPolicyGrant.create(
+            actorId = ownerActorId,
+            effect = OwnerEffectType.EXTERNAL_APP_HANDOFF,
+            resource = OwnerResourceSelector(
+                OwnerResourceSelectorType.EXACT,
+                PrivateOwnerEffectAuthority.SHARE_HANDOFF_RESOURCE,
             ),
             scope = GOAL_SCOPE,
             validFrom = Instant.EPOCH,
