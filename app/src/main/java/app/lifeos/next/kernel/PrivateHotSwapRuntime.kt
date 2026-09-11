@@ -113,6 +113,10 @@ class PrivateHotSwapRuntime private constructor(
                     ledger = ledger,
                     capabilities = capabilities,
                     budgets = budgets,
+                    ownerPolicy = ownerPolicy,
+                    tools = tools,
+                    actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+                    ownerScope = PrivateOwnerPolicyBaseline.HOT_SWAP_SCOPE,
                 )
             )
             return PrivateHotSwapRuntime(
