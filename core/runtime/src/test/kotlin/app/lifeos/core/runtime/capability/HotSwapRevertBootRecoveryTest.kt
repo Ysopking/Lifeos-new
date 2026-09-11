@@ -19,11 +19,8 @@ class HotSwapRevertBootRecoveryTest {
     @Test
     fun `boot completes persisted revert intent and commits revert budget exactly once`() = runTest {
         val capabilities = CapabilityRegistry()
-        val tools = GeneratedToolRegistry()
         val old = restoredProvider(OLD_TOOL)
         val candidate = restoredProvider(NEW_TOOL)
-        restoreActiveRecord(tools, old.record, old.receipt)
-        restoreActiveRecord(tools, candidate.record, candidate.receipt)
         capabilities.registerGeneratedRestored(old.descriptor, old.record, old.receipt)
         capabilities.registerGeneratedRestored(candidate.descriptor, candidate.record, candidate.receipt)
         capabilities.applyRestoredHotSwap(CAPABILITY, OLD_TOOL, NEW_TOOL, committed = true)
@@ -68,7 +65,6 @@ class HotSwapRevertBootRecoveryTest {
             capabilities = capabilities,
             budgets = budgets,
             ownerPolicy = policy.ledger,
-            tools = tools,
             actorId = V14_TEST_OWNER,
             ownerScope = V14_TEST_HOT_SWAP_SCOPE,
         ).reconcile()
@@ -89,7 +85,6 @@ class HotSwapRevertBootRecoveryTest {
             capabilities = capabilities,
             budgets = budgets,
             ownerPolicy = policy.ledger,
-            tools = tools,
             actorId = V14_TEST_OWNER,
             ownerScope = V14_TEST_HOT_SWAP_SCOPE,
         ).reconcile()
@@ -98,60 +93,6 @@ class HotSwapRevertBootRecoveryTest {
         assertEquals(0, second.budgetsCommitted)
         assertEquals(REQUESTED, budgets.current(revertAccountId).consumed)
         assertEquals(listOf(OLD_TOOL), capabilities.providersFor(CAPABILITY).map { it.providerId })
-    }
-
-    private suspend fun restoreActiveRecord(
-        tools: GeneratedToolRegistry,
-        active: GeneratedToolRecord,
-        receipt: GeneratedToolPromotionReceipt,
-    ) {
-        val generated = active.copy(
-            state = GeneratedToolState.GENERATED,
-            verificationConfidence = 0.0,
-            promotionEvidenceId = null,
-        )
-        val built = generated.copy(state = GeneratedToolState.BUILT)
-        val tested = built.copy(state = GeneratedToolState.TESTED)
-        val verified = tested.copy(
-            state = GeneratedToolState.VERIFIED,
-            verificationConfidence = active.verificationConfidence,
-        )
-        val trial = verified.copy(state = GeneratedToolState.TRIAL)
-        val chain = mutableListOf<GeneratedToolAuditEntry>()
-        fun append(
-            before: GeneratedToolRecord?,
-            after: GeneratedToolRecord,
-            action: GeneratedToolAuditAction,
-        ) {
-            val previous = chain.lastOrNull()
-            chain += GeneratedToolAuditEntry(
-                toolId = active.manifest.toolId,
-                action = action,
-                fromState = before?.state,
-                toState = after.state,
-                beforeRecordFingerprint = before?.auditFingerprint(),
-                afterRecordFingerprint = after.auditFingerprint(),
-                actorId = if (action == GeneratedToolAuditAction.PROMOTED) "private-owner" else null,
-                evidenceRef = if (action == GeneratedToolAuditAction.PROMOTED) receipt.evidenceId else null,
-                reason = if (action == GeneratedToolAuditAction.PROMOTED) "test-promotion" else null,
-                occurredAt = NOW.plusSeconds(chain.size.toLong()),
-                previousEntryId = previous?.id,
-            )
-        }
-        append(null, generated, GeneratedToolAuditAction.REGISTERED)
-        append(generated, built, GeneratedToolAuditAction.TRANSITIONED)
-        append(built, tested, GeneratedToolAuditAction.TRANSITIONED)
-        append(tested, verified, GeneratedToolAuditAction.TRANSITIONED)
-        append(verified, trial, GeneratedToolAuditAction.TRANSITIONED)
-        append(trial, active, GeneratedToolAuditAction.PROMOTED)
-        tools.restore(
-            GeneratedToolPersistentState(
-                record = active,
-                auditEntries = chain,
-                trialEvidence = GeneratedToolTrialEvidence(active.manifest.toolId, emptyList()),
-                promotionReceipt = receipt,
-            )
-        )
     }
 
     private fun restoredProvider(toolId: String): RestoredProvider {
