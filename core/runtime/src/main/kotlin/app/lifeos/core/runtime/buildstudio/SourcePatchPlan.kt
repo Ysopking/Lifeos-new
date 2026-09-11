@@ -205,6 +205,8 @@ class BuildPathPolicy(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolTrialLifecycle.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolActivationEvidence.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolPromotionEvidence.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/BoundedGeneratedToolPromotionEvidence.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/BoundedGeneratedToolStateRepository.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolAudit.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolPersistentState.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolStateCodec.kt",
