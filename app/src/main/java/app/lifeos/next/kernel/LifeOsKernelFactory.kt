@@ -68,9 +68,14 @@ import app.lifeos.core.runtime.cognition.InMemoryPhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.OutcomeTriggerObserver
 import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
 import app.lifeos.core.runtime.context.DurableContextFieldEnricher
+import app.lifeos.core.runtime.evolution.BoundedNovelPromotionCoordinator
 import app.lifeos.core.runtime.evolution.EvolutionCanaryOutcomeCoordinator
 import app.lifeos.core.runtime.evolution.EvolutionCanaryRouter
 import app.lifeos.core.runtime.evolution.EvolutionPromotionBridge
+import app.lifeos.core.runtime.evolution.NovelCapabilityAdmissionGate
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryCoordinator
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReadinessGate
+import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationCoordinator
 import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.health.CircuitBreaker
 import app.lifeos.core.runtime.health.HealthGate
@@ -213,13 +218,52 @@ class LifeOsKernelFactory(
             tools = generatedTools,
             lifecycle = generatedToolLifecycle,
         )
+        val evolutionStore = EncryptedEvolutionStore(appContext)
+        val novelAdmissionGate = NovelCapabilityAdmissionGate(
+            capabilities = capabilityRegistry,
+            tools = generatedTools,
+            artifacts = privateGeneratedToolRuntime.artifactRepository,
+        )
+        val novelCanary = NovelCapabilityCanaryCoordinator(
+            admissionGate = novelAdmissionGate,
+            trialRunner = privateGeneratedToolRuntime.trialRunner,
+            trialLedger = generatedToolTrials,
+            store = evolutionStore,
+        )
+        val novelReadiness = NovelCapabilityCanaryReadinessGate(
+            admissionGate = novelAdmissionGate,
+            trialLedger = generatedToolTrials,
+            store = evolutionStore,
+        )
+        val boundedNovelPromotion = BoundedNovelPromotionCoordinator(
+            admissionGate = novelAdmissionGate,
+            readinessGate = novelReadiness,
+            promotionStore = evolutionStore,
+            capabilities = capabilityRegistry,
+            tools = generatedTools,
+            artifacts = privateGeneratedToolRuntime.artifactRepository,
+            trials = generatedToolTrials,
+            lifecycle = generatedToolLifecycle,
+        )
+        val privateNovelActivation = PrivateNovelCapabilityActivationCoordinator(
+            capabilities = capabilityRegistry,
+            tools = generatedTools,
+            artifacts = privateGeneratedToolRuntime.artifactRepository,
+            trialLedger = generatedToolTrials,
+            canary = novelCanary,
+            admissionGate = novelAdmissionGate,
+            readinessGate = novelReadiness,
+            promotionStore = evolutionStore,
+            promotion = boundedNovelPromotion,
+        )
         val generatedToolBootRehydrator = GeneratedToolBootStateRehydrator(
             repository = generatedToolStateRepository,
             tools = generatedTools,
             trialLedger = generatedToolTrials,
             capabilityRegistry = capabilityRegistry,
+            artifactRepository = privateGeneratedToolRuntime.artifactRepository,
+            novelPromotionStore = evolutionStore,
         )
-        val evolutionStore = EncryptedEvolutionStore(appContext)
         val evolutionResources = EvolutionRuntimeResources(
             generatedTools = generatedTools,
             trialLedger = generatedToolTrials,
@@ -235,6 +279,7 @@ class LifeOsKernelFactory(
                 outcomeStore = evolutionStore,
                 lifecycle = generatedToolLifecycle,
             ),
+            privateNovelActivation = privateNovelActivation,
             artifactRepository = privateGeneratedToolRuntime.artifactRepository,
         )
         val goalCapabilityRouter = LanguageGoalCapabilityRouter(capabilityRegistry)
@@ -351,11 +396,11 @@ class LifeOsKernelFactory(
             primary = primaryStateRehydrator,
             additionalSteps = listOf(
                 RuntimeStateRehydrationStep {
-                    // Read-only full-vault decode: a corrupt J09 vault must fail before runtime start.
+                    // Read-only full-vault decode: a corrupt evolution vault must fail before runtime start.
                     evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
                 },
                 RuntimeStateRehydrationStep {
-                    // Preflight J10 before mutating the in-memory generated-tool registry.
+                    // Preflight generated-tool lifecycle state before mutating the in-memory registry.
                     generatedToolStateRepository.loadAll()
                 },
                 RuntimeStateRehydrationStep {
@@ -558,6 +603,7 @@ class LifeOsKernelFactory(
             languageContextBuilder = languageContextBuilder,
             goalCapabilityRouter = goalCapabilityRouter,
             privateGeneratedToolRuntime = privateGeneratedToolRuntime,
+            evolutionRuntime = evolutionResources,
             localReminderScheduler = AndroidLocalReminderScheduler(appContext),
             sceneCompiler = sceneCompiler,
             sceneRasterizer = sceneRasterizer,

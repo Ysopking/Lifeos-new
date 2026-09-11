@@ -127,7 +127,7 @@ class CapabilityRegistry(
         }
     }
 
-    /** Boot-only J03 restore path. Bounded ACTIVE restore remains gated until V1.5. */
+    /** Boot-only J03 restore path. */
     internal suspend fun registerGeneratedRestored(
         descriptor: CapabilityDescriptor,
         activeRecord: GeneratedToolRecord,
@@ -138,6 +138,23 @@ class CapabilityRegistry(
         require(!receipt.activationAllowed)
         require(activeRecord.promotionEvidenceId == receipt.evidenceId) {
             "Generated capability restore requires the accepted promotion receipt"
+        }
+        require(receipt.toolId == activeRecord.manifest.toolId)
+        providers[descriptor.capabilityId to descriptor.providerId] = descriptor
+        descriptor
+    }
+
+    /** V1.5 boot-only bounded restore path after artifact/seal verification by the rehydrator. */
+    internal suspend fun registerGeneratedRestoredBounded(
+        descriptor: CapabilityDescriptor,
+        activeRecord: GeneratedToolRecord,
+        receipt: BoundedGeneratedToolPromotionReceipt,
+    ): CapabilityDescriptor = mutex.withLock {
+        require(descriptor.capabilityId !in novelActivationClaims)
+        requireGeneratedDescriptor(descriptor, activeRecord)
+        require(!receipt.activationAllowed)
+        require(activeRecord.promotionEvidenceId == receipt.evidenceId) {
+            "Bounded generated capability restore requires the accepted promotion receipt"
         }
         require(receipt.toolId == activeRecord.manifest.toolId)
         providers[descriptor.capabilityId to descriptor.providerId] = descriptor

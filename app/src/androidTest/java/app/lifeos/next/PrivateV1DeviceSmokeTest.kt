@@ -13,6 +13,7 @@ import app.lifeos.core.runtime.capability.GapSeverity
 import app.lifeos.core.runtime.capability.GeneratedToolGenesisResult
 import app.lifeos.core.runtime.capability.GeneratedToolRequestExecutionResult
 import app.lifeos.core.runtime.capability.GeneratedToolState
+import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.next.kernel.KernelBootstrapState
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import kotlinx.coroutines.flow.first
@@ -26,11 +27,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Real Android/Keystore smoke contract for the private-v1 final gate.
+ * Real Android/Keystore recovery contract for the private generated-tool path.
  *
- * The CI workflow invokes seed first, force-stops and cold-starts the target app, then invokes
- * recovery. This verifies actual encrypted stores, Application boot, Activity recreation and the
- * generated-tool TRIAL recovery path on an emulator without granting promotion authority.
+ * The emulator workflow invokes seed first, force-stops and cold-starts the target app, then invokes
+ * recovery. Seed performs explicit Genesis -> TRIAL and the separate owner activation action. The
+ * second process must recover the exact bounded ACTIVE receipt/artifact/seal identities and the eight
+ * immutable trial results without manufacturing fresh activation authority.
  */
 @RunWith(AndroidJUnit4::class)
 class PrivateV1DeviceSmokeTest {
@@ -42,7 +44,7 @@ class PrivateV1DeviceSmokeTest {
     fun seedGeneratedToolAndAssertRuntime() {
         runBlocking {
             val boot = awaitBoot()
-            assertTrue("Kernel must complete boot before device smoke", boot.ready)
+            assertTrue("Kernel must complete boot before emulator recovery seed", boot.ready)
 
             val result = app.kernel.generateExplicitlyApprovedTool(
                 CapabilityGap(
@@ -64,32 +66,60 @@ class PrivateV1DeviceSmokeTest {
             assertTrue("Private trial suite must satisfy all expected cases", trials!!.completeAndExpected)
             assertEquals(3, trials.finalStats?.trials)
 
-            val status = app.generatedToolStatusReader.snapshot()
-            val tool = status.tools.single { it.toolId == genesis.record.manifest.toolId }
-            assertEquals(GeneratedToolState.TRIAL, tool.state)
-            assertEquals(3, tool.trials)
-            assertEquals(3, tool.successes)
-            assertEquals(3, tool.expectedOutputs)
-            assertEquals(0, tool.safetyViolations)
-            assertTrue("TRIAL action must not create ACTIVE provider state", status.activeTools == 0)
+            val trialStatus = app.generatedToolStatusReader.snapshot()
+            val trialTool = trialStatus.tools.single { it.toolId == genesis.record.manifest.toolId }
+            assertEquals(GeneratedToolState.TRIAL, trialTool.state)
+            assertEquals(3, trialTool.trials)
+            assertEquals(3, trialTool.successes)
+            assertEquals(3, trialTool.expectedOutputs)
+            assertEquals(0, trialTool.safetyViolations)
+            assertEquals(0, trialStatus.activeTools)
+            assertTrue(trialTool.promotionEvidenceId == null)
+
+            val activation = app.kernel.reviewAndActivateGeneratedTool(trialTool.toolId)
+            assertTrue(
+                "Second explicit owner action must pass bounded Novel Canary promotion",
+                activation is PrivateNovelCapabilityActivationResult.Activated,
+            )
+            val activated = activation as PrivateNovelCapabilityActivationResult.Activated
+            assertEquals(5, activated.canaryExecutions.size)
+            assertEquals(GeneratedToolState.ACTIVE, activated.promotion.activeRecord.state)
+
+            val activeStatus = app.generatedToolStatusReader.snapshot()
+            val activeTool = activeStatus.tools.single { it.toolId == trialTool.toolId }
+            assertEquals(GeneratedToolState.ACTIVE, activeTool.state)
+            assertEquals(8, activeTool.trials)
+            assertEquals(8, activeTool.successes)
+            assertEquals(8, activeTool.expectedOutputs)
+            assertEquals(0, activeTool.safetyViolations)
+            assertEquals(1, activeStatus.activeTools)
+            assertNotNull(activeTool.promotionEvidenceId)
+            assertNotNull(activeTool.boundedAdmissionEvidenceId)
+            assertNotNull(activeTool.boundedReadinessEvidenceId)
+            assertNotNull(activeTool.boundedPromotionSealId)
+            assertEquals(activated.promotion.evidence.id, activeTool.promotionEvidenceId)
+            assertEquals(activated.promotion.evidence.novelAdmissionEvidenceId, activeTool.boundedAdmissionEvidenceId)
+            assertEquals(activated.promotion.readiness.id, activeTool.boundedReadinessEvidenceId)
+            assertEquals(activated.promotion.seal.id, activeTool.boundedPromotionSealId)
 
             val sentinel = Photon(
-                content = "$SENTINEL_PREFIX${tool.toolId}",
-                provenance = Provenance("private-v1-device-smoke", "instrumentation"),
+                content = listOf(
+                    activeTool.toolId,
+                    requireNotNull(activeTool.promotionEvidenceId),
+                    requireNotNull(activeTool.boundedReadinessEvidenceId),
+                    requireNotNull(activeTool.boundedPromotionSealId),
+                ).joinToString(SENTINEL_SEPARATOR),
+                provenance = Provenance("private-v1-emulator-recovery", "instrumentation"),
                 tags = setOf(SENTINEL_TAG),
             )
             val persisted = app.kernel.persistAndIngest(sentinel)
             assertEquals(sentinel, app.kernel.photonStore.load(sentinel.id))
-            assertTrue("Smoke sentinel must enter durable cognition", persisted.processingQueued)
+            assertTrue("Recovery sentinel must enter durable cognition", persisted.processingQueued)
 
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                scenario.onActivity { activity ->
-                    assertFalse(activity.isFinishing)
-                }
+                scenario.onActivity { activity -> assertFalse(activity.isFinishing) }
                 scenario.recreate()
-                scenario.onActivity { activity ->
-                    assertFalse(activity.isFinishing)
-                }
+                scenario.onActivity { activity -> assertFalse(activity.isFinishing) }
             }
         }
     }
@@ -102,24 +132,30 @@ class PrivateV1DeviceSmokeTest {
 
             val sentinel = app.kernel.photonStore.loadAll()
                 .singleOrNull { SENTINEL_TAG in it.tags }
-            assertNotNull("Cold restart must preserve encrypted smoke sentinel", sentinel)
-            val toolId = sentinel!!.content.removePrefix(SENTINEL_PREFIX)
-            assertTrue("Smoke sentinel must contain generated tool id", toolId.isNotBlank())
+            assertNotNull("Cold restart must preserve encrypted recovery sentinel", sentinel)
+            val expected = sentinel!!.content.split(SENTINEL_SEPARATOR)
+            assertEquals("Recovery sentinel must bind tool plus exact evidence ids", 4, expected.size)
+            val toolId = expected[0]
+            val promotionEvidenceId = expected[1]
+            val readinessEvidenceId = expected[2]
+            val promotionSealId = expected[3]
+            assertTrue("Recovery sentinel must contain generated tool id", toolId.isNotBlank())
 
             val status = app.generatedToolStatusReader.snapshot()
             val tool = status.tools.single { it.toolId == toolId }
-            assertEquals(GeneratedToolState.TRIAL, tool.state)
-            assertEquals(3, tool.trials)
-            assertEquals(3, tool.successes)
-            assertEquals(3, tool.expectedOutputs)
+            assertEquals(GeneratedToolState.ACTIVE, tool.state)
+            assertEquals(8, tool.trials)
+            assertEquals(8, tool.successes)
+            assertEquals(8, tool.expectedOutputs)
             assertEquals(0, tool.safetyViolations)
-            assertEquals("Cold recovery must not activate generated tools", 0, status.activeTools)
-            assertTrue(tool.promotionEvidenceId == null)
+            assertEquals(1, status.activeTools)
+            assertEquals(promotionEvidenceId, tool.promotionEvidenceId)
+            assertEquals(readinessEvidenceId, tool.boundedReadinessEvidenceId)
+            assertEquals(promotionSealId, tool.boundedPromotionSealId)
+            assertNotNull(tool.boundedAdmissionEvidenceId)
 
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-                scenario.onActivity { activity ->
-                    assertFalse(activity.isFinishing)
-                }
+                scenario.onActivity { activity -> assertFalse(activity.isFinishing) }
             }
         }
     }
@@ -131,14 +167,14 @@ class PrivateV1DeviceSmokeTest {
                 state.status == KernelBootstrapStatus.FAILED
         }.also { state ->
             if (state.status == KernelBootstrapStatus.FAILED) {
-                error("Kernel boot failed during device smoke: ${state.failureMessage ?: "unknown"}")
+                error("Kernel boot failed during emulator recovery: ${state.failureMessage ?: "unknown"}")
             }
         }
     }
 
     private companion object {
         const val BOOT_TIMEOUT_MS = 30_000L
-        const val SENTINEL_TAG = "private-v1-device-smoke"
-        const val SENTINEL_PREFIX = "private-v1-tool:"
+        const val SENTINEL_TAG = "private-v1-emulator-recovery"
+        const val SENTINEL_SEPARATOR = "|"
     }
 }

@@ -7,10 +7,11 @@ import app.lifeos.core.runtime.capability.GeneratedToolTrialLedger
 import app.lifeos.core.runtime.evolution.EvolutionCanaryOutcomeCoordinator
 import app.lifeos.core.runtime.evolution.EvolutionCanaryRouter
 import app.lifeos.core.runtime.evolution.EvolutionPromotionBridge
+import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationCoordinator
 
 /**
- * Process-owned evolution graph. All members are deliberately kept together so routing, outcomes,
- * promotion and generated-tool lifecycle share the exact same durable stores and registries.
+ * Process-owned evolution graph. All members deliberately share the exact same durable stores,
+ * generated-tool registry, trial ledger and capability registry.
  */
 internal data class EvolutionRuntimeResources(
     val generatedTools: GeneratedToolRegistry,
@@ -19,5 +20,6 @@ internal data class EvolutionRuntimeResources(
     val canaryRouter: EvolutionCanaryRouter,
     val outcomeCoordinator: EvolutionCanaryOutcomeCoordinator,
     val promotionBridge: EvolutionPromotionBridge,
+    val privateNovelActivation: PrivateNovelCapabilityActivationCoordinator,
     val artifactRepository: GeneratedToolArtifactRepository,
 )
