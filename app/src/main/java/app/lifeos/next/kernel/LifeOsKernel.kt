@@ -24,6 +24,7 @@ import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.capability.PrivateGeneratedToolTrialSuite
+import app.lifeos.core.runtime.cognition.CognitiveDeltaIdentity
 import app.lifeos.core.runtime.cognition.CognitiveOutcomeJournal
 import app.lifeos.core.runtime.cognition.CognitivePriority
 import app.lifeos.core.runtime.cognition.CognitiveTriggerSink
@@ -297,6 +298,7 @@ class LifeOsKernel internal constructor(
         return try {
             val submission = continuousCognition.submit(
                 delta = PhotonDelta(
+                    deltaId = CognitiveDeltaIdentity.photonRevision(photon.id, photon.revision),
                     source = "kernel-live-submit",
                     photonId = photon.id,
                     revisionBefore = previous?.revision,
@@ -623,7 +625,9 @@ class LifeOsKernel internal constructor(
         supervisor.start()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
-        runtimePhotons.forEach { runtime.ingest(it) }
+        // Restore the process-local read model without enqueuing a second task family.
+        // Durable reconciliation has already restored missing work; terminal work stays terminal.
+        runtimePhotons.forEach { matrix.influence(it) }
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = if (degraded) KernelBootstrapStatus.DEGRADED else KernelBootstrapStatus.READY,
