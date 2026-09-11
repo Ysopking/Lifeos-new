@@ -175,7 +175,7 @@ data class ConvergenceDecisionRequest(
     }
 
     fun sourceFingerprint(): String = StableFieldIds.fingerprint(
-        "convergence-decision-source/v1",
+        "convergence-decision-source/v2",
         source.id,
         convergence.status.name,
         workingSetFingerprint.orEmpty(),
@@ -187,6 +187,28 @@ data class ConvergenceDecisionRequest(
                 "status:${result.status.name}",
             )
         }.toTypedArray(),
+        *convergence.bridgeTrace.sortedBy { it.bridgeId }.flatMap { trace ->
+            listOf(
+                "bridge:${trace.bridgeId}",
+                "bridge-status:${trace.status.name}",
+                "bridge-source:${trace.sourceDomainId.value}",
+                "bridge-target:${trace.targetDomainId.value}",
+                "bridge-run:${trace.sourceRunId.orEmpty()}",
+                "bridge-snapshot:${trace.sourceSnapshotId.orEmpty()}",
+                "bridge-reason:${trace.reason}",
+            ) + trace.derivedEvidenceIds.sorted().map { "bridge-evidence:$it" }
+        }.toTypedArray(),
+        *convergence.conflicts.sortedWith(
+            compareBy<PreservedDomainConflict> { it.domainId.value }.thenBy { it.conflictKey }
+        ).flatMap { conflict ->
+            listOf(
+                "conflict-domain:${conflict.domainId.value}",
+                "conflict-key:${conflict.conflictKey}",
+                "conflict-severity:${java.lang.Double.toHexString(conflict.severity)}",
+                "conflict-explanation:${conflict.explanation}",
+            )
+        }.toTypedArray(),
+        *convergence.failures.sorted().map { "failure:$it" }.toTypedArray(),
         *capabilityGaps.map(::capabilityGapFingerprint).sorted().toTypedArray(),
     )
 }
