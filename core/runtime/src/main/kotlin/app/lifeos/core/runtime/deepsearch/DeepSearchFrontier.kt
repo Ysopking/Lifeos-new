@@ -19,19 +19,60 @@ data class DeepSearchFrontierOffer(
             status == DeepSearchFrontierOfferStatus.BREADTH_REPLACED
 }
 
+data class DeepSearchFrontierSnapshot(
+    val admittedBranches: List<DeepSearchBranch>,
+    val queuedBranchIds: Set<DeepSearchBranchId>,
+    val expandedBranchIds: Set<DeepSearchBranchId>,
+) {
+    init {
+        require(admittedBranches.map { it.id }.distinct().size == admittedBranches.size)
+        require(queuedBranchIds.intersect(expandedBranchIds).isEmpty()) {
+            "DeepSearch frontier branch cannot be queued and expanded"
+        }
+        val admittedIds = admittedBranches.mapTo(linkedSetOf()) { it.id }
+        require(queuedBranchIds.all(admittedIds::contains))
+        require(expandedBranchIds.all(admittedIds::contains))
+        require(queuedBranchIds + expandedBranchIds == admittedIds) {
+            "Every admitted DeepSearch branch must be queued or expanded"
+        }
+    }
+}
+
 /**
  * Deterministic bounded search frontier.
  *
  * Dedupe is global for the request by semantic hypothesis signature. Breadth is enforced per depth
  * across all admitted branches, not just currently queued branches, so polling cannot reopen budget.
+ * V12 can reconstruct the exact queue/expanded boundary from a durable snapshot.
  */
 class DeepSearchFrontier(
     private val request: DeepSearchRequest,
+    restored: DeepSearchFrontierSnapshot? = null,
 ) {
     private val bestBySignature = linkedMapOf<String, DeepSearchBranch>()
     private val admittedByDepth = mutableMapOf<Int, MutableMap<String, DeepSearchBranch>>()
     private val queuedIds = linkedSetOf<DeepSearchBranchId>()
     private val expandedIds = linkedSetOf<DeepSearchBranchId>()
+
+    init {
+        if (restored != null) {
+            restored.admittedBranches
+                .sortedWith(DeepSearchEvaluator.branchOrder())
+                .forEach { branch ->
+                    require(branch.requestId == request.id) { "Restored branch belongs to another request" }
+                    require(branch.depth <= request.budget.maxDepth) { "Restored branch exceeds current depth bound" }
+                    val signature = branch.hypothesis.signature()
+                    require(signature !in bestBySignature) { "Restored frontier contains duplicate hypothesis signature" }
+                    require((admittedByDepth[branch.depth]?.size ?: 0) < request.budget.maxBreadth) {
+                        "Restored frontier exceeds current breadth bound"
+                    }
+                    bestBySignature[signature] = branch
+                    admittedByDepth.getOrPut(branch.depth) { linkedMapOf() }[signature] = branch
+                }
+            queuedIds += restored.queuedBranchIds
+            expandedIds += restored.expandedBranchIds
+        }
+    }
 
     fun offer(branch: DeepSearchBranch): DeepSearchFrontierOffer {
         require(branch.requestId == request.id) { "DeepSearch branch belongs to another request" }
@@ -96,6 +137,12 @@ class DeepSearchFrontier(
         .sortedWith(DeepSearchEvaluator.branchOrder())
 
     fun signatures(): Set<String> = bestBySignature.keys.toSortedSet()
+
+    fun snapshot(): DeepSearchFrontierSnapshot = DeepSearchFrontierSnapshot(
+        admittedBranches = admittedBranches(),
+        queuedBranchIds = queuedIds.toSet(),
+        expandedBranchIds = expandedIds.toSet(),
+    )
 
     fun isEmpty(): Boolean = bestBySignature.values.none {
         it.id in queuedIds && it.id !in expandedIds
