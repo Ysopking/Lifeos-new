@@ -4,6 +4,7 @@ import java.time.Instant
 import java.util.concurrent.CancellationException
 
 enum class RepairProbeKind {
+    RUNTIME,
     STORE,
     WORKER,
     FIELD,
@@ -84,6 +85,12 @@ abstract class ComponentRepairProbe(
 
     final override suspend fun observe(): RepairProbeObservation = check()
 }
+
+class RuntimeRepairProbe(
+    id: String,
+    nodeId: HealthNodeId,
+    check: suspend () -> RepairProbeObservation,
+) : ComponentRepairProbe(id, RepairProbeKind.RUNTIME, nodeId, check)
 
 class StoreRepairProbe(
     id: String,
