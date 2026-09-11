@@ -22,6 +22,7 @@ class UniversalFieldRuntimeAdapter(
     private val requestEnricher: FieldRequestEnricher = FieldRequestEnricher.NONE,
     private val engine: FieldConvergenceEngine = FieldConvergenceEngine(),
     private val healthGate: HealthGate? = null,
+    private val thoughtGraphProjection: FieldThoughtGraphProjectionCoordinator? = null,
     private val now: () -> Instant = Instant::now,
 ) : FieldShadowProcessor {
     override suspend fun process(photon: Photon): FieldShadowExecution {
@@ -71,7 +72,11 @@ class UniversalFieldRuntimeAdapter(
 
         return try {
             val result = engine.converge(request)
+            // Crash-safe write order: projection intent first, authoritative snapshot second,
+            // graph materialization last. A kill at any boundary is repaired by boot reconciliation.
+            val projection = thoughtGraphProjection?.prepare(photon, request, result)
             snapshotRepository.save(result.snapshot)
+            if (projection != null) thoughtGraphProjection.materialize(projection)
             if (permit != null && healthGate != null) {
                 try {
                     healthGate.onSuccess(permit)
