@@ -34,6 +34,8 @@ enum class HotSwapEventType {
     PREPARED,
     CANDIDATE_PROMOTED,
     CUTOVER_COMMITTED,
+    REVERT_PREPARED,
+    CUTOVER_REVERTED,
     ROLLED_BACK,
     BLOCKED,
 }
@@ -87,6 +89,8 @@ enum class HotSwapState {
     PREPARED,
     CANDIDATE_PROMOTED,
     COMMITTED,
+    REVERT_PREPARED,
+    REVERTED,
     ROLLED_BACK,
     BLOCKED,
 }
@@ -106,6 +110,7 @@ data class HotSwapSnapshot(
 ) {
     val terminal: Boolean
         get() = state == HotSwapState.COMMITTED ||
+            state == HotSwapState.REVERTED ||
             state == HotSwapState.ROLLED_BACK ||
             state == HotSwapState.BLOCKED
 }
@@ -155,6 +160,36 @@ class HotSwapLedger(
     suspend fun markCommitted(snapshot: HotSwapSnapshot, detail: String = "routing-cutover-committed"): HotSwapSnapshot =
         transition(snapshot, HotSwapEventType.CUTOVER_COMMITTED, detail = detail)
 
+    /** COMMITTED remains terminal for duplicate swap calls, but may enter one explicit revert flow. */
+    suspend fun markRevertPrepared(
+        snapshot: HotSwapSnapshot,
+        ownerPolicyRevision: Long,
+        worldSnapshotId: String,
+        detail: String = "post-commit-revert-authorized",
+    ): HotSwapSnapshot {
+        require(snapshot.state == HotSwapState.COMMITTED) {
+            "Only a committed hot-swap can prepare a post-commit revert"
+        }
+        append(
+            id = snapshot.transactionId,
+            capabilityId = snapshot.capabilityId,
+            previousToolId = snapshot.previousToolId,
+            candidateToolId = snapshot.candidateToolId,
+            previousPromotionEvidenceId = snapshot.previousPromotionEvidenceId,
+            candidatePromotionEvidenceId = snapshot.candidatePromotionEvidenceId,
+            type = HotSwapEventType.REVERT_PREPARED,
+            ownerPolicyRevision = ownerPolicyRevision,
+            worldSnapshotId = worldSnapshotId,
+            detail = detail,
+        )
+        return requireNotNull(snapshot(snapshot.transactionId))
+    }
+
+    suspend fun markReverted(
+        snapshot: HotSwapSnapshot,
+        detail: String = "routing-cutover-reverted",
+    ): HotSwapSnapshot = transition(snapshot, HotSwapEventType.CUTOVER_REVERTED, detail = detail)
+
     suspend fun markRolledBack(snapshot: HotSwapSnapshot, detail: String): HotSwapSnapshot =
         transition(snapshot, HotSwapEventType.ROLLED_BACK, detail = detail)
 
@@ -187,10 +222,12 @@ class HotSwapLedger(
         when (type) {
             HotSwapEventType.CANDIDATE_PROMOTED -> require(snapshot.state == HotSwapState.PREPARED)
             HotSwapEventType.CUTOVER_COMMITTED -> require(snapshot.state == HotSwapState.CANDIDATE_PROMOTED)
+            HotSwapEventType.CUTOVER_REVERTED -> require(snapshot.state == HotSwapState.REVERT_PREPARED)
             HotSwapEventType.ROLLED_BACK,
             HotSwapEventType.BLOCKED -> require(
                 snapshot.state == HotSwapState.PREPARED || snapshot.state == HotSwapState.CANDIDATE_PROMOTED
             )
+            HotSwapEventType.REVERT_PREPARED -> error("Use markRevertPrepared for a committed transaction")
             HotSwapEventType.PREPARED -> error("Hot-swap transaction cannot prepare twice")
         }
         append(
@@ -280,6 +317,14 @@ class HotSwapLedger(
                 HotSwapEventType.CUTOVER_COMMITTED -> {
                     require(state == HotSwapState.CANDIDATE_PROMOTED)
                     state = HotSwapState.COMMITTED
+                }
+                HotSwapEventType.REVERT_PREPARED -> {
+                    require(state == HotSwapState.COMMITTED)
+                    state = HotSwapState.REVERT_PREPARED
+                }
+                HotSwapEventType.CUTOVER_REVERTED -> {
+                    require(state == HotSwapState.REVERT_PREPARED)
+                    state = HotSwapState.REVERTED
                 }
                 HotSwapEventType.ROLLED_BACK -> {
                     require(state == HotSwapState.PREPARED || state == HotSwapState.CANDIDATE_PROMOTED)
