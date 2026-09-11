@@ -4,14 +4,20 @@ import app.lifeos.core.model.task.CreateTaskResult
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskDraft
 import app.lifeos.core.model.task.TaskRepository
+import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskState
 import java.time.Instant
+import kotlinx.coroutines.sync.Mutex
 
 class DurableTaskEngine(
     private val tasks: TaskRepository,
     private val schedulerSignal: TaskSchedulerSignal,
     private val now: () -> Instant = Instant::now,
 ) {
+    /** Shared synchronization/snapshot boundary for all bounded cognition producers on this engine. */
+    internal val cognitionAdmissionMutex = Mutex()
+    internal val cognitionSnapshotRepository: TaskSnapshotRepository? = tasks as? TaskSnapshotRepository
+
     suspend fun submit(draft: TaskDraft): LifeTask {
         val createdAt = now()
         val candidate = LifeTask(
