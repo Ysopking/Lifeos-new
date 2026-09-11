@@ -25,15 +25,8 @@ import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/**
- * Process-level V10 composition for the private APK.
- *
- * Productive generated-tool and capability registries are reused exactly; durable trial evidence is
- * replayed only for promotion validation. The encrypted hot-swap ledger is also installed into boot
- * reconciliation before the kernel starts.
- */
+/** Process-level V10 composition for the private APK. */
 class PrivateHotSwapRuntime private constructor(
-    private val stateRepository: EncryptedGeneratedToolStateRepository,
     val ledger: HotSwapLedger,
     private val lifecycleFactory: HotSwapLifecycleFactory,
     private val ownerPolicy: OwnerPolicyLedger,
@@ -77,12 +70,6 @@ class PrivateHotSwapRuntime private constructor(
         )
     }
 
-    /**
-     * New authority is seeded only on a pristine owner ledger. The complete pre-existing private APK
-     * baseline is seeded together so installing V10 cannot suppress reminder/share permissions.
-     * Any non-pristine ledger is left untouched, making upgrades fail closed for hot-swap until the
-     * owner explicitly grants provider activation.
-     */
     private suspend fun ensurePrivateOwnerBaseline() = ownerBootstrapMutex.withLock {
         if (ownerPolicy.snapshot().revision != 0L) return@withLock
         DEFAULT_OWNER_GRANTS.forEach { ownerPolicy.grant(it) }
@@ -112,10 +99,10 @@ class PrivateHotSwapRuntime private constructor(
                 HotSwapBootReconciler(
                     ledger = ledger,
                     capabilities = capabilities,
+                    budgets = budgets,
                 )
             )
             return PrivateHotSwapRuntime(
-                stateRepository = stateRepository,
                 ledger = ledger,
                 lifecycleFactory = lifecycleFactory,
                 ownerPolicy = ownerPolicy,
