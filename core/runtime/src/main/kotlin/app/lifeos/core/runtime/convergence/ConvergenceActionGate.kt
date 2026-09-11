@@ -34,6 +34,10 @@ class ConvergenceActionGate(
         var conflicted = false
         var allDomainsPass = request.convergence.domainResults.isNotEmpty()
 
+        if (request.convergence.status != CrossDomainConvergenceStatus.CONVERGED) {
+            allDomainsPass = false
+            reasons += "cross-domain-not-converged:${request.convergence.status.name}"
+        }
         if (request.convergence.failures.isNotEmpty()) {
             allDomainsPass = false
             reasons += request.convergence.failures.map { "convergence-failure:$it" }
