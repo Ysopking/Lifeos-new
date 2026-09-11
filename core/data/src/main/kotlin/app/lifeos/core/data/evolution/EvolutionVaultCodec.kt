@@ -6,6 +6,10 @@ import app.lifeos.core.runtime.evolution.EvolutionCanaryPromotionSealEvidence
 import app.lifeos.core.runtime.evolution.EvolutionCanaryReservation
 import app.lifeos.core.runtime.evolution.EvolutionCanaryStopReason
 import app.lifeos.core.runtime.evolution.EvolutionHardFailure
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryKillSwitchEvidence
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryOutcome
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReservation
+import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryStopReason
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -15,15 +19,19 @@ import java.nio.charset.CodingErrorAction
 import java.time.Instant
 
 /**
- * One logical J09 snapshot. Runtime reservations, stop state, promotion seals and outcomes are
- * encoded together so rehydration cannot observe only part of the evolution safety boundary.
+ * One logical evolution snapshot. Legacy replacement-evolution buckets and novel-capability canary
+ * buckets share the same encrypted/atomic vault while retaining distinct evidence semantics.
  */
 internal data class EvolutionVaultSnapshot(
     val buckets: List<EvolutionVaultBucket> = emptyList(),
+    val novelBuckets: List<NovelCapabilityVaultBucket> = emptyList(),
 ) {
     init {
         require(buckets.map { it.adoptionEvidenceId }.distinct().size == buckets.size) {
             "Evolution vault cannot contain duplicate adoption buckets"
+        }
+        require(novelBuckets.map { it.admissionEvidenceId }.distinct().size == novelBuckets.size) {
+            "Evolution vault cannot contain duplicate novel admission buckets"
         }
     }
 
@@ -34,6 +42,15 @@ internal data class EvolutionVaultSnapshot(
     fun withBucket(bucket: EvolutionVaultBucket): EvolutionVaultSnapshot = copy(
         buckets = (buckets.filterNot { it.adoptionEvidenceId == bucket.adoptionEvidenceId } + bucket)
             .sortedBy { it.adoptionEvidenceId },
+    )
+
+    fun novelBucket(admissionEvidenceId: String): NovelCapabilityVaultBucket =
+        novelBuckets.firstOrNull { it.admissionEvidenceId == admissionEvidenceId }
+            ?: NovelCapabilityVaultBucket(admissionEvidenceId = admissionEvidenceId)
+
+    fun withNovelBucket(bucket: NovelCapabilityVaultBucket): EvolutionVaultSnapshot = copy(
+        novelBuckets = (novelBuckets.filterNot { it.admissionEvidenceId == bucket.admissionEvidenceId } + bucket)
+            .sortedBy { it.admissionEvidenceId },
     )
 }
 
@@ -120,17 +137,100 @@ internal data class EvolutionVaultBucket(
     }
 }
 
+/** Durable novel-capability bucket. It never contains replacement-baseline/adoption evidence. */
+internal data class NovelCapabilityVaultBucket(
+    val admissionEvidenceId: String,
+    val reservations: List<NovelCapabilityCanaryReservation> = emptyList(),
+    val killSwitch: NovelCapabilityCanaryKillSwitchEvidence? = null,
+    val outcomes: List<NovelCapabilityCanaryOutcome> = emptyList(),
+) {
+    init {
+        require(admissionEvidenceId.isNotBlank()) { "Novel canary admission id must not be blank" }
+        require(reservations.all { it.admissionEvidenceId == admissionEvidenceId }) {
+            "Novel canary reservation belongs to another admission"
+        }
+        require(reservations.map { it.invocationId }.distinct().size == reservations.size) {
+            "Novel canary cannot contain duplicate reservations"
+        }
+        require(reservations.map { it.id }.distinct().size == reservations.size) {
+            "Novel canary cannot contain duplicate reservation evidence"
+        }
+        val orderedReservations = reservations.sortedBy { it.sequence }
+        require(orderedReservations.map { it.sequence } == (1..orderedReservations.size).toList()) {
+            "Novel canary reservation sequence must be contiguous"
+        }
+        require(killSwitch == null || killSwitch.admissionEvidenceId == admissionEvidenceId) {
+            "Novel canary kill switch belongs to another admission"
+        }
+        require(outcomes.all { it.admissionEvidenceId == admissionEvidenceId }) {
+            "Novel canary outcome belongs to another admission"
+        }
+        require(outcomes.map { it.invocationId }.distinct().size == outcomes.size) {
+            "Novel canary cannot contain duplicate outcomes"
+        }
+        require(outcomes.map { it.id }.distinct().size == outcomes.size) {
+            "Novel canary cannot contain duplicate outcome evidence"
+        }
+        require(outcomes.size <= reservations.size) {
+            "Novel canary outcomes cannot exceed reservations"
+        }
+        val reservationByInvocation = reservations.associateBy { it.invocationId }
+        outcomes.forEach { outcome ->
+            val reservation = requireNotNull(reservationByInvocation[outcome.invocationId]) {
+                "Novel canary outcome has no matching reservation"
+            }
+            require(reservation.id == outcome.reservationId) {
+                "Novel canary outcome reservation evidence does not match vault"
+            }
+            require(reservation.toolId == outcome.toolId) {
+                "Novel canary outcome tool differs from reservation"
+            }
+            require(reservation.candidateRecordFingerprint == outcome.candidateRecordFingerprint) {
+                "Novel canary outcome record differs from reservation"
+            }
+        }
+        val toolIds = buildSet {
+            reservations.mapTo(this) { it.toolId }
+            outcomes.mapTo(this) { it.toolId }
+            killSwitch?.toolId?.let(::add)
+        }
+        require(toolIds.size <= 1) { "Novel canary bucket cannot mix tool identities" }
+        val recordFingerprints = buildSet {
+            reservations.mapTo(this) { it.candidateRecordFingerprint }
+            outcomes.mapTo(this) { it.candidateRecordFingerprint }
+        }
+        require(recordFingerprints.size <= 1) { "Novel canary bucket cannot mix candidate records" }
+
+        val safetyOutcomes = outcomes.filter { it.safetyViolation }
+        if (safetyOutcomes.isNotEmpty()) {
+            require(safetyOutcomes.size == 1) {
+                "Novel canary cannot contain outcomes after the first safety violation"
+            }
+            val safety = safetyOutcomes.single()
+            require(killSwitch != null) { "Novel canary safety violation requires atomic stop evidence" }
+            require(killSwitch.reason == NovelCapabilityCanaryStopReason.SAFETY_VIOLATION)
+            require(killSwitch.triggerEvidenceId == safety.id) {
+                "Novel canary stop must reference the persisted safety outcome"
+            }
+        }
+    }
+}
+
 /** Strict binary codec kept Android-free so corruption and rehydration invariants are JVM-tested. */
 internal object EvolutionVaultCodec {
-    const val VERSION = 1
+    const val VERSION = 2
+    private const val LEGACY_VERSION = 1
     private const val MAGIC = 0x4C45564F // LEVO
     private const val MAX_BUCKETS = 512
     private const val MAX_ENTRIES_PER_BUCKET = 10_000
     private const val MAX_STRING_BYTES = 16 * 1024
     private const val MAX_FAILURES = 32
 
+    fun supportsVersion(version: Int): Boolean = version in LEGACY_VERSION..VERSION
+
     fun encode(snapshot: EvolutionVaultSnapshot): ByteArray {
         require(snapshot.buckets.size <= MAX_BUCKETS) { "Too many evolution vault buckets" }
+        require(snapshot.novelBuckets.size <= MAX_BUCKETS) { "Too many novel canary vault buckets" }
         return ByteArrayOutputStream().also { output ->
             DataOutputStream(output).use { data ->
                 data.writeInt(MAGIC)
@@ -138,19 +238,32 @@ internal object EvolutionVaultCodec {
                 val buckets = snapshot.buckets.sortedBy { it.adoptionEvidenceId }
                 data.writeInt(buckets.size)
                 buckets.forEach { data.writeBucket(it) }
+                val novelBuckets = snapshot.novelBuckets.sortedBy { it.admissionEvidenceId }
+                data.writeInt(novelBuckets.size)
+                novelBuckets.forEach { data.writeNovelBucket(it) }
             }
         }.toByteArray()
     }
 
-    fun decode(bytes: ByteArray): EvolutionVaultSnapshot {
+    fun decode(bytes: ByteArray, expectedVersion: Int? = null): EvolutionVaultSnapshot {
         require(bytes.isNotEmpty()) { "Evolution vault payload is empty" }
         return DataInputStream(ByteArrayInputStream(bytes)).use { data ->
             require(data.readInt() == MAGIC) { "Invalid evolution vault magic" }
-            require(data.readInt() == VERSION) { "Unsupported evolution vault version" }
+            val version = data.readInt()
+            require(supportsVersion(version)) { "Unsupported evolution vault version" }
+            require(expectedVersion == null || expectedVersion == version) {
+                "Evolution vault container/payload version mismatch"
+            }
             val bucketCount = data.readBoundedCount(MAX_BUCKETS, "adoption buckets")
             val buckets = List(bucketCount) { data.readBucket() }
+            val novelBuckets = if (version >= VERSION) {
+                val novelCount = data.readBoundedCount(MAX_BUCKETS, "novel admission buckets")
+                List(novelCount) { data.readNovelBucket() }
+            } else {
+                emptyList()
+            }
             require(data.read() == -1) { "Evolution vault contains trailing bytes" }
-            EvolutionVaultSnapshot(buckets)
+            EvolutionVaultSnapshot(buckets = buckets, novelBuckets = novelBuckets)
         }
     }
 
@@ -190,6 +303,35 @@ internal object EvolutionVaultCodec {
         )
     }
 
+    private fun DataOutputStream.writeNovelBucket(bucket: NovelCapabilityVaultBucket) {
+        writeText(bucket.admissionEvidenceId)
+        require(bucket.reservations.size <= MAX_ENTRIES_PER_BUCKET)
+        val reservations = bucket.reservations.sortedBy { it.sequence }
+        writeInt(reservations.size)
+        reservations.forEach { writeNovelReservation(it) }
+        writeBoolean(bucket.killSwitch != null)
+        bucket.killSwitch?.let { writeNovelKillSwitch(it) }
+        require(bucket.outcomes.size <= MAX_ENTRIES_PER_BUCKET)
+        val outcomes = bucket.outcomes.sortedBy { it.invocationId }
+        writeInt(outcomes.size)
+        outcomes.forEach { writeNovelOutcome(it) }
+    }
+
+    private fun DataInputStream.readNovelBucket(): NovelCapabilityVaultBucket {
+        val admissionEvidenceId = readText()
+        val reservations = List(readBoundedCount(MAX_ENTRIES_PER_BUCKET, "novel reservations")) {
+            readNovelReservation().also { require(it.admissionEvidenceId == admissionEvidenceId) }
+        }
+        val killSwitch = if (readBoolean()) readNovelKillSwitch() else null
+        val outcomes = List(readBoundedCount(MAX_ENTRIES_PER_BUCKET, "novel outcomes")) { readNovelOutcome() }
+        return NovelCapabilityVaultBucket(
+            admissionEvidenceId = admissionEvidenceId,
+            reservations = reservations,
+            killSwitch = killSwitch,
+            outcomes = outcomes,
+        )
+    }
+
     private fun DataOutputStream.writeReservation(value: EvolutionCanaryReservation) {
         writeText(value.id)
         writeText(value.adoptionEvidenceId)
@@ -207,6 +349,34 @@ internal object EvolutionVaultCodec {
             reservedAt = readInstant(),
         )
         require(value.id == expectedId) { "Evolution reservation id integrity check failed" }
+        return value
+    }
+
+    private fun DataOutputStream.writeNovelReservation(value: NovelCapabilityCanaryReservation) {
+        writeText(value.id)
+        writeText(value.admissionEvidenceId)
+        writeText(value.toolId)
+        writeText(value.candidateRecordFingerprint)
+        writeText(value.invocationId)
+        writeText(value.inputFingerprint)
+        writeText(value.expectedOutputFingerprint)
+        writeInt(value.sequence)
+        writeInstant(value.reservedAt)
+    }
+
+    private fun DataInputStream.readNovelReservation(): NovelCapabilityCanaryReservation {
+        val expectedId = readText()
+        val value = NovelCapabilityCanaryReservation(
+            admissionEvidenceId = readText(),
+            toolId = readText(),
+            candidateRecordFingerprint = readText(),
+            invocationId = readText(),
+            inputFingerprint = readText(),
+            expectedOutputFingerprint = readText(),
+            sequence = readInt(),
+            reservedAt = readInstant(),
+        )
+        require(value.id == expectedId) { "Novel canary reservation id integrity check failed" }
         return value
     }
 
@@ -231,6 +401,28 @@ internal object EvolutionVaultCodec {
             trippedAt = readInstant(),
         )
         require(value.id == expectedId) { "Evolution kill-switch id integrity check failed" }
+        return value
+    }
+
+    private fun DataOutputStream.writeNovelKillSwitch(value: NovelCapabilityCanaryKillSwitchEvidence) {
+        writeText(value.id)
+        writeText(value.admissionEvidenceId)
+        writeText(value.toolId)
+        writeText(value.reason.name)
+        writeText(value.triggerEvidenceId)
+        writeInstant(value.trippedAt)
+    }
+
+    private fun DataInputStream.readNovelKillSwitch(): NovelCapabilityCanaryKillSwitchEvidence {
+        val expectedId = readText()
+        val value = NovelCapabilityCanaryKillSwitchEvidence(
+            admissionEvidenceId = readText(),
+            toolId = readText(),
+            reason = enumValueOf<NovelCapabilityCanaryStopReason>(readText()),
+            triggerEvidenceId = readText(),
+            trippedAt = readInstant(),
+        )
+        require(value.id == expectedId) { "Novel canary kill-switch id integrity check failed" }
         return value
     }
 
@@ -289,6 +481,40 @@ internal object EvolutionVaultCodec {
             recordedAt = readInstant(),
         )
         require(value.id == expectedId) { "Evolution outcome id integrity check failed" }
+        return value
+    }
+
+    private fun DataOutputStream.writeNovelOutcome(value: NovelCapabilityCanaryOutcome) {
+        writeText(value.id)
+        writeText(value.admissionEvidenceId)
+        writeText(value.reservationId)
+        writeText(value.toolId)
+        writeText(value.candidateRecordFingerprint)
+        writeText(value.invocationId)
+        writeText(value.trialResultFingerprint)
+        writeBoolean(value.success)
+        writeBoolean(value.producedExpectedOutput)
+        writeBoolean(value.safetyViolation)
+        writeLong(value.latencyMs)
+        writeInstant(value.recordedAt)
+    }
+
+    private fun DataInputStream.readNovelOutcome(): NovelCapabilityCanaryOutcome {
+        val expectedId = readText()
+        val value = NovelCapabilityCanaryOutcome(
+            admissionEvidenceId = readText(),
+            reservationId = readText(),
+            toolId = readText(),
+            candidateRecordFingerprint = readText(),
+            invocationId = readText(),
+            trialResultFingerprint = readText(),
+            success = readBoolean(),
+            producedExpectedOutput = readBoolean(),
+            safetyViolation = readBoolean(),
+            latencyMs = readLong(),
+            recordedAt = readInstant(),
+        )
+        require(value.id == expectedId) { "Novel canary outcome id integrity check failed" }
         return value
     }
 
