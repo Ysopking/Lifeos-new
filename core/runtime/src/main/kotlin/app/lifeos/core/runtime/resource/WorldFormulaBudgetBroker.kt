@@ -14,6 +14,7 @@ enum class ResourceBudgetDomain {
     COGNITION,
     TOOL_WORKSHOP,
     EVOLUTION,
+    SELF_HEALING,
     BACKGROUND,
 }
 
@@ -151,7 +152,6 @@ class WorldFormulaBudgetBroker(
             val readiness = laneState[WorldSignalDimension.CAPABILITY_READINESS]
             val salienceValue = (salience?.value ?: 0.0) * (salience?.confidence ?: 0.0)
             val readinessValue = (readiness?.value ?: 0.0) * (readiness?.confidence ?: 0.0)
-            // This scalar is only a capacity-allocation weight. It is not an epistemic truth score.
             val weight = (salienceValue * readinessValue).coerceIn(0.0, 1.0)
             demand.domain to weight
         }
@@ -160,36 +160,12 @@ class WorldFormulaBudgetBroker(
         }
 
         val requestedByDomain = demands.associate { it.domain to it.requested }
-        val elapsed = distributeDimension(
-            pool.elapsedMillis,
-            requestedByDomain.mapValues { it.value.elapsedMillis },
-            weights,
-        )
-        val work = distributeDimension(
-            pool.workUnits,
-            requestedByDomain.mapValues { it.value.workUnits },
-            weights,
-        )
-        val memory = distributeDimension(
-            pool.memoryBytes,
-            requestedByDomain.mapValues { it.value.memoryBytes },
-            weights,
-        )
-        val io = distributeDimension(
-            pool.ioBytes,
-            requestedByDomain.mapValues { it.value.ioBytes },
-            weights,
-        )
-        val network = distributeDimension(
-            pool.networkBytes,
-            requestedByDomain.mapValues { it.value.networkBytes },
-            weights,
-        )
-        val candidates = distributeDimension(
-            pool.candidates,
-            requestedByDomain.mapValues { it.value.candidates },
-            weights,
-        )
+        val elapsed = distributeDimension(pool.elapsedMillis, requestedByDomain.mapValues { it.value.elapsedMillis }, weights)
+        val work = distributeDimension(pool.workUnits, requestedByDomain.mapValues { it.value.workUnits }, weights)
+        val memory = distributeDimension(pool.memoryBytes, requestedByDomain.mapValues { it.value.memoryBytes }, weights)
+        val io = distributeDimension(pool.ioBytes, requestedByDomain.mapValues { it.value.ioBytes }, weights)
+        val network = distributeDimension(pool.networkBytes, requestedByDomain.mapValues { it.value.networkBytes }, weights)
+        val candidates = distributeDimension(pool.candidates, requestedByDomain.mapValues { it.value.candidates }, weights)
 
         val allocations = demands.sortedBy { it.domain.name }.map { demand ->
             ResourceBudgetDomainAllocation(
@@ -230,7 +206,6 @@ class WorldFormulaBudgetBroker(
         val unallocated: Long,
     )
 
-    /** Deterministic capped weighted water-filling with stable domain-order tie breaking. */
     private fun distributeDimension(
         capacity: Long,
         requested: Map<ResourceBudgetDomain, Long>,
