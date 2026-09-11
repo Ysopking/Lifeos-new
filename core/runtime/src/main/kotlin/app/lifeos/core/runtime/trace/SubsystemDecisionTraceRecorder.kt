@@ -303,7 +303,7 @@ class SubsystemDecisionTraceRecorder(
             type = DecisionTraceNodeType.CANDIDATE_ALTERNATIVE,
             sourceType = "generated-provider",
             sourceId = snapshot.previousToolId,
-            sourceRevision = 0L,
+            sourceRevision = snapshot.ledgerRevision,
             reasonCodes = listOf("PREVIOUS", "CAPABILITY_${snapshot.capabilityId.value}"),
             recordedAt = recordedAt,
         )
@@ -311,7 +311,7 @@ class SubsystemDecisionTraceRecorder(
             type = DecisionTraceNodeType.CANDIDATE_ALTERNATIVE,
             sourceType = "generated-provider",
             sourceId = snapshot.candidateToolId,
-            sourceRevision = 0L,
+            sourceRevision = snapshot.ledgerRevision,
             reasonCodes = listOf("CANDIDATE", "CAPABILITY_${snapshot.capabilityId.value}"),
             recordedAt = recordedAt,
         )
@@ -319,7 +319,7 @@ class SubsystemDecisionTraceRecorder(
             DecisionTraceNode.create(
                 type = DecisionTraceNodeType.POLICY_CONSTRAINT,
                 sourceType = "owner-policy-revision",
-                sourceId = snapshot.transactionId.value,
+                sourceId = "${snapshot.transactionId.value}:ledger-${snapshot.ledgerRevision}",
                 sourceRevision = revision,
                 reasonCodes = listOf("PROVIDER_ACTIVATION"),
                 recordedAt = recordedAt,
@@ -330,7 +330,7 @@ class SubsystemDecisionTraceRecorder(
                 type = DecisionTraceNodeType.RESOURCE_CONSTRAINT,
                 sourceType = "world-formula-snapshot",
                 sourceId = worldId,
-                sourceRevision = 1L,
+                sourceRevision = snapshot.ledgerRevision,
                 reasonCodes = listOf("HOT_SWAP"),
                 recordedAt = recordedAt,
             )
