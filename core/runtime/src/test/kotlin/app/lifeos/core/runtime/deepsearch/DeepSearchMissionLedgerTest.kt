@@ -5,7 +5,6 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
@@ -16,6 +15,30 @@ class DeepSearchMissionLedgerTest {
         val second = definition(setOf("local-photons", "local-memory"))
         assertEquals(first.id, second.id)
         assertTrue(first.id.value.matches(Regex("deep-search-mission_[0-9a-f]{64}")))
+    }
+
+    @Test
+    fun `active mission rejects changed evidence snapshot without changing mission identity`() = runBlocking {
+        val ledger = DeepSearchMissionLedger(MemoryRepository(), now = { NOW })
+        val first = definition(snapshot = "a".repeat(64))
+        var state = ledger.create(first)
+        state = ledger.startExploring(state)
+        val changed = definition(snapshot = "b".repeat(64))
+        assertEquals(first.id, changed.id)
+        assertFailsWith<IllegalArgumentException> { ledger.create(changed) }
+        assertEquals(DeepSearchMissionState.EXPLORING, state.state)
+    }
+
+    @Test
+    fun `terminal mission stays reusable after unrelated evidence changes`() = runBlocking {
+        val ledger = DeepSearchMissionLedger(MemoryRepository(), now = { NOW })
+        var state = ledger.startExploring(ledger.create(definition(snapshot = "a".repeat(64))))
+        state = ledger.startSynthesizing(state)
+        state = ledger.startVerifying(state)
+        state = ledger.unresolved(state, PhotonId("result-1"))
+        val changed = definition(snapshot = "b".repeat(64))
+        assertEquals(state.definition.id, changed.id)
+        assertEquals(state, ledger.create(changed))
     }
 
     @Test
@@ -85,13 +108,17 @@ class DeepSearchMissionLedgerTest {
         assertFailsWith<IllegalStateException> { ledger.all() }
     }
 
-    private fun definition(scopes: Set<String> = setOf("local-photons")) = DeepSearchMissionDefinition.create(
+    private fun definition(
+        scopes: Set<String> = setOf("local-photons"),
+        snapshot: String = "a".repeat(64),
+    ) = DeepSearchMissionDefinition.create(
         goalPhotonId = PhotonId("goal_1"),
         sourcePhotonId = PhotonId("source_1"),
         sourceRevision = 3,
         query = "  LIFEOS   search  ",
         searchPolicyVersion = "deepsearch-v2-policy-1",
         sourceScopeIds = scopes,
+        sourceSnapshotFingerprint = snapshot,
         createdAt = NOW,
     )
 
