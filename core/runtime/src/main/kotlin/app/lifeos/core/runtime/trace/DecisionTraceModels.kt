@@ -1,7 +1,29 @@
 package app.lifeos.core.runtime.trace
 
-import app.lifeos.core.field.StableFieldIds
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.time.Instant
+
+/** Exact, case-sensitive and structurally unambiguous hashing for durable trace identity. */
+internal object DecisionTraceFingerprints {
+    fun sha256(vararg parts: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        parts.forEach { raw ->
+            val bytes = raw.toByteArray(StandardCharsets.UTF_8)
+            val length = bytes.size
+            digest.update(
+                byteArrayOf(
+                    ((length ushr 24) and 0xff).toByte(),
+                    ((length ushr 16) and 0xff).toByte(),
+                    ((length ushr 8) and 0xff).toByte(),
+                    (length and 0xff).toByte(),
+                )
+            )
+            digest.update(bytes)
+        }
+        return digest.digest().joinToString(separator = "") { byte -> "%02x".format(byte) }
+    }
+}
 
 @JvmInline
 value class DecisionTraceId(val value: String) {
@@ -15,7 +37,9 @@ value class DecisionTraceId(val value: String) {
         fun create(rootType: String, rootId: String): DecisionTraceId {
             require(rootType.isNotBlank())
             require(rootId.isNotBlank())
-            return DecisionTraceId(PREFIX + StableFieldIds.fingerprint("decision-trace/v1", rootType, rootId))
+            return DecisionTraceId(
+                PREFIX + DecisionTraceFingerprints.sha256("decision-trace/v1", rootType, rootId)
+            )
         }
     }
 }
@@ -87,7 +111,7 @@ data class DecisionTraceNode(
             sourceRevision: Long,
             reasonCodes: List<String>,
         ) = DecisionTraceNodeId(
-            DecisionTraceNodeId.PREFIX + StableFieldIds.fingerprint(
+            DecisionTraceNodeId.PREFIX + DecisionTraceFingerprints.sha256(
                 "decision-trace-node/v1", type.name, sourceType, sourceId, sourceRevision.toString(),
                 *reasonCodes.toTypedArray(),
             )
