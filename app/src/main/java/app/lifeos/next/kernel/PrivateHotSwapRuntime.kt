@@ -4,6 +4,8 @@ import android.content.Context
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.capability.EncryptedHotSwapRepository
 import app.lifeos.core.runtime.capability.GeneratedToolHotSwapCoordinator
+import app.lifeos.core.runtime.capability.GeneratedToolHotSwapRevertCoordinator
+import app.lifeos.core.runtime.capability.GeneratedToolHotSwapRevertResult
 import app.lifeos.core.runtime.capability.GeneratedToolHotSwapResult
 import app.lifeos.core.runtime.capability.GeneratedToolPromotionEvidence
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeProcessRegistry
@@ -12,6 +14,7 @@ import app.lifeos.core.runtime.capability.HotSwapBootRuntimeRegistry
 import app.lifeos.core.runtime.capability.HotSwapLedger
 import app.lifeos.core.runtime.capability.HotSwapLifecycleFactory
 import app.lifeos.core.runtime.capability.HotSwapResourceProfile
+import app.lifeos.core.runtime.capability.HotSwapTransactionId
 import app.lifeos.core.runtime.policy.OwnerActorId
 import app.lifeos.core.runtime.policy.OwnerEffectType
 import app.lifeos.core.runtime.policy.OwnerPolicyGrant
@@ -68,6 +71,28 @@ class PrivateHotSwapRuntime private constructor(
             evidence = evidence,
             resources = resources,
         )
+    }
+
+    suspend fun revert(
+        transactionId: HotSwapTransactionId,
+        resources: HotSwapResourceProfile = DEFAULT_RESOURCE_PROFILE,
+    ): GeneratedToolHotSwapRevertResult = swapMutex.withLock {
+        ensurePrivateOwnerBaseline()
+        val capabilities = requireNotNull(GeneratedToolRuntimeProcessRegistry.capabilities()) {
+            "Generated-tool capability registry is not installed"
+        }
+        val tools = requireNotNull(GeneratedToolRuntimeProcessRegistry.tools()) {
+            "Generated-tool registry is not installed"
+        }
+        GeneratedToolHotSwapRevertCoordinator(
+            ledger = ledger,
+            tools = tools,
+            capabilities = capabilities,
+            ownerPolicy = ownerPolicy,
+            budgets = budgets,
+            actorId = PRIVATE_OWNER,
+            ownerScope = HOT_SWAP_SCOPE,
+        ).revert(transactionId, resources)
     }
 
     private suspend fun ensurePrivateOwnerBaseline() = ownerBootstrapMutex.withLock {
