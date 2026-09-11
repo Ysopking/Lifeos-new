@@ -3,6 +3,9 @@ package app.lifeos.core.runtime.cognition
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.task.TaskDraft
+import app.lifeos.core.model.task.TaskState
+import app.lifeos.core.runtime.tasks.DurableTaskEngine
 import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskType
 
@@ -12,6 +15,7 @@ data class DurableCognitionReconciliationResult(
     val submitted: Int,
     val deferred: Int,
     val durableTaskIds: List<String>,
+    val resumedCreated: Int = 0,
 )
 
 /**
@@ -23,6 +27,7 @@ class DurableCognitionReconciler(
     private val photons: PhotonRepository,
     private val tasks: TaskSnapshotRepository,
     private val cognition: ContinuousCognitionEngine,
+    private val taskEngine: DurableTaskEngine,
     private val maxSubmissionsPerPass: Int = DEFAULT_MAX_SUBMISSIONS_PER_PASS,
 ) {
     init {
@@ -34,6 +39,27 @@ class DurableCognitionReconciler(
         val taskReport = tasks.loadReport()
         check(taskReport.unreadableEntries.isEmpty()) {
             "Cannot reconcile cognition with unreadable durable task entries"
+        }
+
+        // A kill after create() but before CREATED -> QUEUED leaves a durable record that
+        // the scheduler cannot see. Resume its exact original key, including legacy keys.
+        val created = taskReport.tasks.filter {
+            (it.type == TaskType.PROCESS_PHOTON || it.type == TaskType.REPROCESS_PHOTON) &&
+                it.state == TaskState.CREATED
+        }.sortedBy { it.id.value }
+        val createdBatch = created.take(maxSubmissionsPerPass)
+        for (task in createdBatch) {
+            val resumed = taskEngine.submit(
+                TaskDraft(
+                    type = task.type,
+                    priority = task.priority,
+                    inputPhotonIds = task.inputPhotonIds,
+                    inputPhotonRevisions = task.inputPhotonRevisions,
+                    idempotencyKey = task.idempotencyKey,
+                    maxAttempts = task.maxAttempts,
+                )
+            )
+            check(resumed.id == task.id) { "Created cognition task changed identity during resume" }
         }
 
         val coveredRevisions = buildSet {
@@ -53,7 +79,7 @@ class DurableCognitionReconciler(
         val uncovered = orderedPhotons.filter { photon ->
             PhotonRevision(photon.id, photon.revision) !in coveredRevisions
         }
-        val batch = uncovered.take(maxSubmissionsPerPass)
+        val batch = uncovered.take(maxSubmissionsPerPass - createdBatch.size)
         val taskIds = ArrayList<String>(batch.size)
 
         for (photon in batch) {
@@ -90,8 +116,9 @@ class DurableCognitionReconciler(
             scannedPhotons = orderedPhotons.size,
             alreadyCovered = orderedPhotons.size - uncovered.size,
             submitted = batch.size,
-            deferred = uncovered.size - batch.size,
+            deferred = uncovered.size - batch.size + created.size - createdBatch.size,
             durableTaskIds = taskIds,
+            resumedCreated = createdBatch.size,
         )
     }
 

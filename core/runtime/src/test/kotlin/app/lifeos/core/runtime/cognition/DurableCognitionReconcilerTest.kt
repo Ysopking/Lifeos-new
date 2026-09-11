@@ -136,6 +136,26 @@ class DurableCognitionReconcilerTest {
         assertEquals(0, reconciler.reconcile().submitted)
     }
 
+    @Test
+    fun createdLegacyTaskResumesOriginalIdentityAfterCrashBeforeQueueTransition() = runTest {
+        val photon = photon("created-gap", revision = 1)
+        val tasks = SnapshotTaskRepository()
+        val created = LifeTask(
+            type = TaskType.PROCESS_PHOTON,
+            inputPhotonIds = setOf(photon.id),
+            inputPhotonRevisions = mapOf(photon.id to photon.revision),
+            idempotencyKey = "legacy-created-key",
+        )
+        tasks.create(created)
+        val reconciler = reconciler(TestPhotonRepository(listOf(photon)), tasks)
+        val recovered = reconciler.reconcile()
+        assertEquals(1, recovered.resumedCreated)
+        assertEquals(0, recovered.submitted)
+        assertEquals(TaskState.QUEUED, tasks.get(created.id)?.state)
+        assertEquals(created.id, tasks.snapshot().single().id)
+        assertEquals(0, reconciler.reconcile().resumedCreated)
+    }
+
     private fun reconciler(
         photons: PhotonRepository,
         tasks: SnapshotTaskRepository,
@@ -155,6 +175,7 @@ class DurableCognitionReconcilerTest {
             photons = photons,
             tasks = tasks,
             cognition = cognition,
+            taskEngine = taskEngine,
             maxSubmissionsPerPass = batchSize,
         )
     }

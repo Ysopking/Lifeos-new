@@ -308,6 +308,7 @@ class LifeOsKernelFactory(
             photons = store,
             tasks = taskRepository,
             cognition = continuousCognition,
+            taskEngine = taskEngine,
         )
         val photonTransactions = InMemoryPhotonTransactionJournal()
         val cognitiveOutcomes = InMemoryCognitiveOutcomeJournal()
