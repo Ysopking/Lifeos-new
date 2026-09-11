@@ -121,26 +121,30 @@ class HotSwapBootReconciler(
         useRevertBudget: Boolean,
     ): Boolean {
         val policy = ownerPolicy
-        val generatedTools = tools
         val actor = actorId
         val scope = ownerScope
-        if (policy == null || generatedTools == null || actor == null || scope == null) {
+        if (policy == null || actor == null || scope == null) {
             unregisterPair(transaction)
             return false
         }
 
         val targetToolId = if (committed) transaction.candidateToolId else transaction.previousToolId
-        val targetRecord = requireNotNull(generatedTools.get(targetToolId)) {
-            "Hot-swap boot restore target tool is missing: $targetToolId"
-        }
+        val targetRecord = tools?.get(targetToolId)
+        val exactDurableVersion = targetRecord?.manifest?.buildHash
+            ?: targetRecord?.manifest?.sourceHash
+            ?: if (committed) {
+                transaction.candidatePromotionEvidenceId
+            } else {
+                transaction.previousPromotionEvidenceId
+            }
         val binding = budgetBinding(transaction, useRevertBudget)
         val request = OwnerEffectRequest(
             actorId = actor,
             effect = OwnerEffectType.PROVIDER_ACTIVATION,
             resource = "hot-swap:${transaction.capabilityId.value}:${transaction.previousToolId}->${transaction.candidateToolId}",
             scope = scope,
-            capabilityId = targetRecord.manifest.sourceCapability,
-            providerVersion = targetRecord.manifest.buildHash ?: targetRecord.manifest.sourceHash,
+            capabilityId = targetRecord?.manifest?.sourceCapability ?: transaction.capabilityId,
+            providerVersion = exactDurableVersion,
             budgetAccountId = binding?.accountId,
             budgetReservationId = binding?.reservationId,
         )
