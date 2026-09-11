@@ -8,7 +8,8 @@ import kotlinx.coroutines.sync.withLock
  * Process-boot adapter around generated-tool rehydration. Legacy J03 states keep their established
  * path; snapshots containing bounded ACTIVE tools use the stricter V1.5 artifact/seal replay gate.
  * A later bootstrap retry never restores twice and verifies RAM against the durable source of truth.
- * V10 routing cutovers are reconciled only after all promoted tool records/providers are restored.
+ * V10 routing cutovers and V11 workshop jobs are reconciled only after promoted/generated tool
+ * records have been restored into the productive process registries.
  */
 class GeneratedToolBootStateRehydrator(
     private val repository: GeneratedToolStateRepository,
@@ -88,6 +89,7 @@ class GeneratedToolBootStateRehydrator(
         }
 
         HotSwapBootRuntimeRegistry.reconcileIfInstalled()
+        ToolWorkshopBootRuntimeRegistry.reconcileIfInstalled()
         report
     }
 }
