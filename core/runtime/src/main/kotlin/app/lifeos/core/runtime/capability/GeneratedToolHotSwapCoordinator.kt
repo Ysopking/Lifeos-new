@@ -195,12 +195,6 @@ class GeneratedToolHotSwapCoordinator(
         val finalRequest = ownerRequest(previous, finalCandidate, accountId, reservation)
         val finalOwner = ownerPolicy.evaluate(finalRequest)
         if (finalOwner is OwnerPolicyDecision.Blocked) {
-            capabilities.applyRestoredHotSwap(
-                capabilityId = previous.manifest.sourceCapability,
-                previousProviderId = previousToolId,
-                candidateProviderId = candidateToolId,
-                committed = false,
-            )
             budgets.release(accountId, reservation.id)
             transaction = ledger.markRolledBack(
                 transaction,
@@ -210,44 +204,33 @@ class GeneratedToolHotSwapCoordinator(
         }
 
         val descriptor = lifecycle.activeDescriptor(candidateToolId)
-        val mutation = try {
-            when (
-                val exposure = OwnerPolicyEffectGate(ownerPolicy).expose(
-                    request = finalRequest,
-                ) {
-                    capabilities.hotSwapGenerated(
-                        previousProviderId = previousToolId,
-                        candidateDescriptor = descriptor,
-                        candidateRecord = finalCandidate,
-                        evidence = evidence,
-                    )
-                }
+        val exposure = try {
+            OwnerPolicyEffectGate(ownerPolicy).expose(
+                request = finalRequest,
             ) {
-                is OwnerEffectExposureResult.Exposed -> exposure.value
-                is OwnerEffectExposureResult.Blocked -> {
-                    capabilities.applyRestoredHotSwap(
+                val mutation = capabilities.hotSwapGenerated(
+                    previousProviderId = previousToolId,
+                    candidateDescriptor = descriptor,
+                    candidateRecord = finalCandidate,
+                    evidence = evidence,
+                )
+                try {
+                    HotSwapCommitExposure(
+                        mutation = mutation,
+                        transaction = ledger.markCommitted(transaction),
+                    )
+                } catch (error: Exception) {
+                    // Compensation belongs to the same freshly authorized exposure. It never creates
+                    // a new productive route; it restores the route that existed before this cutover.
+                    capabilities.rollbackHotSwap(
                         capabilityId = previous.manifest.sourceCapability,
                         previousProviderId = previousToolId,
                         candidateProviderId = candidateToolId,
-                        committed = false,
                     )
-                    budgets.release(accountId, reservation.id)
-                    transaction = ledger.markRolledBack(
-                        transaction,
-                        "owner-policy-revoked:${exposure.assessment.reasonCodes.joinToString("|") { it.name }}",
-                    )
-                    return GeneratedToolHotSwapResult.Blocked(transaction, transaction.lastDetail!!)
+                    throw error
                 }
             }
         } catch (error: Exception) {
-            runCatching {
-                capabilities.applyRestoredHotSwap(
-                    capabilityId = previous.manifest.sourceCapability,
-                    previousProviderId = previousToolId,
-                    candidateProviderId = candidateToolId,
-                    committed = false,
-                )
-            }
             budgets.release(accountId, reservation.id)
             transaction = ledger.markRolledBack(
                 transaction,
@@ -256,18 +239,25 @@ class GeneratedToolHotSwapCoordinator(
             return GeneratedToolHotSwapResult.Blocked(transaction, transaction.lastDetail!!)
         }
 
-        transaction = try {
-            ledger.markCommitted(transaction)
-        } catch (error: Exception) {
-            capabilities.rollbackHotSwap(
-                capabilityId = previous.manifest.sourceCapability,
-                previousProviderId = previousToolId,
-                candidateProviderId = candidateToolId,
-            )
-            throw error
+        return when (exposure) {
+            is OwnerEffectExposureResult.Blocked -> {
+                budgets.release(accountId, reservation.id)
+                transaction = ledger.markRolledBack(
+                    transaction,
+                    "owner-policy-revoked:${exposure.assessment.reasonCodes.joinToString("|") { it.name }}",
+                )
+                GeneratedToolHotSwapResult.Blocked(transaction, transaction.lastDetail!!)
+            }
+
+            is OwnerEffectExposureResult.Exposed -> {
+                transaction = exposure.value.transaction
+                settleCommittedBudget(accountId, reservation, resources.requested)
+                GeneratedToolHotSwapResult.Committed(
+                    transaction = transaction,
+                    mutation = exposure.value.mutation,
+                )
+            }
         }
-        settleCommittedBudget(accountId, reservation, resources.requested)
-        return GeneratedToolHotSwapResult.Committed(transaction, mutation)
     }
 
     private fun ownerRequest(
@@ -305,4 +295,9 @@ class GeneratedToolHotSwapCoordinator(
             ResourceBudgetReservationState.RELEASED -> error("Committed hot-swap has released resource reservation")
         }
     }
+
+    private data class HotSwapCommitExposure(
+        val mutation: GeneratedProviderHotSwapMutation,
+        val transaction: HotSwapSnapshot,
+    )
 }
