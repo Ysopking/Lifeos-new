@@ -10,7 +10,6 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
 
 class DeepSearchMissionCoordinatorTest {
     private val now = Instant.parse("2026-09-11T17:00:00Z")
@@ -122,6 +121,7 @@ class DeepSearchMissionCoordinatorTest {
         query = "lifeos photons",
         searchPolicyVersion = "deepsearch-v2-test",
         sourceScopeIds = setOf("test-source"),
+        sourceSnapshotFingerprint = "a".repeat(64),
         createdAt = now,
     )
 
