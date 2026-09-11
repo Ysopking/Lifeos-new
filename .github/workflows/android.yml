@@ -39,7 +39,7 @@ jobs:
             app/build/reports/lint-results-debug.*
           retention-days: 14
 
-  device-smoke:
+  android-emulator-recovery:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -59,7 +59,7 @@ jobs:
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           sudo rm -rf "$sdk_root/ndk" "$sdk_root/cmake"
           df -h /
-      - name: Private v1 cold-restart and generated-tool recovery smoke
+      - name: Private v1 Android emulator cold-restart and generated-tool recovery
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: 36
@@ -69,7 +69,7 @@ jobs:
           disable-animations: true
           script: |
             set -eu
-            mkdir -p device-smoke
+            mkdir -p android-emulator-recovery
             gradle :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
@@ -86,10 +86,10 @@ jobs:
 
             run_test \
               'app.lifeos.next.PrivateV1DeviceSmokeTest#seedGeneratedToolAndAssertRuntime' \
-              device-smoke/seed.txt
+              android-emulator-recovery/seed.txt
 
             adb shell am force-stop app.lifeos.next
-            adb shell am start -W -n app.lifeos.next/.MainActivity | tee device-smoke/cold-start.txt
+            adb shell am start -W -n app.lifeos.next/.MainActivity | tee android-emulator-recovery/cold-start.txt
             pid="$(adb shell pidof app.lifeos.next | tr -d '\r')"
             test -n "$pid"
             adb shell dumpsys activity activities \
@@ -97,12 +97,12 @@ jobs:
 
             run_test \
               'app.lifeos.next.PrivateV1DeviceSmokeTest#assertRecoveredRuntimeAndToolEvidence' \
-              device-smoke/recovery.txt
-      - name: Upload device smoke reports
+              android-emulator-recovery/recovery.txt
+      - name: Upload Android emulator recovery reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: LIFEOS-device-smoke
-          path: device-smoke/
+          name: LIFEOS-android-emulator-recovery
+          path: android-emulator-recovery/
           if-no-files-found: warn
           retention-days: 14
