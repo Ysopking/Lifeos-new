@@ -23,6 +23,9 @@ value class WorldCoefficientId(val value: String) {
 enum class WorldNodeKind {
     DOMAIN_FIELD,
     PHOTON,
+    EVIDENCE,
+    HYPOTHESIS,
+    GOAL,
     THOUGHT,
     CAPABILITY,
     HEALTH,
@@ -34,9 +37,13 @@ enum class WorldNodeKind {
  */
 enum class WorldSignalDimension {
     EVIDENCE_SUPPORT,
+    RELIABILITY,
+    AUTHORITY,
     UNCERTAINTY,
     CONFLICT_PRESSURE,
     TEMPORAL_FRESHNESS,
+    SEMANTIC_RELEVANCE,
+    GOAL_RELEVANCE,
     CONTEXT_RELEVANCE,
     CAPABILITY_READINESS,
     HEALTH_STABILITY,
