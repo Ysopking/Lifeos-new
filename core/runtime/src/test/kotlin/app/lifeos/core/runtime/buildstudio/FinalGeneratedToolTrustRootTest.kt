@@ -16,8 +16,10 @@ class FinalGeneratedToolTrustRootTest {
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/GeneratedToolActivationEvidence.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/BoundedGeneratedToolPromotionEvidence.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/BoundedGeneratedToolStateRepository.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/BoundedGeneratedToolStateRehydrator.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/NovelCapabilityPromotion.kt",
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/BoundedNovelPromotionCoordinator.kt",
+            "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/PrivateNovelCapabilityActivationCoordinator.kt",
         ).forEach { path -> assertTrue(policy.isProtected(path), path) }
     }
 }
