@@ -7,7 +7,8 @@ import app.lifeos.core.runtime.evolution.NovelCapabilityPromotionStore
  *
  * Persisted receipts remain evidence only. Before RAM/provider restoration every bounded ACTIVE
  * record is re-bound to the exact executable artifact and the exact durable Novel Canary seal,
- * reservation ledger and outcome ledger that authorized the previous live promotion.
+ * reservation ledger, outcome ledger and trial-result fingerprints that authorized the previous
+ * live promotion.
  */
 internal class BoundedGeneratedToolStateRehydrator(
     private val repository: GeneratedToolStateRepository,
@@ -140,13 +141,16 @@ internal class BoundedGeneratedToolStateRehydrator(
         require(reservations.all {
             it.toolId == receipt.toolId && it.candidateRecordFingerprint == seal.candidateRecordFingerprint
         }) { "ACTIVE bounded restore reservations differ from sealed candidate" }
-        require(outcomes.all {
-            it.toolId == receipt.toolId &&
-                it.candidateRecordFingerprint == seal.candidateRecordFingerprint &&
-                it.success &&
-                it.producedExpectedOutput &&
-                !it.safetyViolation
-        }) { "ACTIVE bounded restore outcomes no longer satisfy sealed readiness" }
+
+        val trialByInvocation = state.trialEvidence.results.associateBy { it.invocationId }
+        require(outcomes.all { outcome ->
+            outcome.toolId == receipt.toolId &&
+                outcome.candidateRecordFingerprint == seal.candidateRecordFingerprint &&
+                outcome.success &&
+                outcome.producedExpectedOutput &&
+                !outcome.safetyViolation &&
+                trialByInvocation[outcome.invocationId]?.fingerprint() == outcome.trialResultFingerprint
+        }) { "ACTIVE bounded restore outcomes no longer match exact durable trial evidence" }
     }
 
     private fun requirePromotionEligible(record: GeneratedToolRecord, stats: GeneratedToolTrialStats) {
