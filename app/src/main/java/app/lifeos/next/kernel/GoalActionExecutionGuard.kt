@@ -1,9 +1,12 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.language.IntentType
+import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.policy.OwnerEffectRequest
 import app.lifeos.core.runtime.policy.OwnerEffectType
-import app.lifeos.core.runtime.policy.OwnerPolicyDecision
+import app.lifeos.core.runtime.policy.OwnerPolicyAssessment
+import app.lifeos.core.runtime.policy.OwnerPolicyDecisionId
+import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.HardwareWorkPriority
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
@@ -17,6 +20,8 @@ import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
 import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
 import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
+import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
+import java.time.Instant
 
 sealed interface GoalActionExecutionPermit {
     data object Unmetered : GoalActionExecutionPermit
@@ -25,11 +30,22 @@ sealed interface GoalActionExecutionPermit {
         val accountId: ResourceBudgetAccountId,
         val reservation: ResourceBudgetReservation,
         val ownerPolicyRevision: Long?,
+        val ownerPolicyDecisionId: OwnerPolicyDecisionId? = null,
+        val worldSnapshotId: String? = null,
+        val traceBinding: GoalExecutionTraceBinding? = null,
     ) : GoalActionExecutionPermit
 
     data class Blocked(val reason: String) : GoalActionExecutionPermit {
         init { require(reason.isNotBlank()) }
     }
+}
+
+data class GoalExecutionTraceBinding(
+    val goalPhotonId: PhotonId,
+    val goalPhotonRevision: Long,
+    val recordedAt: Instant,
+) {
+    init { require(goalPhotonRevision > 0L) }
 }
 
 interface GoalActionExecutionGuard {
@@ -62,27 +78,35 @@ object PassThroughGoalActionExecutionGuard : GoalActionExecutionGuard {
  * Shared private-APK execution gate. Every currently executable goal action is first routed through
  * V16 World Formula budget distribution when the shared broker is installed, then durably reserved.
  * Host-facing reminder/share effects additionally pass the revocable V14 owner ledger immediately
- * before execution. All current actions reserve zero network bytes.
+ * before execution. V15 observes the already-authoritative V14/V16 decisions and cannot alter them.
+ * All current actions reserve zero network bytes.
  */
 class PrivateGoalActionExecutionGuard(
     private val ownerPolicy: OwnerPolicyLedger,
     private val budgets: ResourceBudgetCoordinator,
     private val hardware: HardwareExecutionBudgetGate,
     private val sharedBudgets: SharedResourceBudgetGate? = null,
+    private val traces: GoalDecisionTraceRecorder? = null,
+    private val ownerPolicyGate: OwnerPolicyEffectGate = OwnerPolicyEffectGate(ownerPolicy),
 ) : GoalActionExecutionGuard {
     override suspend fun prepare(context: GoalActionContext): GoalActionExecutionPermit {
         val profile = profile(context.goal.intent) ?: return GoalActionExecutionPermit.Unmetered
+        val traceBinding = traceBinding(context)
         val policy = policyRequest(context)
-        val firstPolicyDecision = if (policy != null) {
+        val firstPolicyAssessment = if (policy != null) {
             PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
-            ownerPolicy.evaluate(policy)
+            ownerPolicyGate.assessLive(policy).also { assessment ->
+                traceOwnerPolicy(traceBinding, assessment)
+            }
         } else null
-        if (firstPolicyDecision is OwnerPolicyDecision.Blocked) {
+        if (firstPolicyAssessment != null && !firstPolicyAssessment.allowed) {
             return GoalActionExecutionPermit.Blocked(
-                "owner-policy:${firstPolicyDecision.reasons.joinToString(",")}",
+                "owner-policy:${policyBlockReason(firstPolicyAssessment)}",
             )
         }
-        val policyRevision = firstPolicyDecision?.policyRevision
+        val policyRevision = firstPolicyAssessment?.policyRevision
+        var ownerPolicyDecisionId = firstPolicyAssessment?.decisionId
+        var worldSnapshotId: String? = null
 
         val reservationUsage = sharedBudgets?.let { broker ->
             val demand = ResourceBudgetDemand(
@@ -94,13 +118,33 @@ class PrivateGoalActionExecutionGuard(
                 confidence = 1.0,
             )
             when (val decision = broker.allocate(profile.hardQuota, listOf(demand))) {
-                is SharedResourceBudgetDecision.Blocked ->
+                is SharedResourceBudgetDecision.Blocked -> {
+                    traceResourceBlock(
+                        traceBinding,
+                        source = "world-formula:${profile.domain.name}:${context.goalPhotonId.value}",
+                        reason = decision.reason,
+                    )
                     return GoalActionExecutionPermit.Blocked(decision.reason)
+                }
                 is SharedResourceBudgetDecision.Ready -> {
                     val allocation = requireNotNull(decision.allocation.allocation(profile.domain)) {
                         "World Formula budget allocation omitted requested goal domain"
                     }
+                    worldSnapshotId = decision.allocation.worldSnapshotId
+                    traces?.recordResourceAllocation(
+                        goalPhotonId = traceBinding.goalPhotonId,
+                        goalPhotonRevision = traceBinding.goalPhotonRevision,
+                        recordedAt = traceBinding.recordedAt,
+                        domain = profile.domain,
+                        worldSnapshotId = decision.allocation.worldSnapshotId,
+                        demandFingerprint = allocation.demandFingerprint,
+                    )
                     if (!profile.requested.isWithin(allocation.allocated)) {
+                        traceResourceBlock(
+                            traceBinding,
+                            source = decision.allocation.worldSnapshotId,
+                            reason = "requested-work-exceeds-world-formula-allocation",
+                        )
                         return GoalActionExecutionPermit.Blocked(
                             "requested-work-exceeds-world-formula-allocation",
                         )
@@ -115,10 +159,21 @@ class PrivateGoalActionExecutionGuard(
                 priority = profile.priority,
             )
             val ready = hardwareDecision as? HardwareExecutionBudgetDecision.Ready
-                ?: return GoalActionExecutionPermit.Blocked(
-                    (hardwareDecision as HardwareExecutionBudgetDecision.Blocked).reason,
-                )
+                ?: run {
+                    val reason = (hardwareDecision as HardwareExecutionBudgetDecision.Blocked).reason
+                    traceResourceBlock(
+                        traceBinding,
+                        source = "hardware-budget:${profile.domain.name}:${context.goalPhotonId.value}",
+                        reason = reason,
+                    )
+                    return GoalActionExecutionPermit.Blocked(reason)
+                }
             if (!ready.plan.requestedFits) {
+                traceResourceBlock(
+                    traceBinding,
+                    source = "hardware-budget:${profile.domain.name}:${context.goalPhotonId.value}",
+                    reason = "requested-work-exceeds-current-hardware-envelope",
+                )
                 return GoalActionExecutionPermit.Blocked(
                     "requested-work-exceeds-current-hardware-envelope",
                 )
@@ -143,9 +198,15 @@ class PrivateGoalActionExecutionGuard(
                 usage = reservationUsage,
             )
         ) {
-            is ResourceBudgetReservationResult.Denied -> return GoalActionExecutionPermit.Blocked(reserved.reason)
-            is ResourceBudgetReservationResult.Reserved -> reserved.reservation
+            is ResourceBudgetReservationResult.Denied -> {
+                traceResourceBlock(traceBinding, accountId.value, reserved.reason)
+                return GoalActionExecutionPermit.Blocked(reserved.reason)
+            }
+            is ResourceBudgetReservationResult.Reserved -> reserved.reservation.also { reservation ->
+                traceReservation(traceBinding, reservation)
+            }
             is ResourceBudgetReservationResult.Existing -> {
+                traceReservation(traceBinding, reserved.reservation)
                 when (reserved.reservation.state) {
                     ResourceBudgetReservationState.RESERVED -> reserved.reservation
                     ResourceBudgetReservationState.COMMITTED -> return GoalActionExecutionPermit.Blocked(
@@ -159,16 +220,19 @@ class PrivateGoalActionExecutionGuard(
         }
 
         if (policy != null) {
-            val finalPolicy = ownerPolicy.evaluate(
+            val finalAssessment = ownerPolicyGate.assessLive(
                 policy.copy(
                     budgetAccountId = accountId,
                     budgetReservationId = reservation.id,
                 )
             )
-            if (finalPolicy is OwnerPolicyDecision.Blocked) {
-                budgets.release(accountId, reservation.id)
+            ownerPolicyDecisionId = finalAssessment.decisionId
+            traceOwnerPolicy(traceBinding, finalAssessment)
+            if (!finalAssessment.allowed) {
+                val released = budgets.release(accountId, reservation.id)
+                traceReservation(traceBinding, released)
                 return GoalActionExecutionPermit.Blocked(
-                    "owner-policy-recheck:${finalPolicy.reasons.joinToString(",")}",
+                    "owner-policy-recheck:${policyBlockReason(finalAssessment)}",
                 )
             }
         }
@@ -176,6 +240,9 @@ class PrivateGoalActionExecutionGuard(
             accountId = accountId,
             reservation = reservation,
             ownerPolicyRevision = policyRevision,
+            ownerPolicyDecisionId = ownerPolicyDecisionId,
+            worldSnapshotId = worldSnapshotId,
+            traceBinding = traceBinding,
         )
     }
 
@@ -185,12 +252,63 @@ class PrivateGoalActionExecutionGuard(
     ) {
         val reserved = permit as? GoalActionExecutionPermit.Reserved ?: return
         val actual = successfulUsage(result, reserved.reservation) ?: return
-        budgets.commit(
+        val settled = budgets.commit(
             accountId = reserved.accountId,
             reservationId = reserved.reservation.id,
             actualUsage = actual,
         )
+        reserved.traceBinding?.let { binding -> traceReservation(binding, settled) }
     }
+
+    private suspend fun traceOwnerPolicy(
+        binding: GoalExecutionTraceBinding,
+        assessment: OwnerPolicyAssessment,
+    ) {
+        traces?.recordOwnerPolicy(
+            goalPhotonId = binding.goalPhotonId,
+            goalPhotonRevision = binding.goalPhotonRevision,
+            recordedAt = binding.recordedAt,
+            assessment = assessment,
+        )
+    }
+
+    private suspend fun traceResourceBlock(
+        binding: GoalExecutionTraceBinding,
+        source: String,
+        reason: String,
+    ) {
+        traces?.recordResourceBlock(
+            goalPhotonId = binding.goalPhotonId,
+            goalPhotonRevision = binding.goalPhotonRevision,
+            recordedAt = binding.recordedAt,
+            source = source,
+            reason = reason,
+        )
+    }
+
+    private suspend fun traceReservation(
+        binding: GoalExecutionTraceBinding,
+        reservation: ResourceBudgetReservation,
+    ) {
+        traces?.recordResourceReservation(
+            goalPhotonId = binding.goalPhotonId,
+            goalPhotonRevision = binding.goalPhotonRevision,
+            recordedAt = binding.recordedAt,
+            reservation = reservation,
+        )
+    }
+
+    private fun traceBinding(context: GoalActionContext): GoalExecutionTraceBinding =
+        GoalExecutionTraceBinding(
+            goalPhotonId = context.goalPhotonId,
+            goalPhotonRevision = context.goalPhotonRevision,
+            recordedAt = context.sourcePhoton.provenance.createdAt,
+        )
+
+    private fun policyBlockReason(assessment: OwnerPolicyAssessment): String =
+        assessment.reasons.joinToString(",").ifBlank {
+            assessment.reasonCodes.joinToString(",") { it.name.lowercase().replace('_', '-') }
+        }
 
     private fun successfulUsage(
         result: GoalActionDispatchResult,
