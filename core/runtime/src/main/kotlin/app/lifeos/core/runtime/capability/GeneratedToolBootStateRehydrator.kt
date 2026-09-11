@@ -10,6 +10,10 @@ import kotlinx.coroutines.sync.withLock
  * A later bootstrap retry never restores twice and verifies RAM against the durable source of truth.
  * V10 routing cutovers and V11 workshop jobs are reconciled only after promoted/generated tool
  * records have been restored into the productive process registries.
+ *
+ * V14 invariant: durable ACTIVE state is evidence only. Re-registering an ACTIVE generated provider
+ * requires a fresh GeneratedProviderRestoreAuthority decision immediately around the registry
+ * mutation. Missing/revoked/corrupt authority leaves durable tool/trial state readable but unroutable.
  */
 class GeneratedToolBootStateRehydrator(
     private val repository: GeneratedToolStateRepository,
@@ -19,6 +23,8 @@ class GeneratedToolBootStateRehydrator(
     private val promotionPolicy: GeneratedToolPromotionPolicy = GeneratedToolPromotionPolicy(),
     private val artifactRepository: GeneratedToolArtifactRepository? = null,
     private val novelPromotionStore: NovelCapabilityPromotionStore? = null,
+    private val providerRestoreAuthority: GeneratedProviderRestoreAuthority? =
+        GeneratedProviderRestoreAuthorityRuntimeRegistry.current(),
 ) {
     private val mutex = Mutex()
 
@@ -47,6 +53,7 @@ class GeneratedToolBootStateRehydrator(
                         "Bounded ACTIVE boot restore requires the durable Novel Canary promotion store"
                     },
                     promotionPolicy = promotionPolicy,
+                    providerRestoreAuthority = providerRestoreAuthority,
                 ).rehydrate(durable)
             } else {
                 GeneratedToolStateRehydrator(
@@ -55,6 +62,7 @@ class GeneratedToolBootStateRehydrator(
                     trialLedger = trialLedger,
                     capabilityRegistry = capabilityRegistry,
                     promotionPolicy = promotionPolicy,
+                    providerRestoreAuthority = providerRestoreAuthority,
                 ).rehydrate()
             }
         } else {
@@ -70,21 +78,25 @@ class GeneratedToolBootStateRehydrator(
                 }
             }
 
-            val activeIds = durable
-                .filter { it.record.state == GeneratedToolState.ACTIVE }
-                .map { it.record.manifest.toolId }
-                .toSet()
+            val activeStates = durable.filter { it.record.state == GeneratedToolState.ACTIVE }
+            val expectedProviderIds = if (capabilityRegistry == null) {
+                emptySet()
+            } else {
+                activeStates.filter { state ->
+                    providerRestoreAuthority?.allowedNow(state.record) == true
+                }.map { it.record.manifest.toolId }.toSet()
+            }
             if (capabilityRegistry != null) {
                 val providerIds = generatedProviders.map { it.providerId }.toSet()
-                require(providerIds == activeIds) {
-                    "Generated-tool boot retry found generated providers different from ACTIVE durable tools"
+                require(providerIds == expectedProviderIds) {
+                    "Generated-tool boot retry found generated providers different from currently owner-authorized ACTIVE durable tools"
                 }
             }
 
             GeneratedToolRehydrationReport(
                 restoredTools = durable.size,
                 restoredTrialResults = durable.sumOf { it.trialEvidence.stats.trials },
-                restoredActiveProviders = if (capabilityRegistry == null) 0 else activeIds.size,
+                restoredActiveProviders = expectedProviderIds.size,
             )
         }
 
