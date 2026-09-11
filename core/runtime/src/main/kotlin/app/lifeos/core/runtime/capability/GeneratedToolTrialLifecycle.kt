@@ -290,17 +290,20 @@ class GeneratedToolLifecycleCoordinator(
     }
 
     /**
-     * Internal activation primitive retained for same-module lifecycle tests and J08 only. External
-     * modules cannot bypass J04-J07 by invoking J03 evidence directly anymore.
+     * Internal activation primitive. Evidence is non-authoritative: current state, exact trials and
+     * the exact promotion policy are replayed under the activation mutex before registry mutation.
      */
     internal suspend fun promote(
         toolId: String,
-        evidence: GeneratedToolPromotionEvidence,
+        evidence: GeneratedToolActivationEvidence,
         activationEvidenceRef: String = evidence.id,
         actorId: String? = null,
     ): GeneratedToolRecord = activationMutex.withLock {
         require(activationEvidenceRef.isNotBlank()) { "Activation evidence reference must not be blank" }
         require(actorId == null || actorId.isNotBlank()) { "Activation actor id must not be blank" }
+        require(!evidence.activationAllowed) {
+            "Activation evidence must remain non-authoritative"
+        }
         val evaluation = evaluatePromotion(toolId)
         require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
             "Generated tool is not eligible for promotion: $evaluation"
@@ -309,7 +312,7 @@ class GeneratedToolLifecycleCoordinator(
         val exactTrials = trialLedger.evidence(toolId)
         require(exactTrials.stats == evaluation.stats) { "Trial evidence changed while promotion was being evaluated" }
         require(evidence.matches(record, exactTrials, promotionPolicy)) {
-            "J03 promotion evidence is stale or belongs to another candidate/tool/policy"
+            "Activation evidence is stale or belongs to another tool/trial/policy"
         }
         val active = tools.promote(
             toolId = toolId,
