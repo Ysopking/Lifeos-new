@@ -23,8 +23,11 @@ Scope: finish V12-E only after code, recovery and build evidence are all explici
 15. Recovery-audit coverage includes a crash-window `VERIFYING` mission with persisted result evidence and asserts the audit does not re-run a search source.
 16. Recovery-audit coverage rejects a `SYNTHESIZING` mission whose checkpoint is not terminal.
 17. Recovery-audit coverage rejects a terminal result whose durable Photon status tag diverges from the checkpoint-derived result.
+18. `LifeOsApplication` routes productive startup through a JVM-safe composition seam that installs DeepSearch and self-healing before `kernel.start()`.
+19. Android instrumentation covers cold-start presence of the DeepSearch runtime, HealthGraph, RuntimeSupervisor and readable self-healing ledger.
+20. Android instrumentation corrupts isolated encrypted DeepSearch mission/checkpoint vaults and verifies reads report unreadable state while subsequent writes fail closed.
 
-## Recovery-audit implementation state
+## Recovery and startup hardening implementation state
 
 Implemented in source, pending execution on a real runner:
 
@@ -35,14 +38,16 @@ Implemented in source, pending execution on a real runner:
 05. Same file; `VERIFYING` mission with persisted result; expects healthy audit and unchanged search-source execution count.
 06. Same file; `SYNTHESIZING` mission with non-terminal checkpoint; expects `synthesis-checkpoint-not-terminal`.
 07. Same file; terminal Photon status-tag mismatch; expects deterministic fail-closed verification issue.
+08. File: `app/src/main/java/app/lifeos/next/LifeOsStartupComposition.kt`; JVM-safe startup composition seam.
+09. File: `app/src/test/java/app/lifeos/next/LifeOsStartupCompositionTest.kt`; exact registry/recovery/kernel startup ordering test.
+10. File: `app/src/androidTest/java/app/lifeos/next/V12StartupDeviceSmokeTest.kt`; cold-start V12 registry and self-healing integrity smoke coverage.
+11. File: `app/src/androidTest/java/app/lifeos/next/DeepSearchEncryptedRepositoryCorruptionDeviceTest.kt`; Android Keystore/file corruption coverage for mission and checkpoint repositories.
 
 These items are code-complete only. They are not acceptance evidence until Gradle executes them on a real runner or trusted local checkout.
 
 ## Remaining code hardening steps
 
-01. File: `app/src/test/java/app/lifeos/next`; add application composition unit seam if Android test cannot run; verify registry install ordering through a JVM-safe factory boundary.
-02. File: `app/src/androidTest/java/app/lifeos`; add cold-start smoke test for V12 registry plus self-healing startup; verify app reaches ACTIVE without destructive recovery.
-03. File: `core/data/src/test`; add encrypted repository corruption tests when Android/JVM test infrastructure allows file-backed crypto; verify unreadable entries block recovery.
+No additional V12-E code item is currently known from this ledger. New code work stops here unless a real compiler/test/emulator run exposes a defect or a new invariant gap. V13 must not be treated as accepted progression from this branch until the V12 execution gates below are real.
 
 ## Remaining build hardening steps
 
