@@ -8,9 +8,10 @@ import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.time.Instant
 
-/** Deterministic, Android-free codec for the complete J10 generated-tool lifecycle snapshot. */
+/** Deterministic, Android-free codec for the complete generated-tool lifecycle snapshot. */
 object GeneratedToolStateCodec {
-    const val VERSION = 1
+    const val VERSION = 2
+    const val LEGACY_VERSION = 1
 
     private const val MAGIC = 0x4C475453 // LGTS
     private const val MAX_TOOLS = 2_048
@@ -18,6 +19,9 @@ object GeneratedToolStateCodec {
     private const val MAX_TRIAL_RESULTS = 20_000
     private const val MAX_LIST_ENTRIES = 20_000
     private const val MAX_STRING_BYTES = 32 * 1024
+    private val SUPPORTED_VERSIONS = setOf(LEGACY_VERSION, VERSION)
+
+    fun supportsVersion(version: Int): Boolean = version in SUPPORTED_VERSIONS
 
     fun encode(states: List<GeneratedToolPersistentState>): ByteArray {
         require(states.size <= MAX_TOOLS) { "Too many generated-tool states" }
@@ -30,18 +34,28 @@ object GeneratedToolStateCodec {
                 data.writeInt(VERSION)
                 val ordered = states.sortedBy { it.record.manifest.toolId }
                 data.writeInt(ordered.size)
-                ordered.forEach { data.writeState(it) }
+                ordered.forEach { data.writeStateV2(it) }
             }
         }.toByteArray()
     }
 
-    fun decode(bytes: ByteArray): List<GeneratedToolPersistentState> {
+    fun decode(bytes: ByteArray, expectedVersion: Int? = null): List<GeneratedToolPersistentState> {
         require(bytes.isNotEmpty()) { "Generated-tool state payload is empty" }
         return DataInputStream(ByteArrayInputStream(bytes)).use { data ->
             require(data.readInt() == MAGIC) { "Invalid generated-tool state magic" }
-            require(data.readInt() == VERSION) { "Unsupported generated-tool state codec" }
+            val storedVersion = data.readInt()
+            require(supportsVersion(storedVersion)) { "Unsupported generated-tool state codec" }
+            require(expectedVersion == null || storedVersion == expectedVersion) {
+                "Generated-tool state payload version does not match vault metadata"
+            }
             val count = data.readBoundedCount(MAX_TOOLS, "tools")
-            val states = List(count) { data.readState() }
+            val states = List(count) {
+                when (storedVersion) {
+                    LEGACY_VERSION -> data.readStateV1()
+                    VERSION -> data.readStateV2()
+                    else -> error("Unsupported generated-tool state codec")
+                }
+            }
             require(states.map { it.record.manifest.toolId }.distinct().size == states.size) {
                 "Generated-tool state payload contains duplicate tool identities"
             }
@@ -50,18 +64,28 @@ object GeneratedToolStateCodec {
         }
     }
 
-    private fun DataOutputStream.writeState(state: GeneratedToolPersistentState) {
+    private fun DataOutputStream.writeStateV2(state: GeneratedToolPersistentState) {
         writeText(state.id)
         writeRecord(state.record)
         require(state.auditEntries.size <= MAX_AUDIT_ENTRIES)
         writeInt(state.auditEntries.size)
         state.auditEntries.forEach { writeAudit(it) }
         writeTrialEvidence(state.trialEvidence)
-        writeBoolean(state.promotionReceipt != null)
-        state.promotionReceipt?.let { writePromotionReceipt(it) }
+        val kind = when {
+            state.promotionReceipt != null -> ReceiptKind.J03_APK
+            state.boundedPromotionReceipt != null -> ReceiptKind.BOUNDED
+            else -> ReceiptKind.NONE
+        }
+        writeText(kind.name)
+        when (kind) {
+            ReceiptKind.NONE -> Unit
+            ReceiptKind.J03_APK -> writePromotionReceipt(requireNotNull(state.promotionReceipt))
+            ReceiptKind.BOUNDED -> writeBoundedPromotionReceipt(requireNotNull(state.boundedPromotionReceipt))
+        }
     }
 
-    private fun DataInputStream.readState(): GeneratedToolPersistentState {
+    /** Exact pre-V1.2 state layout: boolean receipt flag followed by the J03/APK receipt only. */
+    private fun DataInputStream.readStateV1(): GeneratedToolPersistentState {
         val expectedId = readText()
         val record = readRecord()
         val audit = List(readBoundedCount(MAX_AUDIT_ENTRIES, "audit entries")) { readAudit() }
@@ -72,6 +96,40 @@ object GeneratedToolStateCodec {
             auditEntries = audit,
             trialEvidence = trials,
             promotionReceipt = receipt,
+        ).also { state ->
+            require(state.id == expectedId) { "Generated-tool persistent state id integrity check failed" }
+        }
+    }
+
+    private fun DataInputStream.readStateV2(): GeneratedToolPersistentState {
+        val expectedId = readText()
+        val record = readRecord()
+        val audit = List(readBoundedCount(MAX_AUDIT_ENTRIES, "audit entries")) { readAudit() }
+        val trials = readTrialEvidence()
+        val kind = runCatching { enumValueOf<ReceiptKind>(readText()) }
+            .getOrElse { throw IllegalArgumentException("Unsupported generated-tool receipt kind", it) }
+        val legacyReceipt: GeneratedToolPromotionReceipt?
+        val boundedReceipt: BoundedGeneratedToolPromotionReceipt?
+        when (kind) {
+            ReceiptKind.NONE -> {
+                legacyReceipt = null
+                boundedReceipt = null
+            }
+            ReceiptKind.J03_APK -> {
+                legacyReceipt = readPromotionReceipt()
+                boundedReceipt = null
+            }
+            ReceiptKind.BOUNDED -> {
+                legacyReceipt = null
+                boundedReceipt = readBoundedPromotionReceipt()
+            }
+        }
+        return GeneratedToolPersistentState(
+            record = record,
+            auditEntries = audit,
+            trialEvidence = trials,
+            promotionReceipt = legacyReceipt,
+            boundedPromotionReceipt = boundedReceipt,
         ).also { state ->
             require(state.id == expectedId) { "Generated-tool persistent state id integrity check failed" }
         }
@@ -237,6 +295,42 @@ object GeneratedToolStateCodec {
         return receipt
     }
 
+    private fun DataOutputStream.writeBoundedPromotionReceipt(receipt: BoundedGeneratedToolPromotionReceipt) {
+        writeText(receipt.id)
+        writeText(receipt.evidenceId)
+        writeText(receipt.toolId)
+        writeText(receipt.artifactId)
+        writeText(receipt.recordFingerprint)
+        writeText(receipt.trialEvidenceId)
+        writeText(receipt.promotionPolicyFingerprint)
+        writeText(receipt.novelAdmissionEvidenceId)
+        writeText(receipt.canaryReadinessEvidenceId)
+        writeText(receipt.promotionSealId)
+        writeTexts(receipt.reviewerEvidenceFingerprints.sorted())
+        writeTexts(receipt.activationActorEvidenceFingerprints.sorted())
+    }
+
+    private fun DataInputStream.readBoundedPromotionReceipt(): BoundedGeneratedToolPromotionReceipt {
+        val expectedReceiptId = readText()
+        val receipt = BoundedGeneratedToolPromotionReceipt(
+            evidenceId = readText(),
+            toolId = readText(),
+            artifactId = readText(),
+            recordFingerprint = readText(),
+            trialEvidenceId = readText(),
+            promotionPolicyFingerprint = readText(),
+            novelAdmissionEvidenceId = readText(),
+            canaryReadinessEvidenceId = readText(),
+            promotionSealId = readText(),
+            reviewerEvidenceFingerprints = readTexts("bounded reviewer evidence", requireUnique = false),
+            activationActorEvidenceFingerprints = readTexts("bounded activation actor evidence", requireUnique = false),
+        )
+        require(receipt.id == expectedReceiptId) {
+            "Bounded generated-tool promotion receipt id integrity check failed"
+        }
+        return receipt
+    }
+
     private fun DataOutputStream.writeEnumNames(values: List<String>) = writeTexts(values.sorted())
 
     private fun DataInputStream.readEnumNames(label: String): List<String> = readTexts(label)
@@ -287,5 +381,11 @@ object GeneratedToolStateCodec {
 
     private fun DataInputStream.readBoundedCount(maximum: Int, label: String): Int = readInt().also {
         require(it in 0..maximum) { "Invalid generated-tool $label count: $it" }
+    }
+
+    private enum class ReceiptKind {
+        NONE,
+        J03_APK,
+        BOUNDED,
     }
 }
