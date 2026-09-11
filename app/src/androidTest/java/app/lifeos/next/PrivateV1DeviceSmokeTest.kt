@@ -191,13 +191,20 @@ class PrivateV1DeviceSmokeTest {
         EncryptedTaskRepository(instrumentation.targetContext).loadReport().also {
             assertTrue("Task vault must remain readable", it.unreadableEntries.isEmpty())
         }.tasks.filter {
-            (it.type == TaskType.PROCESS_PHOTON || it.type == TaskType.REPROCESS_PHOTON) &&
+            it.type == TaskType.PROCESS_PHOTON &&
                 it.inputPhotonRevisions[photon.id] == photon.revision
         }
 
     private suspend fun assertSingleCognitiveTask(photon: Photon) {
-        assertEquals("Each photon revision must have exactly one durable cognition task",
-            1, cognitiveTasks(photon).size)
+        val tasks = cognitiveTasks(photon)
+        // REPROCESS_PHOTON is a distinct, outcome-triggered reevaluation, not duplicate ingestion.
+        assertEquals("Each revision must have one initial task; found " +
+            tasks.joinToString { "${it.id.value}:${it.idempotencyKey}" }, 1, tasks.size)
+        assertEquals(
+            "cognition:photon:${photon.id.value}:revision:${photon.revision}" +
+                ":photon:${photon.id.value}:revision:${photon.revision}:pipeline:1",
+            tasks.single().idempotencyKey,
+        )
     }
 
     private suspend fun awaitBoot(): KernelBootstrapState = withTimeout(BOOT_TIMEOUT_MS) {
