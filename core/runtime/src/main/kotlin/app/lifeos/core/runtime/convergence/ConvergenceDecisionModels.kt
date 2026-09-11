@@ -194,7 +194,7 @@ data class ConvergenceDecisionRequest(
 data class ConvergenceDecision(
     val id: ConvergenceDecisionId,
     val state: ConvergenceDecisionState,
-    val selectedHypothesisId: HypothesisId?,
+    val selectedHypothesisIds: List<HypothesisId>,
     val candidates: List<ConvergenceCandidateAssessment>,
     val evidenceRequests: List<ConvergenceEvidenceRequest>,
     val capabilityGaps: List<CapabilityGap>,
@@ -203,18 +203,19 @@ data class ConvergenceDecision(
     val sourceFingerprint: String,
 ) {
     init {
+        require(selectedHypothesisIds.distinct().size == selectedHypothesisIds.size)
         require(candidates.distinctBy { it.domainId to it.hypothesisId }.size == candidates.size)
         require(evidenceRequests.distinctBy { it.id }.size == evidenceRequests.size)
         require(reasons.isNotEmpty() && reasons.none { it.isBlank() })
         require(sourceFingerprint.isNotBlank())
         if (state == ConvergenceDecisionState.ACTIONABLE) {
-            require(selectedHypothesisId != null)
+            require(selectedHypothesisIds.isNotEmpty())
             require(evidenceRequests.isEmpty())
             require(capabilityGaps.isEmpty())
             require(escalation == null)
         } else {
-            require(selectedHypothesisId == null) {
-                "Non-actionable convergence decision cannot select a hypothesis"
+            require(selectedHypothesisIds.isEmpty()) {
+                "Non-actionable convergence decision cannot select hypotheses"
             }
         }
     }
