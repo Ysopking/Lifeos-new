@@ -15,7 +15,6 @@ import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 
-/** Hard per-incident ceiling plus one action's requested working set. */
 data class SelfHealingResourceProfile(
     val hardQuota: ResourceBudgetQuota,
     val perActionRequested: ResourceBudgetUsage,
@@ -39,8 +38,9 @@ data class SelfHealingResourceProfile(
 sealed interface DurableSelfHealingResult {
     data class Recovered(
         val incident: SelfHealingIncidentSnapshot,
-        val evidence: CompositeRepairEvidence,
+        val evidence: CompositeRepairEvidence?,
         val recoveredAfterRestart: Boolean,
+        val replayedTerminal: Boolean = false,
     ) : DurableSelfHealingResult
 
     data class Exhausted(
@@ -57,13 +57,9 @@ sealed interface DurableSelfHealingResult {
 }
 
 /**
- * V9 durable self-healing boundary.
- *
- * The action is marked in-flight before execution. If the process dies after a repair side effect,
- * restart never blindly re-runs that action: verification probes run first. Healthy evidence closes
- * the incident; non-healthy evidence marks the interrupted action consumed and advances to the next
- * registered repair. Every fresh repair action must receive a persisted World Formula SELF_HEALING
- * allocation and a durable V16 reservation before it can execute.
+ * Restart-safe V9 self-healing boundary. An action is durably marked in-flight before execution.
+ * A restart verifies an in-flight repair before doing anything else and never blindly repeats it.
+ * Every fresh action also needs a persisted SELF_HEALING World Formula allocation and V16 reserve.
  */
 class DurableSelfHealingCoordinator(
     private val ledger: SelfHealingLedger,
@@ -84,7 +80,6 @@ class DurableSelfHealingCoordinator(
 
         val accountId = ResourceBudgetAccountId("self-healing:${incident.incidentId.value}")
         budgets.createAccount(accountId, resources.hardQuota)
-
         healthGraph.record(
             HealthObservation(
                 nodeId = plan.nodeId,
@@ -313,6 +308,12 @@ class DurableSelfHealingCoordinator(
     }
 
     private fun terminalResult(snapshot: SelfHealingIncidentSnapshot): DurableSelfHealingResult? = when (snapshot.state) {
+        SelfHealingIncidentState.RECOVERED -> DurableSelfHealingResult.Recovered(
+            incident = snapshot,
+            evidence = null,
+            recoveredAfterRestart = false,
+            replayedTerminal = true,
+        )
         SelfHealingIncidentState.BLOCKED -> DurableSelfHealingResult.Blocked(
             snapshot,
             snapshot.lastDetail ?: "self-healing-blocked",
@@ -322,7 +323,6 @@ class DurableSelfHealingCoordinator(
             snapshot,
             snapshot.state == SelfHealingIncidentState.QUARANTINED,
         )
-        SelfHealingIncidentState.RECOVERED -> null // Recovery evidence is not reconstructed from summary alone.
         SelfHealingIncidentState.OPEN,
         SelfHealingIncidentState.ACTION_IN_FLIGHT -> null
     }
