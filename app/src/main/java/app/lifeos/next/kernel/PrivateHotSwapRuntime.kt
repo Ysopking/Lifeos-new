@@ -14,11 +14,14 @@ import app.lifeos.core.runtime.capability.HotSwapBootRuntimeRegistry
 import app.lifeos.core.runtime.capability.HotSwapLedger
 import app.lifeos.core.runtime.capability.HotSwapLifecycleFactory
 import app.lifeos.core.runtime.capability.HotSwapResourceProfile
+import app.lifeos.core.runtime.capability.HotSwapSnapshot
 import app.lifeos.core.runtime.capability.HotSwapTransactionId
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
+import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
+import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -49,7 +52,7 @@ class PrivateHotSwapRuntime private constructor(
             "Generated-tool registry is not installed"
         }
         val lifecycle = lifecycleFactory.create()
-        GeneratedToolHotSwapCoordinator(
+        val result = GeneratedToolHotSwapCoordinator(
             ledger = ledger,
             tools = tools,
             lifecycle = lifecycle,
@@ -64,6 +67,8 @@ class PrivateHotSwapRuntime private constructor(
             evidence = evidence,
             resources = resources,
         )
+        recordTrace(result.transaction())
+        result
     }
 
     suspend fun revert(
@@ -77,7 +82,7 @@ class PrivateHotSwapRuntime private constructor(
         val tools = requireNotNull(GeneratedToolRuntimeProcessRegistry.tools()) {
             "Generated-tool registry is not installed"
         }
-        GeneratedToolHotSwapRevertCoordinator(
+        val result = GeneratedToolHotSwapRevertCoordinator(
             ledger = ledger,
             tools = tools,
             capabilities = capabilities,
@@ -86,6 +91,27 @@ class PrivateHotSwapRuntime private constructor(
             actorId = PrivateOwnerPolicyBaseline.ownerActorId,
             ownerScope = PrivateOwnerPolicyBaseline.HOT_SWAP_SCOPE,
         ).revert(transactionId, resources)
+        recordTrace(result.transaction())
+        result
+    }
+
+    private suspend fun recordTrace(snapshot: HotSwapSnapshot) {
+        DecisionTraceRuntimeRegistry.currentOrNull()?.recordHotSwap(
+            snapshot = snapshot,
+            recordedAt = Instant.now(),
+        )
+    }
+
+    private fun GeneratedToolHotSwapResult.transaction(): HotSwapSnapshot = when (this) {
+        is GeneratedToolHotSwapResult.Committed -> transaction
+        is GeneratedToolHotSwapResult.Blocked -> transaction
+        is GeneratedToolHotSwapResult.AlreadyTerminal -> transaction
+    }
+
+    private fun GeneratedToolHotSwapRevertResult.transaction(): HotSwapSnapshot = when (this) {
+        is GeneratedToolHotSwapRevertResult.Reverted -> transaction
+        is GeneratedToolHotSwapRevertResult.AlreadyReverted -> transaction
+        is GeneratedToolHotSwapRevertResult.Blocked -> transaction
     }
 
     companion object {
