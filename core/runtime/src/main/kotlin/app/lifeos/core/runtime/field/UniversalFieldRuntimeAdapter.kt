@@ -21,6 +21,7 @@ class UniversalFieldRuntimeAdapter(
     private val requestFactory: PhotonFieldRequestFactory = DefaultPhotonFieldRequestFactory(),
     private val requestEnricher: FieldRequestEnricher = FieldRequestEnricher.NONE,
     private val engine: FieldConvergenceEngine = FieldConvergenceEngine(),
+    private val engineProvider: (() -> FieldConvergenceEngine)? = null,
     private val healthGate: HealthGate? = null,
     private val thoughtGraphProjection: FieldThoughtGraphProjectionCoordinator? = null,
     private val now: () -> Instant = Instant::now,
@@ -71,7 +72,8 @@ class UniversalFieldRuntimeAdapter(
         }
 
         return try {
-            val result = engine.converge(request)
+            val convergenceEngine = engineProvider?.invoke() ?: engine
+            val result = convergenceEngine.converge(request)
             // Crash-safe write order: projection intent first, authoritative snapshot second,
             // graph materialization last. A kill at any boundary is repaired by boot reconciliation.
             val projection = thoughtGraphProjection?.prepare(photon, request, result)
