@@ -30,6 +30,8 @@ import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRecorder
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.SubsystemDecisionTraceRecorder
 import app.lifeos.next.kernel.DurableGoalPlanRuntime
 import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
@@ -87,6 +89,7 @@ class LifeOsApplication : Application() {
                     decisionTraces = DecisionTraceLedger(EncryptedDecisionTraceRepository(this))
                     goalDecisionTraceRecorder = GoalDecisionTraceRecorder(decisionTraces)
                     DecisionTraceRuntimeRegistry.install(SubsystemDecisionTraceRecorder(decisionTraces))
+                    LifecycleDecisionTraceRuntimeRegistry.install(LifecycleDecisionTraceRecorder(decisionTraces))
                     runBlocking {
                         PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
                     }
