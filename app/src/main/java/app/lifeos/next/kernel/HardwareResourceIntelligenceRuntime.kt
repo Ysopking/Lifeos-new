@@ -15,6 +15,21 @@ import app.lifeos.core.runtime.world.WorldFormulaExecution
 import app.lifeos.core.runtime.world.WorldFormulaExecutionState
 import app.lifeos.core.runtime.world.WorldFormulaStatus
 
+sealed interface HardwareExecutionBudgetDecision {
+    data class Ready(val plan: HardwareAdaptiveBudgetPlan) : HardwareExecutionBudgetDecision
+    data class Blocked(val reason: String) : HardwareExecutionBudgetDecision {
+        init { require(reason.isNotBlank()) }
+    }
+}
+
+fun interface HardwareExecutionBudgetGate {
+    suspend fun plan(
+        hardQuota: ResourceBudgetQuota,
+        requested: ResourceBudgetUsage,
+        priority: HardwareWorkPriority,
+    ): HardwareExecutionBudgetDecision
+}
+
 /**
  * APK-level V16 bridge. A fresh local hardware observation is projected through the World Formula
  * and persisted before it may influence a resource recommendation. The World Formula stays
@@ -25,7 +40,7 @@ class HardwareResourceIntelligenceRuntime internal constructor(
     private val reader: AndroidHardwareStateReader = AndroidHardwareStateReader(context),
     private val optimizer: HardwareAdaptiveResourceOptimizer = HardwareAdaptiveResourceOptimizer(),
     private val profile: HardwareWorldEquationProfile = HardwareWorldEquationProfile(),
-) {
+) : HardwareExecutionBudgetGate {
     private val worldFormula = WorldFormulaCoordinator(
         equations = InMemoryWorldEquationRegistry(listOf(profile.spec)),
         snapshots = EncryptedWorldFormulaSnapshotRepository(context.applicationContext),
@@ -60,6 +75,17 @@ class HardwareResourceIntelligenceRuntime internal constructor(
                 priority = priority,
             ),
         )
+    }
+
+    override suspend fun plan(
+        hardQuota: ResourceBudgetQuota,
+        requested: ResourceBudgetUsage,
+        priority: HardwareWorkPriority,
+    ): HardwareExecutionBudgetDecision = when (
+        val decision = evaluate(hardQuota, requested, priority)
+    ) {
+        is HardwareResourceDecision.Ready -> HardwareExecutionBudgetDecision.Ready(decision.plan)
+        is HardwareResourceDecision.Blocked -> HardwareExecutionBudgetDecision.Blocked(decision.reason)
     }
 
     /** Read-only diagnostics path; it does not reserve or spend a resource budget. */
