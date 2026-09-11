@@ -10,6 +10,7 @@ import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.next.kernel.DurableGoalPlanRuntime
 import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
 import app.lifeos.next.kernel.GoalExecutionRuntimeRegistry
@@ -41,6 +42,7 @@ class LifeOsApplication : Application() {
             EncryptedGeneratedToolStateRepository(this),
         )
         hardwareResourceIntelligence = HardwareResourceIntelligenceRuntime(this)
+        SharedResourceBudgetRuntimeRegistry.install(hardwareResourceIntelligence)
         ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(this))
         resourceBudgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(this))
         GoalExecutionRuntimeRegistry.install(
