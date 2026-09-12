@@ -13,6 +13,7 @@ data class LifeEntity(
     val label: String,
     val sourcePhotonIds: Set<PhotonId>,
     val confidence: Double,
+    val aliases: Set<String> = emptySet(),
 )
 
 data class LifeGraphEvent(
@@ -40,31 +41,54 @@ data class LifeGraphSnapshot(
     val fingerprint: String,
 )
 
-/** Deterministic, rebuildable projection of explicit entity tags and chronological evidence. */
+/**
+ * Deterministic, rebuildable projection of explicit entity evidence plus conservative alias and
+ * relationship evidence. Candidate aliases are only applied when all qualifying evidence agrees on
+ * one canonical label; ambiguous aliases remain separate entities rather than inventing identity.
+ */
 class LifeGraphProjector {
     fun project(photons: Collection<Photon>): LifeGraphSnapshot {
         val canonical = photons.groupBy { it.id }.map { (_, revisions) -> revisions.maxBy { it.revision } }
-            .filterNot { "causal-ledger" in it.tags }
+            .filterNot { "causal-ledger" in it.tags || "life-memory-management" in it.tags }
             .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+        val byId = canonical.associateBy { it.id }
+        val aliases = resolveAliases(canonical)
 
         val entitySources = linkedMapOf<Pair<LifeEntityType, String>, MutableSet<PhotonId>>()
         canonical.forEach { photon ->
-            explicitEntities(photon).forEach { key -> entitySources.getOrPut(key) { linkedSetOf() } += photon.id }
+            explicitEntities(photon).forEach { raw ->
+                val key = canonicalEntity(raw, aliases)
+                entitySources.getOrPut(key) { linkedSetOf() } += photon.id
+            }
         }
+        aliases.values.forEach { alias ->
+            val key = alias.type to alias.canonical
+            if (key in entitySources) entitySources.getValue(key) += alias.sourcePhotonIds
+        }
+
         val entities = entitySources.entries.map { (key, sources) ->
             val (type, label) = key
+            val sourceConfidence = sources.mapNotNull(byId::get).map { it.confidence }
+            val entityAliases = aliases.values
+                .filter { it.type == type && it.canonical.equals(label, ignoreCase = true) }
+                .map { it.alias }
+                .toSortedSet()
             LifeEntity(
                 id = entityId(type, label),
                 type = type,
                 label = label,
                 sourcePhotonIds = sources.toSet(),
-                confidence = 1.0,
+                confidence = sourceConfidence.averageOrOne().coerceIn(0.0, 1.0),
+                aliases = entityAliases,
             )
         }.sortedBy { it.id }
         val entityIdByKey = entities.associateBy({ it.type to it.label }, { it.id })
 
         val events = canonical.map { photon ->
-            val entityIds = explicitEntities(photon).mapNotNull(entityIdByKey::get).toSortedSet()
+            val entityIds = explicitEntities(photon)
+                .map { canonicalEntity(it, aliases) }
+                .mapNotNull(entityIdByKey::get)
+                .toSortedSet()
             LifeGraphEvent(
                 id = "event-" + StableCognitiveIds.fingerprint("life-event/v1", photon.id.value, photon.revision.toString()),
                 occurredAt = photon.provenance.createdAt,
@@ -75,18 +99,25 @@ class LifeGraphProjector {
             )
         }
 
-        val relationships = canonical.flatMap { photon ->
-            val ids = explicitEntities(photon).mapNotNull(entityIdByKey::get).distinct().sorted()
+        val coOccurrence = canonical.flatMap { photon ->
+            val ids = explicitEntities(photon)
+                .map { canonicalEntity(it, aliases) }
+                .mapNotNull(entityIdByKey::get)
+                .distinct()
+                .sorted()
             buildList {
                 for (left in ids.indices) {
                     for (right in (left + 1) until ids.size) {
-                        val from = ids[left]
-                        val to = ids[right]
                         add(
                             LifeGraphRelationship(
-                                id = "relation-" + StableCognitiveIds.fingerprint("life-relation/v1", from, to, photon.id.value),
-                                fromEntityId = from,
-                                toEntityId = to,
+                                id = "relation-" + StableCognitiveIds.fingerprint(
+                                    "life-relation/v1",
+                                    ids[left],
+                                    ids[right],
+                                    photon.id.value,
+                                ),
+                                fromEntityId = ids[left],
+                                toEntityId = ids[right],
                                 type = "CO_OCCURRENCE",
                                 sourcePhotonIds = setOf(photon.id),
                                 confidence = photon.confidence,
@@ -95,7 +126,29 @@ class LifeGraphProjector {
                     }
                 }
             }
-        }.groupBy { Triple(it.fromEntityId, it.toEntityId, it.type) }
+        }
+        val explicitRelationships = canonical.flatMap { photon ->
+            relationshipEvidence(photon).mapNotNull { evidence ->
+                val from = entityIdByKey[canonicalEntity(evidence.from, aliases)] ?: return@mapNotNull null
+                val to = entityIdByKey[canonicalEntity(evidence.to, aliases)] ?: return@mapNotNull null
+                LifeGraphRelationship(
+                    id = "relation-" + StableCognitiveIds.fingerprint(
+                        "life-relation-evidence/v1",
+                        from,
+                        to,
+                        evidence.type,
+                        photon.id.value,
+                    ),
+                    fromEntityId = from,
+                    toEntityId = to,
+                    type = evidence.type,
+                    sourcePhotonIds = setOf(photon.id),
+                    confidence = photon.confidence,
+                )
+            }
+        }
+        val relationships = (coOccurrence + explicitRelationships)
+            .groupBy { Triple(it.fromEntityId, it.toEntityId, it.type) }
             .map { (key, matches) ->
                 val sources = matches.flatMap { it.sourcePhotonIds }.toSortedSet(compareBy { it.value })
                 LifeGraphRelationship(
@@ -115,14 +168,79 @@ class LifeGraphProjector {
             }.sortedBy { it.id }
 
         val fingerprint = StableCognitiveIds.fingerprint(
-            "life-graph/v1",
+            "life-graph/v2",
             *buildList {
-                entities.forEach { add("e:${it.id}") }
+                entities.forEach { entity ->
+                    add("e:${entity.id}:${java.lang.Double.toHexString(entity.confidence)}:${entity.aliases.joinToString(",")}")
+                }
                 events.forEach { add("v:${it.id}") }
-                relationships.forEach { add("r:${it.id}") }
+                relationships.forEach { relationship ->
+                    add("r:${relationship.id}:${java.lang.Double.toHexString(relationship.confidence)}")
+                }
             }.toTypedArray(),
         )
         return LifeGraphSnapshot(entities, events, relationships, fingerprint)
+    }
+
+    private data class AliasEvidence(
+        val type: LifeEntityType,
+        val alias: String,
+        val canonical: String,
+        val sourcePhotonIds: Set<PhotonId>,
+    )
+
+    private data class RelationshipEvidence(
+        val type: String,
+        val from: Pair<LifeEntityType, String>,
+        val to: Pair<LifeEntityType, String>,
+    )
+
+    private fun resolveAliases(photons: List<Photon>): Map<Pair<LifeEntityType, String>, AliasEvidence> {
+        val candidates = photons.flatMap { photon ->
+            if (photon.confidence < MIN_ALIAS_CONFIDENCE) return@flatMap emptyList()
+            photon.tags.mapNotNull { tag -> parseAlias(tag, photon.id) }
+        }
+        return candidates.groupBy { it.type to it.alias.lowercase() }.mapNotNull { (key, matches) ->
+            val canonicalLabels = matches.map { it.canonical.lowercase() }.distinct()
+            if (canonicalLabels.size != 1) return@mapNotNull null
+            val canonicalLabel = matches.minBy { it.canonical }.canonical
+            key to AliasEvidence(
+                type = matches.first().type,
+                alias = matches.minBy { it.alias }.alias,
+                canonical = canonicalLabel,
+                sourcePhotonIds = matches.flatMap { it.sourcePhotonIds }.toSet(),
+            )
+        }.toMap()
+    }
+
+    private fun parseAlias(tag: String, source: PhotonId): AliasEvidence? {
+        if (!tag.startsWith(ALIAS_PREFIX)) return null
+        val payload = tag.removePrefix(ALIAS_PREFIX)
+        val typeRaw = payload.substringBefore(':', missingDelimiterValue = "")
+        val mapping = payload.substringAfter(':', missingDelimiterValue = "")
+        val alias = mapping.substringBefore('=', missingDelimiterValue = "").trim()
+        val canonical = mapping.substringAfter('=', missingDelimiterValue = "").trim()
+        val type = runCatching { LifeEntityType.valueOf(typeRaw.trim().uppercase()) }.getOrNull() ?: return null
+        if (alias.isBlank() || canonical.isBlank()) return null
+        return AliasEvidence(type, alias, canonical, setOf(source))
+    }
+
+    private fun relationshipEvidence(photon: Photon): List<RelationshipEvidence> = photon.tags.mapNotNull { tag ->
+        if (!tag.startsWith(RELATIONSHIP_PREFIX)) return@mapNotNull null
+        val parts = tag.removePrefix(RELATIONSHIP_PREFIX).split('|')
+        if (parts.size != 3) return@mapNotNull null
+        val type = parts[0].trim().uppercase().takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val from = parseTypedLabel(parts[1]) ?: return@mapNotNull null
+        val to = parseTypedLabel(parts[2]) ?: return@mapNotNull null
+        RelationshipEvidence(type, from, to)
+    }
+
+    private fun parseTypedLabel(raw: String): Pair<LifeEntityType, String>? {
+        val type = runCatching {
+            LifeEntityType.valueOf(raw.substringBefore(':', missingDelimiterValue = "").trim().uppercase())
+        }.getOrNull() ?: return null
+        val label = raw.substringAfter(':', missingDelimiterValue = "").trim().takeIf { it.isNotBlank() } ?: return null
+        return type to label
     }
 
     private fun explicitEntities(photon: Photon): Set<Pair<LifeEntityType, String>> = photon.tags.mapNotNull { tag ->
@@ -133,10 +251,23 @@ class LifeGraphProjector {
         }
     }.toSet()
 
+    private fun canonicalEntity(
+        raw: Pair<LifeEntityType, String>,
+        aliases: Map<Pair<LifeEntityType, String>, AliasEvidence>,
+    ): Pair<LifeEntityType, String> {
+        val alias = aliases[raw.first to raw.second.lowercase()] ?: return raw
+        return raw.first to alias.canonical
+    }
+
     private fun entityId(type: LifeEntityType, label: String): String =
         "entity-" + StableCognitiveIds.fingerprint("life-entity/v1", type.name, label.lowercase())
 
+    private fun List<Double>.averageOrOne(): Double = if (isEmpty()) 1.0 else average()
+
     private companion object {
+        const val MIN_ALIAS_CONFIDENCE = 0.5
+        const val ALIAS_PREFIX = "entity-alias:"
+        const val RELATIONSHIP_PREFIX = "entity-relationship:"
         val ENTITY_PREFIXES = linkedMapOf(
             "person:" to LifeEntityType.PERSON,
             "organization:" to LifeEntityType.ORGANIZATION,
@@ -148,8 +279,19 @@ class LifeGraphProjector {
     }
 }
 
-data class LifeSourceCursor(val sourceId: String, val position: String?) {
-    init { require(sourceId.isNotBlank()) }
+data class LifeSourceCursor(
+    val sourceId: String,
+    val position: String?,
+    val adapterVersion: String = DEFAULT_ADAPTER_VERSION,
+) {
+    init {
+        require(sourceId.isNotBlank())
+        require(adapterVersion.isNotBlank())
+    }
+
+    companion object {
+        const val DEFAULT_ADAPTER_VERSION = "life-source-adapter/v1"
+    }
 }
 
 data class LifeSourceRecord(
@@ -196,13 +338,18 @@ class ContinuousLifeIngestEngine(
                 mimeType = record.mimeType,
                 confidence = record.confidence,
                 salience = 0.5,
-                tags = record.tags + setOf("life-ingest", "source:${record.sourceId}", "source-record:${record.recordId}"),
+                tags = record.tags + setOf(
+                    "life-ingest",
+                    "source:${record.sourceId}",
+                    "source-record:${record.recordId}",
+                    "source-adapter:${cursor.adapterVersion}",
+                ),
             )
         }
         return LifeIngestBatch(
             sourceId = cursor.sourceId,
             cursorBefore = cursor,
-            cursorAfter = LifeSourceCursor(cursor.sourceId, nextPosition),
+            cursorAfter = LifeSourceCursor(cursor.sourceId, nextPosition, cursor.adapterVersion),
             perception = perception.fuse(signals),
         )
     }
