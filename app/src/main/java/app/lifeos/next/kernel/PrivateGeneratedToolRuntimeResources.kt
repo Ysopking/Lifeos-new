@@ -108,18 +108,21 @@ internal data class PrivateGeneratedToolRuntimeResources(
                 workshop = durableWorkshop,
                 jobs = workshopJobs,
                 persistPhoton = { photon ->
-                    val existing = photonStore.load(photon.id)
-                    if (existing != null) {
+                    val durable = photonStore.load(photon.id)?.also { existing ->
                         require(existing == photon) {
                             "Autonomous ToolWorkshop Photon identity was reused with different content"
                         }
-                        existing
-                    } else {
+                    } ?: run {
                         photonStore.save(photon)
                         requireNotNull(photonStore.load(photon.id)) {
                             "Autonomous ToolWorkshop Photon was not durable after persistence"
                         }
                     }
+                    LifeOsAutomationPhotonBridge.ingestIfInstalled(durable)?.also { ingested ->
+                        require(ingested == durable) {
+                            "Kernel ingestion changed autonomous ToolWorkshop Photon identity"
+                        }
+                    } ?: durable
                 },
             )
             AutonomousToolWorkshopRuntimeRegistry.install(autonomousRuntime)

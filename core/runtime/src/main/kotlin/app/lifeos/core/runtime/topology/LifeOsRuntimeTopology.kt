@@ -51,10 +51,9 @@ data class LifeOsRuntimeTopologySnapshot(
 
 /**
  * Process-wide topology projection for the productive LIFEOS runtime.
- *
  * Capability availability comes exclusively from CapabilityRegistry. Runtime presence and lifecycle
- * come from LifeOsRuntimeBindingRegistry. Dependencies are then propagated transitively, so a node
- * can no longer look healthy when an upstream subsystem is absent, stopped or quarantined.
+ * come from LifeOsRuntimeBindingRegistry. Dependencies are propagated in deterministic topological
+ * order so downstream nodes cannot appear healthy when an upstream subsystem is absent.
  */
 object LifeOsProcessTopology {
     val canonicalSubsystems: List<LifeOsSubsystemDescriptor> = listOf(
@@ -67,10 +66,14 @@ object LifeOsProcessTopology {
         LifeOsSubsystemDescriptor("world-formula", dependencies = setOf("field-runtime")),
         LifeOsSubsystemDescriptor("language-understanding", requiredCapabilities = setOf("language.understand")),
         LifeOsSubsystemDescriptor("language-context", dependencies = setOf("photon-store")),
-        LifeOsSubsystemDescriptor("goal-planning", dependencies = setOf("language-understanding")),
-        LifeOsSubsystemDescriptor("goal-resume", requiredCapabilities = setOf("goal.resume"), dependencies = setOf("goal-planning")),
         LifeOsSubsystemDescriptor("capability-registry"),
         LifeOsSubsystemDescriptor("capability-router", dependencies = setOf("capability-registry")),
+        LifeOsSubsystemDescriptor("owner-policy"),
+        LifeOsSubsystemDescriptor("resource-intelligence"),
+        LifeOsSubsystemDescriptor("resource-budgets", dependencies = setOf("resource-intelligence")),
+        LifeOsSubsystemDescriptor("decision-trace", dependencies = setOf("photon-store")),
+        LifeOsSubsystemDescriptor("goal-planning", dependencies = setOf("language-understanding", "capability-router")),
+        LifeOsSubsystemDescriptor("goal-resume", requiredCapabilities = setOf("goal.resume"), dependencies = setOf("goal-planning")),
         LifeOsSubsystemDescriptor("local-knowledge", requiredCapabilities = setOf("knowledge.resolve"), dependencies = setOf("capability-router")),
         LifeOsSubsystemDescriptor("deep-search", requiredCapabilities = setOf("deepsearch.query"), dependencies = setOf("capability-router")),
         LifeOsSubsystemDescriptor("scene-compiler", requiredCapabilities = setOf("scene.construct.procedural"), dependencies = setOf("capability-router")),
@@ -89,17 +92,13 @@ object LifeOsProcessTopology {
         LifeOsSubsystemDescriptor("runtime-supervisor", dependencies = setOf("task-scheduler", "lease-recovery")),
         LifeOsSubsystemDescriptor("health-graph"),
         LifeOsSubsystemDescriptor("protection-coordinator", dependencies = setOf("health-graph")),
-        LifeOsSubsystemDescriptor("self-healing", dependencies = setOf("health-graph", "runtime-supervisor")),
-        LifeOsSubsystemDescriptor("tool-workshop", dependencies = setOf("capability-registry", "resource-budgets")),
+        LifeOsSubsystemDescriptor("self-healing", dependencies = setOf("health-graph", "runtime-supervisor", "resource-budgets")),
+        LifeOsSubsystemDescriptor("tool-workshop", dependencies = setOf("capability-registry", "resource-budgets", "owner-policy")),
         LifeOsSubsystemDescriptor("generated-tool-registry", dependencies = setOf("tool-workshop", "capability-registry")),
-        LifeOsSubsystemDescriptor("evolution-hot-swap", dependencies = setOf("generated-tool-registry", "capability-registry", "owner-policy")),
-        LifeOsSubsystemDescriptor("learning-adaptation", dependencies = setOf("field-runtime", "capability-router")),
-        LifeOsSubsystemDescriptor("owner-policy"),
-        LifeOsSubsystemDescriptor("resource-intelligence"),
-        LifeOsSubsystemDescriptor("resource-budgets", dependencies = setOf("resource-intelligence")),
-        LifeOsSubsystemDescriptor("decision-trace", dependencies = setOf("photon-store")),
-        LifeOsSubsystemDescriptor("hot-swap-runtime", dependencies = setOf("evolution-hot-swap", "owner-policy", "resource-budgets")),
         LifeOsSubsystemDescriptor("autonomous-tool-workshop", dependencies = setOf("tool-workshop", "continuous-cognition")),
+        LifeOsSubsystemDescriptor("evolution-hot-swap", dependencies = setOf("generated-tool-registry", "capability-registry", "owner-policy")),
+        LifeOsSubsystemDescriptor("hot-swap-runtime", dependencies = setOf("evolution-hot-swap", "owner-policy", "resource-budgets")),
+        LifeOsSubsystemDescriptor("learning-adaptation", dependencies = setOf("field-runtime", "capability-router")),
         LifeOsSubsystemDescriptor("build-studio", requiredCapabilities = setOf("buildstudio.run"), dependencies = setOf("capability-router", "tool-workshop")),
     ).also { descriptors ->
         require(descriptors.size >= MINIMUM_CANONICAL_SUBSYSTEMS) {
@@ -108,11 +107,12 @@ object LifeOsProcessTopology {
         require(descriptors.map { it.id }.distinct().size == descriptors.size) {
             "Canonical LIFEOS subsystem ids must be unique"
         }
-        val ids = descriptors.mapTo(linkedSetOf()) { it.id }
+        val seen = linkedSetOf<String>()
         descriptors.forEach { descriptor ->
-            require(ids.containsAll(descriptor.dependencies)) {
-                "Unknown LIFEOS dependency for ${descriptor.id}: ${descriptor.dependencies - ids}"
+            require(seen.containsAll(descriptor.dependencies)) {
+                "LIFEOS topology must be topologically ordered; ${descriptor.id} depends on ${descriptor.dependencies - seen}"
             }
+            seen += descriptor.id
         }
     }
 

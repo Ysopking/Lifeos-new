@@ -37,6 +37,7 @@ import app.lifeos.next.kernel.DurableGoalPlanRuntime
 import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
 import app.lifeos.next.kernel.GoalExecutionRuntimeRegistry
 import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
+import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
@@ -114,6 +115,9 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
+                    LifeOsAutomationPhotonBridge.install { photon ->
+                        kernel.persistAndIngest(photon).photon
+                    }
                 },
                 installDeepSearchRuntime = {
                     DeepSearchMissionRuntimeRegistry.install(
@@ -122,7 +126,7 @@ class LifeOsApplication : Application() {
                             checkpoints = DeepSearchCheckpointStore(EncryptedDeepSearchCheckpointRepository(this)),
                             resultPhotons = object : DeepSearchResultPhotonPersistence {
                                 override suspend fun save(photon: Photon) {
-                                    kernel.photonStore.save(photon)
+                                    kernel.persistAndIngest(photon)
                                 }
 
                                 override suspend fun load(id: PhotonId): Photon? = kernel.photonStore.load(id)

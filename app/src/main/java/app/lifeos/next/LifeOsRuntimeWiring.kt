@@ -49,6 +49,7 @@ internal object LifeOsRuntimeWiring {
                         "protection-coordinator",
                         "tool-workshop",
                         "generated-tool-registry",
+                        "autonomous-tool-workshop",
                         "evolution-hot-swap",
                         "learning-adaptation",
                     ),
