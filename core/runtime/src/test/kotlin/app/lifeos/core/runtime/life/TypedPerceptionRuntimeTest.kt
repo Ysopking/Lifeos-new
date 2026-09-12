@@ -107,7 +107,7 @@ class TypedPerceptionRuntimeTest {
         assertEquals("hallo welt", observation.transcript)
         assertEquals(PerceptionModality.SPEECH, signal.modality)
         assertEquals(observedAt.plusSeconds(1), signal.observedUntil)
-        assertEquals(listOf("0:hallo", "0:halo", "1:welt"), signal.canonicalCandidates.map { it.value })
+        assertEquals(listOf("0:hallo", "1:welt", "0:halo"), signal.canonicalCandidates.map { it.value })
     }
 
     @Test
