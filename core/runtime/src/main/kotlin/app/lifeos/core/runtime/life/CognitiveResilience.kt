@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.life
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.StableCognitiveIds
+import java.time.Instant
 
 enum class RetentionClass { HOT, WARM, ARCHIVE }
 
@@ -56,6 +57,11 @@ data class MemoryRetentionDecision(
     val photonId: PhotonId,
     val retentionClass: RetentionClass,
     val reason: String,
+    val stage: MemoryStage = when (retentionClass) {
+        RetentionClass.HOT -> MemoryStage.HOT
+        RetentionClass.WARM -> MemoryStage.WARM
+        RetentionClass.ARCHIVE -> MemoryStage.COLD
+    },
 )
 
 data class MemoryRetentionPlan(
@@ -63,24 +69,40 @@ data class MemoryRetentionPlan(
     val fingerprint: String,
 )
 
-/** Block G compaction policy. It classifies only; destructive deletion remains outside this seam. */
-class CognitiveMemoryCompactor {
-    fun plan(photons: Collection<Photon>): MemoryRetentionPlan {
-        val latest = photons.groupBy { it.id }.mapValues { (_, revisions) -> revisions.maxBy { it.revision } }.values
-        val decisions = latest.map { photon ->
-            when {
-                "chat" in photon.tags || "goal" in photon.tags || photon.semanticMass >= 0.8 ->
-                    MemoryRetentionDecision(photon.id, RetentionClass.HOT, "active-or-high-mass")
-                photon.confidence >= 0.8 || photon.semanticMass >= 0.4 ->
-                    MemoryRetentionDecision(photon.id, RetentionClass.WARM, "reliable-or-relevant")
-                else -> MemoryRetentionDecision(photon.id, RetentionClass.ARCHIVE, "low-active-salience")
+/**
+ * Backwards-compatible Block G facade over the four-stage LongTermMemoryEngine.
+ * RetentionClass stays available to old callers; MemoryStage is the authoritative new lifecycle.
+ * Destructive deletion remains explicitly outside this seam.
+ */
+class CognitiveMemoryCompactor(
+    private val longTermMemory: LongTermMemoryEngine = LongTermMemoryEngine(),
+) {
+    fun plan(
+        photons: Collection<Photon>,
+        accessLedger: MemoryAccessLedger = MemoryAccessLedger(),
+        now: Instant = Instant.now(),
+    ): MemoryRetentionPlan {
+        val projection = longTermMemory.project(photons, accessLedger, now)
+        val decisions = projection.decisions.map { decision ->
+            val retention = when (decision.toStage) {
+                MemoryStage.HOT -> RetentionClass.HOT
+                MemoryStage.WARM -> RetentionClass.WARM
+                MemoryStage.COLD, MemoryStage.CRYSTALLIZED -> RetentionClass.ARCHIVE
             }
+            MemoryRetentionDecision(
+                photonId = decision.photonId,
+                retentionClass = retention,
+                reason = decision.reason,
+                stage = decision.toStage,
+            )
         }.sortedBy { it.photonId.value }
         return MemoryRetentionPlan(
             decisions = decisions,
             fingerprint = StableCognitiveIds.fingerprint(
-                "memory-retention-plan/v1",
-                *decisions.flatMap { listOf(it.photonId.value, it.retentionClass.name, it.reason) }.toTypedArray(),
+                "memory-retention-plan/v2",
+                *decisions.flatMap {
+                    listOf(it.photonId.value, it.retentionClass.name, it.stage.name, it.reason)
+                }.toTypedArray(),
             ),
         )
     }
