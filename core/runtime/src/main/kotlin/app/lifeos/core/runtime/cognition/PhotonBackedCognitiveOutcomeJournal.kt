@@ -13,16 +13,24 @@ class PhotonBackedCognitiveOutcomeJournal(private val store: PhotonRepository) :
     override suspend fun record(outcome: CognitiveOutcome): Long = lock.withLock {
         val key = outcomeKey(outcome)
         val id = CognitionJournalIdentity.photonId(CognitionJournalKind.OUTCOME.tag, key)
-        store.load(id)?.let { existing ->
-            check(normalize(decode(existing)) == normalize(outcome)) { "Cognitive outcome identity conflict" }
-        } ?: store.save(
-            cognitionJournalPhoton(
-                CognitionJournalKind.OUTCOME,
-                key,
-                outcome.recordedAt,
-                CognitionOutcomeCodec.encode(outcome),
-            )
+        val legacyId = CognitionJournalIdentity.photonId(
+            CognitionJournalKind.OUTCOME.tag,
+            legacyOutcomeKey(outcome),
         )
+
+        val existing = store.load(id) ?: store.load(legacyId)
+        if (existing != null) {
+            check(normalize(decode(existing)) == normalize(outcome)) { "Cognitive outcome identity conflict" }
+        } else {
+            store.save(
+                cognitionJournalPhoton(
+                    CognitionJournalKind.OUTCOME,
+                    key,
+                    outcome.recordedAt,
+                    CognitionOutcomeCodec.encode(outcome),
+                )
+            )
+        }
         outcomes().size.toLong()
     }
 
@@ -43,10 +51,16 @@ class PhotonBackedCognitiveOutcomeJournal(private val store: PhotonRepository) :
         throw CognitionJournalCorruptionException("Unreadable outcome journal ${photon.id.value}", error)
     }
 
-    private fun outcomeKey(outcome: CognitiveOutcome): String = StableCognitiveIds.fingerprint(
+    internal fun outcomeKey(outcome: CognitiveOutcome): String = StableCognitiveIds.fingerprint(
         "cognition-outcome/v2",
         outcome.taskId.value,
         CognitionOutcomeCodec.encode(normalize(outcome)),
+    )
+
+    internal fun legacyOutcomeKey(outcome: CognitiveOutcome): String = StableCognitiveIds.fingerprint(
+        "cognition-outcome/v1",
+        outcome.taskId.value,
+        CognitionOutcomeCodec.encode(outcome),
     )
 
     private fun normalize(outcome: CognitiveOutcome): CognitiveOutcome = outcome.copy(recordedAt = Instant.EPOCH)
