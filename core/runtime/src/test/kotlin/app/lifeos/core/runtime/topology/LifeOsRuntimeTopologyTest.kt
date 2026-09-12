@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -23,12 +24,58 @@ class LifeOsRuntimeTopologyTest {
     }
 
     @Test
-    fun canonicalInventoryNeverShrinksBelowEstablishedBaseline() {
-        val descriptors = LifeOsProcessTopology.canonicalSubsystems
-        assertTrue(descriptors.size >= LifeOsProcessTopology.MINIMUM_CANONICAL_SUBSYSTEMS)
-        assertEquals(descriptors.size, descriptors.map { it.id }.distinct().size)
-        val ids = descriptors.mapTo(linkedSetOf()) { it.id }
-        assertTrue(descriptors.all { ids.containsAll(it.dependencies) })
+    fun canonicalInventoryIsPreservedByTypedManifestGraph() {
+        val expected = setOf(
+            "photon-store",
+            "binary-asset-store",
+            "thought-matrix",
+            "thought-graph",
+            "field-runtime",
+            "field-thought-graph-projection",
+            "world-formula",
+            "language-understanding",
+            "language-context",
+            "capability-registry",
+            "capability-router",
+            "owner-policy",
+            "resource-intelligence",
+            "resource-budgets",
+            "decision-trace",
+            "goal-planning",
+            "goal-resume",
+            "local-knowledge",
+            "deep-search",
+            "scene-compiler",
+            "scene-rasterizer",
+            "image-renderer",
+            "image-transform",
+            "reminder-scheduler",
+            "communication",
+            "durable-task-engine",
+            "continuous-cognition",
+            "cognition-reconciler",
+            "cognition-outcome-pipeline",
+            "cognitive-worker",
+            "task-scheduler",
+            "lease-recovery",
+            "runtime-supervisor",
+            "health-graph",
+            "protection-coordinator",
+            "self-healing",
+            "tool-workshop",
+            "generated-tool-registry",
+            "autonomous-tool-workshop",
+            "evolution-hot-swap",
+            "hot-swap-runtime",
+            "learning-adaptation",
+            "build-studio",
+        )
+        val manifests = LifeOsProcessTopology.canonicalManifestGraph.topologicalOrder
+
+        assertEquals(43, manifests.size)
+        assertEquals(expected, manifests.mapTo(linkedSetOf()) { it.id.value })
+        assertEquals(expected, LifeOsProcessTopology.canonicalSubsystems.mapTo(linkedSetOf()) { it.id })
+        assertTrue(LifeOsProcessTopology.manifestFingerprint.isNotBlank())
     }
 
     @Test
@@ -56,7 +103,7 @@ class LifeOsRuntimeTopologyTest {
         )
 
         val snapshot = assertNotNull(LifeOsProcessTopology.snapshot())
-        assertTrue(snapshot.registeredSubsystemCount >= LifeOsProcessTopology.MINIMUM_CANONICAL_SUBSYSTEMS)
+        assertEquals(LifeOsProcessTopology.manifestFingerprint, snapshot.manifestFingerprint)
         assertEquals(
             LifeOsSubsystemState.ACTIVE,
             snapshot.subsystems.single { it.descriptor.id == "language-understanding" }.state,
@@ -79,5 +126,37 @@ class LifeOsRuntimeTopologyTest {
         val thoughtGraph = snapshot.subsystems.single { it.descriptor.id == "thought-graph" }
         assertEquals(LifeOsSubsystemState.UNAVAILABLE, thoughtGraph.state)
         assertEquals(setOf("photon-store"), thoughtGraph.unavailableDependencies)
+    }
+
+    @Test
+    fun degradedDependencyPropagatesDegradedState() = runTest {
+        CapabilityRegistry()
+        LifeOsRuntimeBindingRegistry.install(
+            subsystemId = "photon-store",
+            state = LifeOsRuntimeBindingState.DEGRADED,
+            source = "test",
+        )
+        LifeOsRuntimeBindingRegistry.install(
+            subsystemId = "thought-graph",
+            source = "test",
+        )
+
+        val snapshot = assertNotNull(LifeOsProcessTopology.snapshot())
+        val thoughtGraph = snapshot.subsystems.single { it.descriptor.id == "thought-graph" }
+        assertEquals(LifeOsSubsystemState.DEGRADED, thoughtGraph.state)
+        assertTrue(thoughtGraph.unavailableDependencies.isEmpty())
+    }
+
+    @Test
+    fun optionalRuntimesCannotAppearActiveWithoutBindingAndCapabilityTruth() = runTest {
+        CapabilityRegistry()
+
+        val snapshot = assertNotNull(LifeOsProcessTopology.snapshot())
+        val hotSwap = snapshot.subsystems.single { it.descriptor.id == "hot-swap-runtime" }
+        val buildStudio = snapshot.subsystems.single { it.descriptor.id == "build-studio" }
+
+        assertNotEquals(LifeOsSubsystemState.ACTIVE, hotSwap.state)
+        assertNotEquals(LifeOsSubsystemState.ACTIVE, buildStudio.state)
+        assertTrue(buildStudio.unavailableCapabilities.contains("buildstudio.run"))
     }
 }
