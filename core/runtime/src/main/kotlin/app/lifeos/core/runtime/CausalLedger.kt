@@ -6,11 +6,28 @@ import app.lifeos.core.model.CognitiveIntegrationRecord
 import app.lifeos.core.model.ModuleProcessingRecord
 import app.lifeos.core.model.PhotonId
 
+/** Serializable attraction evidence; processor/function references never enter the ledger. */
+data class ModuleAttractionLedgerRecord(
+    val moduleFingerprint: String,
+    val moduleId: String,
+    val moduleVersion: String,
+    val score: Double,
+    val selected: Boolean,
+    val reasons: List<String>,
+) {
+    init {
+        require(moduleFingerprint.isNotBlank()) { "Module fingerprint must not be blank" }
+        require(moduleId.isNotBlank()) { "Module id must not be blank" }
+        require(moduleVersion.isNotBlank()) { "Module version must not be blank" }
+        require(score in 0.0..1.0) { "Attraction score must be in 0..1" }
+    }
+}
+
 /** Immutable snapshot of one completed causal cognition run. */
 data class CausalLedgerEntry(
     val traceId: CausalTraceId,
     val rootPhotonId: PhotonId,
-    val attraction: FieldAttractionPlan,
+    val attraction: List<ModuleAttractionLedgerRecord>,
     val branches: List<CognitiveBranch>,
     val processingRecords: List<ModuleProcessingRecord>,
     val integration: CognitiveIntegrationRecord?,
@@ -44,4 +61,16 @@ class InMemoryCausalLedgerStore : CausalLedgerStore {
 
     @Synchronized
     override suspend fun load(traceId: CausalTraceId): CausalLedgerEntry? = entries[traceId]
+}
+
+fun FieldAttractionPlan.toLedgerRecords(): List<ModuleAttractionLedgerRecord> = decisions.map { decision ->
+    val identity = decision.module.descriptor.identity
+    ModuleAttractionLedgerRecord(
+        moduleFingerprint = identity.stableFingerprint,
+        moduleId = identity.moduleId,
+        moduleVersion = identity.version,
+        score = decision.score,
+        selected = decision.selected,
+        reasons = decision.reasons.toList(),
+    )
 }
