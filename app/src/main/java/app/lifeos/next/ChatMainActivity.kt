@@ -48,6 +48,9 @@ private fun LifeOsChatScreen(model: LifeOsChatViewModel) {
                         style = MaterialTheme.typography.labelSmall,
                     )
                 }
+                state.readiness?.let { readiness ->
+                    LifeOsReadinessCard(readiness)
+                }
                 LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
