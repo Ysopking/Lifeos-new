@@ -70,10 +70,10 @@ import app.lifeos.core.runtime.cognition.DurableCognitionDispatcher
 import app.lifeos.core.runtime.cognition.DurableCognitionReconciler
 import app.lifeos.core.runtime.cognition.DurableCognitionRecoveryObserver
 import app.lifeos.core.runtime.cognition.DurableCognitiveTriggerSink
-import app.lifeos.core.runtime.cognition.InMemoryCognitiveEventJournal
-import app.lifeos.core.runtime.cognition.InMemoryCognitiveOutcomeJournal
-import app.lifeos.core.runtime.cognition.InMemoryCognitiveTriggerSink
-import app.lifeos.core.runtime.cognition.InMemoryPhotonTransactionJournal
+import app.lifeos.core.runtime.cognition.PhotonBackedCognitiveOutcomeJournal
+import app.lifeos.core.runtime.cognition.PhotonBackedCognitiveTriggerSink
+import app.lifeos.core.runtime.cognition.PhotonBackedPhotonTransactionJournal
+import app.lifeos.core.runtime.cognition.PhotonBackedRuntimeEventJournal
 import app.lifeos.core.runtime.cognition.OutcomeTriggerObserver
 import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
 import app.lifeos.core.runtime.context.DurableContextFieldEnricher
@@ -331,7 +331,7 @@ class LifeOsKernelFactory(
         val schedulerSignal = ConflatedTaskSchedulerSignal()
         val taskEngine = DurableTaskEngine(taskRepository, schedulerSignal)
 
-        val cognitiveEventJournal = InMemoryCognitiveEventJournal()
+        val cognitiveEventJournal = PhotonBackedRuntimeEventJournal(store)
         val cognitiveScheduler = CognitiveScheduler()
         val cognitionAdmission = DurableCognitionAdmissionController(
             tasks = taskRepository,
@@ -351,10 +351,10 @@ class LifeOsKernelFactory(
             cognition = continuousCognition,
             taskEngine = taskEngine,
         )
-        val photonTransactions = InMemoryPhotonTransactionJournal()
-        val cognitiveOutcomes = InMemoryCognitiveOutcomeJournal()
+        val photonTransactions = PhotonBackedPhotonTransactionJournal(store)
+        val cognitiveOutcomes = PhotonBackedCognitiveOutcomeJournal(store)
         val cognitiveTriggers = DurableCognitiveTriggerSink(
-            journal = InMemoryCognitiveTriggerSink(),
+            journal = PhotonBackedCognitiveTriggerSink(store),
             photons = store,
             taskEngine = taskEngine,
         )
@@ -460,15 +460,12 @@ class LifeOsKernelFactory(
                     cognitionReconciler.reconcile()
                 },
                 RuntimeStateRehydrationStep {
-                    // Read-only full-vault decode: a corrupt evolution vault must fail before runtime start.
                     evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
                 },
                 RuntimeStateRehydrationStep {
-                    // Preflight generated-tool lifecycle state before mutating the in-memory registry.
                     generatedToolStateRepository.loadAll()
                 },
                 RuntimeStateRehydrationStep {
-                    // Bounded executable material must exactly match durable lifecycle state.
                     privateGeneratedToolRuntime.artifactBootVerifier.verify()
                 },
                 RuntimeStateRehydrationStep {
@@ -485,7 +482,6 @@ class LifeOsKernelFactory(
                 probes = listOf(
                     object : StoreProbe {
                         override val storeId: String = "goal-plan-ledger"
-
                         override suspend fun probe(): StoreStatus {
                             val report = goalPlanRepository.loadReport()
                             return StoreStatus(
@@ -497,47 +493,28 @@ class LifeOsKernelFactory(
                     },
                     object : StoreProbe {
                         override val storeId: String = "photon-store"
-
                         override suspend fun probe(): StoreStatus {
                             val report = store.loadReport()
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableFiles.isEmpty()) {
-                                    StoreState.HEALTHY
-                                } else {
-                                    StoreState.PARTIALLY_RECOVERABLE
-                                },
-                                message = if (report.unreadableFiles.isEmpty()) {
-                                    null
-                                } else {
-                                    "unreadable:${report.unreadableFiles.size}"
-                                },
+                                state = if (report.unreadableFiles.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
+                                message = if (report.unreadableFiles.isEmpty()) null else "unreadable:${report.unreadableFiles.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "learning-adaptation-ledger"
-
                         override suspend fun probe(): StoreStatus {
                             val report = learningAdaptationRepository.loadReport()
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableEntries.isEmpty()) {
-                                    StoreState.HEALTHY
-                                } else {
-                                    StoreState.CORRUPTED
-                                },
-                                message = if (report.unreadableEntries.isEmpty()) {
-                                    null
-                                } else {
-                                    "unreadable:${report.unreadableEntries.size}"
-                                },
+                                state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
+                                message = if (report.unreadableEntries.isEmpty()) null else "unreadable:${report.unreadableEntries.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "thought-matrix-state-store"
-
                         override suspend fun probe(): StoreStatus {
                             thoughtMatrixStateRepository.load()
                             return StoreStatus(storeId, StoreState.HEALTHY)
@@ -545,47 +522,28 @@ class LifeOsKernelFactory(
                     },
                     object : StoreProbe {
                         override val storeId: String = "thought-graph-delta-store"
-
                         override suspend fun probe(): StoreStatus {
                             val report = thoughtGraphDeltaRepository.loadReport()
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableEntries.isEmpty()) {
-                                    StoreState.HEALTHY
-                                } else {
-                                    StoreState.CORRUPTED
-                                },
-                                message = if (report.unreadableEntries.isEmpty()) {
-                                    null
-                                } else {
-                                    "unreadable:${report.unreadableEntries.size}"
-                                },
+                                state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
+                                message = if (report.unreadableEntries.isEmpty()) null else "unreadable:${report.unreadableEntries.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "field-thought-graph-projection-outbox"
-
                         override suspend fun probe(): StoreStatus {
                             val report = fieldThoughtGraphProjectionOutbox.loadReport()
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableEntries.isEmpty()) {
-                                    StoreState.HEALTHY
-                                } else {
-                                    StoreState.CORRUPTED
-                                },
-                                message = if (report.unreadableEntries.isEmpty()) {
-                                    null
-                                } else {
-                                    "unreadable:${report.unreadableEntries.size}"
-                                },
+                                state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
+                                message = if (report.unreadableEntries.isEmpty()) null else "unreadable:${report.unreadableEntries.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "task-store"
-
                         override suspend fun probe(): StoreStatus {
                             val now = Instant.now()
                             taskRepository.listRunnable(now, limit = 1)
@@ -595,75 +553,40 @@ class LifeOsKernelFactory(
                     },
                     object : StoreProbe {
                         override val storeId: String = "runtime-protection-store"
-
-                        override suspend fun probe(): StoreStatus = when (
-                            val protection = protectionRepository.load()
-                        ) {
-                            ProtectionStateLoadResult.Missing -> StoreStatus(
-                                storeId = storeId,
-                                state = StoreState.HEALTHY,
-                            )
+                        override suspend fun probe(): StoreStatus = when (val protection = protectionRepository.load()) {
+                            ProtectionStateLoadResult.Missing -> StoreStatus(storeId = storeId, state = StoreState.HEALTHY)
                             is ProtectionStateLoadResult.Loaded -> StoreStatus(
                                 storeId = storeId,
-                                state = if (protection.state.protected) {
-                                    StoreState.LOCKED
-                                } else {
-                                    StoreState.HEALTHY
-                                },
-                                message = protection.state
-                                    .takeIf { it.protected }
-                                    ?.let { "active:${it.mode.name.lowercase()}:generation-${it.generation}" },
+                                state = if (protection.state.protected) StoreState.LOCKED else StoreState.HEALTHY,
+                                message = protection.state.takeIf { it.protected }?.let { "active:${it.mode.name.lowercase()}:generation-${it.generation}" },
                             )
-                            is ProtectionStateLoadResult.Unreadable -> StoreStatus(
-                                storeId = storeId,
-                                state = StoreState.CORRUPTED,
-                                message = protection.message,
-                            )
+                            is ProtectionStateLoadResult.Unreadable -> StoreStatus(storeId = storeId, state = StoreState.CORRUPTED, message = protection.message)
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "field-snapshot-store"
-
                         override suspend fun probe(): StoreStatus {
                             val report = fieldSnapshotRepository.loadReport()
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableEntries.isEmpty()) {
-                                    StoreState.HEALTHY
-                                } else {
-                                    StoreState.PARTIALLY_RECOVERABLE
-                                },
-                                message = if (report.unreadableEntries.isEmpty()) {
-                                    null
-                                } else {
-                                    "unreadable:${report.unreadableEntries.size}"
-                                },
+                                state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
+                                message = if (report.unreadableEntries.isEmpty()) null else "unreadable:${report.unreadableEntries.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "world-formula-snapshot-store"
-
                         override suspend fun probe(): StoreStatus {
                             val report = worldFormulaSnapshotRepository.loadReport()
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableEntries.isEmpty()) {
-                                    StoreState.HEALTHY
-                                } else {
-                                    StoreState.PARTIALLY_RECOVERABLE
-                                },
-                                message = if (report.unreadableEntries.isEmpty()) {
-                                    null
-                                } else {
-                                    "unreadable:${report.unreadableEntries.size}"
-                                },
+                                state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
+                                message = if (report.unreadableEntries.isEmpty()) null else "unreadable:${report.unreadableEntries.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "evolution-store"
-
                         override suspend fun probe(): StoreStatus {
                             evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
                             return StoreStatus(storeId, StoreState.HEALTHY)
@@ -671,7 +594,6 @@ class LifeOsKernelFactory(
                     },
                     object : StoreProbe {
                         override val storeId: String = "generated-tool-state-store"
-
                         override suspend fun probe(): StoreStatus {
                             generatedToolStateRepository.loadAll()
                             return StoreStatus(storeId, StoreState.HEALTHY)
@@ -679,7 +601,6 @@ class LifeOsKernelFactory(
                     },
                     object : StoreProbe {
                         override val storeId: String = "generated-tool-artifact-store"
-
                         override suspend fun probe(): StoreStatus {
                             privateGeneratedToolRuntime.artifactBootVerifier.verify()
                             return StoreStatus(storeId, StoreState.HEALTHY)
@@ -692,9 +613,7 @@ class LifeOsKernelFactory(
             moduleRehydrator = object : ModuleRehydrator {
                 override suspend fun rehydrate(): ModuleRestoreSummary {
                     matrix.rehydrate()
-                    return ModuleRestoreSummary(
-                        restored = registry.activeFields().size,
-                    )
+                    return ModuleRestoreSummary(restored = registry.activeFields().size)
                 }
             },
             thoughtMatrixWarmup = object : ThoughtMatrixWarmup {
@@ -702,14 +621,12 @@ class LifeOsKernelFactory(
             },
             capabilityWarmup = object : CapabilityWarmup {
                 override suspend fun warmup(): CapabilityWarmupResult {
-                    val activeGeneratedToolIds = evolutionResources.generatedTools
-                        .snapshot()
+                    val activeGeneratedToolIds = evolutionResources.generatedTools.snapshot()
                         .filter { it.state == GeneratedToolState.ACTIVE }
                         .map { it.manifest.toolId }
                         .toSet()
                     val providers = capabilityRegistry.all(includeUnavailable = true)
-                    val generatedProviderIds = providers
-                        .filter { it.providerType == ProviderType.GENERATED_TOOL }
+                    val generatedProviderIds = providers.filter { it.providerType == ProviderType.GENERATED_TOOL }
                         .map { it.providerId }
                         .toSet()
                     require(generatedProviderIds == activeGeneratedToolIds) {
