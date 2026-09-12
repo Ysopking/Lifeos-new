@@ -3,7 +3,9 @@ package app.lifeos.core.runtime
 import app.lifeos.core.model.ModuleIdentity
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -32,8 +34,9 @@ class CausalCognitiveRuntimeTest {
                 )
             },
         )
+        val runtimeScope = CoroutineScope(StandardTestDispatcher(testScheduler))
         val runtime = CausalCognitiveRuntime(
-            scope = backgroundScope,
+            scope = runtimeScope,
             moduleRegistry = StaticCognitiveModuleRegistry(listOf(module)),
             engine = CausalCognitionEngine(),
             photonSink = CausalPhotonSink { photon, _ -> emitted += photon },
