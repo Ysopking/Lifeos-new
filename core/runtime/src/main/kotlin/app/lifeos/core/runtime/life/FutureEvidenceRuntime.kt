@@ -18,6 +18,7 @@ data class FutureEvidenceScenario(
     val allowed: Boolean,
     val sourcePhotonIds: Set<PhotonId>,
     val explanation: String,
+    val projectionVersion: String = FutureEvidenceEngine.DEFAULT_PROJECTION_VERSION,
 ) {
     init {
         require(id.isNotBlank())
@@ -26,6 +27,7 @@ data class FutureEvidenceScenario(
         require(stateDelta.values.all { it.isFinite() && it in -1.0..1.0 })
         require(sourcePhotonIds.isNotEmpty())
         require(explanation.isNotBlank())
+        require(projectionVersion.isNotBlank())
     }
 
     fun toPlannerCandidate(): FutureDeltaCandidate = FutureDeltaCandidate(
@@ -40,8 +42,14 @@ data class FutureEvidenceScenario(
 /**
  * Converts present evidence into explicit candidate future evidence. The mapping is intentionally
  * deterministic and conservative: it produces hypotheses with probabilities, never future facts.
+ * Projection version is part of scenario identity so historical evidence can be reinterpreted when
+ * the future model changes without overwriting the earlier interpretation.
  */
-class FutureEvidenceEngine {
+class FutureEvidenceEngine(
+    val projectionVersion: String = DEFAULT_PROJECTION_VERSION,
+) {
+    init { require(projectionVersion.isNotBlank()) }
+
     fun project(photon: Photon): List<FutureEvidenceScenario> {
         val kind = parseKind(photon) ?: return emptyList()
         val source = setOf(photon.id)
@@ -135,14 +143,25 @@ class FutureEvidenceEngine {
         explanation: String,
     ): FutureEvidenceScenario {
         val id = "future-" + StableCognitiveIds.fingerprint(
-            "future-evidence/v1",
+            projectionVersion,
             photon.id.value,
             photon.revision.toString(),
             kind.name,
             type.name,
             horizon.name,
         )
-        return FutureEvidenceScenario(id, type, horizon, probability, delta, cost, allowed, source, explanation)
+        return FutureEvidenceScenario(
+            id = id,
+            type = type,
+            horizon = horizon,
+            probability = probability,
+            stateDelta = delta,
+            resourceCost = cost,
+            allowed = allowed,
+            sourcePhotonIds = source,
+            explanation = explanation,
+            projectionVersion = projectionVersion,
+        )
     }
 
     private fun parseKind(photon: Photon): DomainFactKind? {
@@ -152,5 +171,9 @@ class FutureEvidenceEngine {
             ?: photon.tags.firstOrNull { it.startsWith("fact:") }?.substringAfter("fact:")?.uppercase()
             ?: return null
         return runCatching { DomainFactKind.valueOf(raw.trim().uppercase()) }.getOrNull()
+    }
+
+    companion object {
+        const val DEFAULT_PROJECTION_VERSION = "future-evidence/v2"
     }
 }
