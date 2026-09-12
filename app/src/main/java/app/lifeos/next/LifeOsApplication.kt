@@ -38,6 +38,7 @@ import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
 import app.lifeos.next.kernel.GoalExecutionRuntimeRegistry
 import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
 import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
+import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
@@ -144,24 +145,35 @@ class LifeOsApplication : Application() {
                     )
                 },
                 startSelfHealingRuntime = {
+                    val healthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
+                        "Kernel did not install its HealthGraph"
+                    }
+                    val quarantineRegistry = requireNotNull(QuarantineRegistryProcessRegistry.current()) {
+                        "Kernel did not install its QuarantineRegistry"
+                    }
+                    val supervisor = requireNotNull(RuntimeSupervisorProcessRegistry.current()) {
+                        "Kernel did not install its RuntimeSupervisor"
+                    }
                     selfHealingRuntime = PrivateSelfHealingRuntime.create(
                         context = this,
                         scope = selfHealingScope,
-                        graph = requireNotNull(HealthGraphProcessRegistry.current()) {
-                            "Kernel did not install its HealthGraph"
-                        },
-                        quarantineRegistry = requireNotNull(QuarantineRegistryProcessRegistry.current()) {
-                            "Kernel did not install its QuarantineRegistry"
-                        },
+                        graph = healthGraph,
+                        quarantineRegistry = quarantineRegistry,
                         budgets = resourceBudgets,
                         runtime = kernel.runtime,
-                        supervisor = requireNotNull(RuntimeSupervisorProcessRegistry.current()) {
-                            "Kernel did not install its RuntimeSupervisor"
-                        },
+                        supervisor = supervisor,
                     )
                     runBlocking {
                         selfHealingRuntime.verifyLedgerIntegrity()
                     }
+                    LifeOsHealthPhotonBridge.start(
+                        scope = selfHealingScope,
+                        graph = healthGraph,
+                        persist = { photon ->
+                            kernel.persistAndIngest(photon)
+                            Unit
+                        },
+                    )
                     selfHealingRuntime.orchestrator.start()
                 },
                 installDurableGoalPlanRuntime = {
