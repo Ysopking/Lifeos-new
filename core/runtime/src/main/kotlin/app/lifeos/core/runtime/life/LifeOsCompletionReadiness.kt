@@ -2,7 +2,7 @@ package app.lifeos.core.runtime.life
 
 import app.lifeos.core.model.StableCognitiveIds
 
-enum class LifeOsBlock { A, B, C, D, E, F, G, H }
+enum class LifeOsBlock { A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P }
 
 enum class ReadinessState { READY, DEGRADED, BLOCKED }
 
@@ -57,7 +57,7 @@ class LifeOsCompletionReadiness {
         return LifeOsReadinessSnapshot(
             blocks = blocks,
             fingerprint = StableCognitiveIds.fingerprint(
-                "lifeos-a-h-readiness/v1",
+                "lifeos-a-p-runtime-readiness/v2",
                 *blocks.flatMap { listOf(it.block.name, it.state.name, it.detail) }.toTypedArray(),
             ),
         )
