@@ -278,7 +278,7 @@ private class AndroidMediaInitialDataSource(
             add(MediaStore.MediaColumns.WIDTH)
             add(MediaStore.MediaColumns.HEIGHT)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) add(MediaStore.MediaColumns.RELATIVE_PATH)
-            if (kind != AndroidMediaKind.IMAGE) add(MediaStore.MediaColumns.DURATION)
+            if (kind != AndroidMediaKind.IMAGE) add(MEDIA_DURATION_COLUMN)
         }.toTypedArray()
         val rows = buildList {
             queryByIdPage(uri, projection, afterPosition, limit)?.use { cursor ->
@@ -295,7 +295,7 @@ private class AndroidMediaInitialDataSource(
                         clean(cursor.string(MediaStore.MediaColumns.RELATIVE_PATH))
                     } else ""
                     val duration = if (kind != AndroidMediaKind.IMAGE) {
-                        cursor.longOrNull(MediaStore.MediaColumns.DURATION) ?: 0L
+                        cursor.longOrNull(MEDIA_DURATION_COLUMN) ?: 0L
                     } else 0L
                     val itemUri = ContentUris.withAppendedId(uri, rowId).toString()
                     val state = StableCognitiveIds.fingerprint(
@@ -369,3 +369,5 @@ private fun instantFromMillis(value: Long): Instant =
 
 private fun instantFromSeconds(value: Long): Instant =
     if (value > 0L) Instant.ofEpochSecond(value) else Instant.EPOCH
+
+private const val MEDIA_DURATION_COLUMN = "duration"
