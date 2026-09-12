@@ -158,7 +158,7 @@ class DurableLifeMemoryRuntimeTest {
     }
 
     @Test
-    fun futureRelevanceRehydratesPersistedOldMemoryDeterministically() = runTest {
+    fun explicitAccessRehydratesPersistedOldMemoryToHotDeterministically() = runTest {
         val repository = MemoryPhotonRepository()
         val source = photon(
             "future-old",
@@ -180,8 +180,8 @@ class DurableLifeMemoryRuntimeTest {
             futureRelevance = 0.95,
         )
 
-        assertEquals(MemoryStage.WARM, rehydrated.memory.stageOf(source.id))
-        assertEquals("rehydrated-by-future-or-goal-relevance", rehydrated.memory.decisions.single().reason)
+        assertEquals(MemoryStage.HOT, rehydrated.memory.stageOf(source.id))
+        assertEquals("active-or-high-relevance", rehydrated.memory.decisions.single().reason)
     }
 
     @Test
