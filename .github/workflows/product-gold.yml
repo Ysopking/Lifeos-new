@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - lifeos/optimization-round-2
   push:
     branches:
       - main

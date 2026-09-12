@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime
 
+import app.lifeos.core.model.CognitiveBranchSemanticOutcome
 import app.lifeos.core.model.CognitiveBranchStatus
 import app.lifeos.core.model.ModuleIdentity
 import app.lifeos.core.model.Photon
@@ -10,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -26,11 +28,20 @@ class CausalCognitionEngineTest {
         ),
     )
 
-    private fun module(id: String, content: String, counter: () -> Unit): CognitiveModule = CognitiveModule(
+    private fun module(
+        id: String,
+        content: String,
+        version: String = "1.0.0",
+        semanticOutcome: CognitiveBranchSemanticOutcome = CognitiveBranchSemanticOutcome.UNSPECIFIED,
+        counter: () -> Unit,
+    ): CognitiveModule = CognitiveModule(
         descriptor = CognitiveModuleDescriptor(
-            identity = ModuleIdentity(id, "1.0.0", "impl-$id"),
+            identity = ModuleIdentity(id, version, "impl-$id-$version"),
             acceptedMimeTypes = setOf("text/*"),
             preferredTags = setOf("finance"),
+            semanticHints = setOf("payment", "request", "due"),
+            expectedInformationGain = 0.7,
+            estimatedCost = 0.2,
         ),
         processor = CognitiveModuleProcessor { _, _ ->
             counter()
@@ -47,6 +58,7 @@ class CausalCognitionEngineTest {
                     ),
                 ),
                 explanation = "$id extracted one fact",
+                semanticOutcome = semanticOutcome,
             )
         },
     )
@@ -85,6 +97,36 @@ class CausalCognitionEngineTest {
     }
 
     @Test
+    fun semanticOutcomeSurvivesCausalLedgerPersistence() = runTest {
+        val repository = object : app.lifeos.core.model.PhotonRepository {
+            private val data = linkedMapOf<PhotonId, Photon>()
+            override suspend fun save(photon: Photon) { data[photon.id] = photon }
+            override suspend fun load(id: PhotonId): Photon? = data[id]
+            override suspend fun loadReport() = app.lifeos.core.model.PhotonLoadReport(data.values.toList(), emptyList())
+            override suspend fun loadAll(): List<Photon> = data.values.toList()
+            override suspend fun delete(id: PhotonId) { data.remove(id) }
+        }
+        val durableLedger = PhotonBackedCausalLedgerStore(repository)
+        val first = CausalCognitionEngine(ledger = durableLedger).process(
+            source,
+            listOf(
+                module(
+                    id = "legal",
+                    content = "supported-obligation",
+                    semanticOutcome = CognitiveBranchSemanticOutcome.SUPPORTED,
+                ) {},
+            ),
+        )
+        val recovered = PhotonBackedCausalLedgerStore(repository).load(first.traceId)
+
+        assertNotNull(recovered)
+        assertEquals(
+            CognitiveBranchSemanticOutcome.SUPPORTED,
+            recovered.branches.single().semanticOutcome,
+        )
+    }
+
+    @Test
     fun aFreshLedgerReplaysTheSameSemanticRunToTheSamePhotonIds() = runTest {
         val modules = listOf(
             module("debt", "due-date=tomorrow") {},
@@ -92,12 +134,38 @@ class CausalCognitionEngineTest {
         )
 
         val first = CausalCognitionEngine().process(source, modules)
-        val second = CausalCognitionEngine().process(source, modules)
+        val second = CausalCognitionEngine().process(source, modules.reversed())
 
         assertEquals(
             first.emittedPhotons.map { it.id.value }.sorted(),
             second.emittedPhotons.map { it.id.value }.sorted(),
         )
         assertEquals(first.traceId, second.traceId)
+    }
+
+    @Test
+    fun moduleVersionChangeCreatesNewTraceForHistoricalReinterpretation() = runTest {
+        val ledger = InMemoryCausalLedgerStore()
+        val engine = CausalCognitionEngine(ledger = ledger)
+
+        val first = engine.process(source, listOf(module("legal", "v1", version = "1") {}))
+        val second = engine.process(source, listOf(module("legal", "v2", version = "2") {}))
+
+        assertFalse(first.replayed)
+        assertFalse(second.replayed)
+        assertNotEquals(first.traceId, second.traceId)
+    }
+
+    @Test
+    fun policyVersionChangeCreatesNewTrace() = runTest {
+        val modules = listOf(module("legal", "fact") {})
+        val first = CausalCognitionEngine(
+            config = CausalCognitionEngineConfig(policyVersion = "policy-v1"),
+        ).process(source, modules)
+        val second = CausalCognitionEngine(
+            config = CausalCognitionEngineConfig(policyVersion = "policy-v2"),
+        ).process(source, modules)
+
+        assertNotEquals(first.traceId, second.traceId)
     }
 }

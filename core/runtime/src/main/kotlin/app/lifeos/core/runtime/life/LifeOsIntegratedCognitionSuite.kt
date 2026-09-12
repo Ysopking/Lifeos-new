@@ -2,13 +2,15 @@ package app.lifeos.core.runtime.life
 
 import app.lifeos.core.runtime.CognitiveModule
 
-/** Process-owned services introduced by Blocks B-H. */
+/** Process-owned services introduced by Blocks B-H and Optimization Round 2. */
 data class LifeOsIntegratedCognitionSuite(
     val perception: PerceptionFusionEngine = PerceptionFusionEngine(),
-    val lifeMemory: BootLifeMemoryRehydrator = BootLifeMemoryRehydrator(),
+    val longTermMemory: LongTermMemoryEngine = LongTermMemoryEngine(),
+    val lifeMemory: BootLifeMemoryRehydrator = BootLifeMemoryRehydrator(longTermMemory = longTermMemory),
     val seinEvaluator: SeinModeEvaluator = SeinModeEvaluator(),
     val lifePlanner: LifePlanner = LifePlanner(),
-    val domainModules: List<CognitiveModule> = DomainCognitionModules.all(),
+    val futureEvidence: FutureEvidenceEngine = FutureEvidenceEngine(),
+    val domainModules: List<CognitiveModule> = DomainCognitionModules.all() + FutureCognitionModule.create(futureEvidence),
     val creativeCapabilities: CreativeCapabilityOrchestrator = CreativeCapabilityOrchestrator(),
     val memoryIntegrity: MemoryIntegrityVerifier = MemoryIntegrityVerifier(),
     val memoryCompactor: CognitiveMemoryCompactor = CognitiveMemoryCompactor(),

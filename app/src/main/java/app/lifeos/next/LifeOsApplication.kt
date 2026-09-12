@@ -31,6 +31,12 @@ import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
+import app.lifeos.core.runtime.life.DomainEvidenceConvergenceCoordinator
+import app.lifeos.core.runtime.life.DomainEvidenceConvergingPersistence
+import app.lifeos.core.runtime.life.DurableLifeMemoryRuntime
+import app.lifeos.core.runtime.life.DurableLifeMemoryRuntimeRegistry
+import app.lifeos.core.runtime.life.FuturePlanningCoordinator
+import app.lifeos.core.runtime.life.FuturePlanningPersistence
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
@@ -52,9 +58,12 @@ import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
 import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
+import app.lifeos.next.kernel.MultimodalPerceptionRuntime
+import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
+import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -78,6 +87,12 @@ class LifeOsApplication : Application() {
         private set
 
     lateinit var decisionTraces: DecisionTraceLedger
+        private set
+
+    lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
+        private set
+
+    lateinit var multimodalPerception: MultimodalPerceptionRuntime
         private set
 
     internal lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
@@ -128,18 +143,46 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
+                    lifeMemoryRuntime = DurableLifeMemoryRuntime(kernel.photonStore)
+                    DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
+                    multimodalPerception = MultimodalPerceptionRuntime(kernel)
+                    runBlocking { multimodalPerception.install() }
                     val integratedCognition = requireNotNull(LifeOsIntegratedCognitionSuiteRegistry.current()) {
                         "Integrated cognition suite must be installed before kernel composition"
+                    }
+                    val basePersistence = CausalDerivedPhotonPersistence { derived, _ ->
+                        kernel.photonStore.save(derived)
+                        kernel.matrix.influence(derived)
+                    }
+                    val domainPersistence = DomainEvidenceConvergingPersistence(
+                        delegate = basePersistence,
+                        convergence = DomainEvidenceConvergenceCoordinator(kernel.photonStore),
+                    )
+                    val futurePlanning = FuturePlanningCoordinator(
+                        photons = kernel.photonStore,
+                        authority = PrivateFuturePlanningAuthority(
+                            ownerPolicy = ownerPolicy,
+                            resources = hardwareResourceIntelligence,
+                        ),
+                        planner = integratedCognition.lifePlanner,
+                        evaluator = integratedCognition.seinEvaluator,
+                    )
+                    val productivePersistence = FuturePlanningPersistence(
+                        delegate = domainPersistence,
+                        planning = futurePlanning,
+                    )
+                    runBlocking {
+                        lifeMemoryRuntime.rebuild(Instant.now())
+                        futurePlanning.reconsiderAll().forEach { planned ->
+                            kernel.photonStore.save(planned)
+                        }
                     }
                     val causalCoordinator = RecursiveCausalCognitionCoordinator(
                         modules = StaticCognitiveModuleRegistry(integratedCognition.domainModules),
                         engine = CausalCognitionEngine(
                             ledger = PhotonBackedCausalLedgerStore(kernel.photonStore),
                         ),
-                        persistence = CausalDerivedPhotonPersistence { derived, _ ->
-                            kernel.photonStore.save(derived)
-                            kernel.matrix.influence(derived)
-                        },
+                        persistence = productivePersistence,
                     )
                     CausalCognitionTaskObserverRegistry.install(
                         CausalCognitionTaskObserver(

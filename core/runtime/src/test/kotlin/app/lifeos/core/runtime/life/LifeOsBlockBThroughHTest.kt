@@ -36,10 +36,14 @@ class LifeOsBlockBThroughHTest {
             provenance = Provenance("test", "user", Instant.EPOCH),
         )
         val latest = older.copy(revision = 2, content = "new", tags = setOf("goal"))
-        val report = BootLifeMemoryRehydrator().rehydrate(listOf(older, latest))
+        val report = BootLifeMemoryRehydrator().rehydrate(
+            listOf(older, latest),
+            now = Instant.EPOCH.plusSeconds(1),
+        )
         assertEquals(1, report.snapshot.entries.size)
         assertEquals(2, report.snapshot.entries.single().revision)
         assertEquals(LifeMemoryTier.HOT, report.snapshot.entries.single().tier)
+        assertEquals(MemoryStage.HOT, report.snapshot.entries.single().stage)
     }
 
     @Test
@@ -67,7 +71,7 @@ class LifeOsBlockBThroughHTest {
     }
 
     @Test
-    fun legalDomainModuleProducesDerivedAnalysisPhoton() = runTest {
+    fun legalDomainModuleProducesStructuredEvidencePhoton() = runTest {
         val source = Photon(
             id = PhotonId("legal-root"),
             content = "contract question",
@@ -76,7 +80,12 @@ class LifeOsBlockBThroughHTest {
         )
         val result = CausalCognitionEngine().process(source, listOf(DomainCognitionModules.legal()))
         assertFalse(result.replayed)
-        assertTrue(result.emittedPhotons.any { it.mimeType == "application/vnd.lifeos.domain-note+text" })
+        assertTrue(
+            result.emittedPhotons.any {
+                it.mimeType == "application/vnd.lifeos.domain-fact+text" &&
+                    "fact:legal_issue" in it.tags
+            }
+        )
     }
 
     @Test
