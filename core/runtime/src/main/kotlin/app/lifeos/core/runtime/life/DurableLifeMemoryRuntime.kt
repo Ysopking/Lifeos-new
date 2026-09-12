@@ -434,7 +434,9 @@ class DurableLifeMemoryRuntime(
         val graph = graphProjector.project(graphEvidence)
         val rawMemory = memoryEngine.project(memoryEvidence, effectiveAccess, now)
         val memory = stabilize(rawMemory, memoryEvidence)
-        memory.derivedPhotons.forEach(::saveIdempotent)
+        for (derived in memory.derivedPhotons) {
+            saveIdempotent(derived)
+        }
         val snapshot = DurableLifeMemorySnapshot(
             graph = graph,
             memory = memory,
