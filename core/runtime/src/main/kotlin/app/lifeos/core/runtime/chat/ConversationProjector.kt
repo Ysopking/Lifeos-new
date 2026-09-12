@@ -10,7 +10,7 @@ object ConversationProjector {
         require(conversationId.isNotBlank()) { "Conversation id must not be blank" }
         return photons
             .asSequence()
-            .filter(Photon::conversationVisible)
+            .filter { it.conversationVisible() }
             .filter { photon ->
                 val conversationTag = photon.tags.firstOrNull { it.startsWith(CONVERSATION_PREFIX) }
                 conversationTag == null || conversationTag == "$CONVERSATION_PREFIX$conversationId"
