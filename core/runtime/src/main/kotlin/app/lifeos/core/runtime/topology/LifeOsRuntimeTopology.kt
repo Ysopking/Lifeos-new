@@ -27,8 +27,10 @@ data class LifeOsSubsystemDescriptor(
 data class LifeOsSubsystemStatus(
     val descriptor: LifeOsSubsystemDescriptor,
     val state: LifeOsSubsystemState,
+    val binding: LifeOsRuntimeBinding? = null,
     val activeProviderIds: Set<String> = emptySet(),
     val unavailableCapabilities: Set<String> = emptySet(),
+    val unavailableDependencies: Set<String> = emptySet(),
 )
 
 data class LifeOsRuntimeTopologySnapshot(
@@ -37,14 +39,22 @@ data class LifeOsRuntimeTopologySnapshot(
     val generatedProviderCount: Int,
 ) {
     val registeredSubsystemCount: Int get() = subsystems.size
+    val operationalSubsystemCount: Int
+        get() = subsystems.count { it.state == LifeOsSubsystemState.ACTIVE || it.state == LifeOsSubsystemState.DEGRADED }
     val unavailableSubsystems: List<LifeOsSubsystemStatus>
         get() = subsystems.filter { it.state == LifeOsSubsystemState.UNAVAILABLE }
+    val unboundSubsystems: List<LifeOsSubsystemStatus>
+        get() = subsystems.filter { it.state == LifeOsSubsystemState.REGISTERED }
+    val fullyConnected: Boolean get() = unavailableSubsystems.isEmpty() && unboundSubsystems.isEmpty()
+    val fullyOperational: Boolean get() = subsystems.all { it.state == LifeOsSubsystemState.ACTIVE }
 }
 
 /**
  * Process-wide topology projection for the productive LIFEOS runtime.
- * Static subsystems describe the canonical architecture; capability/provider state remains dynamic,
- * so generated tools and hot swaps become visible without changing this inventory.
+ *
+ * Capability availability comes exclusively from CapabilityRegistry. Runtime presence and lifecycle
+ * come from LifeOsRuntimeBindingRegistry. Dependencies are then propagated transitively, so a node
+ * can no longer look healthy when an upstream subsystem is absent, stopped or quarantined.
  */
 object LifeOsProcessTopology {
     val canonicalSubsystems: List<LifeOsSubsystemDescriptor> = listOf(
@@ -61,18 +71,18 @@ object LifeOsProcessTopology {
         LifeOsSubsystemDescriptor("goal-resume", requiredCapabilities = setOf("goal.resume"), dependencies = setOf("goal-planning")),
         LifeOsSubsystemDescriptor("capability-registry"),
         LifeOsSubsystemDescriptor("capability-router", dependencies = setOf("capability-registry")),
-        LifeOsSubsystemDescriptor("local-knowledge", requiredCapabilities = setOf("knowledge.resolve")),
-        LifeOsSubsystemDescriptor("deep-search", requiredCapabilities = setOf("deepsearch.query")),
-        LifeOsSubsystemDescriptor("scene-compiler", requiredCapabilities = setOf("scene.construct.procedural")),
-        LifeOsSubsystemDescriptor("scene-rasterizer", requiredCapabilities = setOf("scene.rasterize.mmsi")),
-        LifeOsSubsystemDescriptor("image-renderer", requiredCapabilities = setOf("image.render.mmsi")),
-        LifeOsSubsystemDescriptor("image-transform", requiredCapabilities = setOf("image.transform.mmsi")),
-        LifeOsSubsystemDescriptor("reminder-scheduler", requiredCapabilities = setOf("planner.schedule")),
-        LifeOsSubsystemDescriptor("communication", requiredCapabilities = setOf("communication.dispatch")),
+        LifeOsSubsystemDescriptor("local-knowledge", requiredCapabilities = setOf("knowledge.resolve"), dependencies = setOf("capability-router")),
+        LifeOsSubsystemDescriptor("deep-search", requiredCapabilities = setOf("deepsearch.query"), dependencies = setOf("capability-router")),
+        LifeOsSubsystemDescriptor("scene-compiler", requiredCapabilities = setOf("scene.construct.procedural"), dependencies = setOf("capability-router")),
+        LifeOsSubsystemDescriptor("scene-rasterizer", requiredCapabilities = setOf("scene.rasterize.mmsi"), dependencies = setOf("scene-compiler")),
+        LifeOsSubsystemDescriptor("image-renderer", requiredCapabilities = setOf("image.render.mmsi"), dependencies = setOf("scene-rasterizer")),
+        LifeOsSubsystemDescriptor("image-transform", requiredCapabilities = setOf("image.transform.mmsi"), dependencies = setOf("capability-router")),
+        LifeOsSubsystemDescriptor("reminder-scheduler", requiredCapabilities = setOf("planner.schedule"), dependencies = setOf("capability-router")),
+        LifeOsSubsystemDescriptor("communication", requiredCapabilities = setOf("communication.dispatch"), dependencies = setOf("capability-router")),
+        LifeOsSubsystemDescriptor("durable-task-engine", dependencies = setOf("photon-store")),
         LifeOsSubsystemDescriptor("continuous-cognition", dependencies = setOf("photon-store", "durable-task-engine")),
         LifeOsSubsystemDescriptor("cognition-reconciler", dependencies = setOf("continuous-cognition")),
         LifeOsSubsystemDescriptor("cognition-outcome-pipeline", dependencies = setOf("continuous-cognition")),
-        LifeOsSubsystemDescriptor("durable-task-engine"),
         LifeOsSubsystemDescriptor("cognitive-worker", dependencies = setOf("durable-task-engine", "field-runtime")),
         LifeOsSubsystemDescriptor("task-scheduler", dependencies = setOf("durable-task-engine", "cognitive-worker")),
         LifeOsSubsystemDescriptor("lease-recovery", dependencies = setOf("durable-task-engine")),
@@ -80,14 +90,29 @@ object LifeOsProcessTopology {
         LifeOsSubsystemDescriptor("health-graph"),
         LifeOsSubsystemDescriptor("protection-coordinator", dependencies = setOf("health-graph")),
         LifeOsSubsystemDescriptor("self-healing", dependencies = setOf("health-graph", "runtime-supervisor")),
-        LifeOsSubsystemDescriptor("tool-workshop", dependencies = setOf("capability-registry")),
+        LifeOsSubsystemDescriptor("tool-workshop", dependencies = setOf("capability-registry", "resource-budgets")),
         LifeOsSubsystemDescriptor("generated-tool-registry", dependencies = setOf("tool-workshop", "capability-registry")),
-        LifeOsSubsystemDescriptor("evolution-hot-swap", dependencies = setOf("generated-tool-registry", "capability-registry")),
+        LifeOsSubsystemDescriptor("evolution-hot-swap", dependencies = setOf("generated-tool-registry", "capability-registry", "owner-policy")),
         LifeOsSubsystemDescriptor("learning-adaptation", dependencies = setOf("field-runtime", "capability-router")),
+        LifeOsSubsystemDescriptor("owner-policy"),
+        LifeOsSubsystemDescriptor("resource-intelligence"),
+        LifeOsSubsystemDescriptor("resource-budgets", dependencies = setOf("resource-intelligence")),
+        LifeOsSubsystemDescriptor("decision-trace", dependencies = setOf("photon-store")),
+        LifeOsSubsystemDescriptor("hot-swap-runtime", dependencies = setOf("evolution-hot-swap", "owner-policy", "resource-budgets")),
+        LifeOsSubsystemDescriptor("autonomous-tool-workshop", dependencies = setOf("tool-workshop", "continuous-cognition")),
+        LifeOsSubsystemDescriptor("build-studio", requiredCapabilities = setOf("buildstudio.run"), dependencies = setOf("capability-router", "tool-workshop")),
     ).also { descriptors ->
-        require(descriptors.size == 36) { "Canonical LIFEOS topology must contain exactly 36 subsystems" }
+        require(descriptors.size >= MINIMUM_CANONICAL_SUBSYSTEMS) {
+            "Canonical LIFEOS topology must not shrink below the established subsystem baseline"
+        }
         require(descriptors.map { it.id }.distinct().size == descriptors.size) {
             "Canonical LIFEOS subsystem ids must be unique"
+        }
+        val ids = descriptors.mapTo(linkedSetOf()) { it.id }
+        descriptors.forEach { descriptor ->
+            require(ids.containsAll(descriptor.dependencies)) {
+                "Unknown LIFEOS dependency for ${descriptor.id}: ${descriptor.dependencies - ids}"
+            }
         }
     }
 
@@ -95,36 +120,62 @@ object LifeOsProcessTopology {
         val registry = GeneratedToolRuntimeProcessRegistry.capabilities() ?: return null
         val providers = registry.all(includeUnavailable = true)
         val providersByCapability = providers.groupBy { it.capabilityId.value }
-        val statuses = canonicalSubsystems.map { descriptor ->
-            if (descriptor.requiredCapabilities.isEmpty()) {
-                LifeOsSubsystemStatus(descriptor, LifeOsSubsystemState.REGISTERED)
-            } else {
-                val matching = descriptor.requiredCapabilities.flatMap { providersByCapability[it].orEmpty() }
-                val unavailable = descriptor.requiredCapabilities.filterTo(linkedSetOf()) { capability ->
-                    providersByCapability[capability].orEmpty().none { provider ->
-                        provider.state == ProviderState.ACTIVE || provider.state == ProviderState.DEGRADED
-                    }
+        val bindings = LifeOsRuntimeBindingRegistry.snapshot()
+        val resolved = linkedMapOf<String, LifeOsSubsystemStatus>()
+
+        canonicalSubsystems.forEach { descriptor ->
+            val matching = descriptor.requiredCapabilities.flatMap { providersByCapability[it].orEmpty() }
+            val unavailableCapabilities = descriptor.requiredCapabilities.filterTo(linkedSetOf()) { capability ->
+                providersByCapability[capability].orEmpty().none { provider ->
+                    provider.state == ProviderState.ACTIVE || provider.state == ProviderState.DEGRADED
                 }
-                val activeProviders = matching
-                    .filter { it.state == ProviderState.ACTIVE || it.state == ProviderState.DEGRADED }
-                    .mapTo(linkedSetOf()) { it.providerId }
-                val state = when {
-                    unavailable.isNotEmpty() -> LifeOsSubsystemState.UNAVAILABLE
-                    matching.any { it.state == ProviderState.DEGRADED } -> LifeOsSubsystemState.DEGRADED
-                    else -> LifeOsSubsystemState.ACTIVE
-                }
-                LifeOsSubsystemStatus(
-                    descriptor = descriptor,
-                    state = state,
-                    activeProviderIds = activeProviders,
-                    unavailableCapabilities = unavailable,
-                )
             }
+            val activeProviders = matching
+                .filter { it.state == ProviderState.ACTIVE || it.state == ProviderState.DEGRADED }
+                .mapTo(linkedSetOf()) { it.providerId }
+            val binding = bindings[descriptor.id]
+            var state = when {
+                unavailableCapabilities.isNotEmpty() -> LifeOsSubsystemState.UNAVAILABLE
+                binding == null -> LifeOsSubsystemState.REGISTERED
+                binding.state == LifeOsRuntimeBindingState.REGISTERED -> LifeOsSubsystemState.REGISTERED
+                binding.state == LifeOsRuntimeBindingState.ACTIVE && matching.any { it.state == ProviderState.DEGRADED } ->
+                    LifeOsSubsystemState.DEGRADED
+                binding.state == LifeOsRuntimeBindingState.ACTIVE -> LifeOsSubsystemState.ACTIVE
+                binding.state == LifeOsRuntimeBindingState.DEGRADED -> LifeOsSubsystemState.DEGRADED
+                binding.state == LifeOsRuntimeBindingState.QUARANTINED || binding.state == LifeOsRuntimeBindingState.STOPPED ->
+                    LifeOsSubsystemState.UNAVAILABLE
+                else -> LifeOsSubsystemState.REGISTERED
+            }
+
+            val unavailableDependencies = descriptor.dependencies.filterTo(linkedSetOf()) { dependency ->
+                val dependencyState = resolved[dependency]?.state ?: LifeOsSubsystemState.UNAVAILABLE
+                dependencyState == LifeOsSubsystemState.UNAVAILABLE || dependencyState == LifeOsSubsystemState.REGISTERED
+            }
+            val degradedDependency = descriptor.dependencies.any { dependency ->
+                resolved[dependency]?.state == LifeOsSubsystemState.DEGRADED
+            }
+            if (unavailableDependencies.isNotEmpty()) {
+                state = LifeOsSubsystemState.UNAVAILABLE
+            } else if (degradedDependency && state == LifeOsSubsystemState.ACTIVE) {
+                state = LifeOsSubsystemState.DEGRADED
+            }
+
+            resolved[descriptor.id] = LifeOsSubsystemStatus(
+                descriptor = descriptor,
+                state = state,
+                binding = binding,
+                activeProviderIds = activeProviders,
+                unavailableCapabilities = unavailableCapabilities,
+                unavailableDependencies = unavailableDependencies,
+            )
         }
+
         return LifeOsRuntimeTopologySnapshot(
-            subsystems = statuses,
+            subsystems = resolved.values.toList(),
             capabilityProviderCount = providers.size,
             generatedProviderCount = providers.count { it.providerType == ProviderType.GENERATED_TOOL },
         )
     }
+
+    const val MINIMUM_CANONICAL_SUBSYSTEMS = 36
 }

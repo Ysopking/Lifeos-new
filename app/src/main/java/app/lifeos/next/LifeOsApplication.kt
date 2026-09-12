@@ -175,6 +175,7 @@ class LifeOsApplication : Application() {
                     )
                 },
                 startKernel = { kernel.start() },
+                stageObserver = LifeOsRuntimeWiring::onStageReady,
             )
         )
     }
