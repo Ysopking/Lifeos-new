@@ -22,6 +22,11 @@ Execution order for this branch follows the established rule: inspect -> line-an
 ## L Life memory
 - entity/event/relationship projection and timeline indexing
 - source checkpoints and deterministic continuous-ingest contracts
+- four temporal stages: HOT -> WARM -> COLD -> CRYSTALLIZED
+- WARM episode projection, COLD atomization and CRYSTALLIZED semantic-core projection
+- explicit access/relevance ledger input and deterministic rehydration toward WARM/HOT
+- protect open debt, contracts, deadlines, unresolved goals, important relationships and expected events from age-only crystallization
+- atoms/crystals retain source Photon ids, state hashes, confidence and producer version; raw evidence is never rewritten or deleted by compaction
 - keep encrypted Photon repository authoritative
 
 ## M Multimodal perception
@@ -38,4 +43,5 @@ Execution order for this branch follows the established rule: inspect -> line-an
 
 ## P Scale and product surface
 - trace/query projections, long-horizon/large-memory probes and owner-visible future/knowledge views
+- exercise HOT/WARM/COLD/CRYSTALLIZED transition and rehydration under large-memory/long-horizon probes
 - Product Gold regression and cold-restart evidence before merge
