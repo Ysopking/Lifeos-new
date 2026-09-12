@@ -108,7 +108,7 @@ class LifeOsSelfValidation(
             LifeOsBlock.J,
             "versioned-domain-evidence-convergence-contracts",
             "app.lifeos.core.runtime.life.DomainEvidenceConvergenceCoordinator",
-            "app.lifeos.core.runtime.life.DomainEvidencePersistence",
+            "app.lifeos.core.runtime.life.DomainEvidenceConvergingPersistence",
         )
         recordContract(
             LifeOsBlock.K,
