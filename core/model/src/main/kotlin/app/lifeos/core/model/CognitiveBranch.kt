@@ -8,6 +8,16 @@ enum class CognitiveBranchStatus {
     CONVERGED,
 }
 
+/** Semantic meaning of one module branch, separate from its execution lifecycle status. */
+enum class CognitiveBranchSemanticOutcome {
+    SUPPORTED,
+    CONTRADICTED,
+    UNCERTAIN,
+    IRRELEVANT,
+    TRANSFORMED,
+    UNSPECIFIED,
+}
+
 data class CognitiveBranch(
     val branchId: PhotonBranchId,
     val traceId: CausalTraceId,
@@ -19,6 +29,7 @@ data class CognitiveBranch(
     val status: CognitiveBranchStatus = CognitiveBranchStatus.CREATED,
     val outputPhotonIds: List<PhotonId> = emptyList(),
     val outputStateHash: CognitiveStateHash? = null,
+    val semanticOutcome: CognitiveBranchSemanticOutcome = CognitiveBranchSemanticOutcome.UNSPECIFIED,
 ) {
     init {
         require(parentRevision > 0) { "Parent revision must be positive" }
@@ -27,20 +38,30 @@ data class CognitiveBranch(
         require((status == CognitiveBranchStatus.CREATED || status == CognitiveBranchStatus.PROCESSING) || outputStateHash != null) {
             "Completed branch states require an output state hash"
         }
+        require(
+            semanticOutcome == CognitiveBranchSemanticOutcome.UNSPECIFIED ||
+                status !in setOf(CognitiveBranchStatus.CREATED, CognitiveBranchStatus.PROCESSING)
+        ) { "Semantic outcomes require a completed branch evaluation" }
     }
 
     fun processing(): CognitiveBranch = copy(status = CognitiveBranchStatus.PROCESSING)
 
-    fun ready(outputs: List<PhotonId>, stateHash: CognitiveStateHash): CognitiveBranch = copy(
+    fun ready(
+        outputs: List<PhotonId>,
+        stateHash: CognitiveStateHash,
+        semanticOutcome: CognitiveBranchSemanticOutcome = CognitiveBranchSemanticOutcome.UNSPECIFIED,
+    ): CognitiveBranch = copy(
         status = CognitiveBranchStatus.READY_FOR_CONVERGENCE,
         outputPhotonIds = outputs,
         outputStateHash = stateHash,
+        semanticOutcome = semanticOutcome,
     )
 
     fun rejected(outputs: List<PhotonId>, stateHash: CognitiveStateHash): CognitiveBranch = copy(
         status = CognitiveBranchStatus.REJECTED,
         outputPhotonIds = outputs,
         outputStateHash = stateHash,
+        semanticOutcome = CognitiveBranchSemanticOutcome.UNSPECIFIED,
     )
 
     fun converged(): CognitiveBranch {
