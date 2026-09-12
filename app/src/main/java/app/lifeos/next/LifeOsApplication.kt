@@ -114,9 +114,6 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
-                    runBlocking {
-                        kernel.matrix.rehydrate()
-                    }
                 },
                 installDeepSearchRuntime = {
                     DeepSearchMissionRuntimeRegistry.install(
