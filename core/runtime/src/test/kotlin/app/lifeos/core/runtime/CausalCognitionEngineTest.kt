@@ -30,8 +30,8 @@ class CausalCognitionEngineTest {
     private fun module(
         id: String,
         content: String,
-        counter: () -> Unit,
         version: String = "1.0.0",
+        counter: () -> Unit,
     ): CognitiveModule = CognitiveModule(
         descriptor = CognitiveModuleDescriptor(
             identity = ModuleIdentity(id, version, "impl-$id-$version"),
@@ -115,8 +115,8 @@ class CausalCognitionEngineTest {
         val ledger = InMemoryCausalLedgerStore()
         val engine = CausalCognitionEngine(ledger = ledger)
 
-        val first = engine.process(source, listOf(module("legal", "v1") {}, version = "1"))
-        val second = engine.process(source, listOf(module("legal", "v2") {}, version = "2"))
+        val first = engine.process(source, listOf(module("legal", "v1", version = "1") {}))
+        val second = engine.process(source, listOf(module("legal", "v2", version = "2") {}))
 
         assertFalse(first.replayed)
         assertFalse(second.replayed)
