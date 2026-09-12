@@ -4,8 +4,6 @@ import app.lifeos.core.model.ModuleIdentity
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -16,8 +14,6 @@ import kotlin.test.assertTrue
 class CausalCognitiveRuntimeTest {
     @Test
     fun runtimeProcessesThroughCausalEngineAndEmitsDerivedAndIntegratedPhotons() = runTest {
-        val dispatcher = StandardTestDispatcher(testScheduler)
-        val scope = TestScope(dispatcher + backgroundScope.coroutineContext)
         val emitted = mutableListOf<Photon>()
         val module = CognitiveModule(
             descriptor = CognitiveModuleDescriptor(
@@ -37,7 +33,7 @@ class CausalCognitiveRuntimeTest {
             },
         )
         val runtime = CausalCognitiveRuntime(
-            scope = scope,
+            scope = backgroundScope,
             moduleRegistry = StaticCognitiveModuleRegistry(listOf(module)),
             engine = CausalCognitionEngine(),
             photonSink = CausalPhotonSink { photon, _ -> emitted += photon },
