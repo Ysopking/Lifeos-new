@@ -39,4 +39,50 @@ class ConversationProjectorTest {
         assertEquals("turn-1", events[0].turnId)
         assertEquals("turn-1", events[1].turnId)
     }
+
+    @Test
+    fun `projects autonomous workshop request and evolution handoff without duplicate chat photon`() {
+        val sourceId = PhotonId("source-photon")
+        val request = Photon(
+            id = PhotonId("tool-request"),
+            content = """
+                LIFEOS_AUTONOMOUS_TOOL_WORKSHOP_REQUEST_V1
+                capability=buildstudio.run
+            """.trimIndent(),
+            provenance = Provenance(
+                source = "autonomous-capability-gap-request",
+                actor = "lifeos",
+                createdAt = Instant.parse("2026-09-12T00:00:02Z"),
+                parentIds = setOf(sourceId),
+            ),
+            tags = setOf("capability-gap", "tool-request", "autonomous-request", "non-activating"),
+        )
+        val outcome = Photon(
+            id = PhotonId("tool-outcome"),
+            content = """
+                LIFEOS_TOOL_WORKSHOP_OUTCOME_V1
+                capability=buildstudio.run
+                state=TRIAL_READY
+                route=NOVEL_CANARY
+                detail=verified candidate ready
+            """.trimIndent(),
+            provenance = Provenance(
+                source = "autonomous-tool-workshop",
+                actor = "lifeos",
+                createdAt = Instant.parse("2026-09-12T00:00:03Z"),
+                parentIds = setOf(request.id),
+            ),
+            tags = setOf("tool-workshop", "tool-workshop-outcome", "trial_ready", "evolution-handoff", "non-activating"),
+        )
+
+        val events = ConversationProjector.project(listOf(request, outcome))
+
+        assertEquals(2, events.size)
+        assertEquals(ChatRole.SYSTEM, events[0].role)
+        assertEquals(ChatEventType.TOOL_STARTED, events[0].type)
+        assertEquals("Autonomer ToolWorkshop gestartet: buildstudio.run wird als fehlende Fähigkeit bearbeitet.", events[0].text)
+        assertEquals(ChatRole.SYSTEM, events[1].role)
+        assertEquals(ChatEventType.TOOL_RESULT, events[1].type)
+        assertEquals("ToolWorkshop: buildstudio.run → TRIAL_READY · Evolution: NOVEL_CANARY · verified candidate ready", events[1].text)
+    }
 }

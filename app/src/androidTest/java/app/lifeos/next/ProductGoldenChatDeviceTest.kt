@@ -114,7 +114,9 @@ class ProductGoldenChatDeviceTest {
     }
 
     private suspend fun assertProductTopology() {
-        val topology = assertNotNull(LifeOsProcessTopology.snapshot())
+        val topology = LifeOsProcessTopology.snapshot()
+        assertNotNull("Product topology must be installed", topology)
+        topology!!
         assertTrue(
             "Canonical topology must preserve the established LIFEOS baseline",
             topology.registeredSubsystemCount >= LifeOsProcessTopology.MINIMUM_CANONICAL_SUBSYSTEMS,

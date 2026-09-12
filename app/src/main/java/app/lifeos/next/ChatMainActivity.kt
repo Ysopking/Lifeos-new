@@ -83,7 +83,14 @@ private fun ChatMessage(event: ChatEvent) {
     ) {
         Card {
             Column(Modifier.padding(12.dp)) {
-                Text(if (event.role == ChatRole.USER) "Du" else "LIFEOS", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    when (event.role) {
+                        ChatRole.USER -> "Du"
+                        ChatRole.LIFEOS -> "LIFEOS"
+                        ChatRole.SYSTEM -> "System"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                )
                 event.text?.let { Text(it) }
             }
         }
