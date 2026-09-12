@@ -13,12 +13,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Durable causal replay guard backed by the normal Photon repository.
+ * Durable causal ledger backed by the normal encrypted Photon repository.
  *
- * The full high-resolution ledger remains available to observability stores, while this compact
- * record guarantees the critical restart invariant: a completed trace is not executed again after
- * process death. Because the repository is the existing encrypted Photon store in Android
- * composition, no second persistence universe or additional secret is introduced.
+ * V2 stores the complete high-resolution causal entry so attraction, branch processing and fan-in
+ * remain reconstructible after process death. V1 replay guards remain readable for migration.
  */
 class PhotonBackedCausalLedgerStore(
     private val photons: PhotonRepository,
@@ -37,18 +35,21 @@ class PhotonBackedCausalLedgerStore(
         val guardId = replayGuardPhotonId(entry.traceId)
         photons.load(guardId)?.let { persisted ->
             val recovered = persisted.toReplayGuardEntry(entry.traceId)
-            require(recovered.rootPhotonId == entry.rootPhotonId &&
-                recovered.emittedPhotonIds.toSet() == entry.emittedPhotonIds.toSet()
-            ) {
+            val compatible = if (persisted.formatVersion() >= FORMAT_VERSION) {
+                recovered == entry
+            } else {
+                recovered.rootPhotonId == entry.rootPhotonId &&
+                    recovered.emittedPhotonIds.toSet() == entry.emittedPhotonIds.toSet()
+            }
+            require(compatible) {
                 "Persisted causal trace conflicts with the new entry: ${entry.traceId}"
             }
             memory.append(entry)
             return@withLock
         }
 
-        // Durable state is written before the in-process cache. If persistence fails, this trace
-        // remains eligible for retry instead of becoming falsely complete until process death.
-        photons.save(entry.toReplayGuardPhoton())
+        // Persistence happens before the process cache: a failed write never becomes a false replay.
+        photons.save(entry.toLedgerPhoton())
         memory.append(entry)
     }
 
@@ -62,22 +63,23 @@ class PhotonBackedCausalLedgerStore(
 
     companion object {
         const val MIME_TYPE = "application/vnd.lifeos.causal-replay-guard+text"
-        private const val FORMAT_VERSION = 1
+        private const val FORMAT_VERSION = 2
+        private const val LEGACY_FORMAT_VERSION = 1
 
         fun replayGuardPhotonId(traceId: CausalTraceId): PhotonId = PhotonId("causal-${traceId.value}")
     }
 
-    private fun CausalLedgerEntry.toReplayGuardPhoton(): Photon {
-        val lines = buildList {
-            add("v=$FORMAT_VERSION")
-            add("trace=${encode(traceId.value)}")
-            add("root=${encode(rootPhotonId.value)}")
-            emittedPhotonIds.sortedBy { it.value }.forEach { add("out=${encode(it.value)}") }
+    private fun CausalLedgerEntry.toLedgerPhoton(): Photon {
+        val content = buildString {
+            appendLine("v=$FORMAT_VERSION")
+            appendLine("trace=${encode(traceId.value)}")
+            appendLine("root=${encode(rootPhotonId.value)}")
+            append("payload=${CausalLedgerCodec.encode(this@toLedgerPhoton)}")
         }
         return Photon(
             id = replayGuardPhotonId(traceId),
             revision = 1,
-            content = lines.joinToString("\n"),
+            content = content,
             mimeType = MIME_TYPE,
             phase = PhotonPhase.ARCHIVED,
             semanticMass = 0.0,
@@ -89,18 +91,40 @@ class PhotonBackedCausalLedgerStore(
                 createdAt = Instant.EPOCH,
                 parentIds = setOf(rootPhotonId),
             ),
-            tags = setOf("causal-ledger", "replay-guard", "trace:${traceId.value}"),
+            tags = setOf("causal-ledger", "replay-guard", "causal-ledger:v2", "trace:${traceId.value}"),
         )
     }
 
     private fun Photon.toReplayGuardEntry(expectedTraceId: CausalTraceId): CausalLedgerEntry {
         require(mimeType == MIME_TYPE) { "Unexpected causal replay guard MIME type" }
-        val values = content.lineSequence()
-            .map { line -> line.substringBefore('=') to line.substringAfter('=', missingDelimiterValue = "") }
-            .groupBy({ it.first }, { it.second })
-        require(values["v"]?.singleOrNull()?.toIntOrNull() == FORMAT_VERSION) {
-            "Unsupported causal replay guard format"
+        val values = parsedValues()
+        return when (val version = values["v"]?.singleOrNull()?.toIntOrNull()) {
+            FORMAT_VERSION -> {
+                val entry = CausalLedgerCodec.decode(values["payload"]?.singleOrNull().orEmpty())
+                require(entry.traceId == expectedTraceId) { "Causal trace identity mismatch" }
+                val declaredTrace = CausalTraceId(decode(values["trace"]?.singleOrNull().orEmpty()))
+                val declaredRoot = PhotonId(decode(values["root"]?.singleOrNull().orEmpty()))
+                require(declaredTrace == entry.traceId && declaredRoot == entry.rootPhotonId) {
+                    "Causal ledger envelope does not match payload"
+                }
+                entry
+            }
+            LEGACY_FORMAT_VERSION -> decodeLegacy(values, expectedTraceId)
+            else -> error("Unsupported causal replay guard format: $version")
         }
+    }
+
+    private fun Photon.formatVersion(): Int = parsedValues()["v"]?.singleOrNull()?.toIntOrNull() ?: -1
+
+    private fun Photon.parsedValues(): Map<String, List<String>> = content.lineSequence()
+        .filter(String::isNotBlank)
+        .map { line -> line.substringBefore('=') to line.substringAfter('=', missingDelimiterValue = "") }
+        .groupBy({ it.first }, { it.second })
+
+    private fun decodeLegacy(
+        values: Map<String, List<String>>,
+        expectedTraceId: CausalTraceId,
+    ): CausalLedgerEntry {
         val traceId = CausalTraceId(decode(values["trace"]?.singleOrNull().orEmpty()))
         require(traceId == expectedTraceId) { "Causal trace identity mismatch" }
         val rootPhotonId = PhotonId(decode(values["root"]?.singleOrNull().orEmpty()))
