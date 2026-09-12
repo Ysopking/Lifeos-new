@@ -188,7 +188,7 @@ internal object CausalLedgerCodec {
 
     private fun DataOutputStream.strings(values: Collection<String>) {
         writeInt(values.size)
-        values.forEach(::string)
+        values.forEach { value -> string(value) }
     }
 
     private fun DataInputStream.strings(): List<String> = List(count()) { string() }
