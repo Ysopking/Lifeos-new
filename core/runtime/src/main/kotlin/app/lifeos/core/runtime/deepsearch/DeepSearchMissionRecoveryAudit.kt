@@ -102,7 +102,9 @@ class DeepSearchMissionRecoveryAuditor(
                 val checkpoint = requireNotNull(stored) { "terminal-checkpoint-missing" }.checkpoint
                 require(projector.isTerminal(checkpoint)) { "terminal-checkpoint-not-terminal" }
                 val resultId = requireNotNull(snapshot.resultPhotonId) { "terminal-result-id-missing" }
-                val photon = requireNotNull(resultPhotons.load(resultId)) { "terminal-result-photon-missing" }
+                val photon = requireNotNull(resultPhotons.load(resultId)) {
+                    "terminal-deepsearch-result-photon-is-missing"
+                }
                 val product = product(snapshot.definition.id, checkpoint, photon)
                 if (snapshot.state == DeepSearchMissionState.COMPLETED) {
                     require(product.result.status == DeepSearchStatus.RESOLVED) {
