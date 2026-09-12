@@ -59,6 +59,8 @@ object CanonicalPhotonState {
     /**
      * Makes a module output causally self-describing without mutating the source Photon.
      * Existing candidate timestamps are retained for human chronology but do not affect replay ids.
+     * Module ancestry is propagated so a later recursive pass cannot cycle back through a module
+     * that already contributed to this causal branch.
      */
     fun normalizeDerived(
         source: Photon,
@@ -74,11 +76,12 @@ object CanonicalPhotonState {
             target = source.id,
             type = RelationType.DERIVED_FROM,
         )
+        val inheritedModuleTags = source.tags.filterTo(linkedSetOf()) { it.startsWith("module:") }
         return candidate.copy(
             id = deterministicId,
             provenance = candidate.provenance.copy(parentIds = lineage),
             relations = relations,
-            tags = candidate.tags + setOf(
+            tags = candidate.tags + inheritedModuleTags + setOf(
                 "causal-trace:${traceId.value}",
                 "causal-branch:${branchId.value}",
                 "module:${module.moduleId}",
