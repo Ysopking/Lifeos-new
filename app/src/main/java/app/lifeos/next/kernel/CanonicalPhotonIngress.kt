@@ -22,6 +22,17 @@ class CanonicalPhotonIngress(
         photon: Photon,
         mode: PhotonIngressMode = PhotonIngressMode.ORIGIN,
     ) {
+        ingestWithReceipt(photon, mode)
+    }
+
+    /**
+     * Same canonical ingress semantics as [ingest], while returning the kernel submission receipt to
+     * callers whose contract must retain the productive Photon result.
+     */
+    suspend fun ingestWithReceipt(
+        photon: Photon,
+        mode: PhotonIngressMode = PhotonIngressMode.ORIGIN,
+    ): PhotonSubmissionResult {
         val persisted = kernel.photonStore.load(photon.id)
         if (persisted != null) {
             check(persisted.revision <= photon.revision) {
@@ -69,5 +80,6 @@ class CanonicalPhotonIngress(
         check(submission.processingQueued) {
             submission.processingFailure ?: "Photon cognitive work was not durabilized"
         }
+        return submission
     }
 }

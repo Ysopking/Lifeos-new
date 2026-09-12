@@ -313,7 +313,9 @@ class LifeOsApplication : Application() {
                         DurableGoalPlanRuntime(
                             ledger = kernel.goalPlans,
                             convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
-                            persistDerivedOutcome = kernel::persistAndIngest,
+                            persistDerivedOutcome = { photon ->
+                                photonIngress.ingestWithReceipt(photon, PhotonIngressMode.DERIVED)
+                            },
                             loadPersistedPhotons = kernel.photonStore::loadAll,
                             traces = goalDecisionTraceRecorder,
                         )
