@@ -54,16 +54,21 @@ class FieldAttractionEngine(
                 val descriptor = decision.module.descriptor
                 val immediateSelfReentry = !config.allowImmediateSelfReentry &&
                     "module:${descriptor.identity.moduleId}" in photon.tags
+                val requiredTagsMissing = !photon.tags.containsAll(descriptor.requiredTags)
+                val mimeMismatch = descriptor.acceptedMimeTypes.isNotEmpty() &&
+                    descriptor.acceptedMimeTypes.none { mimeMatches(photon.mimeType, it) }
                 val meetsThreshold = decision.score >= descriptor.minimumAttraction &&
                     decision.score >= config.minimumGlobalScore
-                val selected = !immediateSelfReentry && meetsThreshold && remaining > 0
+                val eligible = !immediateSelfReentry && !requiredTagsMissing && !mimeMismatch && meetsThreshold
+                val selected = eligible && remaining > 0
                 if (selected) remaining -= 1
                 decision.copy(
                     selected = selected,
                     reasons = decision.reasons + when {
                         immediateSelfReentry -> "blocked:immediate-self-reentry"
+                        requiredTagsMissing -> "blocked:required-tags-missing"
+                        mimeMismatch -> "blocked:mime-mismatch"
                         !meetsThreshold -> "blocked:below-threshold"
-                        remaining < 0 -> "blocked:module-budget"
                         !selected -> "blocked:module-budget"
                         else -> "selected"
                     },
