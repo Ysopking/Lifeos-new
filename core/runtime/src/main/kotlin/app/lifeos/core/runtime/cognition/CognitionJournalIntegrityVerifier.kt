@@ -25,12 +25,21 @@ class CognitionJournalIntegrityVerifier(
         val outcomeCount = verifyKind(CognitionJournalKind.OUTCOME) { photon ->
             val value = CognitionOutcomeCodec.decode(photon.content)
             val normalized = value.copy(recordedAt = Instant.EPOCH)
-            val key = StableCognitiveIds.fingerprint(
+            val currentKey = StableCognitiveIds.fingerprint(
                 "cognition-outcome/v2",
                 value.taskId.value,
                 CognitionOutcomeCodec.encode(normalized),
             )
-            requireIdentity(photon, CognitionJournalKind.OUTCOME, key)
+            val legacyKey = StableCognitiveIds.fingerprint(
+                "cognition-outcome/v1",
+                value.taskId.value,
+                CognitionOutcomeCodec.encode(value),
+            )
+            requireAnyIdentity(
+                photon = photon,
+                kind = CognitionJournalKind.OUTCOME,
+                stableIds = listOf(currentKey, legacyKey),
+            )
         }
         val triggerCount = verifyKind(CognitionJournalKind.TRIGGER) { photon ->
             val value = CognitionTriggerCodec.decode(photon.content)
@@ -67,10 +76,16 @@ class CognitionJournalIntegrityVerifier(
         photon: Photon,
         kind: CognitionJournalKind,
         stableId: String,
+    ) = requireAnyIdentity(photon, kind, listOf(stableId))
+
+    private fun requireAnyIdentity(
+        photon: Photon,
+        kind: CognitionJournalKind,
+        stableIds: List<String>,
     ) {
-        val expected = CognitionJournalIdentity.photonId(kind.tag, stableId)
-        require(photon.id == expected) {
-            "Cognition journal identity mismatch: expected ${expected.value}, found ${photon.id.value}"
+        val expectedIds = stableIds.map { CognitionJournalIdentity.photonId(kind.tag, it) }
+        require(photon.id in expectedIds) {
+            "Cognition journal identity mismatch for ${photon.id.value}"
         }
     }
 }
