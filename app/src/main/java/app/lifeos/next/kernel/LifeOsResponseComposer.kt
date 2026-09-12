@@ -68,8 +68,8 @@ object LifeOsResponseComposer {
                 .distinct()
                 .joinToString(", ")
             return "Ich habe dein Ziel verstanden. Der produktive Provider für $missing fehlt noch. " +
-                "Der Capability-Gap bleibt bis zum ToolWorkshop-/Controlled-Evolution-Gate blockiert; " +
-                "den aktuellen Workshop- und Evolution-Status siehst du direkt im Systemstrom."
+                "Genesis wählt dafür den kleinsten sicheren Erweiterungspfad; den konkreten Handoff " +
+                "und nachfolgenden ToolWorkshop-/BuildStudio-/Evolution-Status siehst du direkt im Systemstrom."
         }
         val goal = result.effectiveGoal
         return if (goal != null) {
