@@ -11,12 +11,13 @@
         android:label="LIFEOS"
         android:supportsRtl="true"
         android:theme="@style/Theme.LifeOS">
-        <activity android:name=".MainActivity" android:exported="true">
+        <activity android:name=".ChatMainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".MainActivity" android:exported="false" />
 
         <provider
             android:name=".kernel.HotSwapStartupProvider"
