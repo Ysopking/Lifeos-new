@@ -10,6 +10,7 @@ import app.lifeos.core.data.resource.EncryptedResourceBudgetRepository
 import app.lifeos.core.data.trace.EncryptedDecisionTraceRepository
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthorityRuntimeRegistry
@@ -21,6 +22,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionLedger
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRuntimeRegistry
 import app.lifeos.core.runtime.deepsearch.DeepSearchResultPhotonPersistence
+import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
@@ -37,6 +39,8 @@ import app.lifeos.next.kernel.DurableGoalPlanRuntime
 import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
 import app.lifeos.next.kernel.GoalExecutionRuntimeRegistry
 import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
+import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
+import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
@@ -114,6 +118,34 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
+                    LifeOsAutomationPhotonBridge.install { photon ->
+                        kernel.persistAndIngest(photon).photon
+                    }
+                    NovelPromotionRuntimeEventRegistry.install { promotion ->
+                        val capability = promotion.activeRecord.manifest.sourceCapability.value
+                        val toolId = promotion.activeRecord.manifest.toolId
+                        kernel.persistAndIngest(
+                            Photon(
+                                content = "Controlled Evolution aktiviert $capability über $toolId nach " +
+                                    "Novel-Canary-, Readiness-, Owner- und Promotion-Gates.",
+                                provenance = Provenance(
+                                    source = "controlled-evolution",
+                                    actor = "system",
+                                    createdAt = promotion.seal.sealedAt,
+                                ),
+                                tags = setOf(
+                                    "chat",
+                                    "chat:system",
+                                    "conversation:default",
+                                    "system:evolution",
+                                    "evolution:activated",
+                                    "capability:$capability",
+                                    "tool:$toolId",
+                                ),
+                            )
+                        )
+                        Unit
+                    }
                 },
                 installDeepSearchRuntime = {
                     DeepSearchMissionRuntimeRegistry.install(
@@ -122,7 +154,7 @@ class LifeOsApplication : Application() {
                             checkpoints = DeepSearchCheckpointStore(EncryptedDeepSearchCheckpointRepository(this)),
                             resultPhotons = object : DeepSearchResultPhotonPersistence {
                                 override suspend fun save(photon: Photon) {
-                                    kernel.photonStore.save(photon)
+                                    kernel.persistAndIngest(photon)
                                 }
 
                                 override suspend fun load(id: PhotonId): Photon? = kernel.photonStore.load(id)
@@ -140,24 +172,35 @@ class LifeOsApplication : Application() {
                     )
                 },
                 startSelfHealingRuntime = {
+                    val healthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
+                        "Kernel did not install its HealthGraph"
+                    }
+                    val quarantineRegistry = requireNotNull(QuarantineRegistryProcessRegistry.current()) {
+                        "Kernel did not install its QuarantineRegistry"
+                    }
+                    val supervisor = requireNotNull(RuntimeSupervisorProcessRegistry.current()) {
+                        "Kernel did not install its RuntimeSupervisor"
+                    }
                     selfHealingRuntime = PrivateSelfHealingRuntime.create(
                         context = this,
                         scope = selfHealingScope,
-                        graph = requireNotNull(HealthGraphProcessRegistry.current()) {
-                            "Kernel did not install its HealthGraph"
-                        },
-                        quarantineRegistry = requireNotNull(QuarantineRegistryProcessRegistry.current()) {
-                            "Kernel did not install its QuarantineRegistry"
-                        },
+                        graph = healthGraph,
+                        quarantineRegistry = quarantineRegistry,
                         budgets = resourceBudgets,
                         runtime = kernel.runtime,
-                        supervisor = requireNotNull(RuntimeSupervisorProcessRegistry.current()) {
-                            "Kernel did not install its RuntimeSupervisor"
-                        },
+                        supervisor = supervisor,
                     )
                     runBlocking {
                         selfHealingRuntime.verifyLedgerIntegrity()
                     }
+                    LifeOsHealthPhotonBridge.start(
+                        scope = selfHealingScope,
+                        graph = healthGraph,
+                        persist = { photon ->
+                            kernel.persistAndIngest(photon)
+                            Unit
+                        },
+                    )
                     selfHealingRuntime.orchestrator.start()
                 },
                 installDurableGoalPlanRuntime = {
@@ -175,6 +218,7 @@ class LifeOsApplication : Application() {
                     )
                 },
                 startKernel = { kernel.start() },
+                stageObserver = LifeOsRuntimeWiring::onStageReady,
             )
         )
     }

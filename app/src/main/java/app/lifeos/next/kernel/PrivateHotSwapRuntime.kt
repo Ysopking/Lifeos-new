@@ -3,6 +3,8 @@ package app.lifeos.next.kernel
 import android.content.Context
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.capability.EncryptedHotSwapRepository
+import app.lifeos.core.model.Photon
+import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.capability.GeneratedToolHotSwapCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolHotSwapRevertCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolHotSwapRevertResult
@@ -66,7 +68,9 @@ class PrivateHotSwapRuntime private constructor(
             evidence = evidence,
             resources = resources,
         )
-        recordTrace(result.transaction())
+        val snapshot = result.transaction()
+        recordTrace(snapshot)
+        recordLifecyclePhoton("swap", snapshot)
         result
     }
 
@@ -90,7 +94,9 @@ class PrivateHotSwapRuntime private constructor(
             actorId = PrivateOwnerPolicyBaseline.ownerActorId,
             ownerScope = PrivateOwnerPolicyBaseline.HOT_SWAP_SCOPE,
         ).revert(transactionId, resources)
-        recordTrace(result.transaction())
+        val snapshot = result.transaction()
+        recordTrace(snapshot)
+        recordLifecyclePhoton("revert", snapshot)
         result
     }
 
@@ -98,6 +104,26 @@ class PrivateHotSwapRuntime private constructor(
         DecisionTraceRuntimeRegistry.currentOrNull()?.recordHotSwap(
             snapshot = snapshot,
             recordedAt = snapshot.lastRecordedAt,
+        )
+    }
+
+    private suspend fun recordLifecyclePhoton(operation: String, snapshot: HotSwapSnapshot) {
+        LifeOsAutomationPhotonBridge.ingestIfInstalled(
+            Photon(
+                content = "Hot-Swap $operation: ${snapshot.toString().take(420)}",
+                provenance = Provenance(
+                    source = "private-hot-swap-runtime",
+                    actor = "system",
+                    createdAt = snapshot.lastRecordedAt,
+                ),
+                tags = setOf(
+                    "chat",
+                    "chat:system",
+                    "conversation:default",
+                    "system:hot-swap",
+                    "hot-swap:$operation",
+                ),
+            )
         )
     }
 

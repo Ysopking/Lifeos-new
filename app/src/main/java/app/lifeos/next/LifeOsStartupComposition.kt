@@ -1,5 +1,16 @@
 package app.lifeos.next
 
+/** Ordered process lifecycle stages exposed to the unified LIFEOS runtime topology. */
+internal enum class LifeOsStartupStage {
+    SHARED_RESOURCES,
+    GOAL_EXECUTION,
+    KERNEL_GRAPH,
+    DEEP_SEARCH,
+    SELF_HEALING,
+    DURABLE_GOALS,
+    RUNTIME_STARTED,
+}
+
 /**
  * JVM-safe startup seam for the process composition owned by [LifeOsApplication].
  *
@@ -15,16 +26,26 @@ internal data class LifeOsStartupHooks(
     val startSelfHealingRuntime: () -> Unit,
     val installDurableGoalPlanRuntime: () -> Unit,
     val startKernel: () -> Unit,
+    val stageObserver: (LifeOsStartupStage) -> Unit = {},
 )
 
 internal object LifeOsStartupComposition {
     fun start(hooks: LifeOsStartupHooks) {
-        hooks.installSharedResourceRuntime()
-        hooks.installGoalExecutionRuntime()
-        hooks.createKernel()
-        hooks.installDeepSearchRuntime()
-        hooks.startSelfHealingRuntime()
-        hooks.installDurableGoalPlanRuntime()
-        hooks.startKernel()
+        runStage(LifeOsStartupStage.SHARED_RESOURCES, hooks.installSharedResourceRuntime, hooks.stageObserver)
+        runStage(LifeOsStartupStage.GOAL_EXECUTION, hooks.installGoalExecutionRuntime, hooks.stageObserver)
+        runStage(LifeOsStartupStage.KERNEL_GRAPH, hooks.createKernel, hooks.stageObserver)
+        runStage(LifeOsStartupStage.DEEP_SEARCH, hooks.installDeepSearchRuntime, hooks.stageObserver)
+        runStage(LifeOsStartupStage.SELF_HEALING, hooks.startSelfHealingRuntime, hooks.stageObserver)
+        runStage(LifeOsStartupStage.DURABLE_GOALS, hooks.installDurableGoalPlanRuntime, hooks.stageObserver)
+        runStage(LifeOsStartupStage.RUNTIME_STARTED, hooks.startKernel, hooks.stageObserver)
+    }
+
+    private fun runStage(
+        stage: LifeOsStartupStage,
+        action: () -> Unit,
+        observer: (LifeOsStartupStage) -> Unit,
+    ) {
+        action()
+        observer(stage)
     }
 }

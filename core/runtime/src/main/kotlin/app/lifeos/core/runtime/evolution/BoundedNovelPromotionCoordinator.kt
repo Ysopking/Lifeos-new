@@ -113,7 +113,9 @@ class BoundedNovelPromotionCoordinator(
                 actorId = actor.actorId,
                 novelClaim = claim,
             )
-            BoundedNovelPromotionResult(active, evidence, readiness, seal)
+            val result = BoundedNovelPromotionResult(active, evidence, readiness, seal)
+            NovelPromotionRuntimeEventRegistry.publishActivated(result)
+            result
         } finally {
             capabilities.releaseNovelActivationClaim(claim)
         }
