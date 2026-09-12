@@ -3,11 +3,15 @@ package app.lifeos.core.runtime.life
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
-import app.lifeos.core.runtime.CausalCognitionEngine
 import app.lifeos.core.runtime.capability.CapabilityId
 import java.time.Instant
 
-/** Deterministic in-process validation used by Block H before Product Gold evidence is trusted. */
+/**
+ * Deterministic in-process validation of the productive LIFEOS runtime.
+ *
+ * This snapshot deliberately reports runtime truth only. CI, emulator recovery and Product Gold are
+ * external release evidence and are never inferred or claimed from inside the APK.
+ */
 class LifeOsSelfValidation(
     private val suite: LifeOsIntegratedCognitionSuite,
 ) {
@@ -19,6 +23,13 @@ class LifeOsSelfValidation(
             val ok = runCatching(check).getOrDefault(false)
             states[block] = if (ok) ReadinessState.READY else ReadinessState.BLOCKED
             details[block] = detail
+        }
+
+        fun recordContract(block: LifeOsBlock, detail: String, vararg classNames: String, extra: () -> Boolean = { true }) {
+            record(block, detail) {
+                classNames.all { className -> runCatching { Class.forName(className, false, javaClass.classLoader) }.isSuccess } &&
+                    extra()
+            }
         }
 
         record(LifeOsBlock.A, "causal-runtime-contract") {
@@ -42,9 +53,7 @@ class LifeOsSelfValidation(
             suite.lifeMemory.rehydrate(listOf(photon)).snapshot.contains(photon.id)
         }
         record(LifeOsBlock.D, "sein-future-delta-ranking") {
-            val state = LifeStateVector(
-                SeinDimension.entries.associateWith { if (it == SeinDimension.FRICTION) 0.5 else 0.5 }
-            )
+            val state = neutralLifeState()
             val candidate = FutureDeltaCandidate(
                 id = "self-improve",
                 stateDelta = mapOf(SeinDimension.SELF_ALIGNMENT to 0.1, SeinDimension.FRICTION to -0.1),
@@ -88,6 +97,77 @@ class LifeOsSelfValidation(
         val chaos = runChaosProbes()
         states[LifeOsBlock.H] = if (chaos.passed) ReadinessState.READY else ReadinessState.BLOCKED
         details[LifeOsBlock.H] = "deterministic-chaos-containment"
+
+        recordContract(
+            LifeOsBlock.I,
+            "durable-cognition-journal-contracts",
+            "app.lifeos.core.runtime.cognition.CognitionJournalIdentity",
+            "app.lifeos.core.runtime.cognition.CognitionJournalIntegrityVerifier",
+        )
+        recordContract(
+            LifeOsBlock.J,
+            "versioned-domain-evidence-convergence-contracts",
+            "app.lifeos.core.runtime.life.DomainEvidenceConvergenceCoordinator",
+            "app.lifeos.core.runtime.life.DomainEvidencePersistence",
+        )
+        recordContract(
+            LifeOsBlock.K,
+            "policy-bound-future-planning-contracts",
+            "app.lifeos.core.runtime.life.FuturePlanningCoordinator",
+            "app.lifeos.core.runtime.life.FuturePlanningPersistence",
+        ) {
+            suite.futureEvidence.projectionVersion.isNotBlank() &&
+                suite.seinEvaluator.definitionFingerprint.isNotBlank()
+        }
+        recordContract(
+            LifeOsBlock.L,
+            "durable-life-graph-four-stage-memory-contracts",
+            "app.lifeos.core.runtime.life.DurableLifeMemoryRuntime",
+            "app.lifeos.core.runtime.life.PhotonBackedLifeSourceCheckpointStore",
+        )
+        recordContract(
+            LifeOsBlock.M,
+            "native-multimodal-perception-contracts",
+            "app.lifeos.core.runtime.life.PerceptionSemanticPhotonFactory",
+            "app.lifeos.core.runtime.life.TypedPerceptionObservation",
+        ) {
+            val signal = PerceptionSignal(PerceptionSource.TOOL_RESULT, "self-multimodal", Instant.EPOCH, "typed")
+            suite.perception.fuse(listOf(signal, signal)).photons.size == 1
+        }
+        recordContract(
+            LifeOsBlock.N,
+            "guarded-recursive-capability-expansion-contracts",
+            "app.lifeos.core.runtime.capability.GeneratedCapabilityCandidatePhoton",
+            "app.lifeos.core.runtime.capability.CapabilityGapPhoton",
+        ) {
+            val plan = suite.creativeCapabilities.plan(
+                CreativeCapabilityRequest(
+                    capabilityId = CapabilityId("self.generated"),
+                    description = "recursive expansion validation",
+                    existingProviderReady = false,
+                    sourceCanBeGeneratedLocally = true,
+                )
+            )
+            !plan.activationAllowed && CapabilityExpansionStage.CANARY_REVIEW in plan.stages
+        }
+        recordContract(
+            LifeOsBlock.O,
+            "typed-topology-and-dependency-startup-contracts",
+            "app.lifeos.core.runtime.topology.SubsystemManifest",
+            "app.lifeos.core.runtime.topology.LifeOsProcessTopology",
+            "app.lifeos.core.runtime.topology.LifeOsRuntimeBindingRegistry",
+        )
+        recordContract(
+            LifeOsBlock.P,
+            "runtime-observability-and-v17-evidence-contracts",
+            "app.lifeos.core.runtime.hardening.V17EvidenceIntegrity",
+            "app.lifeos.core.runtime.hardening.V17EvidenceIntegrityEngine",
+        ) {
+            chaos.passed && states.entries
+                .filter { it.key != LifeOsBlock.P }
+                .all { it.value == ReadinessState.READY }
+        }
+
         return suite.readiness.snapshot(states, details) to chaos
     }
 
@@ -131,9 +211,7 @@ class LifeOsSelfValidation(
             "gap remains non-activating",
         )
 
-        val current = LifeStateVector(
-            SeinDimension.entries.associateWith { if (it == SeinDimension.FRICTION) 0.5 else 0.5 }
-        )
+        val current = neutralLifeState()
         val cheap = FutureDeltaCandidate(
             "cheap",
             mapOf(SeinDimension.AGENCY to 0.1),
@@ -165,4 +243,8 @@ class LifeOsSelfValidation(
 
         return suite.chaosVerifier.verify(results)
     }
+
+    private fun neutralLifeState() = LifeStateVector(
+        SeinDimension.entries.associateWith { 0.5 }
+    )
 }
