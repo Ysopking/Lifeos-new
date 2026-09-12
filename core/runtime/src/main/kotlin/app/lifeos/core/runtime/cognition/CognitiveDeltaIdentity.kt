@@ -16,7 +16,6 @@ object CognitiveDeltaIdentity {
     /**
      * Produces one canonical durable event for a Photon revision. The payload is independent of
      * whether it was observed live, replayed in-process, or repaired by cold-start reconciliation.
-     * This keeps the persistent event journal idempotent across every ingress path.
      */
     fun photonRevisionDelta(photon: Photon): PhotonDelta = PhotonDelta(
         deltaId = photonRevision(photon.id, photon.revision),
@@ -29,4 +28,20 @@ object CognitiveDeltaIdentity {
         timestamp = photon.provenance.createdAt,
         correlationId = photon.id.value,
     )
+
+    /**
+     * Canonicalizes any delta using the stable photon-revision identity. Non photon-revision deltas
+     * are preserved exactly, so specialized recovery/health events retain their own semantics.
+     */
+    fun canonicalize(delta: PhotonDelta): PhotonDelta {
+        val photonId = delta.photonId ?: return delta
+        val revision = delta.revisionAfter ?: return delta
+        if (delta.deltaId != photonRevision(photonId, revision)) return delta
+        return delta.copy(
+            source = PHOTON_REVISION_SOURCE,
+            revisionBefore = null,
+            type = if (revision == 1L) PhotonDeltaType.CREATED else PhotonDeltaType.UPDATED,
+            correlationId = photonId.value,
+        )
+    }
 }
