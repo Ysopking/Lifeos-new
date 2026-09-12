@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.cognition
 
+import app.lifeos.core.model.PhotonId
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -33,6 +34,37 @@ class CognitiveRuntimeFoundationTest {
         assertEquals(first, second)
         assertEquals(1, journal.size())
         assertEquals(listOf("event-1"), journal.readFrom(0).map { it.event.eventId })
+    }
+
+    @Test
+    fun liveReplayAndRecoveryUseOneCanonicalPhotonRevisionEvent() {
+        val photonId = PhotonId("same-revision")
+        val deltaId = CognitiveDeltaIdentity.photonRevision(photonId, 1)
+        val at = Instant.parse("2026-09-12T12:00:00Z")
+        val firstLive = PhotonDelta(
+            deltaId = deltaId,
+            source = "kernel-live-submit",
+            photonId = photonId,
+            revisionBefore = null,
+            revisionAfter = 1,
+            type = PhotonDeltaType.CREATED,
+            importanceHint = 0.9,
+            timestamp = at,
+            correlationId = photonId.value,
+        )
+        val replayedLive = firstLive.copy(
+            source = "kernel-live-submit",
+            revisionBefore = 1,
+            type = PhotonDeltaType.UPDATED,
+        )
+        val recovered = firstLive.copy(source = "boot-cognition-reconcile")
+
+        val canonical = CognitiveDeltaIdentity.canonicalize(firstLive)
+        assertEquals(canonical, CognitiveDeltaIdentity.canonicalize(replayedLive))
+        assertEquals(canonical, CognitiveDeltaIdentity.canonicalize(recovered))
+        assertEquals(CognitiveDeltaIdentity.PHOTON_REVISION_SOURCE, canonical.source)
+        assertEquals(null, canonical.revisionBefore)
+        assertEquals(PhotonDeltaType.CREATED, canonical.type)
     }
 
     @Test
