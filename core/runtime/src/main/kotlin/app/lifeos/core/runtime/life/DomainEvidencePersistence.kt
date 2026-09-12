@@ -1,19 +1,13 @@
 package app.lifeos.core.runtime.life
 
+import app.lifeos.core.model.CanonicalPhotonState
 import app.lifeos.core.model.CognitiveStateHash
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
 import java.time.Instant
 
-/**
- * Stable schema for persisted structured domain evidence.
- *
- * Schema v2 carries enough source identity to reconstruct an assertion after process death without
- * consulting mutable current source state. Older branch-local domain-fact payloads remain readable
- * as Photons but are deliberately not promoted into convergence because their source revision was
- * not encoded losslessly.
- */
+/** Stable schema and compatibility reader for persisted structured domain evidence. */
 object DomainEvidencePhotonCodec {
     const val MIME_TYPE = "application/vnd.lifeos.domain-fact+text"
     private const val SCHEMA_VERSION = "2"
@@ -37,9 +31,19 @@ object DomainEvidencePhotonCodec {
         append("evidence_span=${assertion.evidenceSpan}")
     }
 
-    fun decode(photon: Photon): DomainEvidenceAssertion? {
-        if (photon.mimeType != MIME_TYPE || "structured-domain-evidence" !in photon.tags) return null
+    suspend fun decode(photon: Photon, sources: PhotonRepository): DomainEvidenceAssertion? {
+        val fields = parse(photon) ?: return null
+        val assertion = if (fields["schema"] == SCHEMA_VERSION) {
+            decodeV2(fields)
+        } else {
+            decodeLegacy(photon, fields, sources)
+        }
+        verifyPhotonMetadata(photon, assertion)
+        return assertion
+    }
 
+    private fun parse(photon: Photon): Map<String, String>? {
+        if (photon.mimeType != MIME_TYPE || "structured-domain-evidence" !in photon.tags) return null
         val fields = linkedMapOf<String, String>()
         photon.content.lineSequence().filter { it.isNotBlank() }.forEach { line ->
             val separator = line.indexOf('=')
@@ -48,32 +52,64 @@ object DomainEvidencePhotonCodec {
             val value = line.substring(separator + 1)
             require(fields.put(key, value) == null) { "Duplicate structured domain evidence field: $key" }
         }
+        return fields
+    }
 
-        // Pre-v2 branch-local payloads did not encode source revision and cannot be reconstructed
-        // losslessly. Preserve them as evidence Photons but do not invent missing identity.
-        if (fields["schema"] != SCHEMA_VERSION) return null
+    private fun decodeV2(fields: Map<String, String>): DomainEvidenceAssertion = DomainEvidenceAssertion(
+        factId = required(fields, "fact_id"),
+        interpretationId = required(fields, "interpretation_id"),
+        evidenceFingerprint = required(fields, "evidence_fingerprint"),
+        kind = DomainFactKind.valueOf(required(fields, "kind")),
+        normalizedValue = required(fields, "value"),
+        stance = DomainEvidenceStance.valueOf(required(fields, "stance")),
+        confidence = required(fields, "confidence").toDouble(),
+        sourcePhotonId = PhotonId(required(fields, "source_photon_id")),
+        sourceRevision = required(fields, "source_revision").toLong(),
+        sourceStateHash = CognitiveStateHash(required(fields, "source_state_hash")),
+        producerModuleId = required(fields, "producer_module"),
+        producerModuleVersion = required(fields, "producer_version"),
+        producerModuleFingerprint = required(fields, "producer_fingerprint"),
+        observedAt = Instant.parse(required(fields, "observed_at")),
+        evidenceSpan = required(fields, "evidence_span"),
+    )
 
-        fun required(key: String): String = fields[key]?.takeIf { it.isNotBlank() }
+    private suspend fun decodeLegacy(
+        photon: Photon,
+        fields: Map<String, String>,
+        sources: PhotonRepository,
+    ): DomainEvidenceAssertion {
+        val sourceId = photon.provenance.parentIds.singleOrNull()
+            ?: throw IllegalArgumentException("Legacy structured evidence requires one source parent")
+        val source = sources.load(sourceId)
+            ?: throw IllegalArgumentException("Structured evidence source is unavailable: ${sourceId.value}")
+        val expectedState = CognitiveStateHash(required(fields, "source_state_hash"))
+        require(CanonicalPhotonState.inputHash(source) == expectedState) {
+            "Structured evidence source state mismatch"
+        }
+        return DomainEvidenceAssertion(
+            factId = required(fields, "fact_id"),
+            interpretationId = required(fields, "interpretation_id"),
+            evidenceFingerprint = required(fields, "evidence_fingerprint"),
+            kind = DomainFactKind.valueOf(required(fields, "kind")),
+            normalizedValue = required(fields, "value"),
+            stance = DomainEvidenceStance.valueOf(required(fields, "stance")),
+            confidence = required(fields, "confidence").toDouble(),
+            sourcePhotonId = source.id,
+            sourceRevision = source.revision,
+            sourceStateHash = expectedState,
+            producerModuleId = required(fields, "producer_module"),
+            producerModuleVersion = required(fields, "producer_version"),
+            producerModuleFingerprint = required(fields, "producer_fingerprint"),
+            observedAt = source.provenance.createdAt,
+            evidenceSpan = required(fields, "evidence_span"),
+        )
+    }
+
+    private fun required(fields: Map<String, String>, key: String): String =
+        fields[key]?.takeIf { it.isNotBlank() }
             ?: throw IllegalArgumentException("Missing structured domain evidence field: $key")
 
-        val assertion = DomainEvidenceAssertion(
-            factId = required("fact_id"),
-            interpretationId = required("interpretation_id"),
-            evidenceFingerprint = required("evidence_fingerprint"),
-            kind = DomainFactKind.valueOf(required("kind")),
-            normalizedValue = required("value"),
-            stance = DomainEvidenceStance.valueOf(required("stance")),
-            confidence = required("confidence").toDouble(),
-            sourcePhotonId = PhotonId(required("source_photon_id")),
-            sourceRevision = required("source_revision").toLong(),
-            sourceStateHash = CognitiveStateHash(required("source_state_hash")),
-            producerModuleId = required("producer_module"),
-            producerModuleVersion = required("producer_version"),
-            producerModuleFingerprint = required("producer_fingerprint"),
-            observedAt = Instant.parse(required("observed_at")),
-            evidenceSpan = required("evidence_span"),
-        )
-
+    private fun verifyPhotonMetadata(photon: Photon, assertion: DomainEvidenceAssertion) {
         require(assertion.sourcePhotonId in photon.provenance.parentIds) {
             "Structured domain evidence lost its source parent"
         }
@@ -87,27 +123,19 @@ object DomainEvidencePhotonCodec {
         require("stance:${assertion.stance.name.lowercase()}" in photon.tags) {
             "Structured domain stance tag mismatch"
         }
-        return assertion
     }
 }
 
-/**
- * Productive fan-in seam for durable domain evidence.
- *
- * The just-persisted evidence Photon is converged together with every durable v2 assertion for the
- * same proposition. The coordinator never mutates or deletes source evidence. A convergence Photon
- * is returned to the caller for normal encrypted persistence; an already persisted identical result
- * is treated as an idempotent replay, while same-id/different-content fails closed.
- */
+/** Durable, deterministic fan-in for all structured domain evidence belonging to one fact. */
 class DomainEvidenceConvergenceCoordinator(
     private val photons: PhotonRepository,
     private val engine: DomainEvidenceConvergenceEngine = DomainEvidenceConvergenceEngine(),
 ) {
     suspend fun convergePersisted(photon: Photon): Photon? {
-        val current = DomainEvidencePhotonCodec.decode(photon) ?: return null
+        val current = DomainEvidencePhotonCodec.decode(photon, photons) ?: return null
         val assertions = buildList {
             photons.loadAll().forEach { persisted ->
-                val decoded = DomainEvidencePhotonCodec.decode(persisted) ?: return@forEach
+                val decoded = DomainEvidencePhotonCodec.decode(persisted, photons) ?: return@forEach
                 if (decoded.factId == current.factId) add(decoded)
             }
             if (none { it.interpretationId == current.interpretationId }) add(current)
