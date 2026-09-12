@@ -10,6 +10,7 @@ import app.lifeos.core.data.resource.EncryptedResourceBudgetRepository
 import app.lifeos.core.data.trace.EncryptedDecisionTraceRepository
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthorityRuntimeRegistry
@@ -21,6 +22,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionLedger
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRuntimeRegistry
 import app.lifeos.core.runtime.deepsearch.DeepSearchResultPhotonPersistence
+import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
@@ -118,6 +120,31 @@ class LifeOsApplication : Application() {
                     kernel = LifeOsKernelFactory(this).create()
                     LifeOsAutomationPhotonBridge.install { photon ->
                         kernel.persistAndIngest(photon).photon
+                    }
+                    NovelPromotionRuntimeEventRegistry.install { promotion ->
+                        val capability = promotion.activeRecord.manifest.sourceCapability.value
+                        val toolId = promotion.activeRecord.manifest.toolId
+                        kernel.persistAndIngest(
+                            Photon(
+                                content = "Controlled Evolution aktiviert $capability über $toolId nach " +
+                                    "Novel-Canary-, Readiness-, Owner- und Promotion-Gates.",
+                                provenance = Provenance(
+                                    source = "controlled-evolution",
+                                    actor = "system",
+                                    createdAt = promotion.seal.sealedAt,
+                                ),
+                                tags = setOf(
+                                    "chat",
+                                    "chat:system",
+                                    "conversation:default",
+                                    "system:evolution",
+                                    "evolution:activated",
+                                    "capability:$capability",
+                                    "tool:$toolId",
+                                ),
+                            )
+                        )
+                        Unit
                     }
                 },
                 installDeepSearchRuntime = {

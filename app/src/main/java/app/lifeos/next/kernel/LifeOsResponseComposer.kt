@@ -67,7 +67,9 @@ object LifeOsResponseComposer {
                 .map { it.requirement.capabilityId.value }
                 .distinct()
                 .joinToString(", ")
-            return "Ich habe dein Ziel verstanden. Für die vollständige Ausführung fehlt noch: $missing."
+            return "Ich habe dein Ziel verstanden. Der produktive Provider für $missing fehlt noch. " +
+                "Der Capability-Gap bleibt bis zum ToolWorkshop-/Controlled-Evolution-Gate blockiert; " +
+                "den aktuellen Workshop- und Evolution-Status siehst du direkt im Systemstrom."
         }
         val goal = result.effectiveGoal
         return if (goal != null) {
