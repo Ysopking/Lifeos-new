@@ -5,6 +5,8 @@ import app.lifeos.core.model.CognitiveBranch
 import app.lifeos.core.model.CognitiveIntegrationRecord
 import app.lifeos.core.model.ModuleProcessingRecord
 import app.lifeos.core.model.PhotonId
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Serializable attraction evidence; processor/function references never enter the ledger. */
 data class ModuleAttractionLedgerRecord(
@@ -48,10 +50,10 @@ interface CausalLedgerStore {
 }
 
 class InMemoryCausalLedgerStore : CausalLedgerStore {
+    private val mutex = Mutex()
     private val entries = linkedMapOf<CausalTraceId, CausalLedgerEntry>()
 
-    @Synchronized
-    override suspend fun append(entry: CausalLedgerEntry) {
+    override suspend fun append(entry: CausalLedgerEntry) = mutex.withLock {
         val existing = entries[entry.traceId]
         require(existing == null || existing == entry) {
             "Causal trace already exists with different content: ${entry.traceId}"
@@ -59,8 +61,9 @@ class InMemoryCausalLedgerStore : CausalLedgerStore {
         entries[entry.traceId] = entry
     }
 
-    @Synchronized
-    override suspend fun load(traceId: CausalTraceId): CausalLedgerEntry? = entries[traceId]
+    override suspend fun load(traceId: CausalTraceId): CausalLedgerEntry? = mutex.withLock {
+        entries[traceId]
+    }
 }
 
 fun FieldAttractionPlan.toLedgerRecords(): List<ModuleAttractionLedgerRecord> = decisions.map { decision ->
