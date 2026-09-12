@@ -41,6 +41,13 @@ private fun LifeOsChatScreen(model: LifeOsChatViewModel) {
             ) {
                 Text("LIFEOS", style = MaterialTheme.typography.headlineMedium)
                 Text(statusText(state.bootStatus), style = MaterialTheme.typography.labelMedium)
+                if (state.registeredSubsystems > 0) {
+                    Text(
+                        "${state.registeredSubsystems} Subsysteme · ${state.capabilityProviders} Provider · " +
+                            "${state.unavailableSubsystems} nicht verfügbar · ${state.generatedProviders} generiert",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
                 LazyColumn(
                     Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
