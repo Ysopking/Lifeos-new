@@ -133,10 +133,13 @@ class DomainEvidenceConvergenceCoordinator(
 ) {
     suspend fun convergePersisted(photon: Photon): Photon? {
         val current = DomainEvidencePhotonCodec.decode(photon, photons) ?: return null
+        val factTag = "fact-id:${current.factId}"
         val assertions = buildList {
             photons.loadAll().forEach { persisted ->
+                if (factTag !in persisted.tags) return@forEach
                 val decoded = DomainEvidencePhotonCodec.decode(persisted, photons) ?: return@forEach
-                if (decoded.factId == current.factId) add(decoded)
+                require(decoded.factId == current.factId) { "Domain evidence fact tag mismatch" }
+                add(decoded)
             }
             if (none { it.interpretationId == current.interpretationId }) add(current)
         }
