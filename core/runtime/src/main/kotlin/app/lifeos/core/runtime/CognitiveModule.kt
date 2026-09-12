@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime
 
+import app.lifeos.core.model.CognitiveBranchSemanticOutcome
 import app.lifeos.core.model.DeterminismContext
 import app.lifeos.core.model.FieldInfluence
 import app.lifeos.core.model.ModuleIdentity
@@ -44,9 +45,13 @@ data class CognitiveModuleResult(
     val influences: List<FieldInfluence> = emptyList(),
     val outputPhotons: List<Photon> = emptyList(),
     val explanation: String = "",
+    val semanticOutcome: CognitiveBranchSemanticOutcome = CognitiveBranchSemanticOutcome.UNSPECIFIED,
 ) {
     init {
         require(explanation.length <= 16_384) { "Module explanation is too large" }
+        require(
+            semanticOutcome != CognitiveBranchSemanticOutcome.IRRELEVANT || outputPhotons.isEmpty()
+        ) { "An irrelevant branch must not emit derived photons" }
     }
 }
 

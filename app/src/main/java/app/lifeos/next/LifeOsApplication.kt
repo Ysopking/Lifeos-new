@@ -31,6 +31,8 @@ import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
+import app.lifeos.core.runtime.life.DomainEvidenceConvergenceCoordinator
+import app.lifeos.core.runtime.life.DomainEvidenceConvergingPersistence
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
@@ -131,15 +133,19 @@ class LifeOsApplication : Application() {
                     val integratedCognition = requireNotNull(LifeOsIntegratedCognitionSuiteRegistry.current()) {
                         "Integrated cognition suite must be installed before kernel composition"
                     }
+                    val productivePersistence = DomainEvidenceConvergingPersistence(
+                        delegate = CausalDerivedPhotonPersistence { derived, _ ->
+                            kernel.photonStore.save(derived)
+                            kernel.matrix.influence(derived)
+                        },
+                        convergence = DomainEvidenceConvergenceCoordinator(kernel.photonStore),
+                    )
                     val causalCoordinator = RecursiveCausalCognitionCoordinator(
                         modules = StaticCognitiveModuleRegistry(integratedCognition.domainModules),
                         engine = CausalCognitionEngine(
                             ledger = PhotonBackedCausalLedgerStore(kernel.photonStore),
                         ),
-                        persistence = CausalDerivedPhotonPersistence { derived, _ ->
-                            kernel.photonStore.save(derived)
-                            kernel.matrix.influence(derived)
-                        },
+                        persistence = productivePersistence,
                     )
                     CausalCognitionTaskObserverRegistry.install(
                         CausalCognitionTaskObserver(

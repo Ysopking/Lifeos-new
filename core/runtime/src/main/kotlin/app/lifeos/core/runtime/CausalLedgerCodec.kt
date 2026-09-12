@@ -2,6 +2,7 @@ package app.lifeos.core.runtime
 
 import app.lifeos.core.model.CausalTraceId
 import app.lifeos.core.model.CognitiveBranch
+import app.lifeos.core.model.CognitiveBranchSemanticOutcome
 import app.lifeos.core.model.CognitiveBranchStatus
 import app.lifeos.core.model.CognitiveIntegrationRecord
 import app.lifeos.core.model.CognitiveStateHash
@@ -22,7 +23,8 @@ import java.util.Base64
 
 /** Deterministic lossless codec for the durable high-resolution causal ledger. */
 internal object CausalLedgerCodec {
-    private const val VERSION = 2
+    private const val VERSION = 3
+    private const val LEGACY_VERSION = 2
 
     fun encode(entry: CausalLedgerEntry): String {
         val bytes = ByteArrayOutputStream()
@@ -53,6 +55,7 @@ internal object CausalLedgerCodec {
                 out.string(branch.status.name)
                 out.strings(branch.outputPhotonIds.map { it.value })
                 out.nullableString(branch.outputStateHash?.value)
+                out.string(branch.semanticOutcome.name)
             }
 
             out.writeInt(entry.processingRecords.size)
@@ -88,7 +91,10 @@ internal object CausalLedgerCodec {
         require(payload.isNotBlank()) { "Missing causal ledger payload" }
         val bytes = Base64.getUrlDecoder().decode(payload)
         return DataInputStream(ByteArrayInputStream(bytes)).use { input ->
-            require(input.readInt() == VERSION) { "Unsupported causal ledger binary version" }
+            val version = input.readInt()
+            require(version == VERSION || version == LEGACY_VERSION) {
+                "Unsupported causal ledger binary version"
+            }
             val traceId = CausalTraceId(input.string())
             val root = PhotonId(input.string())
 
@@ -104,17 +110,33 @@ internal object CausalLedgerCodec {
             }
 
             val branches = List(input.count()) {
+                val branchId = PhotonBranchId(input.string())
+                val branchTraceId = CausalTraceId(input.string())
+                val parentPhotonId = PhotonId(input.string())
+                val parentRevision = input.readLong()
+                val ordinal = input.readInt()
+                val module = input.module()
+                val inputStateHash = CognitiveStateHash(input.string())
+                val status = CognitiveBranchStatus.valueOf(input.string())
+                val outputPhotonIds = input.strings().map(::PhotonId)
+                val outputStateHash = input.nullableString()?.let(::CognitiveStateHash)
+                val semanticOutcome = if (version >= VERSION) {
+                    CognitiveBranchSemanticOutcome.valueOf(input.string())
+                } else {
+                    CognitiveBranchSemanticOutcome.UNSPECIFIED
+                }
                 CognitiveBranch(
-                    branchId = PhotonBranchId(input.string()),
-                    traceId = CausalTraceId(input.string()),
-                    parentPhotonId = PhotonId(input.string()),
-                    parentRevision = input.readLong(),
-                    ordinal = input.readInt(),
-                    module = input.module(),
-                    inputStateHash = CognitiveStateHash(input.string()),
-                    status = CognitiveBranchStatus.valueOf(input.string()),
-                    outputPhotonIds = input.strings().map(::PhotonId),
-                    outputStateHash = input.nullableString()?.let(::CognitiveStateHash),
+                    branchId = branchId,
+                    traceId = branchTraceId,
+                    parentPhotonId = parentPhotonId,
+                    parentRevision = parentRevision,
+                    ordinal = ordinal,
+                    module = module,
+                    inputStateHash = inputStateHash,
+                    status = status,
+                    outputPhotonIds = outputPhotonIds,
+                    outputStateHash = outputStateHash,
+                    semanticOutcome = semanticOutcome,
                 )
             }
 
