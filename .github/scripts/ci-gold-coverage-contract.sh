@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 required_jvm_tests=(
+  "core/runtime/src/test/kotlin/app/lifeos/core/runtime/buildstudio/BuildStudioHostRuntimeTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/capability/BoundedGeneratedToolBootRecoveryTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/capability/DurableToolWorkshopOwnerRevocationTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/capability/HotSwapRoutingRecoveryTest.kt"
@@ -11,6 +12,8 @@ required_jvm_tests=(
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/resource/WorldFormulaBudgetBrokerTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/trace/SubsystemDecisionTraceRecorderTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/hardening/V17HardeningEvidenceTest.kt"
+  "host/buildstudio/src/test/kotlin/app/lifeos/host/buildstudio/JvmBuildStudioHostTest.kt"
+  "app/src/test/java/app/lifeos/next/kernel/GenesisBuildStudioExpansionRuntimeTest.kt"
   "app/src/test/java/app/lifeos/next/OutcomeOverviewTest.kt"
 )
 
