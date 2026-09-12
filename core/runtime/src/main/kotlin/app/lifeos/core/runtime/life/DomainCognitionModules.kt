@@ -1,93 +1,110 @@
 package app.lifeos.core.runtime.life
 
+import app.lifeos.core.model.ModuleIdentity
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.CognitiveModule
 import app.lifeos.core.runtime.CognitiveModuleDescriptor
 import app.lifeos.core.runtime.CognitiveModuleProcessor
 import app.lifeos.core.runtime.CognitiveModuleResult
-import app.lifeos.core.model.ModuleIdentity
 
-/** Block E domain modules. They emit analysis Photons only; no external effect is executed here. */
+/** Block E domain modules. They emit evidence-linked analysis Photons only; no external effect is executed here. */
 object DomainCognitionModules {
     fun curiosity(): CognitiveModule = module(
         id = "curiosity",
-        accepted = setOf("text/*"),
-        requiredTags = setOf("question"),
-        preferredTags = setOf("unknown", "research"),
-        outputMime = "application/vnd.lifeos.research-proposal+text",
+        semanticHints = setOf("warum", "wieso", "wie", "unklar", "fehlt", "recherche", "wissen", "question", "unknown"),
+        preferredTags = setOf("question", "unknown", "research"),
         outputTags = setOf("research-proposal", "non-activating", "deepsearch-candidate"),
-        prefix = "Research proposal",
+        extractor = DomainEvidenceExtractor::curiosity,
+        informationGain = 0.95,
+        cost = 0.25,
     )
 
     fun legal(): CognitiveModule = module(
         id = "legal",
-        accepted = setOf("text/*", "application/vnd.lifeos.domain-note+text"),
-        requiredTags = setOf("legal"),
-        preferredTags = setOf("contract", "claim", "deadline"),
-        outputMime = "application/vnd.lifeos.domain-note+text",
+        semanticHints = setOf("vertrag", "recht", "gesetz", "kündigung", "mahnung", "anspruch", "klage", "gericht", "haftung", "frist"),
+        preferredTags = setOf("legal", "contract", "claim", "deadline"),
         outputTags = setOf("domain:legal", "needs-evidence"),
-        prefix = "Legal analysis note",
+        extractor = DomainEvidenceExtractor::legal,
+        informationGain = 0.8,
+        cost = 0.35,
     )
 
     fun debt(): CognitiveModule = module(
         id = "debt",
-        accepted = setOf("text/*", "application/vnd.lifeos.domain-note+text"),
-        requiredTags = setOf("debt"),
-        preferredTags = setOf("finance", "invoice", "creditor"),
-        outputMime = "application/vnd.lifeos.domain-note+text",
-        outputTags = setOf("domain:debt", "finance", "business"),
-        prefix = "Debt analysis note",
+        semanticHints = setOf("schuld", "schulden", "forderung", "mahnung", "rechnung", "gläubiger", "inkasso", "zahlung", "rate", "kredit"),
+        preferredTags = setOf("debt", "finance", "invoice", "creditor", "claim"),
+        outputTags = setOf("domain:debt", "finance", "business", "needs-evidence"),
+        extractor = DomainEvidenceExtractor::debt,
+        informationGain = 0.85,
+        cost = 0.3,
     )
 
     fun businessAdvisory(): CognitiveModule = module(
         id = "business-advisory",
-        accepted = setOf("text/*", "application/vnd.lifeos.domain-note+text"),
-        requiredTags = setOf("business"),
-        preferredTags = setOf("finance", "strategy", "operations"),
-        outputMime = "application/vnd.lifeos.domain-note+text",
-        outputTags = setOf("domain:business-advisory", "decision-support"),
-        prefix = "Business advisory note",
+        semanticHints = setOf("geschäft", "business", "umsatz", "marge", "gewinn", "cashflow", "kunde", "markt", "strategie", "kosten", "chance", "risiko"),
+        preferredTags = setOf("business", "finance", "strategy", "operations", "opportunity"),
+        outputTags = setOf("domain:business-advisory", "decision-support", "needs-evidence"),
+        extractor = DomainEvidenceExtractor::business,
+        informationGain = 0.8,
+        cost = 0.4,
     )
 
     fun all(): List<CognitiveModule> = listOf(curiosity(), legal(), debt(), businessAdvisory())
 
     private fun module(
         id: String,
-        accepted: Set<String>,
-        requiredTags: Set<String>,
+        semanticHints: Set<String>,
         preferredTags: Set<String>,
-        outputMime: String,
         outputTags: Set<String>,
-        prefix: String,
+        extractor: (Photon) -> List<DomainFact>,
+        informationGain: Double,
+        cost: Double,
     ): CognitiveModule = CognitiveModule(
         descriptor = CognitiveModuleDescriptor(
-            identity = ModuleIdentity("domain.$id", "1", "lifeos-domain-$id-v1"),
-            acceptedMimeTypes = accepted,
-            requiredTags = requiredTags,
+            identity = ModuleIdentity(
+                moduleId = "domain.$id",
+                version = "2",
+                implementationHash = "lifeos-domain-$id-v2-structured-evidence",
+                capabilityIds = setOf("domain.analyze.$id"),
+            ),
+            acceptedMimeTypes = setOf("text/*", "application/vnd.lifeos.domain-fact+text", "application/vnd.lifeos.domain-note+text"),
             preferredTags = preferredTags,
-            baseAttraction = 0.1,
-            minimumAttraction = 0.25,
-            maxOutputs = 2,
+            semanticHints = semanticHints,
+            expectedInformationGain = informationGain,
+            estimatedCost = cost,
+            baseAttraction = 0.03,
+            minimumAttraction = 0.48,
+            maxOutputs = 8,
         ),
         processor = CognitiveModuleProcessor { photon, _ ->
+            val facts = extractor(photon).take(8)
             CognitiveModuleResult(
-                outputPhotons = listOf(
+                outputPhotons = facts.map { fact ->
                     Photon(
-                        content = "$prefix\nsource=${photon.id.value}\ncontent=${photon.content.take(2048)}",
-                        mimeType = outputMime,
-                        semanticMass = photon.semanticMass,
+                        content = buildString {
+                            appendLine("kind=${fact.kind.name}")
+                            appendLine("value=${fact.value}")
+                            appendLine("confidence=${fact.confidence}")
+                            append("evidence=${fact.evidence}")
+                        },
+                        mimeType = "application/vnd.lifeos.domain-fact+text",
+                        semanticMass = maxOf(photon.semanticMass, fact.confidence),
                         energy = photon.energy,
-                        confidence = photon.confidence,
+                        confidence = minOf(photon.confidence, fact.confidence),
                         provenance = Provenance(
                             source = "domain:$id",
                             actor = "lifeos",
                             createdAt = photon.provenance.createdAt,
                         ),
-                        tags = photon.tags + outputTags,
+                        tags = photon.tags + outputTags + setOf(
+                            "domain:$id",
+                            "fact:${fact.kind.name.lowercase()}",
+                            "structured-domain-evidence",
+                        ),
                     )
-                ),
-                explanation = "deterministic-domain-analysis:$id",
+                },
+                explanation = "structured-domain-evidence:$id:${facts.size}",
             )
         },
     )
