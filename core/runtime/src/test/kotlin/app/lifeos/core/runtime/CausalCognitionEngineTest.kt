@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime
 
+import app.lifeos.core.model.CognitiveBranchSemanticOutcome
 import app.lifeos.core.model.CognitiveBranchStatus
 import app.lifeos.core.model.ModuleIdentity
 import app.lifeos.core.model.Photon
@@ -31,6 +32,7 @@ class CausalCognitionEngineTest {
         id: String,
         content: String,
         version: String = "1.0.0",
+        semanticOutcome: CognitiveBranchSemanticOutcome = CognitiveBranchSemanticOutcome.UNSPECIFIED,
         counter: () -> Unit,
     ): CognitiveModule = CognitiveModule(
         descriptor = CognitiveModuleDescriptor(
@@ -56,6 +58,7 @@ class CausalCognitionEngineTest {
                     ),
                 ),
                 explanation = "$id extracted one fact",
+                semanticOutcome = semanticOutcome,
             )
         },
     )
@@ -91,6 +94,36 @@ class CausalCognitionEngineTest {
         assertTrue(derived.all { it.id.value.startsWith("derived-") })
         assertTrue(integrated.id.value.startsWith("integration-"))
         assertTrue(first.emittedPhotons.all { it.id.value.matches(Regex("[A-Za-z0-9_-]{1,128}")) })
+    }
+
+    @Test
+    fun semanticOutcomeSurvivesCausalLedgerPersistence() = runTest {
+        val repository = object : app.lifeos.core.model.PhotonRepository {
+            private val data = linkedMapOf<PhotonId, Photon>()
+            override suspend fun save(photon: Photon) { data[photon.id] = photon }
+            override suspend fun load(id: PhotonId): Photon? = data[id]
+            override suspend fun loadReport() = app.lifeos.core.model.PhotonLoadReport(data.values.toList(), emptyList())
+            override suspend fun loadAll(): List<Photon> = data.values.toList()
+            override suspend fun delete(id: PhotonId) { data.remove(id) }
+        }
+        val durableLedger = PhotonBackedCausalLedgerStore(repository)
+        val first = CausalCognitionEngine(ledger = durableLedger).process(
+            source,
+            listOf(
+                module(
+                    id = "legal",
+                    content = "supported-obligation",
+                    semanticOutcome = CognitiveBranchSemanticOutcome.SUPPORTED,
+                ) {},
+            ),
+        )
+        val recovered = PhotonBackedCausalLedgerStore(repository).load(first.traceId)
+
+        assertNotNull(recovered)
+        assertEquals(
+            CognitiveBranchSemanticOutcome.SUPPORTED,
+            recovered.branches.single().semanticOutcome,
+        )
     }
 
     @Test
