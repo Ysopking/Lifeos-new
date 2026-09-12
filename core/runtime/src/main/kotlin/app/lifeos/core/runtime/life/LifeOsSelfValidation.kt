@@ -129,7 +129,7 @@ class LifeOsSelfValidation(
             LifeOsBlock.M,
             "native-multimodal-perception-contracts",
             "app.lifeos.core.runtime.life.PerceptionSemanticPhotonFactory",
-            "app.lifeos.core.runtime.life.TypedPerceptionObservation",
+            "app.lifeos.core.runtime.life.PerceptionModality",
         ) {
             val signal = PerceptionSignal(PerceptionSource.TOOL_RESULT, "self-multimodal", Instant.EPOCH, "typed")
             suite.perception.fuse(listOf(signal, signal)).photons.size == 1
