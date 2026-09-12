@@ -251,6 +251,16 @@ class LanguageGoalCapabilityRouterTest {
     }
 
     @Test
+    fun `conversation is local and never creates a capability gap`() = runTest {
+        val result = LanguageGoalCapabilityRouter(CapabilityRegistry()).route(goal(IntentType.CONVERSATION))
+
+        assertTrue(result.ready)
+        assertTrue(result.plan.requirements.isEmpty())
+        assertFalse(result.plan.languageBlocking)
+        assertTrue(result.gaps.isEmpty())
+    }
+
+    @Test
     fun `unknown language intent never becomes action ready`() = runTest {
         val result = LanguageGoalCapabilityRouter(registryWithLocalSystemProviders()).route(goal(IntentType.UNKNOWN))
         assertFalse(result.ready)

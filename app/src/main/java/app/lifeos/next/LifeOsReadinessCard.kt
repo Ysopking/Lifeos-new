@@ -25,13 +25,13 @@ fun buildReadinessUiModel(snapshot: LifeOsReadinessSnapshot): ReadinessUiModel {
     val blocked = snapshot.blocks.count { it.state == ReadinessState.BLOCKED }
     val degraded = snapshot.blocks.count { it.state == ReadinessState.DEGRADED }
     return ReadinessUiModel(
-        title = if (snapshot.complete) "LIFEOS A–H bereit" else "LIFEOS A–H Integritätsstatus",
+        title = if (snapshot.complete) "LIFEOS Runtime A–P bereit" else "LIFEOS Runtime A–P Integritätsstatus",
         summary = "$ready bereit · $degraded eingeschränkt · $blocked blockiert",
         rows = snapshot.blocks.map { block -> block.block.name to "${block.state.name}: ${block.detail}" },
     )
 }
 
-/** Block H owner-visible readiness surface; it grants no runtime authority. */
+/** Owner-visible runtime-readiness surface; it grants no runtime authority and makes no CI/Gold claim. */
 @Composable
 fun LifeOsReadinessCard(
     snapshot: LifeOsReadinessSnapshot,
