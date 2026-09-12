@@ -10,6 +10,10 @@ import app.lifeos.core.runtime.PhotonIngressMode
  *
  * DERIVED/REPLAY classification is persisted before task submission. The causal task observer can
  * therefore suppress a duplicate root pass even if the process dies after durabilization.
+ *
+ * A Photon that is already persisted/live is deliberately submitted again with the same canonical
+ * revision identity. The durable cognition/task layer owns cross-process idempotency, so this closes
+ * the crash window between Photon persistence/live exposure and durable cognitive submission.
  */
 class CanonicalPhotonIngress(
     private val kernel: LifeOsKernel,
@@ -58,7 +62,6 @@ class CanonicalPhotonIngress(
                 check(live == photon) {
                     "Conflicting live Photon state for ${photon.id.value}@${photon.revision}"
                 }
-                return
             }
         }
 
