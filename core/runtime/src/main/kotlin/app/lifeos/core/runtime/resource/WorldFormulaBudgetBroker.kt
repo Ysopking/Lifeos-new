@@ -16,6 +16,8 @@ enum class ResourceBudgetDomain {
     EVOLUTION,
     HOT_SWAP,
     SELF_HEALING,
+    COLLABORATIVE_ARTIFACTS,
+    BACKGROUND_LEARNING,
     BACKGROUND,
 }
 
