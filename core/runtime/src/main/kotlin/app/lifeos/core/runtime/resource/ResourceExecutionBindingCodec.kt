@@ -24,7 +24,7 @@ object ResourceExecutionBindingCodec {
             data.writeString(binding.accountId.value)
             data.writeString(binding.reservationId.value)
             data.writeBoolean(binding.authoritativeStateId != null)
-            binding.authoritativeStateId?.let(data::writeString)
+            binding.authoritativeStateId?.let { stateId -> data.writeString(stateId) }
             data.writeLong(binding.revision)
             data.writeString(binding.boundAt.toString())
         }
