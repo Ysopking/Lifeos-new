@@ -1,5 +1,8 @@
 package app.lifeos.core.runtime.life
 
+import app.lifeos.core.model.CanonicalPhotonState
+import app.lifeos.core.model.CognitiveStateHash
+import app.lifeos.core.model.ModuleIdentity
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
@@ -17,7 +20,11 @@ enum class DomainEvidenceStance {
 }
 
 data class DomainEvidenceAssertion(
+    /** Stable proposition identity: same normalized proposition can be interpreted repeatedly. */
     val factId: String,
+    /** Stable interpretation identity: changes with source state or producer implementation. */
+    val interpretationId: String,
+    /** Stable source-evidence identity, independent of the module that interpreted it. */
     val evidenceFingerprint: String,
     val kind: DomainFactKind,
     val normalizedValue: String,
@@ -25,40 +32,64 @@ data class DomainEvidenceAssertion(
     val confidence: Double,
     val sourcePhotonId: PhotonId,
     val sourceRevision: Long,
+    val sourceStateHash: CognitiveStateHash,
+    val producerModuleId: String,
+    val producerModuleVersion: String,
+    val producerModuleFingerprint: String,
     val observedAt: Instant,
-    val evidence: String,
+    val evidenceSpan: String,
 ) {
     init {
         require(factId.startsWith("fact:")) { "factId must use the fact: namespace" }
+        require(interpretationId.startsWith("fact-interpretation:")) {
+            "interpretationId must use the fact-interpretation: namespace"
+        }
         require(evidenceFingerprint.matches(Regex("[0-9a-f]{64}"))) {
             "evidenceFingerprint must be a SHA-256 hex digest"
         }
         require(normalizedValue.isNotBlank())
         require(confidence.isFinite() && confidence in 0.0..1.0)
         require(sourceRevision > 0)
-        require(evidence.isNotBlank())
+        require(producerModuleId.isNotBlank())
+        require(producerModuleVersion.isNotBlank())
+        require(producerModuleFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(evidenceSpan.isNotBlank())
     }
 }
 
 object DomainEvidenceIdentity {
-    fun assertion(source: Photon, fact: DomainFact): DomainEvidenceAssertion {
+    fun assertion(
+        source: Photon,
+        fact: DomainFact,
+        producer: ModuleIdentity,
+    ): DomainEvidenceAssertion {
         val normalizedValue = normalizeValue(fact.value)
         val factId = "fact:" + StableCognitiveIds.fingerprint(
-            "domain-fact/v1",
+            "domain-fact/v2",
             fact.kind.name,
             normalizedValue,
         )
-        val evidence = compact(fact.evidence)
+        val evidenceSpan = compact(fact.evidence)
+        val sourceStateHash = CanonicalPhotonState.inputHash(source)
         val evidenceFingerprint = StableCognitiveIds.fingerprint(
-            "domain-evidence/v1",
+            "domain-evidence/v2",
             source.id.value,
             source.revision.toString(),
+            sourceStateHash.value,
             fact.kind.name,
             normalizedValue,
-            evidence,
+            evidenceSpan,
+        )
+        val interpretationId = "fact-interpretation:" + StableCognitiveIds.fingerprint(
+            "domain-fact-interpretation/v1",
+            factId,
+            sourceStateHash.value,
+            producer.stableFingerprint,
+            evidenceFingerprint,
         )
         return DomainEvidenceAssertion(
             factId = factId,
+            interpretationId = interpretationId,
             evidenceFingerprint = evidenceFingerprint,
             kind = fact.kind,
             normalizedValue = normalizedValue,
@@ -66,8 +97,12 @@ object DomainEvidenceIdentity {
             confidence = fact.confidence,
             sourcePhotonId = source.id,
             sourceRevision = source.revision,
+            sourceStateHash = sourceStateHash,
+            producerModuleId = producer.moduleId,
+            producerModuleVersion = producer.version,
+            producerModuleFingerprint = producer.stableFingerprint,
             observedAt = source.provenance.createdAt,
-            evidence = evidence,
+            evidenceSpan = evidenceSpan,
         )
     }
 
@@ -133,9 +168,11 @@ data class DomainEvidenceConvergenceResult(
     val contradictionConfidence: Double,
     val uncertaintyConfidence: Double,
     val evidenceFingerprints: List<String>,
+    val interpretationIds: List<String>,
     val canonicalFingerprint: String,
     val boundedOut: Boolean,
     val totalEvidenceCount: Int,
+    val totalInterpretationCount: Int,
 ) {
     init {
         require(factId.startsWith("fact:"))
@@ -143,16 +180,19 @@ data class DomainEvidenceConvergenceResult(
         require(contradictionConfidence in 0.0..1.0)
         require(uncertaintyConfidence in 0.0..1.0)
         require(evidenceFingerprints == evidenceFingerprints.distinct().sorted())
+        require(interpretationIds == interpretationIds.distinct().sorted())
         require(canonicalFingerprint.matches(Regex("[0-9a-f]{64}")))
         require(totalEvidenceCount >= evidenceFingerprints.size)
+        require(totalInterpretationCount >= interpretationIds.size)
     }
 }
 
 /**
  * Deterministic, bounded convergence for parallel domain evidence.
- * Conflicting evidence is preserved and resolves to UNRESOLVED unless one side has a decisive
- * confidence margin. Inputs above the configured evidence budget never yield a positive/negative
- * assertion; they remain UNRESOLVED so truncation cannot silently create certainty.
+ *
+ * Multiple module versions may reinterpret the same immutable evidence. They retain distinct
+ * interpretation identities but the source evidence votes only once. Conflicting interpretations
+ * of the exact same evidence fingerprint fail closed rather than becoming caller-order dependent.
  */
 class DomainEvidenceConvergenceEngine(
     private val maxEvidence: Int = 64,
@@ -170,11 +210,41 @@ class DomainEvidenceConvergenceEngine(
         val factIds = assertions.map { it.factId }.distinct()
         require(factIds.size == 1) { "All evidence must refer to the same fact identity" }
 
-        val canonicalAll = assertions
-            .distinctBy { it.evidenceFingerprint }
-            .sortedBy { it.evidenceFingerprint }
-        val boundedOut = canonicalAll.size > maxEvidence
-        val canonical = canonicalAll.take(maxEvidence)
+        val interpretations = assertions
+            .groupBy { it.interpretationId }
+            .map { (id, group) ->
+                require(group.distinct().size == 1) {
+                    "Conflicting domain interpretation identity: $id"
+                }
+                group.single()
+            }
+            .sortedBy { it.interpretationId }
+
+        val byEvidence = interpretations.groupBy { it.evidenceFingerprint }
+        val evidenceVotes = byEvidence.map { (fingerprint, group) ->
+            require(group.map { it.stance }.distinct().size == 1) {
+                "Conflicting domain evidence stance: $fingerprint"
+            }
+            require(group.map { it.sourcePhotonId to it.sourceRevision }.distinct().size == 1) {
+                "Conflicting domain evidence source: $fingerprint"
+            }
+            require(group.map { it.sourceStateHash }.distinct().size == 1) {
+                "Conflicting domain evidence state: $fingerprint"
+            }
+            require(group.map { it.normalizedValue }.distinct().size == 1) {
+                "Conflicting domain evidence value: $fingerprint"
+            }
+            require(group.map { it.evidenceSpan }.distinct().size == 1) {
+                "Conflicting domain evidence span: $fingerprint"
+            }
+            group.sortedWith(
+                compareByDescending<DomainEvidenceAssertion> { it.confidence }
+                    .thenBy { it.interpretationId },
+            ).first()
+        }.sortedBy { it.evidenceFingerprint }
+
+        val boundedOut = evidenceVotes.size > maxEvidence
+        val canonical = evidenceVotes.take(maxEvidence)
         val support = canonical.filter { it.stance == DomainEvidenceStance.SUPPORTS }
             .maxOfOrNull { it.confidence } ?: 0.0
         val contradiction = canonical.filter { it.stance == DomainEvidenceStance.CONTRADICTS }
@@ -194,16 +264,19 @@ class DomainEvidenceConvergenceEngine(
         }
 
         val fingerprints = canonical.map { it.evidenceFingerprint }
+        val interpretationIds = interpretations.map { it.interpretationId }.distinct().sorted()
         val canonicalFingerprint = StableCognitiveIds.fingerprint(
-            "domain-evidence-convergence/v1",
+            "domain-evidence-convergence/v2",
             factIds.single(),
             status.name,
             java.lang.Double.toHexString(support),
             java.lang.Double.toHexString(contradiction),
             java.lang.Double.toHexString(uncertainty),
             boundedOut.toString(),
-            canonicalAll.size.toString(),
+            evidenceVotes.size.toString(),
+            interpretations.size.toString(),
             *fingerprints.toTypedArray(),
+            *interpretationIds.toTypedArray(),
         )
         return DomainEvidenceConvergenceResult(
             factId = factIds.single(),
@@ -212,9 +285,11 @@ class DomainEvidenceConvergenceEngine(
             contradictionConfidence = contradiction,
             uncertaintyConfidence = uncertainty,
             evidenceFingerprints = fingerprints,
+            interpretationIds = interpretationIds,
             canonicalFingerprint = canonicalFingerprint,
             boundedOut = boundedOut,
-            totalEvidenceCount = canonicalAll.size,
+            totalEvidenceCount = evidenceVotes.size,
+            totalInterpretationCount = interpretations.size,
         )
     }
 }
@@ -225,10 +300,10 @@ object DomainEvidenceConvergencePhotonFactory {
         result: DomainEvidenceConvergenceResult,
         assertions: Collection<DomainEvidenceAssertion>,
     ): Photon {
-        val byFingerprint = assertions.associateBy { it.evidenceFingerprint }
-        val contributing = result.evidenceFingerprints.map { fingerprint ->
+        val byFingerprint = assertions.groupBy { it.evidenceFingerprint }
+        val contributing = result.evidenceFingerprints.flatMap { fingerprint ->
             requireNotNull(byFingerprint[fingerprint]) { "Missing evidence for convergence fingerprint" }
-        }
+        }.distinctBy { it.interpretationId }
         require(contributing.isNotEmpty())
         require(contributing.all { it.factId == result.factId })
 
@@ -254,7 +329,9 @@ object DomainEvidenceConvergencePhotonFactory {
                 appendLine("uncertainty_confidence=${result.uncertaintyConfidence}")
                 appendLine("bounded_out=${result.boundedOut}")
                 appendLine("total_evidence=${result.totalEvidenceCount}")
-                append("evidence=${result.evidenceFingerprints.joinToString(",")}")
+                appendLine("total_interpretations=${result.totalInterpretationCount}")
+                appendLine("evidence=${result.evidenceFingerprints.joinToString(",")}")
+                append("interpretations=${result.interpretationIds.joinToString(",")}")
             },
             mimeType = "application/vnd.lifeos.domain-convergence+text",
             phase = phase,
