@@ -13,7 +13,6 @@ import kotlin.test.assertTrue
 class LifeOsRuntimeWiringTest {
     @BeforeTest
     fun reset() {
-        LifeOsRuntimeBindingRegistry.clearForTests()
         LifeOsRuntimeWiring.clearForTests()
     }
 
