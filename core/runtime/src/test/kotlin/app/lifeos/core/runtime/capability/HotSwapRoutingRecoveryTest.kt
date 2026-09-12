@@ -344,7 +344,7 @@ class HotSwapRoutingRecoveryTest {
         const val APK_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         const val SOURCE_COMMIT = "67957af9507d53ff15f033847597f8595c953b0e"
         const val APPLIED_HEAD = "cccccccccccccccccccccccccccccccccccccccc"
-        const val BRANCH_NAME = "buildstudio/v10-hot-swap"
+        const val BRANCH_NAME = "buildstudio/candidate-v10-hot-swap"
         const val SOURCE_PREFIX = "core/runtime/src/main/kotlin/app/lifeos/core/runtime/generated"
         const val TEST_PREFIX = "core/runtime/src/test/kotlin/app/lifeos/core/runtime/generated"
         const val SOURCE_PATH = "$SOURCE_PREFIX/V10Tool.kt"
