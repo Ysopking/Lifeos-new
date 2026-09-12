@@ -6,10 +6,16 @@ import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.PhotonIngressMode
+import app.lifeos.core.runtime.life.DurableLifeSourceIngestor
+import app.lifeos.core.runtime.life.LifeSourceDescriptor
+import app.lifeos.core.runtime.life.LifeSourceRecord
 import java.time.Instant
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class CanonicalLifePhotonRepositoryTest {
     private class MemoryPhotonRepository : PhotonRepository {
@@ -84,6 +90,55 @@ class CanonicalLifePhotonRepositoryTest {
             ),
             ingress,
         )
+    }
+
+    @Test
+    fun crashAfterEvidencePersistenceDoesNotAdvanceCursorAndReconcileMakesRetrySafe() = runBlocking {
+        val delegate = MemoryPhotonRepository()
+        var failAfterPersistence = true
+        val ingress = mutableListOf<Pair<PhotonId, PhotonIngressMode>>()
+        val repository = CanonicalLifePhotonRepository(delegate) { photon, mode ->
+            delegate.save(photon)
+            if (failAfterPersistence && "life-source-evidence" in photon.tags) {
+                throw IllegalStateException("simulated crash after Photon persistence")
+            }
+            ingress += photon.id to mode
+        }
+        val descriptor = LifeSourceDescriptor("calendar", "adapter-v4")
+        val record = LifeSourceRecord(
+            sourceId = "calendar",
+            recordId = "event-1",
+            observedAt = Instant.parse("2026-09-12T12:00:00Z"),
+            payload = "Important meeting",
+        )
+
+        assertFailsWith<IllegalStateException> {
+            DurableLifeSourceIngestor(repository).ingest(
+                descriptor = descriptor,
+                records = listOf(record),
+                nextPosition = "cursor-1",
+                authorized = true,
+                committedAt = Instant.parse("2026-09-12T12:01:00Z"),
+            )
+        }
+        assertTrue(delegate.loadAll().any { "life-source-evidence" in it.tags })
+        assertNull(delegate.loadAll().singleOrNull { "life-source-checkpoint" in it.tags })
+
+        failAfterPersistence = false
+        assertEquals(1, repository.reconcilePersisted())
+
+        val recovered = DurableLifeSourceIngestor(repository).ingest(
+            descriptor = descriptor,
+            records = listOf(record),
+            nextPosition = "cursor-1",
+            authorized = true,
+            committedAt = Instant.parse("2026-09-12T12:02:00Z"),
+        )
+
+        assertEquals("cursor-1", recovered.cursorAfter.position)
+        assertEquals(1, delegate.loadAll().count { "life-source-evidence" in it.tags })
+        assertEquals(1, delegate.loadAll().count { "life-source-checkpoint" in it.tags })
+        assertEquals(PhotonIngressMode.ORIGIN, ingress.single().second)
     }
 
     private fun photon(id: String, tags: Set<String>): Photon = Photon(
