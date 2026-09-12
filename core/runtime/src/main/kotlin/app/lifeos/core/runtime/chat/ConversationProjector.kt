@@ -38,12 +38,14 @@ object ConversationProjector {
 
     private fun Photon.conversationVisible(): Boolean =
         "chat" in tags ||
+            "genesis-proposal" in tags ||
             "autonomous-request" in tags ||
             "tool-workshop-outcome" in tags ||
             "evolution-handoff" in tags
 
     private fun Photon.role(): ChatRole = when {
-        "autonomous-request" in tags ||
+        "genesis-proposal" in tags ||
+            "autonomous-request" in tags ||
             "tool-workshop-outcome" in tags ||
             "system:health" in tags ||
             "system:hot-swap" in tags ||
@@ -54,6 +56,7 @@ object ConversationProjector {
     }
 
     private fun Photon.eventType(): ChatEventType = when {
+        "genesis-proposal" in tags -> ChatEventType.MODULE_STARTED
         "autonomous-request" in tags -> ChatEventType.TOOL_STARTED
         "tool-workshop-outcome" in tags || "evolution-handoff" in tags -> ChatEventType.TOOL_RESULT
         "system:health" in tags -> ChatEventType.RECOVERY
@@ -62,6 +65,18 @@ object ConversationProjector {
     }
 
     private fun Photon.conversationText(): String = when {
+        "genesis-proposal" in tags -> {
+            val capability = field("capability") ?: "unbekannte Fähigkeit"
+            val solution = field("solution") ?: "UNKNOWN"
+            val target = field("target") ?: "UNKNOWN"
+            val approval = field("requiresExplicitApproval") == "true"
+            buildString {
+                append("Genesis: ").append(capability)
+                    .append(" → ").append(solution)
+                    .append(" → ").append(target)
+                if (approval) append(" · Freigabe erforderlich")
+            }
+        }
         "autonomous-request" in tags -> {
             val capability = field("capability") ?: "unbekannte Fähigkeit"
             "Autonomer ToolWorkshop gestartet: $capability wird als fehlende Fähigkeit bearbeitet."
