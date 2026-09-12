@@ -1,6 +1,7 @@
 package app.lifeos.core.runtime.topology
 
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeProcessRegistry
+import app.lifeos.core.runtime.capability.MultimodalPerceptionCapabilities
 import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 
@@ -65,6 +66,21 @@ object LifeOsProcessTopology {
         LifeOsSubsystemDescriptor("field-thought-graph-projection", dependencies = setOf("field-runtime", "thought-graph")),
         LifeOsSubsystemDescriptor("world-formula", dependencies = setOf("field-runtime")),
         LifeOsSubsystemDescriptor("language-understanding", requiredCapabilities = setOf("language.understand")),
+        LifeOsSubsystemDescriptor(
+            "word-field-understanding",
+            requiredCapabilities = setOf(MultimodalPerceptionCapabilities.WORD_FIELD),
+            dependencies = setOf("language-understanding"),
+        ),
+        LifeOsSubsystemDescriptor(
+            "speech-field-recognition",
+            requiredCapabilities = setOf(MultimodalPerceptionCapabilities.SPEECH_FIELD),
+            dependencies = setOf("word-field-understanding"),
+        ),
+        LifeOsSubsystemDescriptor(
+            "writing-field-recognition",
+            requiredCapabilities = setOf(MultimodalPerceptionCapabilities.WRITING_FIELD),
+            dependencies = setOf("word-field-understanding"),
+        ),
         LifeOsSubsystemDescriptor("language-context", dependencies = setOf("photon-store")),
         LifeOsSubsystemDescriptor("capability-registry"),
         LifeOsSubsystemDescriptor("capability-router", dependencies = setOf("capability-registry")),

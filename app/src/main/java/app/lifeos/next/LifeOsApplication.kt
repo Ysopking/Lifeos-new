@@ -43,6 +43,7 @@ import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
 import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
+import app.lifeos.next.kernel.MultimodalPerceptionRuntime
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
@@ -54,6 +55,9 @@ import kotlinx.coroutines.runBlocking
 /** Process-level owner for the LIFEOS kernel instance and read-only private diagnostics. */
 class LifeOsApplication : Application() {
     lateinit var kernel: LifeOsKernel
+        private set
+
+    lateinit var multimodalPerception: MultimodalPerceptionRuntime
         private set
 
     lateinit var generatedToolStatusReader: GeneratedToolRuntimeStatusReader
@@ -118,6 +122,10 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
+                    multimodalPerception = MultimodalPerceptionRuntime(kernel)
+                    runBlocking {
+                        multimodalPerception.install()
+                    }
                     LifeOsAutomationPhotonBridge.install { photon ->
                         kernel.persistAndIngest(photon).photon
                     }
