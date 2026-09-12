@@ -58,6 +58,7 @@ import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
 import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
+import app.lifeos.next.kernel.MultimodalPerceptionRuntime
 import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
@@ -89,6 +90,9 @@ class LifeOsApplication : Application() {
         private set
 
     lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
+        private set
+
+    lateinit var multimodalPerception: MultimodalPerceptionRuntime
         private set
 
     internal lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
@@ -141,6 +145,8 @@ class LifeOsApplication : Application() {
                     kernel = LifeOsKernelFactory(this).create()
                     lifeMemoryRuntime = DurableLifeMemoryRuntime(kernel.photonStore)
                     DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
+                    multimodalPerception = MultimodalPerceptionRuntime(kernel)
+                    runBlocking { multimodalPerception.install() }
                     val integratedCognition = requireNotNull(LifeOsIntegratedCognitionSuiteRegistry.current()) {
                         "Integrated cognition suite must be installed before kernel composition"
                     }
@@ -165,9 +171,6 @@ class LifeOsApplication : Application() {
                         delegate = domainPersistence,
                         planning = futurePlanning,
                     )
-                    // Reconstruct life graph/memory from durable evidence before normal cognition starts.
-                    // Current wall time enters only here as an explicit compaction-policy input; stable
-                    // projection identities are source/state based and remain restart-replayable.
                     runBlocking {
                         lifeMemoryRuntime.rebuild(Instant.now())
                         futurePlanning.reconsiderAll().forEach { planned ->

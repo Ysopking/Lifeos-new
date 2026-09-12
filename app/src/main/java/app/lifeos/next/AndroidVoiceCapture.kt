@@ -12,6 +12,7 @@ import app.lifeos.core.language.BidirectionalSpeechFieldEngine
 import app.lifeos.core.language.DeterministicVoiceActivitySegmenter
 import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.Pcm16MonoAudio
+import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
 sealed interface LocalVoiceCaptureResult {
@@ -21,6 +22,8 @@ sealed interface LocalVoiceCaptureResult {
         val segmentCount: Int,
         val capturedMillis: Long,
         val stoppedByLimit: Boolean,
+        val observedAt: Instant,
+        val observedUntil: Instant,
     ) : LocalVoiceCaptureResult
 
     data object NoSpeech : LocalVoiceCaptureResult
@@ -83,6 +86,7 @@ class AndroidVoiceCaptureEngine(
 
         val accumulator = ShortAccumulator(MAX_CAPTURE_SAMPLES)
         var stoppedByLimit = false
+        val observedAt = Instant.now()
         return try {
             recorder.startRecording()
             if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -100,7 +104,7 @@ class AndroidVoiceCaptureEngine(
                 }
             }
             stoppedByLimit = accumulator.size >= MAX_CAPTURE_SAMPLES
-            analyze(accumulator.toArray(), languageContext, stoppedByLimit)
+            analyze(accumulator.toArray(), languageContext, stoppedByLimit, observedAt)
         } catch (_: SecurityException) {
             LocalVoiceCaptureResult.PermissionMissing
         } catch (_: Exception) {
@@ -116,6 +120,7 @@ class AndroidVoiceCaptureEngine(
         samples: ShortArray,
         languageContext: LanguageContext,
         stoppedByLimit: Boolean,
+        observedAt: Instant,
     ): LocalVoiceCaptureResult {
         if (samples.size < SAMPLE_RATE_HZ / 5) return LocalVoiceCaptureResult.NoSpeech
         val audio = Pcm16MonoAudio(SAMPLE_RATE_HZ, samples)
@@ -130,12 +135,15 @@ class AndroidVoiceCaptureEngine(
             winner.toHypothesis(candidates.drop(1).take(3))
         }
         if (hypotheses.isEmpty()) return LocalVoiceCaptureResult.NoSpeech
+        val capturedMillis = samples.size.toLong() * 1000L / SAMPLE_RATE_HZ
         return LocalVoiceCaptureResult.Success(
             transcript = hypotheses.joinToString(" ") { it.canonical },
             words = hypotheses,
             segmentCount = segments.size,
-            capturedMillis = samples.size.toLong() * 1000L / SAMPLE_RATE_HZ,
+            capturedMillis = capturedMillis,
             stoppedByLimit = stoppedByLimit,
+            observedAt = observedAt,
+            observedUntil = observedAt.plusMillis(capturedMillis),
         )
     }
 

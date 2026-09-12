@@ -13,7 +13,9 @@ import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.LanguageContextItem
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolGenesisResult
 import app.lifeos.core.runtime.capability.GeneratedToolRequestExecutionResult
@@ -21,6 +23,10 @@ import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
 import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.goal.LocalSharePreparation
+import app.lifeos.core.runtime.life.PerceptionCandidate
+import app.lifeos.core.runtime.life.PerceptionModality
+import app.lifeos.core.runtime.life.SpeechObservation
+import app.lifeos.core.runtime.life.SpeechWordObservation
 import app.lifeos.next.kernel.GoalResumeExecutionResult
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
@@ -63,6 +69,7 @@ data class LifeOsState(
     val shareStatus: String? = null,
     val voicePhase: VoiceCapturePhase = VoiceCapturePhase.IDLE,
     val voiceStatus: String? = null,
+    val pendingVoiceRecognitions: List<Photon> = emptyList(),
 )
 
 data class ImagePreview(
@@ -81,6 +88,7 @@ sealed interface ImagePreviewState {
 class LifeOsViewModel(application: Application) : AndroidViewModel(application) {
     private val owner = application as LifeOsApplication
     private val kernel = owner.kernel
+    private val multimodalPerception = owner.multimodalPerception
     private val generatedToolStatusReader = owner.generatedToolStatusReader
     private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
     private val localShareIntentFactory = LocalShareIntentFactory(application.applicationContext, kernel)
@@ -102,7 +110,12 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     fun editDraft(text: String) {
         val current = mutableState.value
         if (!current.saving && current.voicePhase != VoiceCapturePhase.PROCESSING) {
-            mutableState.update { it.copy(draft = text) }
+            mutableState.update {
+                it.copy(
+                    draft = text,
+                    pendingVoiceRecognitions = if (text.isBlank()) emptyList() else it.pendingVoiceRecognitions,
+                )
+            }
         }
     }
 
@@ -267,8 +280,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val result = voiceCapture.capture(voiceStopRequested, context)
-            mutableState.update { state -> applyVoiceResult(state, result) }
+            applyVoiceCaptureResult(voiceCapture.capture(voiceStopRequested, context))
         }
     }
 
@@ -321,22 +333,49 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         val current = mutableState.value
         if (current.loading || current.loadFailed || current.saving || current.voicePhase != VoiceCapturePhase.IDLE || current.draft.isBlank()) return
 
-        val photon = Photon(
-            content = current.draft.trim(),
-            provenance = Provenance("local-chat", "user"),
-            tags = setOf("chat"),
+        val submittedContent = current.draft.trim()
+        val voiceRecognitions = current.pendingVoiceRecognitions
+        val exactVoiceRecognition = voiceRecognitions.singleOrNull()?.takeIf { recognition ->
+            "recognition:resolved" in recognition.tags && recognition.content.trim() == submittedContent
+        }
+        val recognitionParentIds = voiceRecognitions.map { it.id }.toSet()
+        val photon = exactVoiceRecognition?.let { null } ?: Photon(
+            content = submittedContent,
+            provenance = Provenance(
+                source = if (recognitionParentIds.isEmpty()) "local-chat" else "local-chat:edited-multimodal",
+                actor = "user",
+                parentIds = recognitionParentIds,
+            ),
+            relations = recognitionParentIds.map { parentId ->
+                PhotonRelation(parentId, RelationType.DERIVED_FROM)
+            }.toSet(),
+            tags = buildSet {
+                add("chat")
+                if (recognitionParentIds.isNotEmpty()) {
+                    add("input:speech-edited")
+                    add("perception-derived-utterance")
+                }
+            },
         )
         mutableState.update { it.copy(saving = true, error = null) }
 
         viewModelScope.launch {
             try {
-                val result = kernel.persistUserUtterance(photon)
+                val result = if (exactVoiceRecognition != null) {
+                    multimodalPerception.routeRecognition(
+                        recognition = exactVoiceRecognition,
+                        modality = PerceptionModality.SPEECH,
+                    )
+                } else {
+                    kernel.persistUserUtterance(requireNotNull(photon))
+                }
                 val retainDraft =
                     result.localSchedule is LocalScheduleExecutionResult.Blocked ||
                         result.localImageTransform is LocalImageTransformExecutionResult.Blocked
                 mutableState.update {
                     it.copy(
-                        draft = if (retainDraft) photon.content else "",
+                        draft = if (retainDraft) submittedContent else "",
+                        pendingVoiceRecognitions = if (retainDraft) voiceRecognitions else emptyList(),
                         lastGoal = result.effectiveGoal ?: it.lastGoal,
                         lastCapabilityGaps = result.effectiveRouting?.blockingGaps.orEmpty(),
                         capabilityRequestStatus = null,
@@ -472,7 +511,61 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun applyVoiceResult(state: LifeOsState, result: LocalVoiceCaptureResult): LifeOsState = when (result) {
+    private suspend fun applyVoiceCaptureResult(result: LocalVoiceCaptureResult) {
+        if (result !is LocalVoiceCaptureResult.Success) {
+            mutableState.update { state -> applyVoiceResult(state, result) }
+            return
+        }
+
+        var recognition: Photon? = null
+        var perceptionFailure: String? = null
+        try {
+            recognition = multimodalPerception.observeSpeech(
+                observation = buildSpeechObservation(result),
+                sampleRateHz = AndroidVoiceCaptureEngine.SAMPLE_RATE_HZ,
+                capturedMillis = result.capturedMillis,
+            ).recognition?.photon
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            perceptionFailure = error.message ?: error::class.simpleName ?: "unbekannter Fehler"
+        }
+        mutableState.update { state ->
+            applyVoiceResult(
+                state = state,
+                result = result,
+                recognition = recognition,
+                perceptionFailure = perceptionFailure,
+            )
+        }
+    }
+
+    private fun buildSpeechObservation(result: LocalVoiceCaptureResult.Success): SpeechObservation = SpeechObservation(
+        sourceId = "android-microphone",
+        observedAt = result.observedAt,
+        observedUntil = result.observedUntil,
+        words = result.words.mapIndexed { index, word ->
+            val candidates = buildList {
+                add(PerceptionCandidate(word.canonical, word.confidence, word.semanticTag))
+                word.alternatives.forEach { (value, confidence) ->
+                    if (value != word.canonical) add(PerceptionCandidate(value, confidence))
+                }
+            }.distinctBy { candidate -> candidate.value to candidate.semanticTag }
+            SpeechWordObservation(index = index, candidates = candidates)
+        },
+        tags = setOf(
+            "conversation:default",
+            "input:speech",
+            "privacy:local-only",
+        ),
+    )
+
+    private fun applyVoiceResult(
+        state: LifeOsState,
+        result: LocalVoiceCaptureResult,
+        recognition: Photon? = null,
+        perceptionFailure: String? = null,
+    ): LifeOsState = when (result) {
         is LocalVoiceCaptureResult.Success -> {
             val transcript = result.transcript.trim()
             val combinedDraft = when {
@@ -481,8 +574,12 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                 else -> "${state.draft.trimEnd()} $transcript"
             }
             val confidence = result.words.map { it.confidence }.average()
+            val recognitions = recognition?.let { persisted ->
+                (state.pendingVoiceRecognitions.filterNot { it.id == persisted.id } + persisted)
+            } ?: state.pendingVoiceRecognitions
             state.copy(
                 draft = combinedDraft,
+                pendingVoiceRecognitions = recognitions,
                 voicePhase = VoiceCapturePhase.IDLE,
                 voiceStatus = buildString {
                     append("Lokales Sprachfeld: ")
@@ -490,6 +587,10 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                     append(result.segmentCount).append(" Sprachsegment(e), ")
                     append("Konfidenz ").append("%.0f".format(confidence * 100.0)).append(" %")
                     if (result.stoppedByLimit) append(" · 20-s-Limit erreicht")
+                    when {
+                        recognition != null -> append(" · Observation & Recognition als Photonen persistiert")
+                        perceptionFailure != null -> append(" · Photon-Lineage nicht persistiert: ").append(perceptionFailure)
+                    }
                 },
             )
         }
@@ -565,7 +666,9 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         "goal" !in tags &&
             "scene-graph" !in tags &&
             "tool-request" !in tags &&
-            "tool-generation-approval" !in tags
+            "tool-generation-approval" !in tags &&
+            "perception" !in tags &&
+            "perception-raw-source" !in tags
 
     private companion object {
         const val LOAD_ERROR_MESSAGE = "Speicher konnte nicht geladen werden. Bitte erneut versuchen."
