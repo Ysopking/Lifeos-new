@@ -37,6 +37,8 @@ import app.lifeos.core.runtime.life.DurableLifeMemoryRuntime
 import app.lifeos.core.runtime.life.DurableLifeMemoryRuntimeRegistry
 import app.lifeos.core.runtime.life.FuturePlanningCoordinator
 import app.lifeos.core.runtime.life.FuturePlanningPersistence
+import app.lifeos.core.runtime.life.InitialDataBootstrapRuntime
+import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
@@ -67,6 +69,7 @@ import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /** Process-level owner for the LIFEOS kernel instance and read-only private diagnostics. */
@@ -95,11 +98,24 @@ class LifeOsApplication : Application() {
     lateinit var multimodalPerception: MultimodalPerceptionRuntime
         private set
 
+    lateinit var initialDataBootstrap: InitialDataBootstrapRuntime
+        private set
+
+    @Volatile
+    var latestInitialDataBootstrap: InitialDataBootstrapSnapshot? = null
+        private set
+
+    @Volatile
+    var initialDataBootstrapFailure: String? = null
+        private set
+
     internal lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
         private set
 
     private lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
+    private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -293,5 +309,45 @@ class LifeOsApplication : Application() {
                 stageObserver = LifeOsRuntimeWiring::onStageReady,
             )
         )
+
+        initialDataSources = AndroidInitialDataSourceCatalog(this)
+        initialDataBootstrap = InitialDataBootstrapRuntime(
+            photons = kernel.photonStore,
+            memory = lifeMemoryRuntime,
+            sources = initialDataSources.sources,
+        )
+        refreshInitialDataBootstrap()
+    }
+
+    fun initialDataPermissionsToRequest(): List<String> = initialDataSources.missingRuntimePermissions()
+
+    fun shouldRequestInitialDataPermissions(): Boolean {
+        if (initialDataSources.missingRuntimePermissions().isEmpty()) return false
+        val schema = initialDataSources.permissionSchemaFingerprint()
+        return getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
+            .getString(INITIAL_DATA_PERMISSION_SCHEMA, null) != schema
+    }
+
+    fun markInitialDataPermissionsRequested() {
+        getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
+            .edit()
+            .putString(INITIAL_DATA_PERMISSION_SCHEMA, initialDataSources.permissionSchemaFingerprint())
+            .apply()
+    }
+
+    fun refreshInitialDataBootstrap() {
+        initialDataScope.launch {
+            try {
+                latestInitialDataBootstrap = initialDataBootstrap.run()
+                initialDataBootstrapFailure = null
+            } catch (error: Exception) {
+                initialDataBootstrapFailure = error.message ?: error::class.simpleName ?: "initial-data-bootstrap-failed"
+            }
+        }
+    }
+
+    private companion object {
+        const val INITIAL_DATA_PREFS = "lifeos-initial-data-bootstrap"
+        const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"
     }
 }
