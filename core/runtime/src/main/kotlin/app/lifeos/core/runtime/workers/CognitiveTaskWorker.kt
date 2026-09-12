@@ -40,6 +40,7 @@ data class CognitiveTaskExecutionResult(
     val influences: List<FieldInfluence>,
     val failures: List<RuntimeFailure>,
     val fieldShadow: FieldShadowExecution? = null,
+    val recordedAt: Instant? = null,
 )
 
 class CognitiveTaskWorker(
@@ -283,6 +284,7 @@ class CognitiveTaskWorker(
             influences = work.influences,
             failures = work.failures,
             fieldShadow = work.fieldShadow,
+            recordedAt = finalTask.updatedAt,
         )
     }
 
