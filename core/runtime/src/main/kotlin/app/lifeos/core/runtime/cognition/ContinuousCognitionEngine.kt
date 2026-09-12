@@ -23,24 +23,25 @@ class ContinuousCognitionEngine(
         targetModules: Set<String>,
         budget: CognitiveWorkBudget,
     ): CognitiveSubmissionResult {
+        val canonicalDelta = CognitiveDeltaIdentity.canonicalize(delta)
         val event = CognitiveEvent(
-            eventId = "delta:${delta.deltaId}",
-            delta = delta,
-            recordedAt = delta.timestamp,
+            eventId = "delta:${canonicalDelta.deltaId}",
+            delta = canonicalDelta,
+            recordedAt = canonicalDelta.timestamp,
         )
         val offset = journal.append(event)
-        val workId = "work:${delta.deltaId}"
+        val workId = "work:${canonicalDelta.deltaId}"
         val work = CognitiveWorkItem(
             id = workId,
-            triggeringDeltaId = delta.deltaId,
+            triggeringDeltaId = canonicalDelta.deltaId,
             priority = priority,
             salience = salienceEngine.score(salience),
-            enqueuedAt = delta.timestamp,
+            enqueuedAt = canonicalDelta.timestamp,
             targetModules = targetModules,
             budget = budget,
-            photonId = delta.photonId,
-            photonRevision = delta.revisionAfter ?: delta.revisionBefore,
-            deltaType = delta.type,
+            photonId = canonicalDelta.photonId,
+            photonRevision = canonicalDelta.revisionAfter ?: canonicalDelta.revisionBefore,
+            deltaType = canonicalDelta.type,
         )
         val offer = scheduler.offer(work)
         if (!offer.accepted || durableDispatcher == null) {
