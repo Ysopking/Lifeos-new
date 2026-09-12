@@ -4,6 +4,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.runtime.cognition.CognitionJournalIntegrityVerifier
 
 enum class PhotonHydrationTier {
     HOT,
@@ -84,6 +85,10 @@ class PhotonRehydrator(
     private val validator: PhotonIntegrityValidator = PhotonIntegrityValidator(),
 ) {
     suspend fun rehydrate(): PhotonRehydrationResult {
+        // Internal cognition journals share the encrypted Photon repository. Validate their
+        // schema and deterministic identities before any journal Photon can participate in boot.
+        CognitionJournalIntegrityVerifier(repository).verify()
+
         val report = repository.loadReport()
         val assessments = validator.assess(report.photons)
         val quarantined = assessments
