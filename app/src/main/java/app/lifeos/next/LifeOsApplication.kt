@@ -11,7 +11,12 @@ import app.lifeos.core.data.trace.EncryptedDecisionTraceRepository
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.runtime.CausalCognitionEngine
+import app.lifeos.core.runtime.CausalDerivedPhotonPersistence
+import app.lifeos.core.runtime.PhotonBackedCausalLedgerStore
+import app.lifeos.core.runtime.RecursiveCausalCognitionCoordinator
 import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
+import app.lifeos.core.runtime.StaticCognitiveModuleRegistry
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
@@ -26,6 +31,8 @@ import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
+import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
+import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
@@ -35,6 +42,8 @@ import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRecorder
 import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.SubsystemDecisionTraceRecorder
+import app.lifeos.core.runtime.workers.CausalCognitionTaskObserver
+import app.lifeos.core.runtime.workers.CausalCognitionTaskObserverRegistry
 import app.lifeos.next.kernel.DurableGoalPlanRuntime
 import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
 import app.lifeos.next.kernel.GoalExecutionRuntimeRegistry
@@ -83,6 +92,7 @@ class LifeOsApplication : Application() {
             EncryptedGeneratedToolStateRepository(this),
         )
         hardwareResourceIntelligence = HardwareResourceIntelligenceRuntime(this)
+        LifeOsIntegratedCognitionSuiteRegistry.install(LifeOsIntegratedCognitionSuite())
 
         LifeOsStartupComposition.start(
             LifeOsStartupHooks(
@@ -118,6 +128,25 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
+                    val integratedCognition = requireNotNull(LifeOsIntegratedCognitionSuiteRegistry.current()) {
+                        "Integrated cognition suite must be installed before kernel composition"
+                    }
+                    val causalCoordinator = RecursiveCausalCognitionCoordinator(
+                        modules = StaticCognitiveModuleRegistry(integratedCognition.domainModules),
+                        engine = CausalCognitionEngine(
+                            ledger = PhotonBackedCausalLedgerStore(kernel.photonStore),
+                        ),
+                        persistence = CausalDerivedPhotonPersistence { derived, _ ->
+                            kernel.photonStore.save(derived)
+                            kernel.matrix.influence(derived)
+                        },
+                    )
+                    CausalCognitionTaskObserverRegistry.install(
+                        CausalCognitionTaskObserver(
+                            photons = kernel.photonStore,
+                            cognition = causalCoordinator,
+                        )
+                    )
                     LifeOsAutomationPhotonBridge.install { photon ->
                         kernel.persistAndIngest(photon).photon
                     }

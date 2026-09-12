@@ -9,6 +9,9 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.chat.ChatEvent
 import app.lifeos.core.runtime.chat.ConversationProjector
+import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
+import app.lifeos.core.runtime.life.LifeOsReadinessSnapshot
+import app.lifeos.core.runtime.life.LifeOsSelfValidation
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.LifeOsResponseComposer
@@ -29,6 +32,7 @@ data class LifeOsChatUiState(
     val unavailableSubsystems: Int = 0,
     val capabilityProviders: Int = 0,
     val generatedProviders: Int = 0,
+    val readiness: LifeOsReadinessSnapshot? = null,
     val error: String? = null,
 )
 
@@ -127,6 +131,13 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             kernel.bootstrapState.collect { boot ->
                 val topology = if (boot.ready) LifeOsProcessTopology.snapshot() else null
+                val readiness = if (boot.ready && mutableState.value.readiness == null) {
+                    LifeOsIntegratedCognitionSuiteRegistry.current()?.let { suite ->
+                        LifeOsSelfValidation(suite).validate().first
+                    }
+                } else {
+                    mutableState.value.readiness
+                }
                 mutableState.update { current ->
                     current.copy(
                         events = ConversationProjector.project(boot.photons),
@@ -135,6 +146,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                         unavailableSubsystems = topology?.unavailableSubsystems?.size ?: 0,
                         capabilityProviders = topology?.capabilityProviderCount ?: 0,
                         generatedProviders = topology?.generatedProviderCount ?: 0,
+                        readiness = readiness,
                         error = boot.failureMessage ?: current.error,
                     )
                 }
