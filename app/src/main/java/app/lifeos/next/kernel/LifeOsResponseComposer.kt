@@ -1,5 +1,7 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.language.IntentType
+
 object LifeOsResponseComposer {
     fun compose(result: LanguageSubmissionResult): String {
         (result.localKnowledge as? LocalKnowledgeExecutionResult.Produced)?.let {
@@ -72,6 +74,9 @@ object LifeOsResponseComposer {
                 "und nachfolgenden ToolWorkshop-/BuildStudio-/Evolution-Status siehst du direkt im Systemstrom."
         }
         val goal = result.effectiveGoal
+        if (goal?.intent == IntentType.CONVERSATION) {
+            return "Ich bin da. Wobei soll ich dir helfen?"
+        }
         return if (goal != null) {
             "Ich habe deine Nachricht verarbeitet und als ${goal.intent.name.lowercase()}-Ziel in LIFEOS übernommen."
         } else {
