@@ -99,6 +99,8 @@ class LifeOsBlockBThroughHTest {
         val photon = Photon(
             id = PhotonId("child"),
             content = "child",
+            semanticMass = 0.1,
+            confidence = 0.2,
             provenance = Provenance(
                 source = "test",
                 actor = "lifeos",
