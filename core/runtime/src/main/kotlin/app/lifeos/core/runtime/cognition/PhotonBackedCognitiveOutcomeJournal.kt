@@ -11,26 +11,23 @@ class PhotonBackedCognitiveOutcomeJournal(private val store: PhotonRepository) :
     private val lock = Mutex()
 
     override suspend fun record(outcome: CognitiveOutcome): Long = lock.withLock {
+        val persisted = outcomes()
+        if (persisted.any { normalize(it) == normalize(outcome) }) {
+            return@withLock persisted.size.toLong()
+        }
+
         val key = outcomeKey(outcome)
         val id = CognitionJournalIdentity.photonId(CognitionJournalKind.OUTCOME.tag, key)
-        val legacyId = CognitionJournalIdentity.photonId(
-            CognitionJournalKind.OUTCOME.tag,
-            legacyOutcomeKey(outcome),
-        )
-
-        val existing = store.load(id) ?: store.load(legacyId)
-        if (existing != null) {
+        store.load(id)?.let { existing ->
             check(normalize(decode(existing)) == normalize(outcome)) { "Cognitive outcome identity conflict" }
-        } else {
-            store.save(
-                cognitionJournalPhoton(
-                    CognitionJournalKind.OUTCOME,
-                    key,
-                    outcome.recordedAt,
-                    CognitionOutcomeCodec.encode(outcome),
-                )
+        } ?: store.save(
+            cognitionJournalPhoton(
+                CognitionJournalKind.OUTCOME,
+                key,
+                outcome.recordedAt,
+                CognitionOutcomeCodec.encode(outcome),
             )
-        }
+        )
         outcomes().size.toLong()
     }
 
