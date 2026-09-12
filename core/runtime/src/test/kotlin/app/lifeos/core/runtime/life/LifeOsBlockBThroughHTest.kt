@@ -36,10 +36,14 @@ class LifeOsBlockBThroughHTest {
             provenance = Provenance("test", "user", Instant.EPOCH),
         )
         val latest = older.copy(revision = 2, content = "new", tags = setOf("goal"))
-        val report = BootLifeMemoryRehydrator().rehydrate(listOf(older, latest))
+        val report = BootLifeMemoryRehydrator().rehydrate(
+            listOf(older, latest),
+            now = Instant.EPOCH.plusSeconds(1),
+        )
         assertEquals(1, report.snapshot.entries.size)
         assertEquals(2, report.snapshot.entries.single().revision)
         assertEquals(LifeMemoryTier.HOT, report.snapshot.entries.single().tier)
+        assertEquals(MemoryStage.HOT, report.snapshot.entries.single().stage)
     }
 
     @Test
