@@ -55,6 +55,7 @@ data class DurableLifeMemorySnapshot(
     val memory: LongTermMemoryProjection,
     val accessLedger: MemoryAccessLedger,
     val authoritativePhotonCount: Int,
+    val fingerprint: String,
 )
 
 /** Photon-backed source cursor. Evidence is committed before this management Photon advances. */
@@ -87,14 +88,14 @@ class PhotonBackedLifeSourceCheckpointStore(
         committedAt: Instant,
     ): DurableLifeSourceCheckpoint {
         require(batchFingerprint.isNotBlank())
+        if (previous.position == nextPosition && previous.lastBatchFingerprint == batchFingerprint) return previous
+
         val desired = DurableLifeSourceCheckpoint(
             descriptor = previous.descriptor,
             position = nextPosition,
             lastBatchFingerprint = batchFingerprint,
             revision = previous.revision + 1L,
         )
-        if (previous.position == nextPosition && previous.lastBatchFingerprint == batchFingerprint) return previous
-
         val content = buildString {
             appendLine("schema=$SCHEMA")
             appendLine("source=${encode(previous.descriptor.sourceId)}")
@@ -102,25 +103,26 @@ class PhotonBackedLifeSourceCheckpointStore(
             appendLine("position=${nextPosition?.let(::encode) ?: NULL}")
             append("batch=$batchFingerprint")
         }
-        val photon = Photon(
-            id = checkpointId(previous.descriptor),
-            revision = desired.revision,
-            content = content,
-            mimeType = MIME_TYPE,
-            provenance = Provenance(
-                source = "life-source-checkpoint",
-                actor = previous.descriptor.sourceId,
-                createdAt = committedAt,
-                parentIds = evidenceIds,
-            ),
-            tags = setOf(
-                "life-memory-management",
-                "life-source-checkpoint",
-                "source:${previous.descriptor.sourceId}",
-                "source-adapter:${previous.descriptor.adapterVersion}",
-            ),
+        photons.save(
+            Photon(
+                id = checkpointId(previous.descriptor),
+                revision = desired.revision,
+                content = content,
+                mimeType = MIME_TYPE,
+                provenance = Provenance(
+                    source = "life-source-checkpoint",
+                    actor = previous.descriptor.sourceId,
+                    createdAt = committedAt,
+                    parentIds = evidenceIds,
+                ),
+                tags = setOf(
+                    "life-memory-management",
+                    "life-source-checkpoint",
+                    "source:${previous.descriptor.sourceId}",
+                    "source-adapter:${previous.descriptor.adapterVersion}",
+                ),
+            )
         )
-        photons.save(photon)
         return desired
     }
 
@@ -236,20 +238,14 @@ class PhotonBackedMemoryAccessLedgerStore(
 
     private suspend fun saveIdempotent(photon: Photon) {
         val existing = photons.load(photon.id)
-        if (existing == null) {
-            photons.save(photon)
-        } else {
-            check(existing == photon) { "Conflicting memory access event identity: ${photon.id.value}" }
-        }
+        if (existing == null) photons.save(photon)
+        else check(existing == photon) { "Conflicting memory access event identity: ${photon.id.value}" }
     }
 }
 
 /**
- * Crash-safe authorized source ingestion.
- *
- * Each source record gets an adapter-versioned stable Photon id. Evidence is persisted first and the
- * source cursor is advanced only after every record is durably present. A crash between those steps
- * replays the same ids and therefore cannot duplicate evidence or lose a record.
+ * Crash-safe authorized source ingestion. Evidence is persisted before the cursor is advanced.
+ * Stable record ids make a replay after process death idempotent across batches and restarts.
  */
 class DurableLifeSourceIngestor(
     private val photons: PhotonRepository,
@@ -395,13 +391,31 @@ class DurableLifeMemoryRuntime(
         val authoritative = all.filterNot(::isLifeMemoryManagementPhoton)
         val accessLedger = accessStore.snapshot()
         val graph = graphProjector.project(authoritative)
-        val memory = memoryEngine.project(authoritative, accessLedger, now)
+        val rawMemory = memoryEngine.project(authoritative, accessLedger, now)
+        val memory = stabilize(rawMemory, authoritative)
         memory.derivedPhotons.forEach(::saveIdempotent)
+        val fingerprint = StableCognitiveIds.fingerprint(
+            "durable-life-memory-snapshot/v1",
+            graph.fingerprint,
+            memory.fingerprint,
+            *accessLedger.profiles.entries.sortedBy { it.key.value }.flatMap { (id, profile) ->
+                listOf(
+                    id.value,
+                    profile.lastAccessAt.toString(),
+                    profile.accessCount.toString(),
+                    java.lang.Double.toHexString(profile.goalRelevance),
+                    java.lang.Double.toHexString(profile.relationshipWeight),
+                    java.lang.Double.toHexString(profile.futureRelevance),
+                    java.lang.Double.toHexString(profile.seinRelevance),
+                )
+            }.toTypedArray(),
+        )
         return DurableLifeMemorySnapshot(
             graph = graph,
             memory = memory,
             accessLedger = accessLedger,
             authoritativePhotonCount = authoritative.size,
+            fingerprint = fingerprint,
         )
     }
 
@@ -437,13 +451,45 @@ class DurableLifeMemoryRuntime(
         return rebuild(at)
     }
 
+    private fun stabilize(
+        raw: LongTermMemoryProjection,
+        authoritative: List<Photon>,
+    ): LongTermMemoryProjection {
+        val sources = authoritative.associateBy { it.id }
+        val derived = raw.derivedPhotons.map { photon ->
+            val sourceParents = photon.provenance.parentIds.mapNotNull(sources::get)
+            val deterministicCreatedAt = when {
+                sourceParents.isEmpty() -> photon.provenance.createdAt
+                "memory-crystal" in photon.tags -> sourceParents.maxOf { it.provenance.createdAt }
+                else -> sourceParents.minOf { it.provenance.createdAt }
+            }
+            val stateTags = sourceParents.mapTo(linkedSetOf()) { source ->
+                "source-state:${CanonicalPhotonState.inputHash(source).value}"
+            }
+            photon.copy(
+                provenance = photon.provenance.copy(createdAt = deterministicCreatedAt),
+                tags = photon.tags + stateTags + setOf(
+                    "life-memory-management",
+                    "producer-version:${LongTermMemoryEngine.RUNTIME_VERSION}",
+                ),
+            )
+        }.sortedBy { it.id.value }
+        val stableFingerprint = StableCognitiveIds.fingerprint(
+            "long-term-memory-durable-projection/v1",
+            *raw.decisions.sortedBy { it.photonId.value }.flatMap { decision ->
+                listOf(decision.decisionId, decision.photonId.value, decision.toStage.name, decision.reason)
+            }.toTypedArray(),
+            *raw.atoms.map { it.atomId }.sorted().toTypedArray(),
+            *raw.crystals.map { it.crystalId }.sorted().toTypedArray(),
+            *derived.map { it.id.value }.toTypedArray(),
+        )
+        return raw.copy(derivedPhotons = derived, fingerprint = stableFingerprint)
+    }
+
     private suspend fun saveIdempotent(photon: Photon) {
         val existing = photons.load(photon.id)
-        if (existing == null) {
-            photons.save(photon)
-        } else {
-            check(existing == photon) { "Conflicting durable memory projection identity: ${photon.id.value}" }
-        }
+        if (existing == null) photons.save(photon)
+        else check(existing == photon) { "Conflicting durable memory projection identity: ${photon.id.value}" }
     }
 }
 
