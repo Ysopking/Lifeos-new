@@ -6,7 +6,7 @@ import app.lifeos.core.model.PhotonRepository
 internal suspend fun loadCognitionJournalPhotons(
     repository: PhotonRepository,
     kind: CognitionJournalKind,
-): List<Photon> = repository.loadAll()
+): List<Photon> = repository.loadReport().photons
     .filter {
         COGNITION_JOURNAL_ROOT_TAG in it.tags &&
             "cognition-journal-kind:${kind.tag}" in it.tags
