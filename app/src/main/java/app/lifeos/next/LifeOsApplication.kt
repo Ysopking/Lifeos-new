@@ -33,6 +33,8 @@ import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
 import app.lifeos.core.runtime.life.DomainEvidenceConvergenceCoordinator
 import app.lifeos.core.runtime.life.DomainEvidenceConvergingPersistence
+import app.lifeos.core.runtime.life.DurableLifeMemoryRuntime
+import app.lifeos.core.runtime.life.DurableLifeMemoryRuntimeRegistry
 import app.lifeos.core.runtime.life.FuturePlanningCoordinator
 import app.lifeos.core.runtime.life.FuturePlanningPersistence
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
@@ -60,6 +62,7 @@ import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
+import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -83,6 +86,9 @@ class LifeOsApplication : Application() {
         private set
 
     lateinit var decisionTraces: DecisionTraceLedger
+        private set
+
+    lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
         private set
 
     internal lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
@@ -133,6 +139,8 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
+                    lifeMemoryRuntime = DurableLifeMemoryRuntime(kernel.photonStore)
+                    DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
                     val integratedCognition = requireNotNull(LifeOsIntegratedCognitionSuiteRegistry.current()) {
                         "Integrated cognition suite must be installed before kernel composition"
                     }
@@ -157,9 +165,11 @@ class LifeOsApplication : Application() {
                         delegate = domainPersistence,
                         planning = futurePlanning,
                     )
-                    // Re-evaluate persisted future evidence against the current policy/resource state
-                    // before boot rehydrates Photons into the runtime. Outputs remain non-executing.
+                    // Reconstruct life graph/memory from durable evidence before normal cognition starts.
+                    // Current wall time enters only here as an explicit compaction-policy input; stable
+                    // projection identities are source/state based and remain restart-replayable.
                     runBlocking {
+                        lifeMemoryRuntime.rebuild(Instant.now())
                         futurePlanning.reconsiderAll().forEach { planned ->
                             kernel.photonStore.save(planned)
                         }
