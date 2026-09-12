@@ -14,6 +14,7 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.CausalCognitionEngine
 import app.lifeos.core.runtime.CausalDerivedPhotonPersistence
 import app.lifeos.core.runtime.PhotonBackedCausalLedgerStore
+import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RecursiveCausalCognitionCoordinator
 import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
 import app.lifeos.core.runtime.StaticCognitiveModuleRegistry
@@ -52,6 +53,7 @@ import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.SubsystemDecisionTraceRecorder
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserver
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserverRegistry
+import app.lifeos.next.kernel.CanonicalPhotonIngress
 import app.lifeos.next.kernel.DurableGoalPlanRuntime
 import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
 import app.lifeos.next.kernel.GoalExecutionRuntimeRegistry
@@ -75,6 +77,9 @@ import kotlinx.coroutines.runBlocking
 /** Process-level owner for the LIFEOS kernel instance and read-only private diagnostics. */
 class LifeOsApplication : Application() {
     lateinit var kernel: LifeOsKernel
+        private set
+
+    lateinit var photonIngress: CanonicalPhotonIngress
         private set
 
     lateinit var generatedToolStatusReader: GeneratedToolRuntimeStatusReader
@@ -159,6 +164,7 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
+                    photonIngress = CanonicalPhotonIngress(kernel)
                     lifeMemoryRuntime = DurableLifeMemoryRuntime(kernel.photonStore)
                     DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
                     multimodalPerception = MultimodalPerceptionRuntime(kernel)
@@ -167,8 +173,7 @@ class LifeOsApplication : Application() {
                         "Integrated cognition suite must be installed before kernel composition"
                     }
                     val basePersistence = CausalDerivedPhotonPersistence { derived, _ ->
-                        kernel.photonStore.save(derived)
-                        kernel.matrix.influence(derived)
+                        photonIngress.ingest(derived, PhotonIngressMode.DERIVED)
                     }
                     val domainPersistence = DomainEvidenceConvergingPersistence(
                         delegate = basePersistence,
@@ -190,7 +195,7 @@ class LifeOsApplication : Application() {
                     runBlocking {
                         lifeMemoryRuntime.rebuild(Instant.now())
                         futurePlanning.reconsiderAll().forEach { planned ->
-                            kernel.photonStore.save(planned)
+                            photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
                         }
                     }
                     val causalCoordinator = RecursiveCausalCognitionCoordinator(
@@ -207,12 +212,13 @@ class LifeOsApplication : Application() {
                         )
                     )
                     LifeOsAutomationPhotonBridge.install { photon ->
-                        kernel.persistAndIngest(photon).photon
+                        photonIngress.ingest(photon, PhotonIngressMode.ORIGIN)
+                        photon
                     }
                     NovelPromotionRuntimeEventRegistry.install { promotion ->
                         val capability = promotion.activeRecord.manifest.sourceCapability.value
                         val toolId = promotion.activeRecord.manifest.toolId
-                        kernel.persistAndIngest(
+                        photonIngress.ingest(
                             Photon(
                                 content = "Controlled Evolution aktiviert $capability über $toolId nach " +
                                     "Novel-Canary-, Readiness-, Owner- und Promotion-Gates.",
@@ -230,7 +236,8 @@ class LifeOsApplication : Application() {
                                     "capability:$capability",
                                     "tool:$toolId",
                                 ),
-                            )
+                            ),
+                            PhotonIngressMode.ORIGIN,
                         )
                         Unit
                     }
@@ -242,7 +249,7 @@ class LifeOsApplication : Application() {
                             checkpoints = DeepSearchCheckpointStore(EncryptedDeepSearchCheckpointRepository(this)),
                             resultPhotons = object : DeepSearchResultPhotonPersistence {
                                 override suspend fun save(photon: Photon) {
-                                    kernel.persistAndIngest(photon)
+                                    photonIngress.ingest(photon, PhotonIngressMode.ORIGIN)
                                 }
 
                                 override suspend fun load(id: PhotonId): Photon? = kernel.photonStore.load(id)
@@ -285,7 +292,7 @@ class LifeOsApplication : Application() {
                         scope = selfHealingScope,
                         graph = healthGraph,
                         persist = { photon ->
-                            kernel.persistAndIngest(photon)
+                            photonIngress.ingest(photon, PhotonIngressMode.ORIGIN)
                             Unit
                         },
                     )
