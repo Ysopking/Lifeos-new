@@ -16,11 +16,14 @@ class ReportingCognitiveTaskDispatcher(
 ) : ClaimedTaskDispatcher {
     override suspend fun dispatch(task: LifeTask) {
         try {
-            observer.onExecutionResult(worker.execute(task))
+            val result = worker.execute(task)
+            observer.onExecutionResult(result)
+            CausalCognitionTaskObserverRegistry.current()?.onExecutionResult(result)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
             observer.onDispatchFailure(task, error)
+            CausalCognitionTaskObserverRegistry.current()?.onDispatchFailure(task, error)
             throw error
         }
     }
