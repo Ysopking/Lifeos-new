@@ -7,9 +7,10 @@ import kotlin.test.assertTrue
 
 class LifeOsSelfValidationTest {
     @Test
-    fun integratedSuitePassesAllEightBlocksAndChaosProbes() = runTest {
+    fun integratedSuitePassesAllRuntimeBlocksAndChaosProbes() = runTest {
         val (readiness, chaos) = LifeOsSelfValidation(LifeOsIntegratedCognitionSuite()).validate()
-        assertEquals(8, readiness.blocks.size)
+        assertEquals(LifeOsBlock.entries.size, readiness.blocks.size)
+        assertEquals(16, readiness.blocks.size)
         assertTrue(readiness.complete)
         assertTrue(chaos.passed)
         assertEquals(ChaosScenario.entries.size, chaos.probes.size)
