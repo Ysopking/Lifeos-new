@@ -50,12 +50,12 @@ run_test \
   "$report_dir/seed-goal-plan.txt"
 
 adb shell am force-stop app.lifeos.next
-cold_start="$(adb shell am start -W -n app.lifeos.next/.MainActivity)"
+cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
 pid="$(adb shell pidof app.lifeos.next | tr -d '\r')"
 test -n "$pid"
 activities="$(adb shell dumpsys activity activities)"
-printf '%s\n' "$activities" | grep -q 'app.lifeos.next/.MainActivity'
+printf '%s\n' "$activities" | grep -q 'app.lifeos.next/.ChatMainActivity'
 
 run_test \
   'app.lifeos.next.ThoughtGraphCompactionDeviceTest#recoverCompactedGraphHistory' \
