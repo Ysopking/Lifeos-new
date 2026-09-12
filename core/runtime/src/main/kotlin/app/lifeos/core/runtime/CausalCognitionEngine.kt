@@ -255,7 +255,7 @@ class CausalCognitionEngine(
             *canonicalBranches.map { it.branchId.value }.toTypedArray(),
             *canonicalOutputs.map { it.id.value }.toTypedArray(),
         )
-        val integratedId = PhotonId("integration:$identityHash")
+        val integratedId = PhotonId("integration-$identityHash")
         val content = buildString {
             appendLine("trace=${traceId.value}")
             appendLine("source=${source.id.value}@${source.revision}")
