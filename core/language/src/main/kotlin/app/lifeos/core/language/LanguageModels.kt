@@ -40,6 +40,7 @@ enum class IntentType {
     SCHEDULE,
     COMMUNICATE,
     STORE_OR_REMEMBER,
+    CONVERSATION,
     UNKNOWN,
 }
 
