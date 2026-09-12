@@ -2,13 +2,15 @@ package app.lifeos.core.runtime.life
 
 import app.lifeos.core.model.ModuleIdentity
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.CognitiveModule
 import app.lifeos.core.runtime.CognitiveModuleDescriptor
 import app.lifeos.core.runtime.CognitiveModuleProcessor
 import app.lifeos.core.runtime.CognitiveModuleResult
 
-/** Block E domain modules. They emit evidence-linked analysis Photons only; no external effect is executed here. */
+/** Domain modules emit evidence-linked analysis Photons only; no external effect is executed here. */
 object DomainCognitionModules {
     fun curiosity(): CognitiveModule = module(
         id = "curiosity",
@@ -64,8 +66,8 @@ object DomainCognitionModules {
         descriptor = CognitiveModuleDescriptor(
             identity = ModuleIdentity(
                 moduleId = "domain.$id",
-                version = "2",
-                implementationHash = "lifeos-domain-$id-v2-structured-evidence",
+                version = "3",
+                implementationHash = "lifeos-domain-$id-v3-stable-evidence-assertions",
                 capabilityIds = setOf("domain.analyze.$id"),
             ),
             acceptedMimeTypes = setOf("text/*", "application/vnd.lifeos.domain-fact+text", "application/vnd.lifeos.domain-note+text"),
@@ -78,33 +80,52 @@ object DomainCognitionModules {
             maxOutputs = 8,
         ),
         processor = CognitiveModuleProcessor { photon, _ ->
-            val facts = extractor(photon).take(8)
+            val assertions = extractor(photon)
+                .take(8)
+                .map { fact -> DomainEvidenceIdentity.assertion(photon, fact) }
             CognitiveModuleResult(
-                outputPhotons = facts.map { fact ->
+                outputPhotons = assertions.map { assertion ->
                     Photon(
                         content = buildString {
-                            appendLine("kind=${fact.kind.name}")
-                            appendLine("value=${fact.value}")
-                            appendLine("confidence=${fact.confidence}")
-                            append("evidence=${fact.evidence}")
+                            appendLine("fact_id=${assertion.factId}")
+                            appendLine("evidence_fingerprint=${assertion.evidenceFingerprint}")
+                            appendLine("kind=${assertion.kind.name}")
+                            appendLine("value=${assertion.normalizedValue}")
+                            appendLine("stance=${assertion.stance.name}")
+                            appendLine("confidence=${assertion.confidence}")
+                            append("evidence=${assertion.evidence}")
                         },
                         mimeType = "application/vnd.lifeos.domain-fact+text",
-                        semanticMass = maxOf(photon.semanticMass, fact.confidence),
+                        semanticMass = maxOf(photon.semanticMass, assertion.confidence),
                         energy = photon.energy,
-                        confidence = minOf(photon.confidence, fact.confidence),
+                        confidence = minOf(photon.confidence, assertion.confidence),
                         provenance = Provenance(
                             source = "domain:$id",
                             actor = "lifeos",
                             createdAt = photon.provenance.createdAt,
+                            parentIds = setOf(photon.id),
+                        ),
+                        relations = setOf(
+                            PhotonRelation(
+                                target = photon.id,
+                                type = when (assertion.stance) {
+                                    DomainEvidenceStance.SUPPORTS -> RelationType.SUPPORTS
+                                    DomainEvidenceStance.CONTRADICTS -> RelationType.CONTRADICTS
+                                    DomainEvidenceStance.UNCERTAIN -> RelationType.REFERENCES
+                                },
+                            )
                         ),
                         tags = photon.tags + outputTags + setOf(
                             "domain:$id",
-                            "fact:${fact.kind.name.lowercase()}",
+                            "fact:${assertion.kind.name.lowercase()}",
+                            "fact-id:${assertion.factId}",
+                            "evidence:${assertion.evidenceFingerprint}",
+                            "stance:${assertion.stance.name.lowercase()}",
                             "structured-domain-evidence",
                         ),
                     )
                 },
-                explanation = "structured-domain-evidence:$id:${facts.size}",
+                explanation = "stable-domain-evidence:$id:${assertions.size}",
             )
         },
     )
