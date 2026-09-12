@@ -9,6 +9,7 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.chat.ChatEvent
 import app.lifeos.core.runtime.chat.ConversationProjector
+import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.LifeOsResponseComposer
 import java.util.UUID
@@ -24,6 +25,10 @@ data class LifeOsChatUiState(
     val draft: String = "",
     val sending: Boolean = false,
     val bootStatus: KernelBootstrapStatus = KernelBootstrapStatus.CREATED,
+    val registeredSubsystems: Int = 0,
+    val unavailableSubsystems: Int = 0,
+    val capabilityProviders: Int = 0,
+    val generatedProviders: Int = 0,
     val error: String? = null,
 )
 
@@ -121,10 +126,15 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     private fun observeKernel() {
         viewModelScope.launch {
             kernel.bootstrapState.collect { boot ->
+                val topology = if (boot.ready) LifeOsProcessTopology.snapshot() else null
                 mutableState.update { current ->
                     current.copy(
                         events = ConversationProjector.project(boot.photons),
                         bootStatus = boot.status,
+                        registeredSubsystems = topology?.registeredSubsystemCount ?: 0,
+                        unavailableSubsystems = topology?.unavailableSubsystems?.size ?: 0,
+                        capabilityProviders = topology?.capabilityProviderCount ?: 0,
+                        generatedProviders = topology?.generatedProviderCount ?: 0,
                         error = boot.failureMessage ?: current.error,
                     )
                 }
