@@ -5,6 +5,7 @@ import app.lifeos.core.model.DeterminismContext
 import app.lifeos.core.model.LogicalTick
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.model.StableCognitiveIds
@@ -53,6 +54,35 @@ class DomainEvidenceConvergenceTest {
         assertEquals(DomainEvidenceConvergenceStatus.UNRESOLVED, forward.status)
         assertEquals(forward, reverse)
         assertEquals(2, forward.evidenceFingerprints.size)
+    }
+
+    @Test
+    fun unresolvedConvergenceBecomesAReflectingPhotonWithCompleteParentLineage() {
+        val fact = DomainFact(DomainFactKind.CLAIM, "Rechnung 100 EUR", 0.9, "Rechnung 100 EUR")
+        val support = DomainEvidenceIdentity.assertion(
+            photon("support-parent", 1, "Rechnung 100 EUR", setOf("evidence:supports")),
+            fact,
+        )
+        val contradiction = DomainEvidenceIdentity.assertion(
+            photon("contradict-parent", 1, "Rechnung 100 EUR", setOf("evidence:contradicts")),
+            fact.copy(confidence = 0.9),
+        )
+        val convergence = DomainEvidenceConvergenceEngine().converge(listOf(support, contradiction))
+
+        val photon = DomainEvidenceConvergencePhotonFactory.create(
+            convergence,
+            listOf(contradiction, support),
+        )
+
+        assertEquals(PhotonPhase.REFLECTING, photon.phase)
+        assertEquals(
+            setOf(PhotonId("support-parent"), PhotonId("contradict-parent")),
+            photon.provenance.parentIds,
+        )
+        assertTrue(photon.id.value.startsWith("domain-convergence-"))
+        assertTrue(photon.content.contains("status=UNRESOLVED"))
+        assertEquals(2, photon.relations.size)
+        assertTrue(photon.relations.all { it.type == RelationType.REFERENCES })
     }
 
     @Test
