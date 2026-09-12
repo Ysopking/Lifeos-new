@@ -79,8 +79,9 @@ class CausalCognitionEngineTest {
         val derived = first.emittedPhotons.filterNot { it.id == integrated.id }
         assertTrue(derived.all { source.id in it.provenance.parentIds })
         assertTrue(derived.all { photon -> photon.tags.any { it.startsWith("module:") } })
-        assertTrue(derived.all { it.id.value.startsWith("derived:") })
-        assertTrue(integrated.id.value.startsWith("integration:"))
+        assertTrue(derived.all { it.id.value.startsWith("derived-") })
+        assertTrue(integrated.id.value.startsWith("integration-"))
+        assertTrue(first.emittedPhotons.all { it.id.value.matches(Regex("[A-Za-z0-9_-]{1,128}")) })
     }
 
     @Test
