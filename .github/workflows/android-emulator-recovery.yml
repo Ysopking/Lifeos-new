@@ -22,6 +22,8 @@ on:
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/resource/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/world/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/trace/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/hardening/**"
+      - "core/runtime/src/test/kotlin/app/lifeos/core/runtime/hardening/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/thought/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/capability/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/evolution/**"
