@@ -40,8 +40,6 @@ internal class AndroidInitialDataSourceCatalog(
             add(Manifest.permission.READ_MEDIA_IMAGES)
             add(Manifest.permission.READ_MEDIA_VIDEO)
             add(Manifest.permission.READ_MEDIA_AUDIO)
-        } else {
-            add(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
     }.distinct().sorted()
 
@@ -58,7 +56,7 @@ internal class AndroidInitialDataSourceCatalog(
 private abstract class AndroidPagedInitialDataSource(
     protected val context: Context,
     final override val descriptor: LifeSourceDescriptor,
-    private val requiredPermission: String,
+    private val requiredPermission: String?,
     private val providerAuthority: String,
 ) : InitialDataSourceAdapter {
     protected val resolver: ContentResolver
@@ -67,6 +65,7 @@ private abstract class AndroidPagedInitialDataSource(
     final override suspend fun status(): InitialDataSourceStatus = when {
         context.packageManager.resolveContentProvider(providerAuthority, 0) == null ->
             InitialDataSourceStatus.UNAVAILABLE
+        requiredPermission == null -> InitialDataSourceStatus.UNAVAILABLE
         context.checkSelfPermission(requiredPermission) != PackageManager.PERMISSION_GRANTED ->
             InitialDataSourceStatus.UNAUTHORIZED
         else -> InitialDataSourceStatus.AVAILABLE
@@ -336,7 +335,7 @@ private class AndroidMediaInitialDataSource(
     }
 }
 
-private fun mediaPermission(kind: AndroidMediaKind): String =
+private fun mediaPermission(kind: AndroidMediaKind): String? =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         when (kind) {
             AndroidMediaKind.IMAGE -> Manifest.permission.READ_MEDIA_IMAGES
@@ -344,7 +343,7 @@ private fun mediaPermission(kind: AndroidMediaKind): String =
             AndroidMediaKind.AUDIO -> Manifest.permission.READ_MEDIA_AUDIO
         }
     } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
+        null
     }
 
 private fun collectionUri(kind: AndroidMediaKind): Uri = when (kind) {
