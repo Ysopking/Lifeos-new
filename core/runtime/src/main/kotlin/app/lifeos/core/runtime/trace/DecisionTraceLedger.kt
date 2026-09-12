@@ -51,10 +51,18 @@ class DecisionTraceLedger(private val repository: DecisionTraceRepository) {
         val merged = existing.associateByTo(linkedMapOf()) { it.id }
         additions.forEach { incoming ->
             val previous = merged[incoming.id]
-            require(previous == null || previous == incoming) {
-                "Decision trace node identity collision: ${incoming.id.value}"
+            if (previous == null) {
+                merged[incoming.id] = incoming
+            } else {
+                require(previous.copy(recordedAt = incoming.recordedAt) == incoming) {
+                    "Decision trace node identity collision: ${incoming.id.value}"
+                }
+                // recordedAt is observation metadata, not part of the durable node identity.
+                // Converge repeated projections deterministically on the earliest observation.
+                if (incoming.recordedAt < previous.recordedAt) {
+                    merged[incoming.id] = previous.copy(recordedAt = incoming.recordedAt)
+                }
             }
-            if (previous == null) merged[incoming.id] = incoming
         }
         return merged.values.sortedBy { it.id.value }
     }
