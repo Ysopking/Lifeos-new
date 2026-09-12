@@ -79,7 +79,7 @@ class PhotonTransactionObserver(
                 state = state,
                 influences = result.influences,
                 failures = result.failures,
-                recordedAt = now(),
+                recordedAt = result.recordedAt ?: now(),
             )
         )
     }
