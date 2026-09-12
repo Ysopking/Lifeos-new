@@ -20,6 +20,15 @@ run_test() {
   printf '%s\n' "$output" | grep -q 'OK (1 test)'
 }
 
+run_suite() {
+  suite_name="$1"
+  expected="$2"
+  report="$3"
+  output="$(adb shell am instrument -w -e class "$suite_name" "$runner")"
+  printf '%s\n' "$output" | tee "$report"
+  printf '%s\n' "$output" | grep -q "OK ($expected tests)"
+}
+
 run_test \
   'app.lifeos.next.PrivateV1DeviceSmokeTest#seedGeneratedToolAndAssertRuntime' \
   "$report_dir/seed-active.txt"
@@ -71,3 +80,8 @@ run_test \
 run_test \
   'app.lifeos.next.OwnerPolicyAssetWriteDeviceTest#assetWriteIsAllowedThenFailsClosedAfterRevokeAcrossFreshStore' \
   "$report_dir/owner-policy-asset-revoke-restart.txt"
+
+run_suite \
+  'app.lifeos.next.DeepSearchEncryptedRepositoryCorruptionDeviceTest' \
+  '2' \
+  "$report_dir/deepsearch-encrypted-recovery-corruption.txt"
