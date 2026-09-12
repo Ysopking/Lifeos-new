@@ -67,7 +67,7 @@ class LifeOsBlockBThroughHTest {
     }
 
     @Test
-    fun legalDomainModuleProducesDerivedAnalysisPhoton() = runTest {
+    fun legalDomainModuleProducesStructuredEvidencePhoton() = runTest {
         val source = Photon(
             id = PhotonId("legal-root"),
             content = "contract question",
@@ -76,7 +76,12 @@ class LifeOsBlockBThroughHTest {
         )
         val result = CausalCognitionEngine().process(source, listOf(DomainCognitionModules.legal()))
         assertFalse(result.replayed)
-        assertTrue(result.emittedPhotons.any { it.mimeType == "application/vnd.lifeos.domain-note+text" })
+        assertTrue(
+            result.emittedPhotons.any {
+                it.mimeType == "application/vnd.lifeos.domain-fact+text" &&
+                    "fact:legal_issue" in it.tags
+            }
+        )
     }
 
     @Test
