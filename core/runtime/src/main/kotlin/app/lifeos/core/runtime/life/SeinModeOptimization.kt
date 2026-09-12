@@ -59,6 +59,10 @@ data class LifeStateVector(val values: Map<SeinDimension, Double>) {
             listOf(dimension.name, java.lang.Double.toHexString(value))
         }.toTypedArray(),
     )
+
+    companion object {
+        fun neutral() = LifeStateVector(SeinDimension.entries.associateWith { 0.5 })
+    }
 }
 
 data class SeinEvaluation(
@@ -69,6 +73,9 @@ data class SeinEvaluation(
 )
 
 class SeinModeEvaluator(private val definition: SeinModeDefinition = SeinModeDefinition.stableV1()) {
+    val definitionVersion: String get() = definition.version
+    val definitionFingerprint: String get() = definition.fingerprint
+
     fun evaluate(state: LifeStateVector): SeinEvaluation {
         val deltas = SeinDimension.entries.associateWith { dimension ->
             definition.targets.getValue(dimension).desired - state.values.getValue(dimension)

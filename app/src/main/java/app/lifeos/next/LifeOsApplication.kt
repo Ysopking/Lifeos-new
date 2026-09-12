@@ -33,6 +33,8 @@ import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
 import app.lifeos.core.runtime.life.DomainEvidenceConvergenceCoordinator
 import app.lifeos.core.runtime.life.DomainEvidenceConvergingPersistence
+import app.lifeos.core.runtime.life.FuturePlanningCoordinator
+import app.lifeos.core.runtime.life.FuturePlanningPersistence
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
@@ -54,6 +56,7 @@ import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
 import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
+import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
@@ -133,13 +136,34 @@ class LifeOsApplication : Application() {
                     val integratedCognition = requireNotNull(LifeOsIntegratedCognitionSuiteRegistry.current()) {
                         "Integrated cognition suite must be installed before kernel composition"
                     }
-                    val productivePersistence = DomainEvidenceConvergingPersistence(
-                        delegate = CausalDerivedPhotonPersistence { derived, _ ->
-                            kernel.photonStore.save(derived)
-                            kernel.matrix.influence(derived)
-                        },
+                    val basePersistence = CausalDerivedPhotonPersistence { derived, _ ->
+                        kernel.photonStore.save(derived)
+                        kernel.matrix.influence(derived)
+                    }
+                    val domainPersistence = DomainEvidenceConvergingPersistence(
+                        delegate = basePersistence,
                         convergence = DomainEvidenceConvergenceCoordinator(kernel.photonStore),
                     )
+                    val futurePlanning = FuturePlanningCoordinator(
+                        photons = kernel.photonStore,
+                        authority = PrivateFuturePlanningAuthority(
+                            ownerPolicy = ownerPolicy,
+                            resources = hardwareResourceIntelligence,
+                        ),
+                        planner = integratedCognition.lifePlanner,
+                        evaluator = integratedCognition.seinEvaluator,
+                    )
+                    val productivePersistence = FuturePlanningPersistence(
+                        delegate = domainPersistence,
+                        planning = futurePlanning,
+                    )
+                    // Re-evaluate persisted future evidence against the current policy/resource state
+                    // before boot rehydrates Photons into the runtime. Outputs remain non-executing.
+                    runBlocking {
+                        futurePlanning.reconsiderAll().forEach { planned ->
+                            kernel.photonStore.save(planned)
+                        }
+                    }
                     val causalCoordinator = RecursiveCausalCognitionCoordinator(
                         modules = StaticCognitiveModuleRegistry(integratedCognition.domainModules),
                         engine = CausalCognitionEngine(
