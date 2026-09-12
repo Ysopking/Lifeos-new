@@ -1,0 +1,97 @@
+name: BuildStudio Candidate Host Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-host-gate:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.head_ref, 'buildstudio/candidate-')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout isolated candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate candidate isolation and bind source
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${GITHUB_HEAD_REF}" in
+            buildstudio/candidate-*) ;;
+            *) echo "BuildStudio candidate must use buildstudio/candidate-*" >&2; exit 1 ;;
+          esac
+          git fetch --no-tags origin main
+          source_commit="$(git merge-base HEAD origin/main)"
+          candidate_head="$(git rev-parse HEAD)"
+          test -n "$source_commit"
+          test "$candidate_head" != "$source_commit"
+          mkdir -p buildstudio-host-evidence
+          printf '%s\n' "$source_commit" > buildstudio-host-evidence/source-commit.txt
+          printf '%s\n' "$candidate_head" > buildstudio-host-evidence/candidate-head.txt
+          printf '%s\n' "$GITHUB_HEAD_REF" > buildstudio-host-evidence/candidate-ref.txt
+          printf '%s\n' "${{ github.event.pull_request.number }}" > buildstudio-host-evidence/pull-request.txt
+          git diff --name-only "$source_commit"..HEAD | LC_ALL=C sort > buildstudio-host-evidence/changed-paths.txt
+          test -s buildstudio-host-evidence/changed-paths.txt
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Run BuildStudio verification gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle test :app:lintDebug :app:assembleDebug --stacktrace
+
+      - name: Seal candidate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk='app/build/outputs/apk/debug/app-debug.apk'
+          test -s "$apk"
+          source_commit="$(cat buildstudio-host-evidence/source-commit.txt)"
+          candidate_head="$(cat buildstudio-host-evidence/candidate-head.txt)"
+          apk_sha="$(sha256sum "$apk" | awk '{print $1}')"
+          printf '%s  %s\n' "$apk_sha" "$apk" > buildstudio-host-evidence/app-debug.sha256
+          {
+            echo 'LIFEOS_BUILDSTUDIO_HOST_EVIDENCE_V1'
+            echo "sourceCommit=$source_commit"
+            echo "candidateHead=$candidate_head"
+            echo "candidateRef=$GITHUB_HEAD_REF"
+            echo "apkSha256=$apk_sha"
+            echo 'activationAllowed=false'
+          } > buildstudio-host-evidence/manifest.txt
+
+      - name: Upload candidate APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIFEOS-BUILDSTUDIO-candidate-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload BuildStudio host evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIFEOS-BUILDSTUDIO-host-evidence
+          path: buildstudio-host-evidence/
+          if-no-files-found: error
+          retention-days: 30

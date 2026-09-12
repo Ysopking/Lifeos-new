@@ -1,5 +1,13 @@
 package app.lifeos.core.runtime.capability
 
+/**
+ * Single process owner for the productive capability/generated-tool graph.
+ *
+ * Once a CapabilityRegistry and GeneratedToolRegistry have become a ready pair, temporary planning
+ * registries (for example Genesis composition sandboxes) must never replace either process owner.
+ * A second productive kernel in the same process is likewise rejected instead of silently creating
+ * a split-brain capability/tool pair.
+ */
 object GeneratedToolRuntimeProcessRegistry {
     private val lock = Any()
 
@@ -10,6 +18,11 @@ object GeneratedToolRuntimeProcessRegistry {
 
     fun installCapabilities(value: CapabilityRegistry) {
         val callbacks = synchronized(lock) {
+            val current = capabilities
+            if (current != null && current !== value && tools != null) {
+                // Productive pair is already sealed. Detached/planning registries remain local only.
+                return@synchronized emptyList()
+            }
             capabilities = value
             drainReadyListenersLocked()
         }
@@ -18,6 +31,11 @@ object GeneratedToolRuntimeProcessRegistry {
 
     fun installTools(value: GeneratedToolRegistry) {
         val callbacks = synchronized(lock) {
+            val current = tools
+            if (current != null && current !== value && capabilities != null) {
+                // Do not split an already-ready process pair.
+                return@synchronized emptyList()
+            }
             tools = value
             drainReadyListenersLocked()
         }
@@ -25,7 +43,13 @@ object GeneratedToolRuntimeProcessRegistry {
     }
 
     fun installLifecycle(value: GeneratedToolLifecycleCoordinator) {
-        lifecycle = value
+        synchronized(lock) {
+            val current = lifecycle
+            require(current == null || current === value) {
+                "Productive generated-tool lifecycle is already installed for this process"
+            }
+            lifecycle = value
+        }
     }
 
     fun whenReady(listener: (CapabilityRegistry, GeneratedToolRegistry) -> Unit) {
@@ -53,6 +77,13 @@ object GeneratedToolRuntimeProcessRegistry {
         val callbacks = readyListeners.map { listener -> listener to (currentCapabilities to currentTools) }
         readyListeners.clear()
         return callbacks
+    }
+
+    internal fun clearForTests() = synchronized(lock) {
+        capabilities = null
+        tools = null
+        lifecycle = null
+        readyListeners.clear()
     }
 }
 

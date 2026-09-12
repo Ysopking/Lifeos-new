@@ -42,6 +42,8 @@ class GoalActionDispatcher(
     private val executionGuard: GoalActionExecutionGuard = GoalExecutionRuntimeRegistry.current(),
     private val durableRuntimeProvider: () -> DurableGoalPlanRuntime? =
         DurableGoalPlanRuntimeRegistry::currentOrNull,
+    private val expandCapabilities: suspend (GoalActionContext) -> String =
+        GenesisCapabilityExpansionRuntime::process,
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
         // V15 is observational only: project the already-computed router result into the shared
@@ -53,48 +55,21 @@ class GoalActionDispatcher(
             resolution = context.routing,
         )
 
-        // Capability expansion must run before V7/V5 action admission. Otherwise a real missing
-        // capability can become WAITING_CAPABILITY before V11 ever sees the gap.
+        // Missing capability expansion is now always Genesis-first. Genesis selects the smallest safe
+        // handoff; only TOOL_WORKSHOP handoffs may reach the bounded autonomous generator. BUILD_STUDIO
+        // and other module paths stay explicit non-activating proposals until a real host/gate exists.
         if (!context.routing.ready) {
             val gapReason = context.routing.blockingGaps
                 .joinToString(",") { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
                 .ifBlank { "goal-is-not-action-ready" }
-            val workshopReason = try {
-                when (val result = AutonomousToolWorkshopRuntimeRegistry.processIfInstalled(context)) {
-                    null,
-                    AutonomousToolWorkshopResult.NotNeeded -> "workshop-not-needed"
-                    is AutonomousToolWorkshopResult.Progressed -> {
-                        result.jobs.forEach { snapshot ->
-                            DecisionTraceRuntimeRegistry.currentOrNull()?.recordToolWorkshop(
-                                goalPhotonId = context.goalPhotonId,
-                                goalPhotonRevision = context.goalPhotonRevision,
-                                recordedAt = context.sourcePhoton.provenance.createdAt,
-                                snapshot = snapshot,
-                            )
-                        }
-                        result.jobs.joinToString(",") {
-                            "${it.definition.capabilityId.value}:${it.state.name}"
-                        }.ifBlank { "workshop-progressed" }
-                    }
-                    is AutonomousToolWorkshopResult.Blocked -> {
-                        result.jobs.forEach { snapshot ->
-                            DecisionTraceRuntimeRegistry.currentOrNull()?.recordToolWorkshop(
-                                goalPhotonId = context.goalPhotonId,
-                                goalPhotonRevision = context.goalPhotonRevision,
-                                recordedAt = context.sourcePhoton.provenance.createdAt,
-                                snapshot = snapshot,
-                                explicitReason = result.reason,
-                            )
-                        }
-                        "workshop-blocked:${result.reason}"
-                    }
-                }
+            val expansionReason = try {
+                expandCapabilities(context)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                "workshop-failed:${error::class.simpleName}:${error.message.orEmpty().take(120)}"
+                "genesis-expansion-failed:${error::class.simpleName}:${error.message.orEmpty().take(120)}"
             }
-            return blocked(context.goal.intent, "$gapReason;$workshopReason")
+            return blocked(context.goal.intent, "$gapReason;$expansionReason")
         }
 
         // Production installs this runtime after kernel construction. Resolve it per execution rather than

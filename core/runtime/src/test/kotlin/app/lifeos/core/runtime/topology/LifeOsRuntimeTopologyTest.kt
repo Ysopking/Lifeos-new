@@ -4,6 +4,7 @@ import app.lifeos.core.runtime.capability.CapabilityContract
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
 import app.lifeos.core.runtime.capability.CapabilityId
 import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.GeneratedToolRuntimeProcessRegistry
 import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.capability.TrustLevel
@@ -16,8 +17,9 @@ import kotlin.test.assertTrue
 
 class LifeOsRuntimeTopologyTest {
     @BeforeTest
-    fun resetBindings() {
+    fun resetProcessState() {
         LifeOsRuntimeBindingRegistry.clearForTests()
+        GeneratedToolRuntimeProcessRegistry.clearForTests()
     }
 
     @Test

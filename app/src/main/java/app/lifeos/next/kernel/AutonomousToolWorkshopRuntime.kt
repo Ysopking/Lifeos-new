@@ -2,6 +2,7 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.capability.AutonomousToolWorkshopRequestPhoton
+import app.lifeos.core.runtime.capability.CapabilityId
 import app.lifeos.core.runtime.capability.DurableToolWorkshopCoordinator
 import app.lifeos.core.runtime.capability.ToolWorkshopAdmissionResult
 import app.lifeos.core.runtime.capability.ToolWorkshopExecutionProfile
@@ -26,6 +27,11 @@ sealed interface AutonomousToolWorkshopResult {
  * durable workshop jobs. One invocation may advance at most the fixed stage count, so the loop is
  * bounded even when every stage succeeds immediately. TRIAL_READY is the hard stop: activation is
  * still owned by Controlled Evolution / V10 and is never implied by generation.
+ *
+ * [allowedCapabilityIds] is the Genesis handoff boundary. Null preserves the legacy/all-gap call for
+ * focused tests and explicit callers; productive capability expansion supplies only capabilities
+ * whose Genesis handoff target is TOOL_WORKSHOP. BuildStudio/module handoffs therefore cannot fall
+ * through into the bounded text-opcode generator.
  */
 class AutonomousToolWorkshopRuntime(
     private val workshop: DurableToolWorkshopCoordinator,
@@ -35,8 +41,14 @@ class AutonomousToolWorkshopRuntime(
 ) {
     private val mutex = Mutex()
 
-    suspend fun process(context: GoalActionContext): AutonomousToolWorkshopResult = mutex.withLock {
+    suspend fun process(
+        context: GoalActionContext,
+        allowedCapabilityIds: Set<CapabilityId>? = null,
+    ): AutonomousToolWorkshopResult = mutex.withLock {
         val gaps = context.routing.blockingGaps
+            .filter { gap ->
+                allowedCapabilityIds == null || gap.requirement.capabilityId in allowedCapabilityIds
+            }
             .sortedWith(compareBy({ it.requirement.capabilityId.value }, { it.type.name }))
         if (gaps.isEmpty()) return@withLock AutonomousToolWorkshopResult.NotNeeded
 
@@ -171,8 +183,10 @@ object AutonomousToolWorkshopRuntimeRegistry {
         runtime = value
     }
 
-    suspend fun processIfInstalled(context: GoalActionContext): AutonomousToolWorkshopResult? =
-        runtime?.process(context)
+    suspend fun processIfInstalled(
+        context: GoalActionContext,
+        allowedCapabilityIds: Set<CapabilityId>? = null,
+    ): AutonomousToolWorkshopResult? = runtime?.process(context, allowedCapabilityIds)
 
     suspend fun reconcileOpenJobs(): List<ToolWorkshopJobSnapshot> =
         runtime?.reconcileOpenJobs().orEmpty()
