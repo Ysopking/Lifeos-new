@@ -11,6 +11,7 @@ enum class LifeOsSubsystemState {
     UNAVAILABLE,
 }
 
+/** Compatibility/read-model projection. The authoritative topology definition is SubsystemManifest. */
 data class LifeOsSubsystemDescriptor(
     val id: String,
     val requiredCapabilities: Set<String> = emptySet(),
@@ -37,6 +38,7 @@ data class LifeOsRuntimeTopologySnapshot(
     val subsystems: List<LifeOsSubsystemStatus>,
     val capabilityProviderCount: Int,
     val generatedProviderCount: Int,
+    val manifestFingerprint: String,
 ) {
     val registeredSubsystemCount: Int get() = subsystems.size
     val operationalSubsystemCount: Int
@@ -52,69 +54,138 @@ data class LifeOsRuntimeTopologySnapshot(
 /**
  * Process-wide topology projection for the productive LIFEOS runtime.
  * Capability availability comes exclusively from CapabilityRegistry. Runtime presence and lifecycle
- * come from LifeOsRuntimeBindingRegistry. Dependencies are propagated in deterministic topological
- * order so downstream nodes cannot appear healthy when an upstream subsystem is absent.
+ * come from LifeOsRuntimeBindingRegistry. The typed manifest graph is the single topology source;
+ * descriptor order, dependency propagation and configuration identity are derived from it.
  */
 object LifeOsProcessTopology {
-    val canonicalSubsystems: List<LifeOsSubsystemDescriptor> = listOf(
-        LifeOsSubsystemDescriptor("photon-store"),
-        LifeOsSubsystemDescriptor("binary-asset-store"),
-        LifeOsSubsystemDescriptor("thought-matrix"),
-        LifeOsSubsystemDescriptor("thought-graph", dependencies = setOf("photon-store")),
-        LifeOsSubsystemDescriptor("field-runtime", dependencies = setOf("thought-matrix")),
-        LifeOsSubsystemDescriptor("field-thought-graph-projection", dependencies = setOf("field-runtime", "thought-graph")),
-        LifeOsSubsystemDescriptor("world-formula", dependencies = setOf("field-runtime")),
-        LifeOsSubsystemDescriptor("language-understanding", requiredCapabilities = setOf("language.understand")),
-        LifeOsSubsystemDescriptor("language-context", dependencies = setOf("photon-store")),
-        LifeOsSubsystemDescriptor("capability-registry"),
-        LifeOsSubsystemDescriptor("capability-router", dependencies = setOf("capability-registry")),
-        LifeOsSubsystemDescriptor("owner-policy"),
-        LifeOsSubsystemDescriptor("resource-intelligence"),
-        LifeOsSubsystemDescriptor("resource-budgets", dependencies = setOf("resource-intelligence")),
-        LifeOsSubsystemDescriptor("decision-trace", dependencies = setOf("photon-store")),
-        LifeOsSubsystemDescriptor("goal-planning", dependencies = setOf("language-understanding", "capability-router")),
-        LifeOsSubsystemDescriptor("goal-resume", requiredCapabilities = setOf("goal.resume"), dependencies = setOf("goal-planning")),
-        LifeOsSubsystemDescriptor("local-knowledge", requiredCapabilities = setOf("knowledge.resolve"), dependencies = setOf("capability-router")),
-        LifeOsSubsystemDescriptor("deep-search", requiredCapabilities = setOf("deepsearch.query"), dependencies = setOf("capability-router")),
-        LifeOsSubsystemDescriptor("scene-compiler", requiredCapabilities = setOf("scene.construct.procedural"), dependencies = setOf("capability-router")),
-        LifeOsSubsystemDescriptor("scene-rasterizer", requiredCapabilities = setOf("scene.rasterize.mmsi"), dependencies = setOf("scene-compiler")),
-        LifeOsSubsystemDescriptor("image-renderer", requiredCapabilities = setOf("image.render.mmsi"), dependencies = setOf("scene-rasterizer")),
-        LifeOsSubsystemDescriptor("image-transform", requiredCapabilities = setOf("image.transform.mmsi"), dependencies = setOf("capability-router")),
-        LifeOsSubsystemDescriptor("reminder-scheduler", requiredCapabilities = setOf("planner.schedule"), dependencies = setOf("capability-router")),
-        LifeOsSubsystemDescriptor("communication", requiredCapabilities = setOf("communication.dispatch"), dependencies = setOf("capability-router")),
-        LifeOsSubsystemDescriptor("durable-task-engine", dependencies = setOf("photon-store")),
-        LifeOsSubsystemDescriptor("continuous-cognition", dependencies = setOf("photon-store", "durable-task-engine")),
-        LifeOsSubsystemDescriptor("cognition-reconciler", dependencies = setOf("continuous-cognition")),
-        LifeOsSubsystemDescriptor("cognition-outcome-pipeline", dependencies = setOf("continuous-cognition")),
-        LifeOsSubsystemDescriptor("cognitive-worker", dependencies = setOf("durable-task-engine", "field-runtime")),
-        LifeOsSubsystemDescriptor("task-scheduler", dependencies = setOf("durable-task-engine", "cognitive-worker")),
-        LifeOsSubsystemDescriptor("lease-recovery", dependencies = setOf("durable-task-engine")),
-        LifeOsSubsystemDescriptor("runtime-supervisor", dependencies = setOf("task-scheduler", "lease-recovery")),
-        LifeOsSubsystemDescriptor("health-graph"),
-        LifeOsSubsystemDescriptor("protection-coordinator", dependencies = setOf("health-graph")),
-        LifeOsSubsystemDescriptor("self-healing", dependencies = setOf("health-graph", "runtime-supervisor", "resource-budgets")),
-        LifeOsSubsystemDescriptor("tool-workshop", dependencies = setOf("capability-registry", "resource-budgets", "owner-policy")),
-        LifeOsSubsystemDescriptor("generated-tool-registry", dependencies = setOf("tool-workshop", "capability-registry")),
-        LifeOsSubsystemDescriptor("autonomous-tool-workshop", dependencies = setOf("tool-workshop", "continuous-cognition")),
-        LifeOsSubsystemDescriptor("evolution-hot-swap", dependencies = setOf("generated-tool-registry", "capability-registry", "owner-policy")),
-        LifeOsSubsystemDescriptor("hot-swap-runtime", dependencies = setOf("evolution-hot-swap", "owner-policy", "resource-budgets")),
-        LifeOsSubsystemDescriptor("learning-adaptation", dependencies = setOf("field-runtime", "capability-router")),
-        LifeOsSubsystemDescriptor("build-studio", requiredCapabilities = setOf("buildstudio.run"), dependencies = setOf("capability-router", "tool-workshop")),
-    ).also { descriptors ->
-        require(descriptors.size >= MINIMUM_CANONICAL_SUBSYSTEMS) {
+    val canonicalManifestGraph: SubsystemManifestGraph = SubsystemManifestGraph(
+        listOf(
+            manifest("photon-store"),
+            manifest("binary-asset-store"),
+            manifest("thought-matrix"),
+            manifest("thought-graph", dependencies = setOf("photon-store")),
+            manifest("field-runtime", dependencies = setOf("thought-matrix")),
+            manifest("field-thought-graph-projection", dependencies = setOf("field-runtime", "thought-graph")),
+            manifest("world-formula", dependencies = setOf("field-runtime")),
+            manifest("language-understanding", requiredCapabilities = setOf("language.understand")),
+            manifest("language-context", dependencies = setOf("photon-store")),
+            manifest("capability-registry"),
+            manifest("capability-router", dependencies = setOf("capability-registry")),
+            manifest("owner-policy", startupOwner = SubsystemStartupOwner.SHARED_RESOURCES),
+            manifest("resource-intelligence", startupOwner = SubsystemStartupOwner.SHARED_RESOURCES),
+            manifest(
+                "resource-budgets",
+                dependencies = setOf("resource-intelligence"),
+                startupOwner = SubsystemStartupOwner.SHARED_RESOURCES,
+            ),
+            manifest(
+                "decision-trace",
+                dependencies = setOf("photon-store"),
+                startupOwner = SubsystemStartupOwner.SHARED_RESOURCES,
+            ),
+            manifest(
+                "goal-planning",
+                dependencies = setOf("language-understanding", "capability-router"),
+                startupOwner = SubsystemStartupOwner.DURABLE_GOALS,
+            ),
+            manifest(
+                "goal-resume",
+                requiredCapabilities = setOf("goal.resume"),
+                dependencies = setOf("goal-planning"),
+            ),
+            manifest(
+                "local-knowledge",
+                requiredCapabilities = setOf("knowledge.resolve"),
+                dependencies = setOf("capability-router"),
+            ),
+            manifest(
+                "deep-search",
+                requiredCapabilities = setOf("deepsearch.query"),
+                dependencies = setOf("capability-router"),
+                startupOwner = SubsystemStartupOwner.DEEP_SEARCH,
+            ),
+            manifest(
+                "scene-compiler",
+                requiredCapabilities = setOf("scene.construct.procedural"),
+                dependencies = setOf("capability-router"),
+            ),
+            manifest(
+                "scene-rasterizer",
+                requiredCapabilities = setOf("scene.rasterize.mmsi"),
+                dependencies = setOf("scene-compiler"),
+            ),
+            manifest(
+                "image-renderer",
+                requiredCapabilities = setOf("image.render.mmsi"),
+                dependencies = setOf("scene-rasterizer"),
+            ),
+            manifest(
+                "image-transform",
+                requiredCapabilities = setOf("image.transform.mmsi"),
+                dependencies = setOf("capability-router"),
+            ),
+            manifest(
+                "reminder-scheduler",
+                requiredCapabilities = setOf("planner.schedule"),
+                dependencies = setOf("capability-router"),
+            ),
+            manifest(
+                "communication",
+                requiredCapabilities = setOf("communication.dispatch"),
+                dependencies = setOf("capability-router"),
+            ),
+            manifest("durable-task-engine", dependencies = setOf("photon-store")),
+            manifest("continuous-cognition", dependencies = setOf("photon-store", "durable-task-engine")),
+            manifest("cognition-reconciler", dependencies = setOf("continuous-cognition")),
+            manifest("cognition-outcome-pipeline", dependencies = setOf("continuous-cognition")),
+            manifest("cognitive-worker", dependencies = setOf("durable-task-engine", "field-runtime")),
+            manifest("task-scheduler", dependencies = setOf("durable-task-engine", "cognitive-worker")),
+            manifest("lease-recovery", dependencies = setOf("durable-task-engine")),
+            manifest("runtime-supervisor", dependencies = setOf("task-scheduler", "lease-recovery")),
+            manifest("health-graph"),
+            manifest("protection-coordinator", dependencies = setOf("health-graph")),
+            manifest(
+                "self-healing",
+                dependencies = setOf("health-graph", "runtime-supervisor", "resource-budgets"),
+                startupOwner = SubsystemStartupOwner.SELF_HEALING,
+            ),
+            manifest(
+                "tool-workshop",
+                dependencies = setOf("capability-registry", "resource-budgets", "owner-policy"),
+            ),
+            manifest("generated-tool-registry", dependencies = setOf("tool-workshop", "capability-registry")),
+            manifest("autonomous-tool-workshop", dependencies = setOf("tool-workshop", "continuous-cognition")),
+            manifest(
+                "evolution-hot-swap",
+                dependencies = setOf("generated-tool-registry", "capability-registry", "owner-policy"),
+            ),
+            manifest(
+                "hot-swap-runtime",
+                dependencies = setOf("evolution-hot-swap", "owner-policy", "resource-budgets"),
+                startupOwner = SubsystemStartupOwner.OPTIONAL_RUNTIME,
+            ),
+            manifest("learning-adaptation", dependencies = setOf("field-runtime", "capability-router")),
+            manifest(
+                "build-studio",
+                requiredCapabilities = setOf("buildstudio.run"),
+                dependencies = setOf("capability-router", "tool-workshop"),
+                startupOwner = SubsystemStartupOwner.EXTERNAL_HOST,
+            ),
+        )
+    ).also { graph ->
+        require(graph.topologicalOrder.size >= MINIMUM_CANONICAL_SUBSYSTEMS) {
             "Canonical LIFEOS topology must not shrink below the established subsystem baseline"
         }
-        require(descriptors.map { it.id }.distinct().size == descriptors.size) {
-            "Canonical LIFEOS subsystem ids must be unique"
-        }
-        val seen = linkedSetOf<String>()
-        descriptors.forEach { descriptor ->
-            require(seen.containsAll(descriptor.dependencies)) {
-                "LIFEOS topology must be topologically ordered; ${descriptor.id} depends on ${descriptor.dependencies - seen}"
-            }
-            seen += descriptor.id
-        }
     }
+
+    val canonicalSubsystems: List<LifeOsSubsystemDescriptor> =
+        canonicalManifestGraph.topologicalOrder.map(SubsystemManifest::descriptor)
+
+    val manifestFingerprint: String get() = canonicalManifestGraph.fingerprint
+
+    fun isKnownSubsystem(id: SubsystemId): Boolean = canonicalManifestGraph.contains(id)
+
+    fun manifest(id: SubsystemId): SubsystemManifest = canonicalManifestGraph.requireManifest(id)
 
     suspend fun snapshot(): LifeOsRuntimeTopologySnapshot? {
         val registry = GeneratedToolRuntimeProcessRegistry.capabilities() ?: return null
@@ -174,8 +245,23 @@ object LifeOsProcessTopology {
             subsystems = resolved.values.toList(),
             capabilityProviderCount = providers.size,
             generatedProviderCount = providers.count { it.providerType == ProviderType.GENERATED_TOOL },
+            manifestFingerprint = manifestFingerprint,
         )
     }
+
+    private fun manifest(
+        id: String,
+        requiredCapabilities: Set<String> = emptySet(),
+        dependencies: Set<String> = emptySet(),
+        startupOwner: SubsystemStartupOwner = SubsystemStartupOwner.KERNEL_GRAPH,
+        version: String = "1",
+    ): SubsystemManifest = SubsystemManifest(
+        id = SubsystemId(id),
+        requiredCapabilities = requiredCapabilities,
+        dependencies = dependencies.mapTo(linkedSetOf(), ::SubsystemId),
+        startupOwner = startupOwner,
+        version = version,
+    )
 
     const val MINIMUM_CANONICAL_SUBSYSTEMS = 36
 }
