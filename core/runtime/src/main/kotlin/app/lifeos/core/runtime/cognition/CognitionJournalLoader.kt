@@ -12,3 +12,13 @@ internal suspend fun loadCognitionJournalPhotons(
             "cognition-journal-kind:${kind.tag}" in it.tags
     }
     .sortedBy { it.id.value }
+
+internal suspend fun loadCognitionJournalPhoton(
+    repository: PhotonRepository,
+    kind: CognitionJournalKind,
+    stableId: String,
+): Photon? = repository.load(CognitionJournalIdentity.photonId(kind.tag, stableId))
+    ?.takeIf {
+        COGNITION_JOURNAL_ROOT_TAG in it.tags &&
+            "cognition-journal-kind:${kind.tag}" in it.tags
+    }
