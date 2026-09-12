@@ -31,6 +31,16 @@ object DomainEvidencePhotonCodec {
         append("evidence_span=${assertion.evidenceSpan}")
     }
 
+    fun declaredFactId(photon: Photon): String? {
+        if (photon.mimeType != MIME_TYPE || "structured-domain-evidence" !in photon.tags) return null
+        val values = photon.content.lineSequence()
+            .filter { it.startsWith("fact_id=") }
+            .map { it.substringAfter('=') }
+            .toList()
+        require(values.size <= 1) { "Duplicate structured domain fact identity" }
+        return values.singleOrNull()?.takeIf { it.isNotBlank() }
+    }
+
     suspend fun decode(photon: Photon, sources: PhotonRepository): DomainEvidenceAssertion? {
         val fields = parse(photon) ?: return null
         val assertion = if (fields["schema"] == SCHEMA_VERSION) {
@@ -136,9 +146,11 @@ class DomainEvidenceConvergenceCoordinator(
         val factTag = "fact-id:${current.factId}"
         val assertions = buildList {
             photons.loadAll().forEach { persisted ->
-                if (factTag !in persisted.tags) return@forEach
+                val declaredFactId = DomainEvidencePhotonCodec.declaredFactId(persisted)
+                if (declaredFactId != null && declaredFactId != current.factId) return@forEach
+                if (declaredFactId == null && factTag !in persisted.tags) return@forEach
                 val decoded = DomainEvidencePhotonCodec.decode(persisted, photons) ?: return@forEach
-                require(decoded.factId == current.factId) { "Domain evidence fact tag mismatch" }
+                require(decoded.factId == current.factId) { "Domain evidence fact identity mismatch" }
                 add(decoded)
             }
             if (none { it.interpretationId == current.interpretationId }) add(current)
