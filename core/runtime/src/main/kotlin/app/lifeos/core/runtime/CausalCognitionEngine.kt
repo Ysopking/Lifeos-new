@@ -170,6 +170,7 @@ class CausalCognitionEngine(
             branches += createdBranch.ready(
                 outputs = normalizedOutputs.map { it.id },
                 stateHash = outputStateHash,
+                semanticOutcome = moduleResult.semanticOutcome,
             )
             emitted += normalizedOutputs
             records += ModuleProcessingRecord(
