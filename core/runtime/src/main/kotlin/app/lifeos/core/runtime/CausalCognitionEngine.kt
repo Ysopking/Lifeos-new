@@ -19,7 +19,7 @@ import app.lifeos.core.model.StableCognitiveIds
 import kotlinx.coroutines.CancellationException
 
 data class CausalCognitionEngineConfig(
-    val runtimeVersion: String = "lifeos-causal-runtime-v1",
+    val runtimeVersion: String = "lifeos-causal-runtime-v2",
     val policyVersion: String = "owner-policy-current",
     val maxTotalDerivedPhotons: Int = 128,
 ) {
@@ -43,11 +43,9 @@ data class CausalCognitionResult(
 /**
  * Universal immutable fan-out/fan-in cognition path.
  *
- * - the source Photon is never changed;
- * - attracted modules get deterministic branches and replay context;
- * - module outputs receive deterministic ids and causal lineage;
- * - complementary successful branches are integrated into a new canonical Photon;
- * - an existing trace is never executed twice by the same ledger.
+ * Trace identity includes runtime, policy and the canonical module/descriptor set. Historical
+ * evidence therefore replays only against the exact cognition configuration that already handled
+ * it; a later module/version/policy change creates a new trace and can reinterpret the same source.
  */
 class CausalCognitionEngine(
     private val attractionEngine: FieldAttractionEngine = FieldAttractionEngine(),
@@ -56,7 +54,13 @@ class CausalCognitionEngine(
 ) {
     suspend fun process(source: Photon, modules: Collection<CognitiveModule>): CausalCognitionResult {
         val inputStateHash = CanonicalPhotonState.inputHash(source)
-        val traceId = StableCognitiveIds.trace(source.id, source.revision, inputStateHash)
+        val executionFingerprint = executionFingerprint(modules)
+        val traceId = StableCognitiveIds.trace(
+            rootPhotonId = source.id,
+            rootRevision = source.revision,
+            inputHash = inputStateHash,
+            namespace = "lifeos:$executionFingerprint",
+        )
 
         ledger.load(traceId)?.let { existing ->
             return CausalCognitionResult(
@@ -148,10 +152,7 @@ class CausalCognitionEngine(
             }
 
             val normalizedInfluences = moduleResult.influences.map { influence ->
-                influence.copy(
-                    module = identity.moduleId,
-                    photonId = source.id,
-                )
+                influence.copy(module = identity.moduleId, photonId = source.id)
             }
             influences += normalizedInfluences
 
@@ -166,11 +167,10 @@ class CausalCognitionEngine(
                 )
             }
             val outputStateHash = CanonicalPhotonState.outputsHash(normalizedOutputs)
-            val readyBranch = createdBranch.ready(
+            branches += createdBranch.ready(
                 outputs = normalizedOutputs.map { it.id },
                 stateHash = outputStateHash,
             )
-            branches += readyBranch
             emitted += normalizedOutputs
             records += ModuleProcessingRecord(
                 processingId = StableCognitiveIds.moduleProcessing(
@@ -194,9 +194,7 @@ class CausalCognitionEngine(
         val successful = branches.filter { it.status == CognitiveBranchStatus.READY_FOR_CONVERGENCE }
         val integratedPhoton = if (successful.isNotEmpty()) {
             buildIntegrationPhoton(source, traceId, successful, emitted)
-        } else {
-            null
-        }
+        } else null
         if (integratedPhoton != null) emitted += integratedPhoton
 
         val finalBranches = branches.map { branch ->
@@ -279,13 +277,24 @@ class CausalCognitionEngine(
                 createdAt = source.provenance.createdAt,
                 parentIds = setOf(source.id) + canonicalOutputs.map { it.id },
             ),
-            relations = setOf(
-                PhotonRelation(source.id, RelationType.DERIVED_FROM),
-            ) + canonicalOutputs.map { PhotonRelation(it.id, RelationType.REFERENCES) },
-            tags = setOf(
-                "cognitive-integration",
-                "causal-trace:${traceId.value}",
-            ),
+            relations = setOf(PhotonRelation(source.id, RelationType.DERIVED_FROM)) +
+                canonicalOutputs.map { PhotonRelation(it.id, RelationType.REFERENCES) },
+            tags = setOf("cognitive-integration", "causal-trace:${traceId.value}"),
+        )
+    }
+
+    private fun executionFingerprint(modules: Collection<CognitiveModule>): String {
+        val moduleDescriptors = modules
+            .associateBy { it.descriptor.identity.stableFingerprint }
+            .values
+            .map { descriptorParametersHash(it.descriptor).value }
+            .sorted()
+        return StableCognitiveIds.fingerprint(
+            "causal-execution/v2",
+            config.runtimeVersion,
+            config.policyVersion,
+            config.maxTotalDerivedPhotons.toString(),
+            *moduleDescriptors.toTypedArray(),
         )
     }
 
@@ -304,8 +313,12 @@ class CausalCognitionEngine(
         descriptor.acceptedMimeTypes.sorted().joinToString("\u0000"),
         descriptor.preferredTags.sorted().joinToString("\u0000"),
         descriptor.requiredTags.sorted().joinToString("\u0000"),
-        descriptor.baseAttraction.toString(),
-        descriptor.minimumAttraction.toString(),
+        descriptor.semanticHints.sorted().joinToString("\u0000"),
+        descriptor.goalHints.sorted().joinToString("\u0000"),
+        java.lang.Double.toHexString(descriptor.expectedInformationGain),
+        java.lang.Double.toHexString(descriptor.estimatedCost),
+        java.lang.Double.toHexString(descriptor.baseAttraction),
+        java.lang.Double.toHexString(descriptor.minimumAttraction),
         descriptor.maxOutputs.toString(),
     )
 }
