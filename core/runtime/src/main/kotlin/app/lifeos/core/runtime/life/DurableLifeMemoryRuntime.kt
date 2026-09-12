@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.life
 import app.lifeos.core.model.CanonicalPhotonState
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.StableCognitiveIds
@@ -38,7 +39,8 @@ data class DurableLifeSourceCheckpoint(
         require(lastBatchFingerprint == null || lastBatchFingerprint.isNotBlank())
     }
 
-    val cursor: LifeSourceCursor get() = LifeSourceCursor(descriptor.sourceId, position)
+    val cursor: LifeSourceCursor
+        get() = LifeSourceCursor(descriptor.sourceId, position, descriptor.adapterVersion)
 }
 
 data class DurableLifeIngestCommit(
@@ -65,19 +67,7 @@ class PhotonBackedLifeSourceCheckpointStore(
     suspend fun load(descriptor: LifeSourceDescriptor): DurableLifeSourceCheckpoint {
         val photon = photons.load(checkpointId(descriptor))
             ?: return DurableLifeSourceCheckpoint(descriptor, null, null, 0L)
-        require("life-source-checkpoint" in photon.tags) { "Life source checkpoint tag missing" }
-        val fields = parseFields(photon.content)
-        require(fields["schema"] == SCHEMA) { "Unsupported life source checkpoint schema" }
-        require(decode(required(fields, "source")) == descriptor.sourceId) { "Life source checkpoint source mismatch" }
-        require(decode(required(fields, "adapter")) == descriptor.adapterVersion) { "Life source checkpoint adapter mismatch" }
-        val position = required(fields, "position").takeIf { it != NULL }?.let(::decode)
-        val lastBatch = required(fields, "batch").takeIf { it != NULL }
-        return DurableLifeSourceCheckpoint(
-            descriptor = descriptor,
-            position = position,
-            lastBatchFingerprint = lastBatch,
-            revision = photon.revision,
-        )
+        return decodeCheckpoint(descriptor, photon)
     }
 
     suspend fun commit(
@@ -88,27 +78,25 @@ class PhotonBackedLifeSourceCheckpointStore(
         committedAt: Instant,
     ): DurableLifeSourceCheckpoint {
         require(batchFingerprint.isNotBlank())
-        if (previous.position == nextPosition && previous.lastBatchFingerprint == batchFingerprint) return previous
-
+        val current = load(previous.descriptor)
+        if (current.position == nextPosition && current.lastBatchFingerprint == batchFingerprint) return current
+        require(current.revision == previous.revision) {
+            "Life source checkpoint changed concurrently; refusing stale cursor advance"
+        }
         val desired = DurableLifeSourceCheckpoint(
             descriptor = previous.descriptor,
             position = nextPosition,
             lastBatchFingerprint = batchFingerprint,
             revision = previous.revision + 1L,
         )
-        val content = buildString {
-            appendLine("schema=$SCHEMA")
-            appendLine("source=${encode(previous.descriptor.sourceId)}")
-            appendLine("adapter=${encode(previous.descriptor.adapterVersion)}")
-            appendLine("position=${nextPosition?.let(::encode) ?: NULL}")
-            append("batch=$batchFingerprint")
-        }
         photons.save(
             Photon(
                 id = checkpointId(previous.descriptor),
                 revision = desired.revision,
-                content = content,
+                content = encodeCheckpoint(desired),
                 mimeType = MIME_TYPE,
+                semanticMass = 0.0,
+                energy = 0.0,
                 provenance = Provenance(
                     source = "life-source-checkpoint",
                     actor = previous.descriptor.sourceId,
@@ -126,9 +114,38 @@ class PhotonBackedLifeSourceCheckpointStore(
         return desired
     }
 
+    private fun decodeCheckpoint(
+        descriptor: LifeSourceDescriptor,
+        photon: Photon,
+    ): DurableLifeSourceCheckpoint {
+        require("life-source-checkpoint" in photon.tags) { "Life source checkpoint tag missing" }
+        val fields = parseFields(photon.content)
+        require(fields["schema"] == SCHEMA) { "Unsupported life source checkpoint schema" }
+        require(decode(required(fields, "source")) == descriptor.sourceId) {
+            "Life source checkpoint source mismatch"
+        }
+        require(decode(required(fields, "adapter")) == descriptor.adapterVersion) {
+            "Life source checkpoint adapter mismatch"
+        }
+        return DurableLifeSourceCheckpoint(
+            descriptor = descriptor,
+            position = required(fields, "position").takeIf { it != NULL }?.let(::decode),
+            lastBatchFingerprint = required(fields, "batch").takeIf { it != NULL },
+            revision = photon.revision,
+        )
+    }
+
+    private fun encodeCheckpoint(checkpoint: DurableLifeSourceCheckpoint): String = buildString {
+        appendLine("schema=$SCHEMA")
+        appendLine("source=${encode(checkpoint.descriptor.sourceId)}")
+        appendLine("adapter=${encode(checkpoint.descriptor.adapterVersion)}")
+        appendLine("position=${checkpoint.position?.let(::encode) ?: NULL}")
+        append("batch=${checkpoint.lastBatchFingerprint ?: NULL}")
+    }
+
     private fun checkpointId(descriptor: LifeSourceDescriptor): PhotonId = PhotonId(
-        "life-source-checkpoint:" + StableCognitiveIds.fingerprint(
-            "life-source-checkpoint-id/v1",
+        "life-source-checkpoint-" + StableCognitiveIds.fingerprint(
+            "life-source-checkpoint-id/v2",
             descriptor.sourceId,
             descriptor.adapterVersion,
         )
@@ -158,27 +175,27 @@ class PhotonBackedMemoryAccessLedgerStore(
         listOfNotNull(goalRelevance, relationshipWeight, futureRelevance, seinRelevance).forEach {
             require(it.isFinite() && it in 0.0..1.0)
         }
-        val id = PhotonId(
-            "memory-access-event:" + StableCognitiveIds.fingerprint(
-                "memory-access-event/v1",
-                photonId.value,
-                accessKey,
-            )
-        )
-        val content = buildString {
-            appendLine("schema=1")
-            appendLine("target=${encode(photonId.value)}")
-            appendLine("access_key=${encode(accessKey)}")
-            appendLine("at=$at")
-            appendLine("goal=${number(goalRelevance)}")
-            appendLine("relationship=${number(relationshipWeight)}")
-            appendLine("future=${number(futureRelevance)}")
-            append("sein=${number(seinRelevance)}")
-        }
         val event = Photon(
-            id = id,
-            content = content,
+            id = PhotonId(
+                "memory-access-event-" + StableCognitiveIds.fingerprint(
+                    "memory-access-event/v2",
+                    photonId.value,
+                    accessKey,
+                )
+            ),
+            content = buildString {
+                appendLine("schema=1")
+                appendLine("target=${encode(photonId.value)}")
+                appendLine("access_key=${encode(accessKey)}")
+                appendLine("at=$at")
+                appendLine("goal=${number(goalRelevance)}")
+                appendLine("relationship=${number(relationshipWeight)}")
+                appendLine("future=${number(futureRelevance)}")
+                append("sein=${number(seinRelevance)}")
+            },
             mimeType = "application/vnd.lifeos.memory-access-event+text",
+            semanticMass = 0.0,
+            energy = 0.0,
             provenance = Provenance(
                 source = "life-memory-access",
                 actor = "lifeos",
@@ -194,7 +211,7 @@ class PhotonBackedMemoryAccessLedgerStore(
     suspend fun snapshot(): MemoryAccessLedger {
         val events = photons.loadAll()
             .filter { "memory-access-event" in it.tags }
-            .map(::decode)
+            .map(::decodeEvent)
             .sortedWith(compareBy<AccessEvent> { it.at }.thenBy { it.id.value })
         var ledger = MemoryAccessLedger()
         events.forEach { event ->
@@ -220,7 +237,7 @@ class PhotonBackedMemoryAccessLedgerStore(
         val seinRelevance: Double?,
     )
 
-    private fun decode(photon: Photon): AccessEvent {
+    private fun decodeEvent(photon: Photon): AccessEvent {
         val fields = parseFields(photon.content)
         require(fields["schema"] == "1") { "Unsupported memory access event schema" }
         val target = PhotonId(decode(required(fields, "target")))
@@ -260,7 +277,7 @@ class DurableLifeSourceIngestor(
     ): DurableLifeIngestCommit {
         val before = checkpoints.load(descriptor)
         if (!authorized) {
-            val gap = permissionGap(descriptor, before.cursor, committedAt)
+            val gap = sourceGap(descriptor, before.cursor, committedAt, "UNAUTHORIZED")
             saveIdempotent(gap)
             return DurableLifeIngestCommit(
                 descriptor = descriptor,
@@ -271,7 +288,9 @@ class DurableLifeSourceIngestor(
                 permissionGap = gap,
             )
         }
-        require(records.all { it.sourceId == descriptor.sourceId }) { "Life source record belongs to another source" }
+        require(records.all { it.sourceId == descriptor.sourceId }) {
+            "Life source record belongs to another source"
+        }
         val canonicalRecords = records.groupBy { it.recordId }.map { (recordId, duplicates) ->
             require(duplicates.distinct().size == 1) { "Conflicting duplicate life source record: $recordId" }
             duplicates.single()
@@ -279,7 +298,7 @@ class DurableLifeSourceIngestor(
         val evidence = canonicalRecords.map { record -> sourceRecordPhoton(descriptor, record) }
         evidence.forEach { saveIdempotent(it) }
         val batchFingerprint = StableCognitiveIds.fingerprint(
-            "life-source-ingest-batch/v1",
+            "life-source-ingest-batch/v2",
             descriptor.fingerprint,
             before.position.orEmpty(),
             nextPosition.orEmpty(),
@@ -301,10 +320,20 @@ class DurableLifeSourceIngestor(
         )
     }
 
+    suspend fun recordUnavailable(
+        descriptor: LifeSourceDescriptor,
+        observedAt: Instant,
+    ): Photon {
+        val checkpoint = checkpoints.load(descriptor)
+        val gap = sourceGap(descriptor, checkpoint.cursor, observedAt, "UNAVAILABLE")
+        saveIdempotent(gap)
+        return gap
+    }
+
     private fun sourceRecordPhoton(descriptor: LifeSourceDescriptor, record: LifeSourceRecord): Photon = Photon(
         id = PhotonId(
-            "life-source-record:" + StableCognitiveIds.fingerprint(
-                "life-source-record-id/v1",
+            "life-source-record-" + StableCognitiveIds.fingerprint(
+                "life-source-record-id/v2",
                 descriptor.sourceId,
                 descriptor.adapterVersion,
                 record.recordId,
@@ -321,6 +350,7 @@ class DurableLifeSourceIngestor(
             createdAt = record.observedAt,
         ),
         tags = record.tags + setOf(
+            "perception",
             "life-ingest",
             "life-source-evidence",
             "source:${descriptor.sourceId}",
@@ -329,38 +359,40 @@ class DurableLifeSourceIngestor(
         ),
     )
 
-    private fun permissionGap(
+    private fun sourceGap(
         descriptor: LifeSourceDescriptor,
         cursor: LifeSourceCursor,
         observedAt: Instant,
+        state: String,
     ): Photon = Photon(
         id = PhotonId(
-            "life-source-gap:" + StableCognitiveIds.fingerprint(
-                "life-source-permission-gap/v1",
+            "life-source-gap-" + StableCognitiveIds.fingerprint(
+                "life-source-gap/v2",
                 descriptor.sourceId,
                 descriptor.adapterVersion,
                 cursor.position.orEmpty(),
+                state,
                 observedAt.toString(),
             )
         ),
         content = buildString {
-            appendLine("source=${descriptor.sourceId}")
-            appendLine("adapter=${descriptor.adapterVersion}")
-            appendLine("cursor=${cursor.position.orEmpty()}")
-            append("state=UNAUTHORIZED")
+            appendLine("source=${encode(descriptor.sourceId)}")
+            appendLine("adapter=${encode(descriptor.adapterVersion)}")
+            appendLine("cursor=${encode(cursor.position.orEmpty())}")
+            append("state=$state")
         },
         mimeType = "application/vnd.lifeos.source-gap+text",
         semanticMass = 0.4,
         energy = 0.1,
         confidence = 1.0,
         provenance = Provenance(
-            source = "life-source-permission",
+            source = "life-source-state",
             actor = descriptor.sourceId,
             createdAt = observedAt,
         ),
         tags = setOf(
             "life-source-gap",
-            "permission-state:unauthorized",
+            "permission-state:${state.lowercase()}",
             "source:${descriptor.sourceId}",
             "source-adapter:${descriptor.adapterVersion}",
         ),
@@ -372,7 +404,8 @@ class DurableLifeSourceIngestor(
             photons.save(photon)
         } else {
             check(existing == photon) {
-                "Conflicting durable life source identity: ${photon.id.value}; source record changed without adapter/version identity change"
+                "Conflicting durable life source identity: ${photon.id.value}; " +
+                    "source record changed without adapter/version identity change"
             }
         }
     }
@@ -386,37 +419,46 @@ class DurableLifeMemoryRuntime(
     private val graphProjector: LifeGraphProjector = LifeGraphProjector(),
     private val memoryEngine: LongTermMemoryEngine = LongTermMemoryEngine(),
 ) {
+    @Volatile
+    private var latest: DurableLifeMemorySnapshot? = null
+
+    fun current(): DurableLifeMemorySnapshot? = latest
+
     suspend fun rebuild(now: Instant): DurableLifeMemorySnapshot {
         val all = photons.loadAll()
         val authoritative = all.filterNot(::isLifeMemoryManagementPhoton)
-        val accessLedger = accessStore.snapshot()
-        val graph = graphProjector.project(authoritative)
-        val rawMemory = memoryEngine.project(authoritative, accessLedger, now)
-        val memory = stabilize(rawMemory, authoritative)
+        val graphEvidence = authoritative.filterNot { "causal-ledger" in it.tags }
+        val memoryEvidence = graphEvidence.filterNot { "life-source-gap" in it.tags }
+        val durableAccess = accessStore.snapshot()
+        val effectiveAccess = rebuildableRelevance(durableAccess, memoryEvidence, all)
+        val graph = graphProjector.project(graphEvidence)
+        val rawMemory = memoryEngine.project(memoryEvidence, effectiveAccess, now)
+        val memory = stabilize(rawMemory, memoryEvidence)
         memory.derivedPhotons.forEach(::saveIdempotent)
-        val fingerprint = StableCognitiveIds.fingerprint(
-            "durable-life-memory-snapshot/v1",
-            graph.fingerprint,
-            memory.fingerprint,
-            *accessLedger.profiles.entries.sortedBy { it.key.value }.flatMap { (id, profile) ->
-                listOf(
-                    id.value,
-                    profile.lastAccessAt.toString(),
-                    profile.accessCount.toString(),
-                    java.lang.Double.toHexString(profile.goalRelevance),
-                    java.lang.Double.toHexString(profile.relationshipWeight),
-                    java.lang.Double.toHexString(profile.futureRelevance),
-                    java.lang.Double.toHexString(profile.seinRelevance),
-                )
-            }.toTypedArray(),
-        )
-        return DurableLifeMemorySnapshot(
+        val snapshot = DurableLifeMemorySnapshot(
             graph = graph,
             memory = memory,
-            accessLedger = accessLedger,
+            accessLedger = effectiveAccess,
             authoritativePhotonCount = authoritative.size,
-            fingerprint = fingerprint,
+            fingerprint = StableCognitiveIds.fingerprint(
+                "durable-life-memory-snapshot/v2",
+                graph.fingerprint,
+                memory.fingerprint,
+                *effectiveAccess.profiles.entries.sortedBy { it.key.value }.flatMap { (id, profile) ->
+                    listOf(
+                        id.value,
+                        profile.lastAccessAt.toString(),
+                        profile.accessCount.toString(),
+                        java.lang.Double.toHexString(profile.goalRelevance),
+                        java.lang.Double.toHexString(profile.relationshipWeight),
+                        java.lang.Double.toHexString(profile.futureRelevance),
+                        java.lang.Double.toHexString(profile.seinRelevance),
+                    )
+                }.toTypedArray(),
+            ),
         )
+        latest = snapshot
+        return snapshot
     }
 
     suspend fun ingest(
@@ -428,6 +470,14 @@ class DurableLifeMemoryRuntime(
     ): Pair<DurableLifeIngestCommit, DurableLifeMemorySnapshot> {
         val commit = ingestor.ingest(descriptor, records, nextPosition, authorized, committedAt)
         return commit to rebuild(committedAt)
+    }
+
+    suspend fun recordUnavailable(
+        descriptor: LifeSourceDescriptor,
+        observedAt: Instant,
+    ): Pair<Photon, DurableLifeMemorySnapshot> {
+        val gap = ingestor.recordUnavailable(descriptor, observedAt)
+        return gap to rebuild(observedAt)
     }
 
     suspend fun recordAccess(
@@ -456,6 +506,9 @@ class DurableLifeMemoryRuntime(
         authoritative: List<Photon>,
     ): LongTermMemoryProjection {
         val sources = authoritative.associateBy { it.id }
+        val idMap = raw.derivedPhotons.associate { photon ->
+            photon.id to stableDerivedId(photon)
+        }
         val derived = raw.derivedPhotons.map { photon ->
             val sourceParents = photon.provenance.parentIds.mapNotNull(sources::get)
             val deterministicCreatedAt = when {
@@ -463,11 +516,24 @@ class DurableLifeMemoryRuntime(
                 "memory-crystal" in photon.tags -> sourceParents.maxOf { it.provenance.createdAt }
                 else -> sourceParents.minOf { it.provenance.createdAt }
             }
+            val stableParents = photon.provenance.parentIds.mapTo(linkedSetOf()) { idMap[it] ?: it }
+            val stableRelations = photon.relations.mapTo(linkedSetOf()) { relation ->
+                PhotonRelation(
+                    target = idMap[relation.target] ?: relation.target,
+                    type = relation.type,
+                    weight = relation.weight,
+                )
+            }
             val stateTags = sourceParents.mapTo(linkedSetOf()) { source ->
                 "source-state:${CanonicalPhotonState.inputHash(source).value}"
             }
             photon.copy(
-                provenance = photon.provenance.copy(createdAt = deterministicCreatedAt),
+                id = idMap.getValue(photon.id),
+                provenance = photon.provenance.copy(
+                    createdAt = deterministicCreatedAt,
+                    parentIds = stableParents,
+                ),
+                relations = stableRelations,
                 tags = photon.tags + stateTags + setOf(
                     "life-memory-management",
                     "producer-version:${LongTermMemoryEngine.RUNTIME_VERSION}",
@@ -475,7 +541,7 @@ class DurableLifeMemoryRuntime(
             )
         }.sortedBy { it.id.value }
         val stableFingerprint = StableCognitiveIds.fingerprint(
-            "long-term-memory-durable-projection/v1",
+            "long-term-memory-durable-projection/v2",
             *raw.decisions.sortedBy { it.photonId.value }.flatMap { decision ->
                 listOf(decision.decisionId, decision.photonId.value, decision.toStage.name, decision.reason)
             }.toTypedArray(),
@@ -484,6 +550,18 @@ class DurableLifeMemoryRuntime(
             *derived.map { it.id.value }.toTypedArray(),
         )
         return raw.copy(derivedPhotons = derived, fingerprint = stableFingerprint)
+    }
+
+    private fun stableDerivedId(photon: Photon): PhotonId {
+        val prefix = if ("memory-crystal" in photon.tags) "memory-crystal-" else "memory-atom-"
+        return PhotonId(
+            prefix + StableCognitiveIds.fingerprint(
+                "durable-memory-photon/v2",
+                photon.id.value,
+                LongTermMemoryEngine.RUNTIME_VERSION,
+                *photon.tags.sorted().toTypedArray(),
+            )
+        )
     }
 
     private suspend fun saveIdempotent(photon: Photon) {
@@ -498,9 +576,71 @@ fun isLifeMemoryManagementPhoton(photon: Photon): Boolean =
         "memory-atom" in photon.tags ||
         "memory-crystal" in photon.tags
 
+/** Goal/future/relationship/Sein relevance can be rebuilt from durable lineage after restart. */
+private fun rebuildableRelevance(
+    base: MemoryAccessLedger,
+    sourceEvidence: List<Photon>,
+    allPhotons: List<Photon>,
+): MemoryAccessLedger {
+    val sourceIds = sourceEvidence.mapTo(linkedSetOf()) { it.id }
+    val byId = allPhotons.associateBy { it.id }
+    val profiles = base.profiles.toMutableMap()
+    allPhotons.sortedBy { it.id.value }.forEach { signal ->
+        val future = "future-evidence" in signal.tags || "future-planning-output" in signal.tags
+        val goal = "goal" in signal.tags || signal.tags.any { it.startsWith("goal:") }
+        val relationship = signal.tags.any {
+            it.startsWith("relationship") || it.startsWith("entity-relationship:")
+        }
+        val sein = signal.tags.any { it.startsWith("sein") }
+        if (!future && !goal && !relationship && !sein) return@forEach
+        val roots = (signal.provenance.parentIds + signal.relations.map { it.target }).toSet()
+        roots.flatMapTo(linkedSetOf()) { root ->
+            sourceAncestors(root, sourceIds, byId)
+        }.forEach { sourceId ->
+            val source = byId[sourceId] ?: return@forEach
+            val previous = profiles[sourceId] ?: MemoryUsageProfile(sourceId, source.provenance.createdAt)
+            profiles[sourceId] = previous.copy(
+                goalRelevance = maxOf(previous.goalRelevance, if (goal) signal.confidence else 0.0),
+                relationshipWeight = maxOf(
+                    previous.relationshipWeight,
+                    if (relationship) signal.confidence else 0.0,
+                ),
+                futureRelevance = maxOf(previous.futureRelevance, if (future) signal.confidence else 0.0),
+                seinRelevance = maxOf(previous.seinRelevance, if (sein) signal.confidence else 0.0),
+            )
+        }
+    }
+    return MemoryAccessLedger(profiles)
+}
+
+private fun sourceAncestors(
+    start: PhotonId,
+    sourceIds: Set<PhotonId>,
+    byId: Map<PhotonId, Photon>,
+): Set<PhotonId> {
+    val result = linkedSetOf<PhotonId>()
+    val queue = ArrayDeque<Pair<PhotonId, Int>>()
+    val visited = linkedSetOf<PhotonId>()
+    queue.addLast(start to 0)
+    while (queue.isNotEmpty()) {
+        val (id, depth) = queue.removeFirst()
+        if (!visited.add(id) || depth > MAX_LINEAGE_DEPTH) continue
+        if (id in sourceIds) result += id
+        val photon = byId[id] ?: continue
+        (photon.provenance.parentIds + photon.relations.map { it.target })
+            .sortedBy { it.value }
+            .forEach { queue.addLast(it to (depth + 1)) }
+    }
+    return result
+}
+
 private fun parseFields(content: String): Map<String, String> {
+    require(content.length <= MAX_MANAGEMENT_CONTENT_CHARS) { "Durable life-memory record too large" }
     val fields = linkedMapOf<String, String>()
-    content.lineSequence().filter { it.isNotBlank() }.forEach { line ->
+    val lines = content.lineSequence().filter { it.isNotBlank() }.toList()
+    require(lines.size <= MAX_MANAGEMENT_FIELDS) { "Too many durable life-memory fields" }
+    lines.forEach { line ->
+        require(line.length <= MAX_MANAGEMENT_FIELD_CHARS) { "Durable life-memory field too large" }
         val separator = line.indexOf('=')
         require(separator > 0) { "Malformed durable life-memory record" }
         val key = line.substring(0, separator)
@@ -523,3 +663,8 @@ private fun decode(value: String): String = String(
 
 private fun number(value: Double?): String = value?.let(java.lang.Double::toHexString) ?: "~"
 private fun optionalNumber(value: String): Double? = value.takeIf { it != "~" }?.let(java.lang.Double::valueOf)
+
+private const val MAX_LINEAGE_DEPTH = 16
+private const val MAX_MANAGEMENT_CONTENT_CHARS = 64 * 1024
+private const val MAX_MANAGEMENT_FIELDS = 32
+private const val MAX_MANAGEMENT_FIELD_CHARS = 16 * 1024
