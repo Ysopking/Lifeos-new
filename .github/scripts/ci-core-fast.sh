@@ -36,10 +36,13 @@ gradle :core:scene:test --stacktrace
 step "gate 06: core data debug unit tests"
 gradle :core:data:testDebugUnitTest --stacktrace
 
-step "gate 07: app debug unit tests"
+step "gate 07: BuildStudio authorized host tests"
+gradle :host:buildstudio:test --stacktrace
+
+step "gate 08: app debug unit tests"
 gradle :app:testDebugUnitTest --stacktrace
 
-step "gate 08: app debug Kotlin compile"
+step "gate 09: app debug Kotlin compile"
 gradle :app:compileDebugKotlin --stacktrace
 
 step "core fast gate complete"
