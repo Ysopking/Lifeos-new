@@ -16,11 +16,16 @@ on:
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/deepsearch/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/resource/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/world/**"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/trace/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/thought/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/capability/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/evolution/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/goal/**"
       - "core/data/src/main/kotlin/app/lifeos/core/data/deepsearch/**"
+      - "core/data/src/main/kotlin/app/lifeos/core/data/resource/**"
+      - "core/data/src/main/kotlin/app/lifeos/core/data/world/**"
 permissions:
   contents: read
 concurrency:
