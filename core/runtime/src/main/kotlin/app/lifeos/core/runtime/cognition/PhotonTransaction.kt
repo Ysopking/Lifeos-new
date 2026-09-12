@@ -93,7 +93,7 @@ class PhotonTransactionObserver(
                 state = PhotonTransactionState.FAILED,
                 influences = emptyList(),
                 failures = emptyList(),
-                recordedAt = now(),
+                recordedAt = task.updatedAt,
             )
         )
     }
