@@ -191,7 +191,7 @@ class OutcomeTriggerObserver(
             finalState = result.finalState,
             influences = result.influences,
             failures = result.failures,
-            recordedAt = now(),
+            recordedAt = result.recordedAt ?: now(),
             fieldShadow = result.fieldShadow,
         )
         outcomes.record(outcome)
