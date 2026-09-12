@@ -13,4 +13,10 @@ internal fun cognitionJournalPhoton(kind: CognitionJournalKind, stableId: String
     semanticMass = 0.0,
     energy = 0.0,
     provenance = Provenance("cognition-journal", "lifeos-runtime", at),
+    tags = setOf(
+        "internal",
+        COGNITION_JOURNAL_ROOT_TAG,
+        "cognition-journal-kind:${kind.tag}",
+        "cognition-journal-schema:1",
+    ),
 )
