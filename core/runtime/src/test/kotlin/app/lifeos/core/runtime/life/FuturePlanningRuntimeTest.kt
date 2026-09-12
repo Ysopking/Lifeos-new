@@ -40,7 +40,8 @@ class FuturePlanningRuntimeTest {
         first.forEach { repository.save(it) }
 
         assertTrue(coordinator.planPersisted(evidence).isEmpty())
-        assertEquals(first, repository.loadAll().filter { it.id in first.mapTo(setOf()) { photon -> photon.id } })
+        val persistedOutputIds = first.map { it.id }.toSet()
+        assertEquals(first, repository.loadAll().filter { it.id in persistedOutputIds })
     }
 
     @Test
@@ -127,14 +128,14 @@ class FuturePlanningRuntimeTest {
         repository.save(observation)
         repository.save(action)
         var revision = 0L
-        val authority = FuturePlanningAuthority {
+        val authority = FuturePlanningAuthority { scenario ->
             revision += 1L
             FuturePlanningAdmissibility(
-                allowed = it.allowed,
+                allowed = scenario.allowed,
                 policyRevision = revision,
                 policyFingerprint = "policy-$revision",
-                resourceFingerprint = "resource-${it.id}",
-                reason = if (it.allowed) "planning-resource-admissible" else "observation-only",
+                resourceFingerprint = "resource-${scenario.id}",
+                reason = if (scenario.allowed) "planning-resource-admissible" else "observation-only",
             )
         }
 
