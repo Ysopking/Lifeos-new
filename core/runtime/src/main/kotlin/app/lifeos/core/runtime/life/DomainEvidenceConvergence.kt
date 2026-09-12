@@ -2,7 +2,12 @@ package app.lifeos.core.runtime.life
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonPhase
+import app.lifeos.core.model.PhotonRelation
+import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.RelationType
 import app.lifeos.core.model.StableCognitiveIds
+import java.time.Instant
 import kotlin.math.abs
 
 enum class DomainEvidenceStance {
@@ -20,6 +25,7 @@ data class DomainEvidenceAssertion(
     val confidence: Double,
     val sourcePhotonId: PhotonId,
     val sourceRevision: Long,
+    val observedAt: Instant,
     val evidence: String,
 ) {
     init {
@@ -60,6 +66,7 @@ object DomainEvidenceIdentity {
             confidence = fact.confidence,
             sourcePhotonId = source.id,
             sourceRevision = source.revision,
+            observedAt = source.provenance.createdAt,
             evidence = evidence,
         )
     }
@@ -208,6 +215,69 @@ class DomainEvidenceConvergenceEngine(
             canonicalFingerprint = canonicalFingerprint,
             boundedOut = boundedOut,
             totalEvidenceCount = canonicalAll.size,
+        )
+    }
+}
+
+/** Creates the new canonical information Photon while retaining every bounded evidence ancestor. */
+object DomainEvidenceConvergencePhotonFactory {
+    fun create(
+        result: DomainEvidenceConvergenceResult,
+        assertions: Collection<DomainEvidenceAssertion>,
+    ): Photon {
+        val byFingerprint = assertions.associateBy { it.evidenceFingerprint }
+        val contributing = result.evidenceFingerprints.map { fingerprint ->
+            requireNotNull(byFingerprint[fingerprint]) { "Missing evidence for convergence fingerprint" }
+        }
+        require(contributing.isNotEmpty())
+        require(contributing.all { it.factId == result.factId })
+
+        val parentIds = contributing.mapTo(linkedSetOf()) { it.sourcePhotonId }
+        val confidence = when (result.status) {
+            DomainEvidenceConvergenceStatus.CONFIRMED -> result.supportConfidence
+            DomainEvidenceConvergenceStatus.REJECTED -> result.contradictionConfidence
+            DomainEvidenceConvergenceStatus.UNRESOLVED -> 0.5
+        }
+        val phase = if (result.status == DomainEvidenceConvergenceStatus.UNRESOLVED) {
+            PhotonPhase.REFLECTING
+        } else {
+            PhotonPhase.CONVERGED
+        }
+        return Photon(
+            id = PhotonId("domain-convergence-${result.canonicalFingerprint}"),
+            revision = 1,
+            content = buildString {
+                appendLine("fact_id=${result.factId}")
+                appendLine("status=${result.status.name}")
+                appendLine("support_confidence=${result.supportConfidence}")
+                appendLine("contradiction_confidence=${result.contradictionConfidence}")
+                appendLine("uncertainty_confidence=${result.uncertaintyConfidence}")
+                appendLine("bounded_out=${result.boundedOut}")
+                appendLine("total_evidence=${result.totalEvidenceCount}")
+                append("evidence=${result.evidenceFingerprints.joinToString(",")}")
+            },
+            mimeType = "application/vnd.lifeos.domain-convergence+text",
+            phase = phase,
+            semanticMass = maxOf(
+                result.supportConfidence,
+                result.contradictionConfidence,
+                result.uncertaintyConfidence,
+            ),
+            energy = 1.0,
+            confidence = confidence,
+            provenance = Provenance(
+                source = "domain-evidence-convergence",
+                actor = "lifeos",
+                createdAt = contributing.maxOf { it.observedAt },
+                parentIds = parentIds,
+            ),
+            relations = parentIds.mapTo(linkedSetOf()) { PhotonRelation(it, RelationType.REFERENCES) },
+            tags = setOf(
+                "domain-evidence-convergence",
+                "fact-id:${result.factId}",
+                "convergence-status:${result.status.name.lowercase()}",
+                if (result.boundedOut) "evidence-budget:exceeded" else "evidence-budget:within",
+            ),
         )
     }
 }
