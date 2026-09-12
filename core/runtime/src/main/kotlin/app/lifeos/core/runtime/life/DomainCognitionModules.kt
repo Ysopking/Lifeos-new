@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.life
 
+import app.lifeos.core.model.CognitiveBranchSemanticOutcome
 import app.lifeos.core.model.ModuleIdentity
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRelation
@@ -85,6 +86,18 @@ object DomainCognitionModules {
                 val assertions = extractor(photon)
                     .take(8)
                     .map { fact -> DomainEvidenceIdentity.assertion(photon, fact, identity) }
+                val semanticOutcome = when {
+                    assertions.isEmpty() -> CognitiveBranchSemanticOutcome.IRRELEVANT
+                    assertions.any { it.stance == DomainEvidenceStance.UNCERTAIN } ->
+                        CognitiveBranchSemanticOutcome.UNCERTAIN
+                    assertions.map { it.stance }.distinct().size > 1 ->
+                        CognitiveBranchSemanticOutcome.UNCERTAIN
+                    assertions.all { it.stance == DomainEvidenceStance.CONTRADICTS } ->
+                        CognitiveBranchSemanticOutcome.CONTRADICTED
+                    assertions.all { it.stance == DomainEvidenceStance.SUPPORTS } ->
+                        CognitiveBranchSemanticOutcome.SUPPORTED
+                    else -> CognitiveBranchSemanticOutcome.UNCERTAIN
+                }
                 CognitiveModuleResult(
                     outputPhotons = assertions.map { assertion ->
                         Photon(
@@ -135,6 +148,7 @@ object DomainCognitionModules {
                         )
                     },
                     explanation = "stable-domain-evidence:$id:${assertions.size}",
+                    semanticOutcome = semanticOutcome,
                 )
             },
         )
