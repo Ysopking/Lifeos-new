@@ -35,14 +35,12 @@ class FieldAttractionEngine(
     private val config: FieldAttractionConfig = FieldAttractionConfig(),
 ) {
     fun plan(photon: Photon, modules: Collection<CognitiveModule>): FieldAttractionPlan {
-        val uniqueModules = modules
-            .associateBy { it.descriptor.identity.stableFingerprint }
-            .values
-            .toList()
-
+        val uniqueModules = modules.associateBy { it.descriptor.identity.stableFingerprint }.values.toList()
         val ranked = uniqueModules.map { module -> score(photon, module) }
             .sortedWith(
                 compareByDescending<ModuleAttractionDecision> { it.score }
+                    .thenBy { it.module.descriptor.estimatedCost }
+                    .thenByDescending { it.module.descriptor.expectedInformationGain }
                     .thenBy { it.module.descriptor.identity.moduleId }
                     .thenBy { it.module.descriptor.identity.version }
                     .thenBy { it.module.descriptor.identity.stableFingerprint },
@@ -80,12 +78,7 @@ class FieldAttractionEngine(
     private fun score(photon: Photon, module: CognitiveModule): ModuleAttractionDecision {
         val descriptor = module.descriptor
         if (!photon.tags.containsAll(descriptor.requiredTags)) {
-            return ModuleAttractionDecision(
-                module = module,
-                score = 0.0,
-                reasons = listOf("required-tags-missing"),
-                selected = false,
-            )
+            return ModuleAttractionDecision(module, 0.0, listOf("required-tags-missing"), false)
         }
 
         var score = descriptor.baseAttraction
@@ -99,25 +92,57 @@ class FieldAttractionEngine(
         score += mimeContribution
         reasons += "mime:$mimeContribution"
 
-        val preferredContribution = if (descriptor.preferredTags.isEmpty()) {
-            0.0
-        } else {
+        val preferredContribution = if (descriptor.preferredTags.isEmpty()) 0.0 else {
             val matches = descriptor.preferredTags.count(photon.tags::contains)
             0.30 * matches.toDouble() / descriptor.preferredTags.size.toDouble()
         }
         score += preferredContribution
         reasons += "tags:$preferredContribution"
 
+        val evidenceTokens = (tokenize(photon.content) + photon.tags.flatMap(::tokenize)).toSet()
+        val semanticContribution = overlapContribution(evidenceTokens, descriptor.semanticHints, 0.35)
+        score += semanticContribution
+        reasons += "semantic:$semanticContribution"
+
+        val goalContribution = overlapContribution(evidenceTokens, descriptor.goalHints, 0.15)
+        score += goalContribution
+        reasons += "goal:$goalContribution"
+
         val confidenceContribution = photon.confidence * 0.10
         score += confidenceContribution
         reasons += "confidence:$confidenceContribution"
 
-        return ModuleAttractionDecision(
-            module = module,
-            score = score.coerceIn(0.0, 1.0),
-            reasons = reasons,
-            selected = false,
-        )
+        val informationGainContribution = descriptor.expectedInformationGain * 0.10
+        score += informationGainContribution
+        reasons += "information-gain:$informationGainContribution"
+
+        val costPenalty = descriptor.estimatedCost * 0.15
+        score -= costPenalty
+        reasons += "cost:-$costPenalty"
+
+        return ModuleAttractionDecision(module, score.coerceIn(0.0, 1.0), reasons, false)
+    }
+
+    private fun overlapContribution(evidenceTokens: Set<String>, hints: Set<String>, weight: Double): Double {
+        if (hints.isEmpty()) return 0.0
+        val hintTokens = hints.flatMap(::tokenize).toSet()
+        if (hintTokens.isEmpty()) return 0.0
+        val matched = hintTokens.count(evidenceTokens::contains)
+        return weight * matched.toDouble() / hintTokens.size.toDouble()
+    }
+
+    private fun tokenize(value: String): List<String> {
+        val tokens = mutableListOf<String>()
+        val current = StringBuilder()
+        fun flush() {
+            if (current.length >= 2) tokens += current.toString()
+            current.clear()
+        }
+        value.lowercase().forEach { char ->
+            if (char.isLetterOrDigit()) current.append(char) else flush()
+        }
+        flush()
+        return tokens
     }
 
     private fun mimeMatches(actual: String, pattern: String): Boolean {
