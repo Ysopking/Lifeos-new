@@ -48,7 +48,7 @@ object CanonicalPhotonState {
     ): PhotonId {
         require(outputOrdinal >= 0) { "Output ordinal must not be negative" }
         return PhotonId(
-            "derived:" + StableCognitiveIds.fingerprint(
+            "derived-" + StableCognitiveIds.fingerprint(
                 branchId.value,
                 outputOrdinal.toString(),
                 semanticHash(candidate).value,
