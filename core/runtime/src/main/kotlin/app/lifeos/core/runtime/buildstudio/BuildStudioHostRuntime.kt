@@ -23,17 +23,25 @@ data class BuildStudioHostStatus(
 )
 
 /**
- * Trusted host boundary for J01 BuildStudio execution.
+ * Trusted host boundary for J01/N BuildStudio execution.
  *
- * The Android/runtime side owns BuildSpec, policy and evidence contracts. A host adapter owns the
- * isolated repository workspace, build commands and APK collection. Installing a host never grants
- * candidate activation authority; BuildStudioResult remains non-activating and promotion stays in
- * the existing ToolWorkshop/Evolution/Owner-policy path.
+ * The Android/runtime side owns intent/evidence contracts. A host adapter owns repository identity,
+ * exact source commit, isolated workspace, build commands and APK collection. Installing a host never
+ * grants candidate activation authority; BuildStudioResult remains non-activating and promotion stays
+ * in the existing ToolWorkshop/Evolution/Owner-policy path.
  */
 interface BuildStudioHostAdapter {
     val id: String
     suspend fun status(): BuildStudioHostStatus
     suspend fun run(spec: BuildSpec): BuildStudioResult
+
+    /**
+     * N credential-free expansion seam. A real authorized host may bind the request to its exact
+     * repository/source commit and delegate to [run]. The APK never needs GitHub credentials or SHA
+     * discovery authority. Existing J01 hosts remain source-compatible and fail closed until upgraded.
+     */
+    suspend fun expand(request: BuildStudioExpansionRequest): BuildStudioResult =
+        BuildStudioResult.Failed("host", "buildstudio-expansion-not-supported")
 }
 
 /**
@@ -105,6 +113,27 @@ object BuildStudioHostProcessRegistry {
             is BuildStudioHostStatus -> when (status.state) {
                 BuildStudioHostState.READY,
                 BuildStudioHostState.DEGRADED -> current.host.run(spec)
+                BuildStudioHostState.QUARANTINED -> BuildStudioResult.Failed(
+                    "host",
+                    "buildstudio-host-quarantined:${status.detail.orEmpty()}",
+                )
+                BuildStudioHostState.STOPPED -> BuildStudioResult.Failed(
+                    "host",
+                    "buildstudio-host-stopped:${status.detail.orEmpty()}",
+                )
+            }
+        }
+    }
+
+    suspend fun expand(request: BuildStudioExpansionRequest): BuildStudioResult {
+        require(!request.activationAllowed) { "BuildStudio expansion request cannot authorize activation" }
+        val current = synchronized(lock) { installed }
+            ?: return BuildStudioResult.Failed("host", "buildstudio-host-not-installed")
+        return when (val status = refresh()) {
+            null -> BuildStudioResult.Failed("host", "buildstudio-host-not-installed")
+            is BuildStudioHostStatus -> when (status.state) {
+                BuildStudioHostState.READY,
+                BuildStudioHostState.DEGRADED -> current.host.expand(request)
                 BuildStudioHostState.QUARANTINED -> BuildStudioResult.Failed(
                     "host",
                     "buildstudio-host-quarantined:${status.detail.orEmpty()}",
