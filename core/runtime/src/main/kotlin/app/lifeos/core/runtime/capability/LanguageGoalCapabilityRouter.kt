@@ -38,6 +38,7 @@ class LanguageGoalCapabilityMapper {
             IntentType.SCHEDULE -> listOf(requirement("planner.schedule", inputs = setOf("goal-photon"), outputs = setOf("scheduled-action")))
             IntentType.COMMUNICATE -> listOf(requirement("communication.dispatch", inputs = setOf("goal-photon"), outputs = setOf("delivery-receipt")))
             IntentType.STORE_OR_REMEMBER -> listOf(requirement("memory.store", inputs = setOf("goal-photon"), outputs = setOf("memory-photon")))
+            IntentType.CONVERSATION,
             IntentType.UNKNOWN -> emptyList()
         }
         val languageBlocking = goal.intent == IntentType.UNKNOWN || goal.ambiguities.any { it.severity >= 0.90 }
