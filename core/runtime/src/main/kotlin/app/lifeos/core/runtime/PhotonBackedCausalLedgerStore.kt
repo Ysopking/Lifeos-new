@@ -9,6 +9,8 @@ import app.lifeos.core.model.Provenance
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.Base64
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Durable causal replay guard backed by the normal Photon repository.
@@ -22,15 +24,40 @@ class PhotonBackedCausalLedgerStore(
     private val photons: PhotonRepository,
     private val memory: CausalLedgerStore = InMemoryCausalLedgerStore(),
 ) : CausalLedgerStore {
-    override suspend fun append(entry: CausalLedgerEntry) {
-        memory.append(entry)
+    private val mutex = Mutex()
+
+    override suspend fun append(entry: CausalLedgerEntry) = mutex.withLock {
+        memory.load(entry.traceId)?.let { existing ->
+            require(existing == entry) {
+                "Causal trace already exists with different content: ${entry.traceId}"
+            }
+            return@withLock
+        }
+
+        val guardId = replayGuardPhotonId(entry.traceId)
+        photons.load(guardId)?.let { persisted ->
+            val recovered = persisted.toReplayGuardEntry(entry.traceId)
+            require(recovered.rootPhotonId == entry.rootPhotonId &&
+                recovered.emittedPhotonIds.toSet() == entry.emittedPhotonIds.toSet()
+            ) {
+                "Persisted causal trace conflicts with the new entry: ${entry.traceId}"
+            }
+            memory.append(entry)
+            return@withLock
+        }
+
+        // Durable state is written before the in-process cache. If persistence fails, this trace
+        // remains eligible for retry instead of becoming falsely complete until process death.
         photons.save(entry.toReplayGuardPhoton())
+        memory.append(entry)
     }
 
-    override suspend fun load(traceId: CausalTraceId): CausalLedgerEntry? {
-        memory.load(traceId)?.let { return it }
-        val persisted = photons.load(replayGuardPhotonId(traceId)) ?: return null
-        return persisted.toReplayGuardEntry(expectedTraceId = traceId).also { memory.append(it) }
+    override suspend fun load(traceId: CausalTraceId): CausalLedgerEntry? = mutex.withLock {
+        memory.load(traceId)?.let { return@withLock it }
+        val persisted = photons.load(replayGuardPhotonId(traceId)) ?: return@withLock null
+        val recovered = persisted.toReplayGuardEntry(expectedTraceId = traceId)
+        memory.append(recovered)
+        recovered
     }
 
     companion object {
