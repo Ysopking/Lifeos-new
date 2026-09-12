@@ -53,6 +53,7 @@ import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.SubsystemDecisionTraceRecorder
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserver
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserverRegistry
+import app.lifeos.next.kernel.CanonicalLifePhotonRepository
 import app.lifeos.next.kernel.CanonicalPhotonIngress
 import app.lifeos.next.kernel.DurableGoalPlanRuntime
 import app.lifeos.next.kernel.DurableGoalPlanRuntimeRegistry
@@ -119,6 +120,7 @@ class LifeOsApplication : Application() {
 
     private lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
     private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
+    private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -165,7 +167,11 @@ class LifeOsApplication : Application() {
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
                     photonIngress = CanonicalPhotonIngress(kernel)
-                    lifeMemoryRuntime = DurableLifeMemoryRuntime(kernel.photonStore)
+                    lifePhotonRepository = CanonicalLifePhotonRepository(
+                        delegate = kernel.photonStore,
+                        productiveIngress = photonIngress::ingest,
+                    )
+                    lifeMemoryRuntime = DurableLifeMemoryRuntime(lifePhotonRepository)
                     DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
                     multimodalPerception = MultimodalPerceptionRuntime(kernel)
                     runBlocking { multimodalPerception.install() }
@@ -193,6 +199,7 @@ class LifeOsApplication : Application() {
                         planning = futurePlanning,
                     )
                     runBlocking {
+                        lifePhotonRepository.reconcilePersisted()
                         lifeMemoryRuntime.rebuild(Instant.now())
                         futurePlanning.reconsiderAll().forEach { planned ->
                             photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
@@ -319,7 +326,7 @@ class LifeOsApplication : Application() {
 
         initialDataSources = AndroidInitialDataSourceCatalog(this)
         initialDataBootstrap = InitialDataBootstrapRuntime(
-            photons = kernel.photonStore,
+            photons = lifePhotonRepository,
             memory = lifeMemoryRuntime,
             sources = initialDataSources.sources,
         )
@@ -345,6 +352,7 @@ class LifeOsApplication : Application() {
     fun refreshInitialDataBootstrap() {
         initialDataScope.launch {
             try {
+                lifePhotonRepository.reconcilePersisted()
                 latestInitialDataBootstrap = initialDataBootstrap.run()
                 initialDataBootstrapFailure = null
             } catch (error: Exception) {
