@@ -1,8 +1,11 @@
 package app.lifeos.core.runtime.life
 
+import app.lifeos.core.model.CognitiveBranchSemanticOutcome
 import app.lifeos.core.model.ModuleIdentity
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.CognitiveModule
 import app.lifeos.core.runtime.CognitiveModuleDescriptor
 import app.lifeos.core.runtime.CognitiveModuleProcessor
@@ -13,8 +16,8 @@ object FutureCognitionModule {
         descriptor = CognitiveModuleDescriptor(
             identity = ModuleIdentity(
                 moduleId = "future.evidence",
-                version = "1",
-                implementationHash = "future-evidence-v1-domain-fact-projection",
+                version = "2",
+                implementationHash = "future-evidence-v2-versioned-hypothesis-projection",
                 capabilityIds = setOf("future.project", "lifeplan.candidate"),
             ),
             acceptedMimeTypes = setOf("application/vnd.lifeos.domain-fact+text"),
@@ -31,7 +34,12 @@ object FutureCognitionModule {
             val scenarios = engine.project(photon).take(4)
             CognitiveModuleResult(
                 outputPhotons = scenarios.map { scenario -> scenario.toPhoton(photon) },
-                explanation = "future-evidence-projection:${scenarios.size}",
+                explanation = "future-evidence-projection:${engine.projectionVersion}:${scenarios.size}",
+                semanticOutcome = when {
+                    scenarios.isEmpty() -> CognitiveBranchSemanticOutcome.IRRELEVANT
+                    scenarios.any { !it.allowed } -> CognitiveBranchSemanticOutcome.UNCERTAIN
+                    else -> CognitiveBranchSemanticOutcome.TRANSFORMED
+                },
             )
         },
     )
@@ -39,6 +47,7 @@ object FutureCognitionModule {
     private fun FutureEvidenceScenario.toPhoton(source: Photon): Photon = Photon(
         content = buildString {
             appendLine("scenario=$id")
+            appendLine("projectionVersion=$projectionVersion")
             appendLine("type=${type.name}")
             appendLine("horizon=${horizon.name}")
             appendLine("probability=$probability")
@@ -47,7 +56,7 @@ object FutureCognitionModule {
             appendLine("delta=${stateDelta.entries.sortedBy { it.key.name }.joinToString(",") { "${it.key.name}:${it.value}" }}")
             append("explanation=$explanation")
         },
-        mimeType = "application/vnd.lifeos.future-evidence+text",
+        mimeType = FutureEvidencePhotonCodec.MIME_TYPE,
         semanticMass = maxOf(source.semanticMass, probability),
         energy = source.energy,
         confidence = minOf(source.confidence, probability),
@@ -57,8 +66,10 @@ object FutureCognitionModule {
             createdAt = source.provenance.createdAt,
             parentIds = sourcePhotonIds,
         ),
+        relations = sourcePhotonIds.mapTo(linkedSetOf()) { PhotonRelation(it, RelationType.REFERENCES) },
         tags = source.tags + setOf(
             "future-evidence",
+            "future-projection:$projectionVersion",
             "future-horizon:${horizon.name.lowercase()}",
             "future-scenario:${type.name.lowercase()}",
             if (allowed) "future-actionable" else "future-observation",
