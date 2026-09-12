@@ -7,6 +7,7 @@
     <application
         android:name=".LifeOsApplication"
         android:allowBackup="false"
+        android:usesCleartextTraffic="false"
         android:label="LIFEOS"
         android:supportsRtl="true"
         android:theme="@style/Theme.LifeOS">
@@ -16,6 +17,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <provider
+            android:name=".kernel.HotSwapStartupProvider"
+            android:authorities="${applicationId}.hotswap-init"
+            android:exported="false"
+            android:initOrder="100" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

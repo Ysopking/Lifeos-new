@@ -20,8 +20,23 @@ data class QuarantineEntry(
     }
 }
 
+object QuarantineRegistryProcessRegistry {
+    @Volatile
+    private var installed: QuarantineRegistry? = null
+
+    fun install(registry: QuarantineRegistry) {
+        installed = registry
+    }
+
+    fun current(): QuarantineRegistry? = installed
+}
+
 /** Explicit quarantine state. Automatic quarantine policy is intentionally separate. */
 class QuarantineRegistry {
+    init {
+        QuarantineRegistryProcessRegistry.install(this)
+    }
+
     private val mutex = Mutex()
     private val entries = mutableMapOf<HealthNodeId, QuarantineEntry>()
 

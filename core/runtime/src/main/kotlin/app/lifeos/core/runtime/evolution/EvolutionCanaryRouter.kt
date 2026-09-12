@@ -195,6 +195,20 @@ class EvolutionCanaryRouter(
 ) {
     private val trustedAdoptionGate = EvolutionAdoptionGate()
 
+    /**
+     * V8 recovery lookup. Production uses one EncryptedEvolutionStore for both runtime control and
+     * outcomes, so this reads the exact same atomic vault. Stores that do not implement the outcome
+     * contract simply have no recoverable outcome.
+     */
+    suspend fun durableOutcome(
+        adoptionEvidenceId: String,
+        invocationId: String,
+    ): EvolutionCanaryOutcome? {
+        require(adoptionEvidenceId.isNotBlank())
+        require(invocationId.isNotBlank())
+        return (runtimeStore as? EvolutionCanaryOutcomeStore)?.outcome(adoptionEvidenceId, invocationId)
+    }
+
     suspend fun route(
         evidence: EvolutionCanaryEvidenceBundle,
         context: EvolutionCanaryRoutingContext,

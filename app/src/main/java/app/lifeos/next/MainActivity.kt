@@ -31,6 +31,8 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.goal.LocalReminderRecord
 import app.lifeos.core.runtime.goal.LocalScheduleGoalEngine
+import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
+import app.lifeos.next.kernel.PrivateOwnerEffectAuthority
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -68,8 +70,17 @@ private fun LifeOsApp(model: LifeOsViewModel) {
         if (pendingShare != null) {
             try {
                 val shareIntent = model.createShareIntent(pendingShare)
-                context.startActivity(Intent.createChooser(shareIntent, "Mit App teilen"))
-                model.communicationShareOpened(pendingShare)
+                when (
+                    val exposure = PrivateOwnerEffectAuthority.expose(
+                        context = context,
+                        request = PrivateOwnerEffectAuthority.shareHandoffRequest(),
+                    ) {
+                        context.startActivity(Intent.createChooser(shareIntent, "Mit App teilen"))
+                    }
+                ) {
+                    is OwnerEffectExposureResult.Exposed -> model.communicationShareOpened(pendingShare)
+                    is OwnerEffectExposureResult.Blocked -> model.communicationShareFailed(pendingShare)
+                }
             } catch (_: Exception) {
                 model.communicationShareFailed(pendingShare)
             }
@@ -86,6 +97,7 @@ private fun LifeOsApp(model: LifeOsViewModel) {
         DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm").withZone(ZoneId.systemDefault())
     }
     val firstTrialTool = state.generatedToolStatus?.tools?.firstOrNull { it.state == GeneratedToolState.TRIAL }
+    val outcomeOverview = remember(state) { buildOutcomeOverview(state) }
 
     MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
         Surface(Modifier.fillMaxSize()) {
@@ -95,6 +107,25 @@ private fun LifeOsApp(model: LifeOsViewModel) {
             ) {
                 Text("LIFEOS · Gedanken", style = MaterialTheme.typography.headlineMedium)
                 Text("${state.photons.size} gespeichert · lokal verschlüsselt", style = MaterialTheme.typography.bodySmall)
+                OutcomeOverviewCard(
+                    overview = outcomeOverview,
+                    onAction = { action ->
+                        when (action) {
+                            OutcomeAction.NONE -> Unit
+                            OutcomeAction.RETRY_LOAD -> model.retryLoad()
+                            OutcomeAction.SAVE_DRAFT -> {
+                                if (requiresReminderNotificationPermission(context, state.draft)) {
+                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    model.saveDraft()
+                                }
+                            }
+                            OutcomeAction.CREATE_TOOL -> model.requestCapabilityGaps()
+                            OutcomeAction.ACTIVATE_TRIAL -> model.reviewAndActivateFirstTrialTool()
+                            OutcomeAction.STOP_RECORDING -> model.stopVoiceCapture()
+                        }
+                    },
+                )
                 OutlinedTextField(
                     query,
                     { query = it },

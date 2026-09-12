@@ -4,9 +4,24 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+object RuntimeSupervisorProcessRegistry {
+    @Volatile
+    private var installed: RuntimeSupervisor? = null
+
+    fun install(supervisor: RuntimeSupervisor) {
+        installed = supervisor
+    }
+
+    fun current(): RuntimeSupervisor? = installed
+}
+
 class RuntimeSupervisor(
     private val runtime: LifeOsRuntime,
 ) {
+    init {
+        RuntimeSupervisorProcessRegistry.install(this)
+    }
+
     private val mutex = Mutex()
 
     suspend fun start() = mutex.withLock {

@@ -1,0 +1,70 @@
+name: V17 Private Debug Gold
+
+on:
+  pull_request:
+    branches:
+      - v16/resource-intelligence-completion
+  push:
+    branches:
+      - v17/final-hardening-gold
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v17-private-debug-gold-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  v17-private-debug-gold:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      GOLD_RUN_ID: ${{ github.run_id }}
+      GOLD_JOB: v17-private-debug-gold
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+      - name: V17 private debug matrix pre-emulator
+        shell: bash
+        run: bash .github/scripts/ci-v17-gold.sh
+      - name: V17 bounded cold-restart recovery
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: aosp_atd
+          arch: x86_64
+          disk-size: 4096M
+          disable-animations: true
+          script: sh .github/scripts/android-emulator-recovery.sh
+      - name: Seal V17 emulator evidence
+        shell: bash
+        run: |
+          printf 'emulator_cold_restart=PASS\n' >> v17-gold-evidence/gates.txt
+          printf 'gold_matrix=PASS\n' >> v17-gold-evidence/gates.txt
+      - name: Upload private debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIFEOS-V17-GOLD-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload V17 Gold evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LIFEOS-V17-GOLD-evidence
+          path: |
+            v17-gold-evidence/
+            android-emulator-recovery/
+            **/build/reports/tests/
+            app/build/reports/lint-results-debug.*
+          if-no-files-found: warn
+          retention-days: 14

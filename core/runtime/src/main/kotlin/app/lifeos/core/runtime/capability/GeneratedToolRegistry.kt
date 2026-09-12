@@ -13,6 +13,10 @@ class GeneratedToolRegistry(
         val auditEntry: GeneratedToolAuditEntry,
     )
 
+    init {
+        GeneratedToolRuntimeProcessRegistry.installTools(this)
+    }
+
     private val mutex = Mutex()
     private val records = linkedMapOf<String, GeneratedToolRecord>()
     private val auditEntries = linkedMapOf<String, MutableList<GeneratedToolAuditEntry>>()
@@ -154,8 +158,7 @@ class GeneratedToolRegistry(
         if (repository != null) {
             when (promotionEvidence) {
                 null -> repository.persistLifecycle(after, nextAudit, promotionEvidence = null)
-                is GeneratedToolPromotionEvidence ->
-                    repository.persistLifecycle(after, nextAudit, promotionEvidence)
+                is GeneratedToolPromotionEvidence -> repository.persistLifecycle(after, nextAudit, promotionEvidence)
                 is BoundedGeneratedToolPromotionEvidence -> {
                     val bounded = repository as? BoundedGeneratedToolStateRepository
                         ?: error("Bounded promotion requires a bounded durable state repository")
