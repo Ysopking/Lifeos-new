@@ -6,6 +6,7 @@ on:
       - "core/**"
       - "app/src/main/**"
       - "app/src/test/**"
+      - "app/src/androidTest/**"
       - "app/build.gradle*"
       - "build.gradle*"
       - "settings.gradle*"
@@ -13,8 +14,10 @@ on:
       - "gradle.properties"
       - ".github/scripts/ci-core-fast.sh"
       - ".github/scripts/ci-gold-coverage-contract.sh"
+      - ".github/scripts/android-emulator-recovery.sh"
       - ".github/workflows/core-fast.yml"
       - ".github/workflows/android-emulator-recovery.yml"
+      - ".github/workflows/product-gold.yml"
   workflow_dispatch:
 
 permissions:
