@@ -8,7 +8,6 @@ import app.lifeos.core.image.LocalImageTransformEngine
 import app.lifeos.core.image.Rgba8Image
 import app.lifeos.core.image.TransformedImagePhotonFactory
 import app.lifeos.core.model.BinaryAssetStore
-import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.goal.LocalImageTransformGoalEngine
 import app.lifeos.core.runtime.goal.LocalImageTransformPlanResult
@@ -23,7 +22,6 @@ import kotlinx.coroutines.withContext
 class LocalImageTransformActionExecutor(
     private val photons: PhotonRepository,
     private val assets: BinaryAssetStore,
-    private val persistAndIngest: suspend (Photon) -> PhotonSubmissionResult,
     private val planner: LocalImageTransformGoalEngine = LocalImageTransformGoalEngine(),
     private val transformer: LocalImageTransformEngine = LocalImageTransformEngine(),
     private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
@@ -95,7 +93,11 @@ class LocalImageTransformActionExecutor(
             LocalImageTransformExecutionResult.Transformed(
                 sourcePhotonId = plan.sourcePhoton.id,
                 operations = plan.operations,
-                output = persistAndIngest(outputPhoton),
+                output = PhotonSubmissionResult(
+                    photon = outputPhoton,
+                    processingQueued = false,
+                    processingFailure = AWAITING_OWNER_REVIEW,
+                ),
             )
         } catch (cancelled: CancellationException) {
             runCatching { assets.delete(asset.id) }
@@ -148,5 +150,6 @@ class LocalImageTransformActionExecutor(
     private companion object {
         const val MAX_TRANSFORM_PIXELS = 8_000_000L
         const val RENDERER_ID = "local-image-transform-v1"
+        const val AWAITING_OWNER_REVIEW = "awaiting-owner-review"
     }
 }
