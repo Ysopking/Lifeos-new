@@ -1,24 +1,35 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.artifact.ArtifactContribution
+import app.lifeos.core.runtime.artifact.ArtifactCoordinator
 import app.lifeos.core.runtime.artifact.ArtifactGenerationCoordinator
 import app.lifeos.core.runtime.artifact.ArtifactGenerationRequest
 import app.lifeos.core.runtime.artifact.ArtifactId
 import app.lifeos.core.runtime.artifact.ArtifactKind
+import app.lifeos.core.runtime.artifact.ArtifactPhotonIngress
+import app.lifeos.core.runtime.artifact.ArtifactReentryReceipt
 import app.lifeos.core.runtime.artifact.CollaborativeArtifactRequest
 import app.lifeos.core.runtime.artifact.ImageArtifactProfile
+import app.lifeos.core.runtime.artifact.OwnerAssetReviewCandidate
+import app.lifeos.core.runtime.artifact.OwnerAssetReviewCoordinator
+import app.lifeos.core.runtime.artifact.OwnerAssetReviewSubjectType
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 
 /**
- * Productive bridge from the already-materialized offline image result into the immutable
- * collaborative-artifact lifecycle. The binary body remains in BinaryAssetStore; artifact Photons
- * only retain AssetRef plus deterministic generation and lineage metadata.
+ * Productive bridge from an already-materialized offline image into the collaborative-artifact
+ * lifecycle, but with publication held behind the private-owner review boundary.
+ *
+ * Scene, image, artifact-revision and generation-provenance Photons are staged together in the
+ * encrypted owner-review vault. None of them reaches the canonical Photon store here.
  */
 internal class ImageArtifactLifecycleRuntime(
-    private val generation: ArtifactGenerationCoordinator,
+    private val photons: PhotonRepository,
+    private val reviews: OwnerAssetReviewCoordinator,
 ) {
     suspend fun attach(
         context: GoalActionContext,
@@ -27,6 +38,9 @@ internal class ImageArtifactLifecycleRuntime(
         if (result !is ImageGenerationResult.Generated) return result
         val image = result.value
         return try {
+            require(!image.scene.processingQueued && !image.image.processingQueued) {
+                "Generated image Photons must remain unpublished until owner review"
+            }
             val finalizedAt = image.image.photon.provenance.createdAt
             val sourceParents = setOf(
                 context.sourcePhoton.id,
@@ -72,7 +86,16 @@ internal class ImageArtifactLifecycleRuntime(
                     content = image.descriptor.encode(),
                 ),
             )
-            val artifact = generation.finalize(
+
+            val stagedIngress = CapturingArtifactPhotonIngress()
+            val stagedGeneration = ArtifactGenerationCoordinator(
+                artifacts = ArtifactCoordinator(
+                    photons = photons,
+                    ingress = stagedIngress,
+                ),
+                ingress = stagedIngress,
+            )
+            val artifact = stagedGeneration.finalize(
                 ArtifactGenerationRequest(
                     request = CollaborativeArtifactRequest(
                         id = ArtifactId("generated-image:${image.image.photon.id.value}"),
@@ -93,14 +116,44 @@ internal class ImageArtifactLifecycleRuntime(
                     materializedAsset = image.descriptor.asset,
                 )
             )
+            val revision = requireNotNull(artifact.finalization.artifact.revision) {
+                "Generated image artifact must have an immutable revision manifest"
+            }
+            val stagedPhotons = listOf(image.scene.photon, image.image.photon) + stagedIngress.photons()
+            val stagedIds = stagedPhotons.mapTo(linkedSetOf()) { it.id }
+            val candidate = OwnerAssetReviewCandidate.create(
+                subjectType = OwnerAssetReviewSubjectType.COLLABORATIVE_ARTIFACT,
+                subjectId = artifact.finalization.artifact.request.id.value,
+                revisionKey = revision.id.value,
+                kind = artifact.finalization.artifact.request.kind,
+                title = artifact.finalization.artifact.request.title,
+                targetMimeType = artifact.finalization.artifact.request.targetMimeType,
+                createdAt = artifact.finalization.artifact.finalizedAt,
+                participatingModules = revision.participatingModules,
+                inputPhotonIds = revision.inputPhotonIds.filterTo(linkedSetOf()) { it !in stagedIds },
+                materializedAsset = image.descriptor.asset,
+                stagedPhotons = stagedPhotons,
+                metadata = mapOf(
+                    "width" to image.descriptor.width.toString(),
+                    "height" to image.descriptor.height.toString(),
+                    "rendererId" to image.rendererId,
+                    "sceneId" to image.descriptor.sceneId,
+                    "assetSha256" to image.descriptor.asset.sha256,
+                ),
+            )
+            reviews.stage(candidate)
+
             ImageGenerationResult.Generated(
-                image.copy(artifactGeneration = artifact),
+                image.copy(
+                    artifactGeneration = artifact,
+                    ownerReviewCandidateId = candidate.id,
+                ),
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
             ImageGenerationResult.Failed(
-                "image-artifact-finalization-failed:${error::class.simpleName}:${error.message.orEmpty().take(160)}"
+                "image-artifact-owner-review-staging-failed:${error::class.simpleName}:${error.message.orEmpty().take(160)}"
             )
         }
     }
@@ -109,6 +162,24 @@ internal class ImageArtifactLifecycleRuntime(
         MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(StandardCharsets.UTF_8))
             .joinToString(separator = "") { byte -> "%02x".format(byte) }
+
+    private class CapturingArtifactPhotonIngress : ArtifactPhotonIngress {
+        private val staged = linkedMapOf<String, Photon>()
+
+        override suspend fun ingest(photon: Photon): ArtifactReentryReceipt {
+            staged[photon.id.value]?.let { existing ->
+                require(existing == photon) {
+                    "Staged artifact Photon identity ${photon.id.value} was reused with different content"
+                }
+                return ArtifactReentryReceipt(accepted = false)
+            }
+            staged[photon.id.value] = photon
+            // False is deliberate: this is staging, not canonical DERIVED re-entry.
+            return ArtifactReentryReceipt(accepted = false)
+        }
+
+        fun photons(): List<Photon> = staged.values.toList()
+    }
 }
 
 /** Late-bound because production constructs the kernel before CanonicalPhotonIngress. */
@@ -116,8 +187,11 @@ internal object ImageArtifactLifecycleRuntimeRegistry {
     @Volatile
     private var runtime: ImageArtifactLifecycleRuntime? = null
 
-    fun install(generation: ArtifactGenerationCoordinator) {
-        runtime = ImageArtifactLifecycleRuntime(generation)
+    fun install(
+        photons: PhotonRepository,
+        reviews: OwnerAssetReviewCoordinator,
+    ) {
+        runtime = ImageArtifactLifecycleRuntime(photons, reviews)
     }
 
     suspend fun attach(
