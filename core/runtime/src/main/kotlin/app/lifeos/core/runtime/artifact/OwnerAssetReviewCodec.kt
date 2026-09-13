@@ -66,7 +66,7 @@ object OwnerAssetReviewCodec {
         instant(candidate.createdAt)
 
         count(candidate.participatingModules.size, OwnerAssetReviewCandidate.MAX_MODULES)
-        candidate.participatingModules.sorted().forEach(::text)
+        candidate.participatingModules.sorted().forEach { module -> text(module) }
         count(candidate.inputPhotonIds.size, OwnerAssetReviewCandidate.MAX_INPUT_PHOTONS)
         candidate.inputPhotonIds.sortedBy { it.value }.forEach { text(it.value) }
 
@@ -103,7 +103,7 @@ object OwnerAssetReviewCodec {
             text(decision.decisionPhotonId.value)
         }
         writeBoolean(record.publishedAt != null)
-        record.publishedAt?.let(::instant)
+        record.publishedAt?.let { publishedAt -> instant(publishedAt) }
     }
 
     private fun DataInputStream.readRecord(): OwnerAssetReviewRecord {
