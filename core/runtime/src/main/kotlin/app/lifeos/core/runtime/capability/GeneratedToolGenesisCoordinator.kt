@@ -27,6 +27,8 @@ sealed interface GeneratedToolGenesisResult {
 class GeneratedToolGenesisCoordinator(
     private val workshop: ToolWorkshopCoordinator,
     private val lifecycle: GeneratedToolLifecycleCoordinator,
+    private val ownerReviewGate: () -> GeneratedToolOwnerReviewGate? =
+        GeneratedToolOwnerReviewGateRegistry::currentOrNull,
 ) {
     suspend fun generateFor(gap: CapabilityGap): GeneratedToolGenesisResult {
         return when (val workshopResult = workshop.generate(gap)) {
@@ -36,7 +38,7 @@ class GeneratedToolGenesisCoordinator(
             )
 
             is ToolWorkshopResult.Verified -> {
-                val reviewGate = GeneratedToolOwnerReviewGateRegistry.currentOrNull()
+                val reviewGate = ownerReviewGate()
                 if (reviewGate != null) {
                     GeneratedToolGenesisResult.OwnerReviewRequired(
                         record = workshopResult.record,
