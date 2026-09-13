@@ -4,6 +4,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.PhotonIngressMarkerStore
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.artifact.ArtifactCoordinator
+import app.lifeos.core.runtime.artifact.ArtifactGenerationCoordinator
 
 /**
  * Single productive Android ingress for Photons that must become immediately visible to the live
@@ -19,11 +20,26 @@ import app.lifeos.core.runtime.artifact.ArtifactCoordinator
 class CanonicalPhotonIngress(
     private val kernel: LifeOsKernel,
 ) {
+    private val artifactIngress by lazy {
+        CanonicalArtifactPhotonIngress(::ingestWithReceipt)
+    }
+
     /** Productive collaborative-artifact runtime bound to the same canonical Photon ingress. */
     val artifacts: ArtifactCoordinator by lazy {
         ArtifactCoordinator(
             photons = kernel.photonStore,
-            ingress = CanonicalArtifactPhotonIngress(::ingestWithReceipt),
+            ingress = artifactIngress,
+        )
+    }
+
+    /**
+     * Productive document/code/image generation provenance. Both the materialized artifact revision
+     * and its generation-manifest Photon re-enter through the same DERIVED canonical boundary.
+     */
+    val artifactGeneration: ArtifactGenerationCoordinator by lazy {
+        ArtifactGenerationCoordinator(
+            artifacts = artifacts,
+            ingress = artifactIngress,
         )
     }
 
