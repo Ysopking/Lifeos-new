@@ -38,12 +38,14 @@ data class OwnerAssetReviewApplyResult(
  * The review repository is the source of truth for pending/decision state. Candidate Photons stay
  * outside the canonical PhotonRepository until the private owner approves the exact candidate id.
  * Publication is replay-safe: exact canonical Photons are skipped, identity collisions fail closed,
- * and staged parent dependencies are published before their children.
+ * staged parent dependencies are published before their children, and approved subject-specific
+ * effects are replayed before the review is marked published.
  */
 class OwnerAssetReviewCoordinator(
     private val reviews: OwnerAssetReviewRepository,
     private val photons: PhotonRepository,
     private val ingress: ArtifactPhotonIngress,
+    private val onApproved: suspend (OwnerAssetReviewCandidate) -> Unit = {},
 ) {
     suspend fun stage(candidate: OwnerAssetReviewCandidate): OwnerAssetReviewRecord =
         reviews.stage(candidate)
@@ -92,10 +94,7 @@ class OwnerAssetReviewCoordinator(
             )
         }
 
-        val newlyPublished = mutableListOf<PhotonId>()
-        publicationOrder(current.candidate.stagedPhotons).forEach { photon ->
-            if (publishExact(photon)) newlyPublished += photon.id
-        }
+        val newlyPublished = publishApprovedCandidate(current.candidate)
         val published = reviews.markPublished(
             candidateId = candidateId,
             publishedAt = decisionRecord.decidedAt,
@@ -115,7 +114,7 @@ class OwnerAssetReviewCoordinator(
             .forEach { record ->
                 val decision = requireNotNull(record.decision)
                 publishExact(createDecisionPhoton(record.candidate, decision))
-                publicationOrder(record.candidate.stagedPhotons).forEach { publishExact(it) }
+                publishApprovedCandidate(record.candidate)
                 reconciled += if (record.publishedAt == null) {
                     reviews.markPublished(record.candidate.id, decision.decidedAt)
                 } else {
@@ -123,6 +122,15 @@ class OwnerAssetReviewCoordinator(
                 }
             }
         return reconciled
+    }
+
+    private suspend fun publishApprovedCandidate(candidate: OwnerAssetReviewCandidate): List<PhotonId> {
+        val newlyPublished = mutableListOf<PhotonId>()
+        publicationOrder(candidate.stagedPhotons).forEach { photon ->
+            if (publishExact(photon)) newlyPublished += photon.id
+        }
+        onApproved(candidate)
+        return newlyPublished
     }
 
     private fun createDecisionRecord(
