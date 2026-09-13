@@ -8,6 +8,7 @@ import app.lifeos.core.image.LocalImageTransformEngine
 import app.lifeos.core.image.Rgba8Image
 import app.lifeos.core.image.TransformedImagePhotonFactory
 import app.lifeos.core.model.BinaryAssetStore
+import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.goal.LocalImageTransformGoalEngine
 import app.lifeos.core.runtime.goal.LocalImageTransformPlanResult
@@ -22,6 +23,8 @@ import kotlinx.coroutines.withContext
 class LocalImageTransformActionExecutor(
     private val photons: PhotonRepository,
     private val assets: BinaryAssetStore,
+    @Suppress("UNUSED_PARAMETER")
+    persistAndIngest: suspend (Photon) -> PhotonSubmissionResult,
     private val planner: LocalImageTransformGoalEngine = LocalImageTransformGoalEngine(),
     private val transformer: LocalImageTransformEngine = LocalImageTransformEngine(),
     private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
