@@ -17,6 +17,7 @@ import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.LifeOsDecisionTraceViewModel
 import app.lifeos.next.LifeOsGoalsViewModel
 import app.lifeos.next.LifeOsMemoryViewModel
+import app.lifeos.next.LifeOsToolCenterViewModel
 import app.lifeos.next.OwnerAssetReviewViewModel
 import app.lifeos.next.ui.assets.OwnerAssetReviewScreen
 import app.lifeos.next.ui.chat.LifeOsChatScreen
@@ -24,6 +25,7 @@ import app.lifeos.next.ui.decision.LifeOsDecisionTraceScreen
 import app.lifeos.next.ui.goals.LifeOsGoalsScreen
 import app.lifeos.next.ui.memory.LifeOsMemoryScreen
 import app.lifeos.next.ui.system.SystemRuntimeHealthScreen
+import app.lifeos.next.ui.tools.LifeOsToolCenterScreen
 
 @Composable
 fun LifeOsRoot(
@@ -32,6 +34,7 @@ fun LifeOsRoot(
     assetReviewModel: OwnerAssetReviewViewModel,
     goalsModel: LifeOsGoalsViewModel,
     decisionTraceModel: LifeOsDecisionTraceViewModel,
+    toolCenterModel: LifeOsToolCenterViewModel,
     onRequestMicrophonePermission: () -> Unit = {},
 ) {
     var selectedKey by rememberSaveable {
@@ -73,6 +76,10 @@ fun LifeOsRoot(
                 )
                 LifeOsDestination.WHY -> LifeOsDecisionTraceScreen(
                     model = decisionTraceModel,
+                    modifier = contentModifier,
+                )
+                LifeOsDestination.TOOLS -> LifeOsToolCenterScreen(
+                    model = toolCenterModel,
                     modifier = contentModifier,
                 )
                 LifeOsDestination.SYSTEM -> SystemRuntimeHealthScreen(model, contentModifier)
