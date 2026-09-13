@@ -52,6 +52,7 @@ class CanonicalPhotonIngress(
             reviews = repository,
             photons = kernel.photonStore,
             ingress = artifactIngress,
+            authorizedOwnerActorId = PrivateOwnerPolicyBaseline.ownerActorId.value,
             onApproved = GeneratedToolOwnerReviewRuntime::applyApproved,
         )
     }
