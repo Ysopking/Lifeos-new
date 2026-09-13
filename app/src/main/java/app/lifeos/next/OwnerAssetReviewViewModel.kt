@@ -110,7 +110,10 @@ class OwnerAssetReviewViewModel(application: Application) : AndroidViewModel(app
     }
 
     fun approve(candidateId: OwnerAssetReviewCandidateId) {
-        decide(candidateId, OwnerAssetReviewDecision.APPROVED, feedback = null)
+        val feedback = mutableState.value.feedbackDrafts[candidateId.value]
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        decide(candidateId, OwnerAssetReviewDecision.APPROVED, feedback)
     }
 
     fun requestChanges(candidateId: OwnerAssetReviewCandidateId) {
