@@ -17,6 +17,11 @@ enum class LifeOsDestination(
         label = "Gedächtnis",
         glyph = "◌",
     ),
+    ASSETS(
+        key = "assets",
+        label = "Assets",
+        glyph = "▣",
+    ),
     GOALS(
         key = "goals",
         label = "Ziele",

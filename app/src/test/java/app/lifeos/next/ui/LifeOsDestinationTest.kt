@@ -12,6 +12,7 @@ class LifeOsDestinationTest {
             listOf(
                 LifeOsDestination.CHAT,
                 LifeOsDestination.MEMORY,
+                LifeOsDestination.ASSETS,
                 LifeOsDestination.GOALS,
                 LifeOsDestination.SYSTEM,
             ),
@@ -33,5 +34,6 @@ class LifeOsDestinationTest {
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey(null))
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("unknown"))
         assertSame(LifeOsDestination.MEMORY, LifeOsDestination.fromKey("memory"))
+        assertSame(LifeOsDestination.ASSETS, LifeOsDestination.fromKey("assets"))
     }
 }

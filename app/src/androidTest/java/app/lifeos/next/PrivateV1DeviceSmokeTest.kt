@@ -13,6 +13,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.task.TaskType
+import app.lifeos.core.runtime.artifact.OwnerAssetReviewDecision
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.CapabilityGapType
 import app.lifeos.core.runtime.capability.CapabilityId
@@ -34,6 +35,7 @@ import app.lifeos.core.runtime.thought.ThoughtGraphProvenance
 import app.lifeos.core.runtime.thought.ThoughtGraphSourceKind
 import app.lifeos.next.kernel.KernelBootstrapState
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import java.time.Instant
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -79,26 +81,54 @@ class PrivateV1DeviceSmokeTest {
             )
             assertTrue(result.execution is GeneratedToolRequestExecutionResult.Completed)
             val completed = result.execution as GeneratedToolRequestExecutionResult.Completed
-            assertTrue(completed.genesis is GeneratedToolGenesisResult.TrialReady)
-            val genesis = completed.genesis as GeneratedToolGenesisResult.TrialReady
-            val trials = result.trials
-            assertNotNull("Explicit generated-tool action must execute private trial suite", trials)
-            assertTrue("Private trial suite must satisfy all expected cases", trials!!.completeAndExpected)
-            assertEquals(3, trials.finalStats?.trials)
+            assertTrue(completed.genesis is GeneratedToolGenesisResult.OwnerReviewRequired)
+            val genesis = completed.genesis as GeneratedToolGenesisResult.OwnerReviewRequired
+            assertNull(
+                "Exact generated code must not execute the private trial suite before owner review",
+                result.trials,
+            )
+
+            val verifiedStatus = app.generatedToolStatusReader.snapshot()
+            val verifiedTool = verifiedStatus.tools.single { it.toolId == genesis.record.manifest.toolId }
+            assertEquals(GeneratedToolState.VERIFIED, verifiedTool.state)
+            assertEquals(0, verifiedTool.trials)
+            assertEquals(0, verifiedTool.successes)
+            assertEquals(0, verifiedTool.expectedOutputs)
+            assertEquals(0, verifiedTool.safetyViolations)
+            assertEquals(0, verifiedStatus.activeTools)
+            assertNull(verifiedTool.promotionEvidenceId)
+
+            val reviews = requireNotNull(app.photonIngress.ownerAssetReview) {
+                "Productive owner review coordinator must gate exact generated code"
+            }
+            val stagedReview = reviews.snapshot().single { it.candidate.id == genesis.candidateId }
+            assertNull(stagedReview.decision)
+            assertNull(stagedReview.publishedAt)
+            assertEquals(genesis.record.manifest.toolId, stagedReview.candidate.subjectId)
+            val approvalTime = maxOf(Instant.now(), stagedReview.candidate.createdAt)
+            val approval = reviews.decide(
+                candidateId = genesis.candidateId,
+                decision = OwnerAssetReviewDecision.APPROVED,
+                ownerActorId = PrivateOwnerPolicyBaseline.ownerActorId.value,
+                feedback = null,
+                decidedAt = approvalTime,
+            )
+            assertEquals(OwnerAssetReviewDecision.APPROVED, approval.record.decision?.decision)
+            assertNotNull("Exact code approval must be durably publication-sealed", approval.record.publishedAt)
 
             val trialStatus = app.generatedToolStatusReader.snapshot()
             val trialTool = trialStatus.tools.single { it.toolId == genesis.record.manifest.toolId }
             assertEquals(GeneratedToolState.TRIAL, trialTool.state)
-            assertEquals(3, trialTool.trials)
-            assertEquals(3, trialTool.successes)
-            assertEquals(3, trialTool.expectedOutputs)
+            assertEquals(0, trialTool.trials)
+            assertEquals(0, trialTool.successes)
+            assertEquals(0, trialTool.expectedOutputs)
             assertEquals(0, trialTool.safetyViolations)
             assertEquals(0, trialStatus.activeTools)
-            assertTrue(trialTool.promotionEvidenceId == null)
+            assertNull(trialTool.promotionEvidenceId)
 
             val activation = app.kernel.reviewAndActivateGeneratedTool(trialTool.toolId)
             assertTrue(
-                "Second explicit owner action must pass bounded Novel Canary promotion",
+                "Separate explicit owner action must pass bounded Novel Canary promotion",
                 activation is PrivateNovelCapabilityActivationResult.Activated,
             )
             val activated = activation as PrivateNovelCapabilityActivationResult.Activated
@@ -108,9 +138,9 @@ class PrivateV1DeviceSmokeTest {
             val activeStatus = app.generatedToolStatusReader.snapshot()
             val activeTool = activeStatus.tools.single { it.toolId == trialTool.toolId }
             assertEquals(GeneratedToolState.ACTIVE, activeTool.state)
-            assertEquals(8, activeTool.trials)
-            assertEquals(8, activeTool.successes)
-            assertEquals(8, activeTool.expectedOutputs)
+            assertEquals(5, activeTool.trials)
+            assertEquals(5, activeTool.successes)
+            assertEquals(5, activeTool.expectedOutputs)
             assertEquals(0, activeTool.safetyViolations)
             assertEquals(1, activeStatus.activeTools)
             assertNotNull(activeTool.promotionEvidenceId)
@@ -323,9 +353,9 @@ class PrivateV1DeviceSmokeTest {
             val status = app.generatedToolStatusReader.snapshot()
             val tool = status.tools.single { it.toolId == toolId }
             assertEquals(GeneratedToolState.ACTIVE, tool.state)
-            assertEquals(8, tool.trials)
-            assertEquals(8, tool.successes)
-            assertEquals(8, tool.expectedOutputs)
+            assertEquals(5, tool.trials)
+            assertEquals(5, tool.successes)
+            assertEquals(5, tool.expectedOutputs)
             assertEquals(0, tool.safetyViolations)
             assertEquals(1, status.activeTools)
             assertEquals(promotionEvidenceId, tool.promotionEvidenceId)

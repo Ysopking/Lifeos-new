@@ -1,6 +1,7 @@
 package app.lifeos.next
 
 import android.app.Application
+import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
@@ -166,7 +167,8 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
-                    photonIngress = CanonicalPhotonIngress(kernel)
+                    val ownerAssetReviews = EncryptedOwnerAssetReviewRepository(this)
+                    photonIngress = CanonicalPhotonIngress(kernel, ownerAssetReviews)
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
                         productiveIngress = photonIngress::ingest,
@@ -321,7 +323,10 @@ class LifeOsApplication : Application() {
                         )
                     )
                 },
-                startKernel = { kernel.start() },
+                startKernel = {
+                    kernel.start()
+                    Unit
+                },
                 stageObserver = LifeOsRuntimeWiring::onStageReady,
             )
         )

@@ -174,6 +174,9 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                         "Tool-Erzeugung wurde vor Genesis blockiert: ${execution.reason}"
 
                     is GeneratedToolRequestExecutionResult.Completed -> when (val genesis = execution.genesis) {
+                        is GeneratedToolGenesisResult.OwnerReviewRequired ->
+                            "${genesis.record.manifest.toolId} wurde lokal erzeugt, gebaut, getestet und verifiziert. Die exakte Code-Revision wartet jetzt in Assets auf deine Freigabe; erst danach darf das Tool in TRIAL."
+
                         is GeneratedToolGenesisResult.TrialReady ->
                             "${genesis.record.manifest.toolId} wurde lokal erzeugt, gebaut, getestet und verifiziert. Das Tool ist jetzt isoliert in TRIAL und noch nicht aktiv."
 
@@ -423,7 +426,9 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                             }
                             result.localImageTransform is LocalImageTransformExecutionResult.Failed ->
                                 "Die lokale Bildbearbeitung ist fehlgeschlagen: ${result.localImageTransform.message}"
-                            result.localImageTransform is LocalImageTransformExecutionResult.Transformed && !result.localImageTransform.output.processingQueued ->
+                            result.localImageTransform is LocalImageTransformExecutionResult.Transformed &&
+                                result.localImageTransform.ownerReviewCandidateId == null &&
+                                !result.localImageTransform.output.processingQueued ->
                                 "Das bearbeitete Bild wurde lokal gespeichert, konnte aber nicht dauerhaft zur Verarbeitung eingereiht werden."
                             result.localCommunication is LocalCommunicationExecutionResult.Blocked ->
                                 "Es gibt kein eindeutig teilbares lokales Ergebnis."

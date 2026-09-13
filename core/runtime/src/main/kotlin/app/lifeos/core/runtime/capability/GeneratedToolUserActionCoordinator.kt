@@ -11,7 +11,8 @@ import java.time.Instant
  * is allowed to run. A request Photon, tag or provenance marker alone never grants build,
  * execution or promotion authority. The approval created here authorizes exactly one bounded
  * Genesis request and remains non-activating. An optional private trial suite may execute only
- * after Genesis has admitted the exact tool to TRIAL; it still cannot activate a provider.
+ * after Genesis has admitted the exact tool to TRIAL; exact owner-review-required tools stop before
+ * that boundary and therefore cannot execute merely because generation was explicitly requested.
  */
 class GeneratedToolUserActionCoordinator(
     private val requests: GeneratedToolRequestCoordinator,
@@ -70,6 +71,7 @@ class GeneratedToolUserActionCoordinator(
             is GeneratedToolRequestExecutionResult.Blocked -> null
             is GeneratedToolRequestExecutionResult.Completed -> when (val genesis = execution.genesis) {
                 is GeneratedToolGenesisResult.Rejected -> null
+                is GeneratedToolGenesisResult.OwnerReviewRequired -> null
                 is GeneratedToolGenesisResult.TrialReady -> trialSuite?.execute(genesis.record)
             }
         }

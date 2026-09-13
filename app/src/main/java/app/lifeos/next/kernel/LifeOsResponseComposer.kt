@@ -20,8 +20,13 @@ object LifeOsResponseComposer {
             null -> Unit
         }
         when (val transformed = result.localImageTransform) {
-            is LocalImageTransformExecutionResult.Transformed ->
-                return "Ich habe das Bild lokal verarbeitet und das Ergebnis wieder als LIFEOS-Photon gespeichert."
+            is LocalImageTransformExecutionResult.Transformed -> {
+                return if (transformed.ownerReviewCandidateId != null) {
+                    "Ich habe das Bild lokal verarbeitet. Das Ergebnis wartet jetzt in Assets auf deine Freigabe und wird erst danach als LIFEOS-Photon veröffentlicht."
+                } else {
+                    "Ich habe das Bild lokal verarbeitet und das Ergebnis wieder als LIFEOS-Photon gespeichert."
+                }
+            }
             is LocalImageTransformExecutionResult.Blocked ->
                 return "Ich konnte die Bildverarbeitung nicht ausführen: ${transformed.reason}"
             is LocalImageTransformExecutionResult.Failed ->
@@ -52,8 +57,13 @@ object LifeOsResponseComposer {
             null -> Unit
         }
         when (val image = result.imageGeneration) {
-            is ImageGenerationResult.Generated ->
-                return "Ich habe das Bild lokal erzeugt und als LIFEOS-Photon gespeichert."
+            is ImageGenerationResult.Generated -> {
+                return if (image.value.ownerReviewCandidateId != null) {
+                    "Ich habe das Bild lokal erzeugt. Es wartet jetzt in Assets auf deine Freigabe und wird erst danach als LIFEOS-Photon veröffentlicht."
+                } else {
+                    "Ich habe das Bild lokal erzeugt und als LIFEOS-Photon gespeichert."
+                }
+            }
             is ImageGenerationResult.Blocked ->
                 return "Ich konnte das Bild nicht erzeugen: ${image.reasons.joinToString("; ")}"
             is ImageGenerationResult.Failed ->
