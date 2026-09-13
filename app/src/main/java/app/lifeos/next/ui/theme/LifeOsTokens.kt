@@ -1,0 +1,45 @@
+package app.lifeos.next.ui.theme
+
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
+object LifeOsTokens {
+    object Spacing {
+        val xSmall: Dp = 4.dp
+        val small: Dp = 8.dp
+        val medium: Dp = 12.dp
+        val large: Dp = 16.dp
+        val xLarge: Dp = 24.dp
+    }
+
+    object Elevation {
+        val resting: Dp = 1.dp
+        val raised: Dp = 4.dp
+    }
+
+    object Motion {
+        const val quickMs: Int = 120
+        const val standardMs: Int = 220
+        const val deliberateMs: Int = 320
+    }
+}
+
+enum class LifeOsMotionMode {
+    REDUCED,
+    STANDARD,
+}
+
+object LifeOsMotionPolicy {
+    fun modeFor(animatorDurationScale: Float): LifeOsMotionMode {
+        require(animatorDurationScale.isFinite() && animatorDurationScale >= 0f)
+        return if (animatorDurationScale == 0f) LifeOsMotionMode.REDUCED else LifeOsMotionMode.STANDARD
+    }
+
+    fun durationMs(baseDurationMs: Int, animatorDurationScale: Float): Int {
+        require(baseDurationMs >= 0)
+        return when (modeFor(animatorDurationScale)) {
+            LifeOsMotionMode.REDUCED -> 0
+            LifeOsMotionMode.STANDARD -> (baseDurationMs * animatorDurationScale).toInt().coerceAtLeast(1)
+        }
+    }
+}
