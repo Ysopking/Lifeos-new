@@ -14,12 +14,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import app.lifeos.next.LifeOsChatViewModel
+import app.lifeos.next.LifeOsMemoryViewModel
 import app.lifeos.next.ui.chat.LifeOsChatScreen
+import app.lifeos.next.ui.memory.LifeOsMemoryScreen
 import app.lifeos.next.ui.system.SystemRuntimeHealthScreen
 
 @Composable
 fun LifeOsRoot(
     model: LifeOsChatViewModel,
+    memoryModel: LifeOsMemoryViewModel,
     onRequestMicrophonePermission: () -> Unit = {},
 ) {
     var selectedKey by rememberSaveable {
@@ -47,7 +50,10 @@ fun LifeOsRoot(
                     modifier = contentModifier,
                     onRequestMicrophonePermission = onRequestMicrophonePermission,
                 )
-                LifeOsDestination.MEMORY -> MemoryMigrationScreen(contentModifier)
+                LifeOsDestination.MEMORY -> LifeOsMemoryScreen(
+                    model = memoryModel,
+                    modifier = contentModifier,
+                )
                 LifeOsDestination.GOALS -> GoalsMigrationScreen(contentModifier)
                 LifeOsDestination.SYSTEM -> SystemRuntimeHealthScreen(model, contentModifier)
             }
