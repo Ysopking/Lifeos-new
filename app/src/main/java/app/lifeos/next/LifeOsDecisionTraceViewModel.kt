@@ -7,6 +7,7 @@ import app.lifeos.core.runtime.trace.DecisionTraceId
 import app.lifeos.next.ui.decision.DecisionTraceProjector
 import app.lifeos.next.ui.decision.DecisionTraceUiModel
 import app.lifeos.next.ui.decision.DecisionTraceWorkspaceUiModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -47,6 +48,8 @@ class LifeOsDecisionTraceViewModel(application: Application) : AndroidViewModel(
                         loading = false,
                     )
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 mutableState.update { current ->
                     current.copy(
