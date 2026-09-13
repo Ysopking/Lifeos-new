@@ -2,7 +2,6 @@ package app.lifeos.next.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -25,6 +24,7 @@ import app.lifeos.next.ui.decision.LifeOsDecisionTraceScreen
 import app.lifeos.next.ui.goals.LifeOsGoalsScreen
 import app.lifeos.next.ui.memory.LifeOsMemoryScreen
 import app.lifeos.next.ui.system.SystemRuntimeHealthScreen
+import app.lifeos.next.ui.theme.LifeOsTheme
 import app.lifeos.next.ui.tools.LifeOsToolCenterScreen
 
 @Composable
@@ -46,7 +46,7 @@ fun LifeOsRoot(
         selectedKey = LifeOsDestination.CHAT.key
     }
 
-    MaterialTheme {
+    LifeOsTheme {
         Scaffold(
             bottomBar = {
                 LifeOsNavigationBar(
