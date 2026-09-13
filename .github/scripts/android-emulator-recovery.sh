@@ -49,6 +49,12 @@ run_test \
   'app.lifeos.next.GoalPlanRecoveryDeviceTest#seedGoalPlanProgress' \
   "$report_dir/seed-goal-plan.txt"
 
+# F6 Goals workspace. Project the exact productive ledger fixture before process death and prove the
+# UI read model does not mutate durable goal progress.
+run_test \
+  'app.lifeos.next.GoalsWorkspaceDeviceTest#productiveLedgerProjectsWithoutGoalMutation' \
+  "$report_dir/goals-workspace-read-only.txt"
+
 run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#seedProductGoldChatRoundTrip' \
   "$report_dir/seed-product-gold-chat.txt"
@@ -84,6 +90,10 @@ run_test \
 run_test \
   'app.lifeos.next.GoalPlanRecoveryDeviceTest#recoverGoalPlanAfterColdStart' \
   "$report_dir/recovered-goal-plan.txt"
+
+run_test \
+  'app.lifeos.next.GoalsWorkspaceDeviceTest#recoveredGoalWorkspaceMatchesDurableLedgerAfterColdStart' \
+  "$report_dir/recovered-goals-workspace.txt"
 
 # F5 Memory workspace. Read the productive DurableLifeMemoryRuntime snapshot and prove that the UI
 # projection neither rebuilds the memory runtime nor writes Photon state.
