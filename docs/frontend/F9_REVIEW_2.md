@@ -1,0 +1,1 @@
+Review B confirms F9 changes are presentation-only: no owner-policy, resource-budget, persistence, provenance, readiness, ToolWorkshop or activation authority moves into UI. Existing ViewModel ownership and navigation semantics remain unchanged. Dark mode follows the system; visible state text accompanies color; motion contracts permit zero-duration reduction.
