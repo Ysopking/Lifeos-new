@@ -56,7 +56,8 @@ jobs:
             'thought_matrix_rehydration=PASS' \
             'runtime_topology=PASS' \
             'self_healing_recovery=PASS' \
-            'controlled_evolution_recovery=PASS' >> product-gold-evidence/gates.txt
+            'controlled_evolution_recovery=PASS' \
+            'offline_image_artifact_e2e=PASS' >> product-gold-evidence/gates.txt
           printf 'product_gold=PASS\n' >> product-gold-evidence/gates.txt
       - name: Upload Product Gold debug APK
         uses: actions/upload-artifact@v4
