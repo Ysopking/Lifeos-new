@@ -13,9 +13,11 @@ import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.life.LifeOsReadinessSnapshot
 import app.lifeos.core.runtime.life.LifeOsSelfValidation
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
+import app.lifeos.core.runtime.topology.LifeOsSubsystemState
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.LifeOsResponseComposer
 import app.lifeos.next.ui.chat.ChatTurnProcessingState
+import app.lifeos.next.ui.components.RuntimeTopologyUiEvidence
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +35,7 @@ data class LifeOsChatUiState(
     val unavailableSubsystems: Int = 0,
     val capabilityProviders: Int = 0,
     val generatedProviders: Int = 0,
+    val runtimeTopology: RuntimeTopologyUiEvidence? = null,
     val readiness: LifeOsReadinessSnapshot? = null,
     val error: String? = null,
 )
@@ -160,6 +163,20 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             kernel.bootstrapState.collect { boot ->
                 val topology = if (boot.ready) LifeOsProcessTopology.snapshot() else null
+                val topologyEvidence = topology?.let { snapshot ->
+                    RuntimeTopologyUiEvidence(
+                        observed = true,
+                        registeredSubsystems = snapshot.registeredSubsystemCount,
+                        operationalSubsystems = snapshot.operationalSubsystemCount,
+                        unavailableSubsystems = snapshot.unavailableSubsystems.size,
+                        unboundSubsystems = snapshot.unboundSubsystems.size,
+                        degradedSubsystems = snapshot.subsystems.count { it.state == LifeOsSubsystemState.DEGRADED },
+                        capabilityProviders = snapshot.capabilityProviderCount,
+                        generatedProviders = snapshot.generatedProviderCount,
+                        fullyConnected = snapshot.fullyConnected,
+                        fullyOperational = snapshot.fullyOperational,
+                    )
+                }
                 val readiness = if (boot.ready && mutableState.value.readiness == null) {
                     LifeOsIntegratedCognitionSuiteRegistry.current()?.let { suite ->
                         LifeOsSelfValidation(suite).validate().first
@@ -175,6 +192,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                         unavailableSubsystems = topology?.unavailableSubsystems?.size ?: 0,
                         capabilityProviders = topology?.capabilityProviderCount ?: 0,
                         generatedProviders = topology?.generatedProviderCount ?: 0,
+                        runtimeTopology = topologyEvidence,
                         readiness = readiness,
                         error = boot.failureMessage ?: current.error,
                     )
