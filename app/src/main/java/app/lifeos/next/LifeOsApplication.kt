@@ -324,11 +324,6 @@ class LifeOsApplication : Application() {
                     )
                 },
                 startKernel = {
-                    runBlocking {
-                        requireNotNull(photonIngress.ownerAssetReview) {
-                            "Owner asset review runtime must be installed before kernel start"
-                        }.reconcileApproved()
-                    }
                     kernel.start()
                     Unit
                 },
