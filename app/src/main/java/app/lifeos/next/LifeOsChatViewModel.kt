@@ -79,12 +79,11 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun editDraft(text: String) {
-        val current = mutableState.value
         if (text.isBlank()) {
             pendingVoiceRecognitions = emptyList()
         }
+        val hasAcceptedVoice = pendingVoiceRecognitions.isNotEmpty()
         mutableState.update {
-            val hasAcceptedVoice = pendingVoiceRecognitions.isNotEmpty()
             it.copy(
                 draft = text,
                 voice = it.voice.copy(
@@ -385,54 +384,55 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
 
-        mutableState.update { current ->
-            val captureDraft = current.voice.draftAtCaptureStart ?: current.draft
-            val resolution = ChatVoicePolicy.resolveTranscript(
-                draftAtCaptureStart = captureDraft,
-                currentDraft = current.draft,
-                transcript = result.transcript,
-            )
-            val confidence = result.words.map { it.confidence }.average()
-            val status = buildString {
-                append("Lokales Sprachfeld: ")
-                append(result.words.size).append(" Wortkandidat(en), ")
-                append(result.segmentCount).append(" Sprachsegment(e), ")
-                append("Konfidenz ").append("%.0f".format(confidence * 100.0)).append(" %")
-                if (result.stoppedByLimit) append(" · 20-s-Limit erreicht")
-                append(" · Observation & Recognition als Photonen persistiert")
+        val current = mutableState.value
+        val captureDraft = current.voice.draftAtCaptureStart ?: current.draft
+        val resolution = ChatVoicePolicy.resolveTranscript(
+            draftAtCaptureStart = captureDraft,
+            currentDraft = current.draft,
+            transcript = result.transcript,
+        )
+        val confidence = result.words.map { it.confidence }.average()
+        val status = buildString {
+            append("Lokales Sprachfeld: ")
+            append(result.words.size).append(" Wortkandidat(en), ")
+            append(result.segmentCount).append(" Sprachsegment(e), ")
+            append("Konfidenz ").append("%.0f".format(confidence * 100.0)).append(" %")
+            if (result.stoppedByLimit) append(" · 20-s-Limit erreicht")
+            append(" · Observation & Recognition als Photonen persistiert")
+        }
+
+        when (resolution) {
+            is VoiceDraftResolution.Applied -> {
+                val mixedWithTypedDraft = captureDraft.isNotBlank() &&
+                    (
+                        pendingVoiceRecognitions.isEmpty() ||
+                            current.voice.voiceDraftBaseline != captureDraft ||
+                            current.voice.voiceInputEdited
+                        )
+                pendingVoiceRecognitions = addRecognition(pendingVoiceRecognitions, recognition)
+                stagedVoiceRecognition = null
+                mutableState.value = current.copy(
+                    draft = resolution.draft,
+                    voice = current.voice.copy(
+                        phase = ChatVoicePhase.IDLE,
+                        status = status,
+                        draftAtCaptureStart = null,
+                        stagedTranscript = null,
+                        voiceDraftBaseline = resolution.draft,
+                        voiceInputEdited = current.voice.voiceInputEdited || mixedWithTypedDraft,
+                    ),
+                )
             }
-            when (resolution) {
-                is VoiceDraftResolution.Applied -> {
-                    val mixedWithTypedDraft = captureDraft.isNotBlank() &&
-                        (
-                            pendingVoiceRecognitions.isEmpty() ||
-                                current.voice.voiceDraftBaseline != captureDraft ||
-                                current.voice.voiceInputEdited
-                            )
-                    pendingVoiceRecognitions = addRecognition(pendingVoiceRecognitions, recognition)
-                    current.copy(
-                        draft = resolution.draft,
-                        voice = current.voice.copy(
-                            phase = ChatVoicePhase.IDLE,
-                            status = status,
-                            draftAtCaptureStart = null,
-                            stagedTranscript = null,
-                            voiceDraftBaseline = resolution.draft,
-                            voiceInputEdited = current.voice.voiceInputEdited || mixedWithTypedDraft,
-                        ),
-                    )
-                }
-                is VoiceDraftResolution.Staged -> {
-                    stagedVoiceRecognition = recognition
-                    current.copy(
-                        voice = current.voice.copy(
-                            phase = ChatVoicePhase.IDLE,
-                            status = "$status · Entwurf wurde zwischenzeitlich geändert; Sprachtext wartet auf Freigabe.",
-                            draftAtCaptureStart = null,
-                            stagedTranscript = resolution.transcript,
-                        ),
-                    )
-                }
+            is VoiceDraftResolution.Staged -> {
+                stagedVoiceRecognition = recognition
+                mutableState.value = current.copy(
+                    voice = current.voice.copy(
+                        phase = ChatVoicePhase.IDLE,
+                        status = "$status · Entwurf wurde zwischenzeitlich geändert; Sprachtext wartet auf Freigabe.",
+                        draftAtCaptureStart = null,
+                        stagedTranscript = resolution.transcript,
+                    ),
+                )
             }
         }
     }
