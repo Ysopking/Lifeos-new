@@ -20,6 +20,7 @@ object ArtifactCoordinatorContract {
     const val PROVENANCE_SOURCE = "lifeos.collaborative-artifact"
     const val PROVENANCE_ACTOR = "lifeos-runtime"
     const val SCHEMA = "lifeos.collaborative-artifact.v1"
+    const val LIFECYCLE_SCHEMA = "lifeos.collaborative-artifact.v2"
 }
 
 /**
@@ -94,8 +95,12 @@ class ArtifactCoordinator(
         request: CollaborativeArtifactRequest,
         contributions: List<ArtifactContribution>,
         finalizedAt: Instant,
+        lifecycle: ArtifactLifecycle = ArtifactLifecycle(),
     ): ArtifactFinalizationResult {
         validator.requireValid(request, contributions, finalizedAt)
+        requireLifecycleCompatible(request, lifecycle, finalizedAt)
+        requirePersistedLineage(request, lifecycle, finalizedAt)
+
         val canonicalContributions = contributions.sortedWith(
             compareBy<ArtifactContribution>(
                 { it.field },
@@ -104,7 +109,7 @@ class ArtifactCoordinator(
                 { it.id },
             )
         )
-        val photonId = artifactPhotonId(request, canonicalContributions)
+        val photonId = artifactPhotonId(request, canonicalContributions, lifecycle)
         val existing = photons.load(photonId)
         val photon: Photon
         val effectiveFinalizedAt: Instant
@@ -114,10 +119,27 @@ class ArtifactCoordinator(
                 request = request,
                 contributions = canonicalContributions,
                 finalizedAt = finalizedAt,
+                lifecycle = lifecycle,
             )
             effectiveFinalizedAt = finalizedAt
         } else {
-            requireOwnedArtifact(existing)
+            requireOwnedArtifact(
+                photon = existing,
+                artifactId = request.id,
+                expectedRevision = lifecycle.revision.revision,
+            )
+            if (!lifecycle.isLegacyDefault) {
+                val expected = createPhoton(
+                    photonId = photonId,
+                    request = request,
+                    contributions = canonicalContributions,
+                    finalizedAt = existing.provenance.createdAt,
+                    lifecycle = lifecycle,
+                )
+                require(existing == expected) {
+                    "Artifact ${request.id.value} revision ${lifecycle.revision.revision} conflicts with persisted state"
+                }
+            }
             photon = existing
             effectiveFinalizedAt = existing.provenance.createdAt
         }
@@ -129,26 +151,103 @@ class ArtifactCoordinator(
                 contributions = canonicalContributions,
                 photon = photon,
                 finalizedAt = effectiveFinalizedAt,
+                lifecycle = lifecycle,
             ),
             reentry = receipt,
         )
     }
 
+    private suspend fun requirePersistedLineage(
+        request: CollaborativeArtifactRequest,
+        lifecycle: ArtifactLifecycle,
+        finalizedAt: Instant,
+    ) {
+        val revision = lifecycle.revision
+        revision.parentPhotonId?.let { parentId ->
+            val parent = requireNotNull(photons.load(parentId)) {
+                "Artifact revision ${revision.revision} parent Photon ${parentId.value} is not persisted"
+            }
+            requireOwnedArtifact(
+                photon = parent,
+                artifactId = request.id,
+                expectedRevision = revision.revision - 1L,
+            )
+            require(parent.provenance.createdAt <= finalizedAt) {
+                "Artifact revision parent cannot postdate its child"
+            }
+        }
+
+        revision.inputPhotonIds.sortedBy { it.value }.forEach { inputId ->
+            requireNotNull(photons.load(inputId)) {
+                "Artifact input Photon ${inputId.value} is not persisted"
+            }
+        }
+        lifecycle.output
+            ?.validationEvidence
+            .orEmpty()
+            .flatMap { it.evidencePhotonIds }
+            .toSet()
+            .sortedBy { it.value }
+            .forEach { evidenceId ->
+                requireNotNull(photons.load(evidenceId)) {
+                    "Artifact validation evidence Photon ${evidenceId.value} is not persisted"
+                }
+            }
+    }
+
+    private fun requireLifecycleCompatible(
+        request: CollaborativeArtifactRequest,
+        lifecycle: ArtifactLifecycle,
+        finalizedAt: Instant,
+    ) {
+        val output = lifecycle.output ?: return
+        require(output.asset.mediaType == request.targetMimeType) {
+            "Artifact asset MIME type must match request target MIME type"
+        }
+        when (output.profile) {
+            is DocumentArtifactProfile -> require(
+                request.kind == ArtifactKind.DOCUMENT || request.kind == ArtifactKind.REPORT
+            ) { "Document generation profile requires DOCUMENT or REPORT artifact kind" }
+            is CodeArtifactProfile -> require(request.kind == ArtifactKind.CODE) {
+                "Code generation profile requires CODE artifact kind"
+            }
+            is ImageArtifactProfile -> require(request.kind == ArtifactKind.IMAGE) {
+                "Image generation profile requires IMAGE artifact kind"
+            }
+        }
+        require(output.validationEvidence.all { it.passed }) {
+            "Finalized artifact cannot contain failed validation evidence"
+        }
+        require(output.validationEvidence.all { it.observedAt <= finalizedAt }) {
+            "Artifact validation evidence cannot postdate finalization"
+        }
+    }
+
     private fun artifactPhotonId(
         request: CollaborativeArtifactRequest,
         contributions: List<ArtifactContribution>,
+        lifecycle: ArtifactLifecycle,
     ): PhotonId {
+        if (lifecycle.isLegacyDefault) {
+            val identity = ArtifactFingerprints.fingerprint(
+                "collaborative-artifact-photon/v1",
+                request.id.value,
+                request.kind.name,
+                request.title,
+                request.targetMimeType,
+                request.requestedAt.toString(),
+                *request.requiredFields.sorted().toTypedArray(),
+                *contributions.map { it.contentFingerprint() }.toTypedArray(),
+            )
+            return PhotonId("artifact:${request.id.value}:$identity")
+        }
+
         val identity = ArtifactFingerprints.fingerprint(
-            "collaborative-artifact-photon/v1",
+            "collaborative-artifact-revision-photon/v2",
             request.id.value,
-            request.kind.name,
-            request.title,
-            request.targetMimeType,
-            request.requestedAt.toString(),
-            *request.requiredFields.sorted().toTypedArray(),
-            *contributions.map { it.contentFingerprint() }.toTypedArray(),
+            lifecycle.revision.revision.toString(),
         )
-        return PhotonId("artifact:${request.id.value}:$identity")
+        return PhotonId("artifact-revision:$identity")
     }
 
     private fun createPhoton(
@@ -156,15 +255,27 @@ class ArtifactCoordinator(
         request: CollaborativeArtifactRequest,
         contributions: List<ArtifactContribution>,
         finalizedAt: Instant,
+        lifecycle: ArtifactLifecycle,
     ): Photon {
-        val parentIds = contributions
+        val contributionParents = contributions
             .flatMap { it.provenance.parentIds }
-            .toSortedSet(compareBy { it.value })
+            .toSet()
+        val lineageParents = buildSet {
+            addAll(contributionParents)
+            addAll(lifecycle.revision.inputPhotonIds)
+            lifecycle.revision.parentPhotonId?.let(::add)
+        }
+        val evidenceParents = lifecycle.output
+            ?.validationEvidence
+            .orEmpty()
+            .flatMap { it.evidencePhotonIds }
+            .toSet()
+        val allParents = (lineageParents + evidenceParents).toSortedSet(compareBy { it.value })
         val confidence = contributions.minOf { it.confidence }
-        val content = envelopeJson(request, contributions, finalizedAt)
+        val content = envelopeJson(request, contributions, finalizedAt, lifecycle)
         return Photon(
             id = photonId,
-            revision = 1L,
+            revision = lifecycle.revision.revision,
             content = content,
             mimeType = ArtifactCoordinatorContract.ENVELOPE_MIME_TYPE,
             phase = PhotonPhase.CONVERGED,
@@ -175,13 +286,15 @@ class ArtifactCoordinator(
                 source = ArtifactCoordinatorContract.PROVENANCE_SOURCE,
                 actor = ArtifactCoordinatorContract.PROVENANCE_ACTOR,
                 createdAt = finalizedAt,
-                parentIds = parentIds,
+                parentIds = allParents,
             ),
-            relations = parentIds.mapTo(linkedSetOf()) { parentId ->
-                PhotonRelation(
-                    target = parentId,
-                    type = RelationType.DERIVED_FROM,
-                )
+            relations = buildSet {
+                lineageParents.sortedBy { it.value }.forEach { parentId ->
+                    add(PhotonRelation(target = parentId, type = RelationType.DERIVED_FROM))
+                }
+                evidenceParents.sortedBy { it.value }.forEach { evidenceId ->
+                    add(PhotonRelation(target = evidenceId, type = RelationType.SUPPORTS))
+                }
             },
             tags = buildSet {
                 add("artifact")
@@ -190,19 +303,34 @@ class ArtifactCoordinator(
                 contributions.map { it.field }.toSortedSet().forEach { field ->
                     add("artifact-field:$field")
                 }
+                if (!lifecycle.isLegacyDefault) {
+                    add("artifact-schema:v2")
+                    add("artifact-revision:${lifecycle.revision.revision}")
+                    lifecycle.output?.let { output ->
+                        add("artifact-asset-sha256:${output.asset.sha256}")
+                        add("artifact-asset-media:${output.asset.mediaType}")
+                    }
+                }
             },
         )
     }
 
-    private fun requireOwnedArtifact(photon: Photon) {
+    private fun requireOwnedArtifact(
+        photon: Photon,
+        artifactId: ArtifactId,
+        expectedRevision: Long,
+    ) {
         require(photon.mimeType == ArtifactCoordinatorContract.ENVELOPE_MIME_TYPE) {
             "Artifact Photon id collision for ${photon.id.value}: unexpected MIME type"
         }
         require(photon.provenance.source == ArtifactCoordinatorContract.PROVENANCE_SOURCE) {
             "Artifact Photon id collision for ${photon.id.value}: unexpected provenance source"
         }
-        require(photon.revision == 1L) {
-            "Artifact Photon ${photon.id.value} has unsupported revision ${photon.revision}"
+        require(photon.revision == expectedRevision) {
+            "Artifact Photon ${photon.id.value} has revision ${photon.revision}, expected $expectedRevision"
+        }
+        require("artifact-id:${artifactId.value}" in photon.tags) {
+            "Artifact Photon ${photon.id.value} belongs to another logical artifact"
         }
     }
 
@@ -210,15 +338,36 @@ class ArtifactCoordinator(
         request: CollaborativeArtifactRequest,
         contributions: List<ArtifactContribution>,
         finalizedAt: Instant,
+        lifecycle: ArtifactLifecycle,
     ): String = buildString {
         append('{')
-        append("\"schema\":"); appendJson(ArtifactCoordinatorContract.SCHEMA); append(',')
+        append("\"schema\":")
+        appendJson(
+            if (lifecycle.isLegacyDefault) ArtifactCoordinatorContract.SCHEMA
+            else ArtifactCoordinatorContract.LIFECYCLE_SCHEMA
+        )
+        append(',')
         append("\"artifactId\":"); appendJson(request.id.value); append(',')
         append("\"kind\":"); appendJson(request.kind.name); append(',')
         append("\"title\":"); appendJson(request.title); append(',')
         append("\"targetMimeType\":"); appendJson(request.targetMimeType); append(',')
         append("\"requestedAt\":"); appendJson(request.requestedAt.toString()); append(',')
         append("\"finalizedAt\":"); appendJson(finalizedAt.toString()); append(',')
+        if (!lifecycle.isLegacyDefault) {
+            append("\"revision\":"); append(lifecycle.revision.revision); append(',')
+            append("\"parentPhotonId\":")
+            appendNullableJson(lifecycle.revision.parentPhotonId?.value)
+            append(',')
+            append("\"inputPhotonIds\":[")
+            lifecycle.revision.inputPhotonIds.map { it.value }.sorted().forEachIndexed { index, inputId ->
+                if (index > 0) append(',')
+                appendJson(inputId)
+            }
+            append("],")
+            append("\"output\":")
+            appendArtifactOutput(lifecycle.output)
+            append(',')
+        }
         append("\"requiredFields\":[")
         request.requiredFields.sorted().forEachIndexed { index, field ->
             if (index > 0) append(',')
@@ -248,6 +397,73 @@ class ArtifactCoordinator(
             append('}')
         }
         append("]}")
+    }
+
+    private fun StringBuilder.appendArtifactOutput(output: ArtifactOutputDescriptor?) {
+        if (output == null) {
+            append("null")
+            return
+        }
+        append('{')
+        append("\"asset\":{")
+        append("\"id\":"); appendJson(output.asset.id.value); append(',')
+        append("\"mediaType\":"); appendJson(output.asset.mediaType); append(',')
+        append("\"byteCount\":"); append(output.asset.byteCount); append(',')
+        append("\"sha256\":"); appendJson(output.asset.sha256)
+        append("},\"profile\":")
+        appendGenerationProfile(output.profile)
+        append(",\"validationEvidence\":[")
+        output.validationEvidence.sortedBy { it.id }.forEachIndexed { index, evidence ->
+            if (index > 0) append(',')
+            append('{')
+            append("\"id\":"); appendJson(evidence.id); append(',')
+            append("\"validator\":"); appendJson(evidence.validator); append(',')
+            append("\"check\":"); appendJson(evidence.check); append(',')
+            append("\"passed\":"); append(evidence.passed); append(',')
+            append("\"detail\":"); appendJson(evidence.detail); append(',')
+            append("\"observedAt\":"); appendJson(evidence.observedAt.toString()); append(',')
+            append("\"evidencePhotonIds\":[")
+            evidence.evidencePhotonIds.map { it.value }.sorted().forEachIndexed { evidenceIndex, photonId ->
+                if (evidenceIndex > 0) append(',')
+                appendJson(photonId)
+            }
+            append("]}")
+        }
+        append("]}")
+    }
+
+    private fun StringBuilder.appendGenerationProfile(profile: ArtifactGenerationProfile) {
+        append('{')
+        when (profile) {
+            is DocumentArtifactProfile -> {
+                append("\"type\":\"document\",")
+                append("\"format\":"); appendJson(profile.format); append(',')
+                append("\"style\":"); appendNullableJson(profile.style)
+            }
+            is CodeArtifactProfile -> {
+                append("\"type\":\"code\",")
+                append("\"language\":"); appendJson(profile.language); append(',')
+                append("\"entrypoint\":"); appendNullableJson(profile.entrypoint); append(',')
+                append("\"files\":[")
+                profile.files.sorted().forEachIndexed { index, file ->
+                    if (index > 0) append(',')
+                    appendJson(file)
+                }
+                append(']')
+            }
+            is ImageArtifactProfile -> {
+                append("\"type\":\"image\",")
+                append("\"width\":"); append(profile.width); append(',')
+                append("\"height\":"); append(profile.height); append(',')
+                append("\"promptFingerprint\":"); appendJson(profile.promptFingerprint); append(',')
+                append("\"model\":"); appendNullableJson(profile.model)
+            }
+        }
+        append('}')
+    }
+
+    private fun StringBuilder.appendNullableJson(value: String?) {
+        if (value == null) append("null") else appendJson(value)
     }
 
     private fun StringBuilder.appendJson(value: String) {
