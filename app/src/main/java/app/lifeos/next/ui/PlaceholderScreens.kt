@@ -11,15 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun MemoryMigrationScreen(modifier: Modifier = Modifier) {
-    MigrationScreen(
-        title = "Gedächtnis",
-        detail = "Photon-Suche, Verlauf und Artefakte werden in einem späteren Frontend-Block aus der bestehenden Gedankenansicht hierher migriert.",
-        modifier = modifier,
-    )
-}
-
-@Composable
 fun GoalsMigrationScreen(modifier: Modifier = Modifier) {
     MigrationScreen(
         title = "Ziele",
