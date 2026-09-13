@@ -85,6 +85,13 @@ run_test \
   'app.lifeos.next.GoalPlanRecoveryDeviceTest#recoverGoalPlanAfterColdStart' \
   "$report_dir/recovered-goal-plan.txt"
 
+# V17 IMAGE artifact closure. Run after established cold-restart assertions so the new generated
+# Photons cannot perturb their seed/recovery baseline, but before the owner-policy test deliberately
+# revokes asset-write authority.
+run_test \
+  'app.lifeos.next.OfflineImageArtifactDeviceTest#promptRendersPngReloadsAndEntersArtifactLifecycle' \
+  "$report_dir/offline-image-artifact-e2e.txt"
+
 run_test \
   'app.lifeos.next.OwnerPolicyAssetWriteDeviceTest#assetWriteIsAllowedThenFailsClosedAfterRevokeAcrossFreshStore' \
   "$report_dir/owner-policy-asset-revoke-restart.txt"

@@ -97,9 +97,12 @@ class GoalActionDispatcher(
                 localDeepSearch = executeDeepSearch(context),
             )
 
-            IntentType.CREATE_IMAGE -> GoalActionDispatchResult(
-                imageGeneration = executeImageGeneration(context),
-            )
+            IntentType.CREATE_IMAGE -> {
+                val rendered = executeImageGeneration(context)
+                GoalActionDispatchResult(
+                    imageGeneration = ImageArtifactLifecycleRuntimeRegistry.attach(context, rendered),
+                )
+            }
 
             IntentType.TRANSFORM_IMAGE -> GoalActionDispatchResult(
                 localImageTransform = executeImageTransform(context),

@@ -43,6 +43,13 @@ class CanonicalPhotonIngress(
         )
     }
 
+    init {
+        // Kernel construction precedes this canonical ingress in production. Install the already
+        // canonical artifact coordinator here so CREATE_IMAGE can attach lifecycle provenance before
+        // the action outcome is settled, without introducing a second Photon ingress path.
+        ImageArtifactLifecycleRuntimeRegistry.install(artifactGeneration)
+    }
+
     suspend fun ingest(
         photon: Photon,
         mode: PhotonIngressMode = PhotonIngressMode.ORIGIN,

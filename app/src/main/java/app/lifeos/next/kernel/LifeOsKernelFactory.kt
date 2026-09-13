@@ -203,7 +203,7 @@ class LifeOsKernelFactory(
                     providerId = "scene-reference-rasterizer",
                     providerType = ProviderType.MODULE,
                     contract = CapabilityContract(
-                        requiredInputs = setOf("goal-photon"),
+                        requiredInputs = setOf("scene-graph"),
                         outputs = setOf("mmsi-geometry-buffers"),
                     ),
                     state = ProviderState.ACTIVE,
