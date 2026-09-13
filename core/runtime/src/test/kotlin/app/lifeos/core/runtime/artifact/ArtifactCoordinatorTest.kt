@@ -19,7 +19,7 @@ class ArtifactCoordinatorTest {
     private val finalizedAt = Instant.parse("2026-09-11T18:00:10Z")
 
     @Test
-    fun `finalized collaborative artifact preserves contribution provenance and is replay deterministic`() = runTest {
+    fun `finalized collaborative artifact uses one canonical ingress and is replay deterministic`() = runTest {
         val firstParent = PhotonId("source-a")
         val secondParent = PhotonId("source-b")
         val analysis = ArtifactContribution.create(
@@ -59,12 +59,13 @@ class ArtifactCoordinatorTest {
             requiredFields = setOf("analysis", "validation"),
         )
         val repository = RecordingPhotonRepository()
-        val reentered = mutableListOf<Photon>()
+        val ingressed = mutableListOf<Photon>()
         val coordinator = ArtifactCoordinator(
             photons = repository,
-            reentry = ArtifactPhotonReentry { photon ->
-                reentered += photon
-                ArtifactReentryReceipt(accepted = true, durableTaskId = "task-1")
+            ingress = ArtifactPhotonIngress { photon ->
+                ingressed += photon
+                if (repository.load(photon.id) == null) repository.save(photon)
+                ArtifactReentryReceipt(accepted = true, durableTaskId = "task-${ingressed.size}")
             },
         )
 
@@ -79,8 +80,9 @@ class ArtifactCoordinatorTest {
         assertEquals(first.artifact, replay.artifact)
         assertEquals(finalizedAt, replay.artifact.finalizedAt)
         assertEquals(1, repository.saveCount)
-        assertEquals(2, reentered.size)
-        assertEquals(photon, reentered[1])
+        assertEquals(2, ingressed.size)
+        assertEquals(photon, ingressed[0])
+        assertEquals(photon, ingressed[1])
         assertEquals(0.74, photon.confidence)
         assertEquals(setOf(firstParent, secondParent), photon.provenance.parentIds)
         assertEquals(setOf(firstParent, secondParent), photon.relations.map { it.target }.toSet())
@@ -95,6 +97,7 @@ class ArtifactCoordinatorTest {
         assertEquals("analysis", first.artifact.contributions.first().field)
         assertTrue(first.reentry.accepted)
         assertEquals("task-1", first.reentry.durableTaskId)
+        assertEquals("task-2", replay.reentry.durableTaskId)
     }
 
     @Test

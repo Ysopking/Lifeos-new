@@ -22,14 +22,23 @@ object ArtifactCoordinatorContract {
     const val SCHEMA = "lifeos.collaborative-artifact.v1"
 }
 
+/**
+ * Complete productive ingress for one finalized artifact Photon. Implementations own persistence
+ * and durable cognition submission as one canonical boundary.
+ */
+fun interface ArtifactPhotonIngress {
+    suspend fun ingest(photon: Photon): ArtifactReentryReceipt
+}
+
+/** Legacy continuous-cognition adapter retained for compatibility; productive composition uses [ArtifactPhotonIngress]. */
 fun interface ArtifactPhotonReentry {
     suspend fun submit(photon: Photon): ArtifactReentryReceipt
 }
 
 /**
- * Re-enters finalized artifact Photons through the existing continuous-cognition event path.
- * The deterministic delta id makes journal replay idempotent; the configured durable dispatcher
- * remains responsible for converting accepted work into PROCESS_PHOTON tasks.
+ * Legacy re-entry adapter. It does not persist the Photon and therefore must not be used as the
+ * productive artifact ingress. Android production composition binds [ArtifactPhotonIngress] to the
+ * canonical Photon ingress instead.
  */
 class ContinuousCognitionArtifactReentry(
     private val cognition: ContinuousCognitionEngine,
@@ -78,7 +87,7 @@ class ContinuousCognitionArtifactReentry(
 
 class ArtifactCoordinator(
     private val photons: PhotonRepository,
-    private val reentry: ArtifactPhotonReentry,
+    private val ingress: ArtifactPhotonIngress,
     private val validator: ArtifactValidator = ArtifactValidator(),
 ) {
     suspend fun finalize(
@@ -106,7 +115,6 @@ class ArtifactCoordinator(
                 contributions = canonicalContributions,
                 finalizedAt = finalizedAt,
             )
-            photons.save(photon)
             effectiveFinalizedAt = finalizedAt
         } else {
             requireOwnedArtifact(existing)
@@ -114,7 +122,7 @@ class ArtifactCoordinator(
             effectiveFinalizedAt = existing.provenance.createdAt
         }
 
-        val receipt = reentry.submit(photon)
+        val receipt = ingress.ingest(photon)
         return ArtifactFinalizationResult(
             artifact = CollaborativeArtifact(
                 request = request,

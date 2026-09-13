@@ -3,6 +3,7 @@ package app.lifeos.next.kernel
 import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.PhotonIngressMarkerStore
 import app.lifeos.core.runtime.PhotonIngressMode
+import app.lifeos.core.runtime.artifact.ArtifactCoordinator
 
 /**
  * Single productive Android ingress for Photons that must become immediately visible to the live
@@ -18,6 +19,14 @@ import app.lifeos.core.runtime.PhotonIngressMode
 class CanonicalPhotonIngress(
     private val kernel: LifeOsKernel,
 ) {
+    /** Productive collaborative-artifact runtime bound to the same canonical Photon ingress. */
+    val artifacts: ArtifactCoordinator by lazy {
+        ArtifactCoordinator(
+            photons = kernel.photonStore,
+            ingress = CanonicalArtifactPhotonIngress(::ingestWithReceipt),
+        )
+    }
+
     suspend fun ingest(
         photon: Photon,
         mode: PhotonIngressMode = PhotonIngressMode.ORIGIN,
