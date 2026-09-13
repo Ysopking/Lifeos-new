@@ -75,6 +75,7 @@ class OwnerAssetReviewApprovalEffectRecoveryTest {
             photons.save(photon)
             ArtifactReentryReceipt(accepted = true)
         },
+        authorizedOwnerActorId = "private-owner",
         onApproved = onApproved,
     )
 
