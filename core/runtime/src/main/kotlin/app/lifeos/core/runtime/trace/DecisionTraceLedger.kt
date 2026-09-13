@@ -11,18 +11,16 @@ interface DecisionTraceRepository {
 }
 
 class DecisionTraceLedger(private val repository: DecisionTraceRepository) {
-    suspend fun snapshot(id: DecisionTraceId): DecisionTrace? {
-        val report = repository.loadReport()
-        check(report.unreadableEntries.isEmpty()) {
-            "Decision trace store is unreadable: ${report.unreadableEntries.joinToString(",")}"
+    suspend fun snapshot(id: DecisionTraceId): DecisionTrace? =
+        latestVerified(id, verifiedReport().traces)
+
+    /** Latest verified revision for every durable trace, ordered by stable trace id. */
+    suspend fun snapshots(): List<DecisionTrace> = verifiedReport().traces
+        .groupBy { it.id }
+        .map { (id, revisions) ->
+            requireNotNull(latestVerified(id, revisions))
         }
-        val revisions = report.traces.filter { it.id == id }.sortedBy { it.revision }
-        if (revisions.isEmpty()) return null
-        require(revisions.map { it.revision } == (1L..revisions.size.toLong()).toList()) {
-            "Decision trace revisions must be contiguous"
-        }
-        return revisions.last()
-    }
+        .sortedBy { it.id.value }
 
     suspend fun append(
         id: DecisionTraceId,
@@ -42,6 +40,25 @@ class DecisionTraceLedger(private val repository: DecisionTraceRepository) {
             if (repository.save(current?.revision ?: 0L, next)) return next
         }
         error("Decision trace CAS retry limit exceeded")
+    }
+
+    private suspend fun verifiedReport(): DecisionTraceRepositoryLoadReport =
+        repository.loadReport().also { report ->
+            check(report.unreadableEntries.isEmpty()) {
+                "Decision trace store is unreadable: ${report.unreadableEntries.joinToString(",")}" 
+            }
+        }
+
+    private fun latestVerified(
+        id: DecisionTraceId,
+        traces: List<DecisionTrace>,
+    ): DecisionTrace? {
+        val revisions = traces.filter { it.id == id }.sortedBy { it.revision }
+        if (revisions.isEmpty()) return null
+        require(revisions.map { it.revision } == (1L..revisions.size.toLong()).toList()) {
+            "Decision trace revisions must be contiguous"
+        }
+        return revisions.last()
     }
 
     private fun mergeNodes(
