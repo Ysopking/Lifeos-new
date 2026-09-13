@@ -364,7 +364,7 @@ class PrivateGoalActionExecutionGuard(
         )
         IntentType.CREATE_IMAGE -> GoalActionResourceProfile(
             hardQuota = quota(30_000, 256, 512, 160, 0, 8),
-            requested = usage(20_000, 160, 256, 96, 0, 4),
+            requested = usage(20_000, 48, 48, 16, 0, 2),
             priority = HardwareWorkPriority.HIGH,
             domain = ResourceBudgetDomain.GOAL_EXECUTION,
             expectedUtility = 0.90,
