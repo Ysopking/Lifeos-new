@@ -2,8 +2,10 @@ package app.lifeos.core.runtime.artifact
 
 import app.lifeos.core.model.AssetRef
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonCodec
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.StableCognitiveIds
+import java.security.MessageDigest
 import java.time.Instant
 
 @JvmInline
@@ -150,6 +152,7 @@ data class OwnerAssetReviewCandidate(
                 kind.name,
                 targetMimeType,
                 materializedAsset?.id?.value.orEmpty(),
+                materializedAsset?.mediaType.orEmpty(),
                 materializedAsset?.sha256.orEmpty(),
                 materializedAsset?.byteCount?.toString().orEmpty(),
                 *stagedPhotons
@@ -158,7 +161,7 @@ data class OwnerAssetReviewCandidate(
                         listOf(
                             photon.id.value,
                             photon.revision.toString(),
-                            StableCognitiveIds.fingerprint("owner-asset-review-photon/v1", photon.content, photon.mimeType),
+                            sha256(PhotonCodec.encode(photon)),
                         )
                     }
                     .toTypedArray(),
@@ -166,6 +169,9 @@ data class OwnerAssetReviewCandidate(
                 *metadata.toSortedMap().flatMap { (key, value) -> listOf(key, value) }.toTypedArray(),
             )
         )
+
+        private fun sha256(bytes: ByteArray): String =
+            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     }
 }
 
