@@ -1,8 +1,10 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.image.ImageAssetDescriptor
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.StableCognitiveIds
 import app.lifeos.core.runtime.artifact.ArtifactContribution
 import app.lifeos.core.runtime.artifact.ArtifactCoordinator
 import app.lifeos.core.runtime.artifact.ArtifactGenerationCoordinator
@@ -21,11 +23,11 @@ import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 
 /**
- * Productive bridge from an already-materialized offline image into the collaborative-artifact
+ * Productive bridge from already-materialized offline images into the collaborative-artifact
  * lifecycle, but with publication held behind the private-owner review boundary.
  *
- * Scene, image, artifact-revision and generation-provenance Photons are staged together in the
- * encrypted owner-review vault. None of them reaches the canonical Photon store here.
+ * Generated Scene/Image/Artifact/Generation Photons and transformed Image Photons stay outside the
+ * canonical Photon store until the exact review candidate is approved by the private owner.
  */
 internal class ImageArtifactLifecycleRuntime(
     private val photons: PhotonRepository,
@@ -158,6 +160,56 @@ internal class ImageArtifactLifecycleRuntime(
         }
     }
 
+    suspend fun attachTransform(
+        context: GoalActionContext,
+        result: LocalImageTransformExecutionResult,
+    ): LocalImageTransformExecutionResult {
+        if (result !is LocalImageTransformExecutionResult.Transformed) return result
+        return try {
+            require(!result.output.processingQueued) {
+                "Transformed image Photon must remain unpublished until owner review"
+            }
+            val descriptor = ImageAssetDescriptor.decode(result.output.photon.content)
+            val revisionKey = StableCognitiveIds.fingerprint(
+                "owner-reviewed-image-transform/v1",
+                result.output.photon.id.value,
+                result.output.photon.revision.toString(),
+                result.sourcePhotonId.value,
+                context.goalPhotonId.value,
+                descriptor.asset.sha256,
+                *result.operations.map { it.name }.toTypedArray(),
+            )
+            val candidate = OwnerAssetReviewCandidate.create(
+                subjectType = OwnerAssetReviewSubjectType.COLLABORATIVE_ARTIFACT,
+                subjectId = "transformed-image:${result.output.photon.id.value}",
+                revisionKey = revisionKey,
+                kind = ArtifactKind.IMAGE,
+                title = "Transformed image ${descriptor.sceneId}",
+                targetMimeType = descriptor.asset.mediaType,
+                createdAt = result.output.photon.provenance.createdAt,
+                participatingModules = setOf("local-image-transform"),
+                inputPhotonIds = setOf(result.sourcePhotonId, context.goalPhotonId),
+                materializedAsset = descriptor.asset,
+                stagedPhotons = listOf(result.output.photon),
+                metadata = mapOf(
+                    "width" to descriptor.width.toString(),
+                    "height" to descriptor.height.toString(),
+                    "rendererId" to descriptor.rendererId,
+                    "operations" to result.operations.joinToString(",") { it.name },
+                    "assetSha256" to descriptor.asset.sha256,
+                ),
+            )
+            reviews.stage(candidate)
+            result.copy(ownerReviewCandidateId = candidate.id)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            LocalImageTransformExecutionResult.Failed(
+                "image-transform-owner-review-staging-failed:${error::class.simpleName}:${error.message.orEmpty().take(160)}"
+            )
+        }
+    }
+
     private fun sha256(value: String): String =
         MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(StandardCharsets.UTF_8))
@@ -198,4 +250,9 @@ internal object ImageArtifactLifecycleRuntimeRegistry {
         context: GoalActionContext,
         result: ImageGenerationResult,
     ): ImageGenerationResult = runtime?.attach(context, result) ?: result
+
+    suspend fun attachTransform(
+        context: GoalActionContext,
+        result: LocalImageTransformExecutionResult,
+    ): LocalImageTransformExecutionResult = runtime?.attachTransform(context, result) ?: result
 }
