@@ -29,15 +29,6 @@ fun GoalsMigrationScreen(modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun SystemMigrationScreen(modifier: Modifier = Modifier) {
-    MigrationScreen(
-        title = "System",
-        detail = "Runtime-Health, Readiness und ToolWorkshop werden schrittweise aus den bestehenden Diagnoseflächen hierher verschoben.",
-        modifier = modifier,
-    )
-}
-
-@Composable
 private fun MigrationScreen(
     title: String,
     detail: String,
