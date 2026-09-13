@@ -229,6 +229,9 @@ data class OwnerAssetReviewRecord(
 ) {
     init {
         require(decision == null || decision.candidateId == candidate.id)
+        require(decision == null || decision.decidedAt >= candidate.createdAt) {
+            "Owner asset review decision cannot predate its generated candidate"
+        }
         require(publishedAt == null || decision?.decision == OwnerAssetReviewDecision.APPROVED) {
             "Only an approved candidate may be marked published"
         }
