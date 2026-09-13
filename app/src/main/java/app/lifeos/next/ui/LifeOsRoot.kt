@@ -14,11 +14,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import app.lifeos.next.LifeOsChatViewModel
+import app.lifeos.next.LifeOsDecisionTraceViewModel
 import app.lifeos.next.LifeOsGoalsViewModel
 import app.lifeos.next.LifeOsMemoryViewModel
 import app.lifeos.next.OwnerAssetReviewViewModel
 import app.lifeos.next.ui.assets.OwnerAssetReviewScreen
 import app.lifeos.next.ui.chat.LifeOsChatScreen
+import app.lifeos.next.ui.decision.LifeOsDecisionTraceScreen
 import app.lifeos.next.ui.goals.LifeOsGoalsScreen
 import app.lifeos.next.ui.memory.LifeOsMemoryScreen
 import app.lifeos.next.ui.system.SystemRuntimeHealthScreen
@@ -29,6 +31,7 @@ fun LifeOsRoot(
     memoryModel: LifeOsMemoryViewModel,
     assetReviewModel: OwnerAssetReviewViewModel,
     goalsModel: LifeOsGoalsViewModel,
+    decisionTraceModel: LifeOsDecisionTraceViewModel,
     onRequestMicrophonePermission: () -> Unit = {},
 ) {
     var selectedKey by rememberSaveable {
@@ -66,6 +69,10 @@ fun LifeOsRoot(
                 )
                 LifeOsDestination.GOALS -> LifeOsGoalsScreen(
                     model = goalsModel,
+                    modifier = contentModifier,
+                )
+                LifeOsDestination.WHY -> LifeOsDecisionTraceScreen(
+                    model = decisionTraceModel,
                     modifier = contentModifier,
                 )
                 LifeOsDestination.SYSTEM -> SystemRuntimeHealthScreen(model, contentModifier)
