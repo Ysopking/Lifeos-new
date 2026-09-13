@@ -23,6 +23,7 @@ required_device_tests=(
   "app/src/androidTest/java/app/lifeos/next/OutcomeLearningDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/ConvergenceDecisionDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/DeepSearchEncryptedRepositoryCorruptionDeviceTest.kt"
+  "app/src/androidTest/java/app/lifeos/next/OfflineImageArtifactDeviceTest.kt"
 )
 
 for path in "${required_jvm_tests[@]}" "${required_device_tests[@]}"; do
@@ -40,9 +41,28 @@ for suite in \
   'GoalPlanRecoveryDeviceTest' \
   'OutcomeLearningDeviceTest' \
   'ConvergenceDecisionDeviceTest' \
-  'DeepSearchEncryptedRepositoryCorruptionDeviceTest'; do
+  'DeepSearchEncryptedRepositoryCorruptionDeviceTest' \
+  'OfflineImageArtifactDeviceTest'; do
   grep -Fq "$suite" "$emulator_gate" || { echo "missing-emulator-gold-suite:$suite" >&2; exit 1; }
 done
+
+core_fast_workflow=".github/workflows/core-fast.yml"
+grep -Fq 'push:' "$core_fast_workflow" || { echo "core-fast-missing-push-trigger" >&2; exit 1; }
+if grep -Fq 'branches-ignore: [main]' "$core_fast_workflow"; then
+  echo "core-fast-main-push-disabled" >&2
+  exit 1
+fi
+
+recovery_workflow=".github/workflows/android-emulator-recovery.yml"
+grep -Fq 'push:' "$recovery_workflow" || { echo "emulator-recovery-missing-push-trigger" >&2; exit 1; }
+grep -Fq 'branches: [main]' "$recovery_workflow" || { echo "emulator-recovery-main-push-disabled" >&2; exit 1; }
+
+product_gold_workflow=".github/workflows/product-gold.yml"
+grep -Fq 'push:' "$product_gold_workflow" || { echo "product-gold-missing-push-trigger" >&2; exit 1; }
+grep -Fq 'offline_image_artifact_e2e=PASS' "$product_gold_workflow" || {
+  echo "product-gold-image-e2e-not-sealed" >&2
+  exit 1
+}
 
 grep -Fq 'ci-core-fast.sh' .github/scripts/ci-v17-gold.sh
 grep -Fq 'ci-android-debug.sh' .github/scripts/ci-v17-gold.sh
