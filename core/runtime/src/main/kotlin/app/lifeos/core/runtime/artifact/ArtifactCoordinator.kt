@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.artifact
 
+import app.lifeos.core.model.AssetId
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
@@ -21,6 +22,8 @@ object ArtifactCoordinatorContract {
     const val PROVENANCE_ACTOR = "lifeos-runtime"
     const val SCHEMA = "lifeos.collaborative-artifact.v1"
     const val LIFECYCLE_SCHEMA = "lifeos.collaborative-artifact.v2"
+    const val DEFINITION_FINGERPRINT_TAG_PREFIX = "artifact-definition-fingerprint:"
+    const val ASSET_ID_TAG_PREFIX = "artifact-asset-id:"
 }
 
 /**
@@ -113,6 +116,7 @@ class ArtifactCoordinator(
         val existing = photons.load(photonId)
         val photon: Photon
         val effectiveFinalizedAt: Instant
+        val effectiveLifecycle: ArtifactLifecycle
         if (existing == null) {
             photon = createPhoton(
                 photonId = photonId,
@@ -122,23 +126,27 @@ class ArtifactCoordinator(
                 lifecycle = lifecycle,
             )
             effectiveFinalizedAt = finalizedAt
+            effectiveLifecycle = lifecycle
         } else {
             requireOwnedArtifact(
                 photon = existing,
                 artifactId = request.id,
                 expectedRevision = lifecycle.revision.revision,
             )
-            if (!lifecycle.isLegacyDefault) {
-                val expected = createPhoton(
-                    photonId = photonId,
+            effectiveLifecycle = if (lifecycle.isLegacyDefault) {
+                lifecycle
+            } else {
+                val expectedFingerprint = artifactRevisionDefinitionFingerprint(
                     request = request,
                     contributions = canonicalContributions,
-                    finalizedAt = existing.provenance.createdAt,
                     lifecycle = lifecycle,
                 )
-                require(existing == expected) {
+                require(
+                    "${ArtifactCoordinatorContract.DEFINITION_FINGERPRINT_TAG_PREFIX}$expectedFingerprint" in existing.tags
+                ) {
                     "Artifact ${request.id.value} revision ${lifecycle.revision.revision} conflicts with persisted state"
                 }
+                canonicalizePersistedAssetLocator(existing, lifecycle)
             }
             photon = existing
             effectiveFinalizedAt = existing.provenance.createdAt
@@ -151,7 +159,7 @@ class ArtifactCoordinator(
                 contributions = canonicalContributions,
                 photon = photon,
                 finalizedAt = effectiveFinalizedAt,
-                lifecycle = lifecycle,
+                lifecycle = effectiveLifecycle,
             ),
             reentry = receipt,
         )
@@ -250,6 +258,46 @@ class ArtifactCoordinator(
         return PhotonId("artifact-revision:$identity")
     }
 
+    private fun artifactRevisionDefinitionFingerprint(
+        request: CollaborativeArtifactRequest,
+        contributions: List<ArtifactContribution>,
+        lifecycle: ArtifactLifecycle,
+    ): String {
+        val parts = buildList {
+            add("collaborative-artifact-definition/v2")
+            add(request.id.value)
+            add(request.kind.name)
+            add(request.title)
+            add(request.targetMimeType)
+            add(request.requestedAt.toString())
+            addAll(request.requiredFields.sorted())
+            addAll(contributions.map { it.contentFingerprint() })
+            add(lifecycle.contentFingerprint())
+        }
+        return ArtifactFingerprints.fingerprint(*parts.toTypedArray())
+    }
+
+    private fun canonicalizePersistedAssetLocator(
+        photon: Photon,
+        lifecycle: ArtifactLifecycle,
+    ): ArtifactLifecycle {
+        val output = lifecycle.output ?: return lifecycle
+        val persistedAssetIds = photon.tags
+            .asSequence()
+            .filter { it.startsWith(ArtifactCoordinatorContract.ASSET_ID_TAG_PREFIX) }
+            .map { it.removePrefix(ArtifactCoordinatorContract.ASSET_ID_TAG_PREFIX) }
+            .toSet()
+        require(persistedAssetIds.size == 1) {
+            "Artifact Photon ${photon.id.value} has invalid persisted asset locator metadata"
+        }
+        val persistedAssetId = AssetId(persistedAssetIds.single())
+        return lifecycle.copy(
+            output = output.copy(
+                asset = output.asset.copy(id = persistedAssetId),
+            )
+        )
+    }
+
     private fun createPhoton(
         photonId: PhotonId,
         request: CollaborativeArtifactRequest,
@@ -306,9 +354,14 @@ class ArtifactCoordinator(
                 if (!lifecycle.isLegacyDefault) {
                     add("artifact-schema:v2")
                     add("artifact-revision:${lifecycle.revision.revision}")
+                    add(
+                        ArtifactCoordinatorContract.DEFINITION_FINGERPRINT_TAG_PREFIX +
+                            artifactRevisionDefinitionFingerprint(request, contributions, lifecycle)
+                    )
                     lifecycle.output?.let { output ->
                         add("artifact-asset-sha256:${output.asset.sha256}")
                         add("artifact-asset-media:${output.asset.mediaType}")
+                        add("${ArtifactCoordinatorContract.ASSET_ID_TAG_PREFIX}${output.asset.id.value}")
                     }
                 }
             },
