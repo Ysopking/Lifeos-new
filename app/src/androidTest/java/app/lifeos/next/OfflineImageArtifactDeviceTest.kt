@@ -53,7 +53,20 @@ class OfflineImageArtifactDeviceTest {
         val submission = app.kernel.persistUserUtterance(user)
         assertNull("Image prompt must not fail language/action execution", submission.languageFailure)
         val result = submission.imageGeneration
-        assertTrue("Prompt must execute the productive image action", result is ImageGenerationResult.Generated)
+        val routing = submission.effectiveRouting
+        val blockingGaps = routing?.blockingGaps
+            ?.joinToString(separator = ",") { gap ->
+                "${gap.requirement.capabilityId.value}:${gap.type.name}"
+            }
+            .orEmpty()
+        assertTrue(
+            "Prompt must execute the productive image action; " +
+                "intent=${submission.effectiveGoal?.intent}; " +
+                "actionReady=${submission.actionReady}; " +
+                "routingReady=${routing?.ready}; " +
+                "blockingGaps=$blockingGaps; result=$result",
+            result is ImageGenerationResult.Generated,
+        )
         val generated = (result as ImageGenerationResult.Generated).value
 
         val descriptor = generated.descriptor
