@@ -11,6 +11,8 @@ on:
       - "app/src/main/java/app/lifeos/next/LifeOsRuntimeWiring.kt"
       - "app/src/main/java/app/lifeos/next/kernel/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/ThoughtMatrix*.kt"
+      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/artifact/**"
+      - "core/runtime/src/test/kotlin/app/lifeos/core/runtime/artifact/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/checkpoints/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/thought/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/**"
