@@ -66,17 +66,23 @@ data class OwnerAssetReviewCandidate(
         require(metadata.all { (key, value) ->
             key.isNotBlank() && key.length <= MAX_METADATA_KEY_CHARS && value.length <= MAX_METADATA_VALUE_CHARS
         })
-        require(id == createId(
-            subjectType = subjectType,
-            subjectId = subjectId,
-            revisionKey = revisionKey,
-            kind = kind,
-            targetMimeType = targetMimeType,
-            materializedAsset = materializedAsset,
-            stagedPhotons = stagedPhotons,
-            previewText = previewText,
-            metadata = metadata,
-        )) { "Owner asset review candidate identity does not match its immutable revision" }
+        require(
+            id == createId(
+                subjectType = subjectType,
+                subjectId = subjectId,
+                revisionKey = revisionKey,
+                kind = kind,
+                title = title,
+                targetMimeType = targetMimeType,
+                createdAt = createdAt,
+                participatingModules = participatingModules,
+                inputPhotonIds = inputPhotonIds,
+                materializedAsset = materializedAsset,
+                stagedPhotons = stagedPhotons,
+                previewText = previewText,
+                metadata = metadata,
+            )
+        ) { "Owner asset review candidate identity does not match its immutable revision" }
     }
 
     companion object {
@@ -106,39 +112,55 @@ data class OwnerAssetReviewCandidate(
             stagedPhotons: List<Photon> = emptyList(),
             previewText: String? = null,
             metadata: Map<String, String> = emptyMap(),
-        ): OwnerAssetReviewCandidate = OwnerAssetReviewCandidate(
-            id = createId(
-                subjectType,
-                subjectId,
-                revisionKey,
-                kind,
-                targetMimeType,
-                materializedAsset,
-                stagedPhotons,
-                previewText,
-                metadata,
-            ),
-            subjectType = subjectType,
-            subjectId = subjectId,
-            revisionKey = revisionKey,
-            kind = kind,
-            title = title,
-            targetMimeType = targetMimeType,
-            createdAt = createdAt,
-            participatingModules = participatingModules.toSortedSet(),
-            inputPhotonIds = inputPhotonIds.toSortedSet(compareBy { it.value }),
-            materializedAsset = materializedAsset,
-            stagedPhotons = stagedPhotons.sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value }),
-            previewText = previewText,
-            metadata = metadata.toSortedMap(),
-        )
+        ): OwnerAssetReviewCandidate {
+            val canonicalModules = participatingModules.toSortedSet()
+            val canonicalInputs = inputPhotonIds.toSortedSet(compareBy { it.value })
+            val canonicalStaged = stagedPhotons.sortedWith(
+                compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value }.thenBy { it.revision }
+            )
+            val canonicalMetadata = metadata.toSortedMap()
+            return OwnerAssetReviewCandidate(
+                id = createId(
+                    subjectType = subjectType,
+                    subjectId = subjectId,
+                    revisionKey = revisionKey,
+                    kind = kind,
+                    title = title,
+                    targetMimeType = targetMimeType,
+                    createdAt = createdAt,
+                    participatingModules = canonicalModules,
+                    inputPhotonIds = canonicalInputs,
+                    materializedAsset = materializedAsset,
+                    stagedPhotons = canonicalStaged,
+                    previewText = previewText,
+                    metadata = canonicalMetadata,
+                ),
+                subjectType = subjectType,
+                subjectId = subjectId,
+                revisionKey = revisionKey,
+                kind = kind,
+                title = title,
+                targetMimeType = targetMimeType,
+                createdAt = createdAt,
+                participatingModules = canonicalModules,
+                inputPhotonIds = canonicalInputs,
+                materializedAsset = materializedAsset,
+                stagedPhotons = canonicalStaged,
+                previewText = previewText,
+                metadata = canonicalMetadata,
+            )
+        }
 
         private fun createId(
             subjectType: OwnerAssetReviewSubjectType,
             subjectId: String,
             revisionKey: String,
             kind: ArtifactKind,
+            title: String,
             targetMimeType: String,
+            createdAt: Instant,
+            participatingModules: Set<String>,
+            inputPhotonIds: Set<PhotonId>,
             materializedAsset: AssetRef?,
             stagedPhotons: List<Photon>,
             previewText: String?,
@@ -150,7 +172,11 @@ data class OwnerAssetReviewCandidate(
                 subjectId,
                 revisionKey,
                 kind.name,
+                title,
                 targetMimeType,
+                createdAt.toString(),
+                *participatingModules.sorted().toTypedArray(),
+                *inputPhotonIds.map { it.value }.sorted().toTypedArray(),
                 materializedAsset?.id?.value.orEmpty(),
                 materializedAsset?.mediaType.orEmpty(),
                 materializedAsset?.sha256.orEmpty(),
