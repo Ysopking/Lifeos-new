@@ -133,6 +133,7 @@ internal data class PrivateGeneratedToolRuntimeResources(
             AutonomousToolWorkshopRuntimeRegistry.install(autonomousRuntime)
             ToolWorkshopBootRuntimeRegistry.install {
                 autonomousRuntime.reconcileOpenJobs()
+                OwnerAssetReviewRuntimeRegistry.currentOrNull()?.reconcileApproved()
                 Unit
             }
 
