@@ -14,10 +14,9 @@ on:
       - "gradle.properties"
       - ".github/scripts/ci-core-fast.sh"
       - ".github/scripts/ci-gold-coverage-contract.sh"
+      - ".github/scripts/ci-action-pin-contract.sh"
       - ".github/scripts/android-emulator-recovery.sh"
-      - ".github/workflows/core-fast.yml"
-      - ".github/workflows/android-emulator-recovery.yml"
-      - ".github/workflows/product-gold.yml"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
@@ -32,12 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
         with:
           gradle-version: "9.3.1"
       - name: Core fast gate
