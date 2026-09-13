@@ -85,6 +85,13 @@ run_test \
   'app.lifeos.next.GoalPlanRecoveryDeviceTest#recoverGoalPlanAfterColdStart' \
   "$report_dir/recovered-goal-plan.txt"
 
+# B01 persistent universal-field hardening. Exercise the real AndroidKeyStore + AtomicFile repository
+# against both explicit rollback and an interrupted write recovered by a fresh repository instance.
+run_suite \
+  'app.lifeos.next.FieldSnapshotAtomicRecoveryDeviceTest' \
+  '2' \
+  "$report_dir/field-snapshot-atomic-recovery.txt"
+
 # V17 IMAGE artifact closure. Run after established cold-restart assertions so the new generated
 # Photons cannot perturb their seed/recovery baseline, but before the owner-policy test deliberately
 # revokes asset-write authority.

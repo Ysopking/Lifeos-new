@@ -24,6 +24,7 @@ required_device_tests=(
   "app/src/androidTest/java/app/lifeos/next/ConvergenceDecisionDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/DeepSearchEncryptedRepositoryCorruptionDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/OfflineImageArtifactDeviceTest.kt"
+  "app/src/androidTest/java/app/lifeos/next/FieldSnapshotAtomicRecoveryDeviceTest.kt"
 )
 
 for path in "${required_jvm_tests[@]}" "${required_device_tests[@]}"; do
@@ -42,7 +43,8 @@ for suite in \
   'OutcomeLearningDeviceTest' \
   'ConvergenceDecisionDeviceTest' \
   'DeepSearchEncryptedRepositoryCorruptionDeviceTest' \
-  'OfflineImageArtifactDeviceTest'; do
+  'OfflineImageArtifactDeviceTest' \
+  'FieldSnapshotAtomicRecoveryDeviceTest'; do
   grep -Fq "$suite" "$emulator_gate" || { echo "missing-emulator-gold-suite:$suite" >&2; exit 1; }
 done
 
@@ -69,6 +71,10 @@ grep -Fq 'SOURCE_HEAD_SHA:' "$product_gold_workflow" || {
 }
 grep -Fq 'offline_image_artifact_e2e=PASS' "$product_gold_workflow" || {
   echo "product-gold-image-e2e-not-sealed" >&2
+  exit 1
+}
+grep -Fq 'field_snapshot_atomic_recovery=PASS' "$product_gold_workflow" || {
+  echo "product-gold-field-snapshot-recovery-not-sealed" >&2
   exit 1
 }
 
