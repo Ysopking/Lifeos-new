@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout isolated candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -45,13 +45,13 @@ jobs:
           test -s buildstudio-host-evidence/changed-paths.txt
 
       - name: Set up Java 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Gradle 9.3.1
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
         with:
           gradle-version: '9.3.1'
 
@@ -81,7 +81,7 @@ jobs:
           } > buildstudio-host-evidence/manifest.txt
 
       - name: Upload candidate APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: LIFEOS-BUILDSTUDIO-candidate-apk
           path: app/build/outputs/apk/debug/app-debug.apk
@@ -89,7 +89,7 @@ jobs:
           retention-days: 30
 
       - name: Upload BuildStudio host evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: LIFEOS-BUILDSTUDIO-host-evidence
           path: buildstudio-host-evidence/

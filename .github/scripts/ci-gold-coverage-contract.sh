@@ -31,6 +31,14 @@ for path in "${required_jvm_tests[@]}" "${required_device_tests[@]}"; do
   test -s "$path" || { echo "missing-gold-test:$path" >&2; exit 1; }
 done
 
+action_pin_contract=".github/scripts/ci-action-pin-contract.sh"
+test -s "$action_pin_contract" || { echo "missing-action-pin-contract" >&2; exit 1; }
+grep -Fq 'ci-action-pin-contract.sh' .github/scripts/ci-core-fast.sh || {
+  echo "core-fast-action-pin-contract-not-enforced" >&2
+  exit 1
+}
+bash "$action_pin_contract"
+
 android_gate=".github/scripts/ci-android-debug.sh"
 for command in 'test' ':app:lintDebug' ':app:assembleDebug'; do
   grep -Fq "$command" "$android_gate" || { echo "missing-android-gate-command:$command" >&2; exit 1; }
@@ -54,6 +62,10 @@ if grep -Fq 'branches-ignore: [main]' "$core_fast_workflow"; then
   echo "core-fast-main-push-disabled" >&2
   exit 1
 fi
+grep -Fq '".github/workflows/**"' "$core_fast_workflow" || {
+  echo "core-fast-workflow-change-coverage-missing" >&2
+  exit 1
+}
 
 recovery_workflow=".github/workflows/android-emulator-recovery.yml"
 grep -Fq 'push:' "$recovery_workflow" || { echo "emulator-recovery-missing-push-trigger" >&2; exit 1; }
