@@ -124,7 +124,9 @@ class OfflineImageArtifactDeviceTest {
             revision.inputPhotonIds.all { it in generationPhoton.provenance.parentIds },
         )
         assertTrue(
-            generationPhoton.content.contains("\"promptFingerprint\":\"${sha256(prompt.toByteArray())}\""),
+            generationPhoton.content.contains(
+                "\"promptFingerprint\":\"${sha256(prompt.toByteArray(Charsets.UTF_8))}\""
+            ),
         )
         assertTrue(
             generationPhoton.content.contains("\"model\":\"${generated.rendererId}\""),
