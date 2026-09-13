@@ -39,6 +39,32 @@ class DecisionTraceLedgerTest {
     }
 
     @Test
+    fun `snapshots return latest verified revision for every trace in stable order`() = runTest {
+        val repository = MemoryRepository()
+        val ledger = DecisionTraceLedger(repository)
+        val firstId = DecisionTraceId.create("goal", "goal-a")
+        val secondId = DecisionTraceId.create("self-healing-incident", "incident-b")
+        val firstFact = node(DecisionTraceNodeType.OBSERVED_FACT, "goal", "goal-a", 1)
+        val firstOutcome = node(DecisionTraceNodeType.EXECUTION_OUTCOME, "outcome", "goal-a-outcome", 1)
+        val secondFact = node(DecisionTraceNodeType.OBSERVED_FACT, "health-node", "node-b", 1)
+
+        ledger.append(firstId, listOf(firstFact), emptyList())
+        ledger.append(secondId, listOf(secondFact), emptyList())
+        ledger.append(
+            firstId,
+            listOf(firstOutcome),
+            listOf(DecisionTraceLink(firstFact.id, firstOutcome.id, DecisionTraceLinkType.PRODUCED)),
+        )
+
+        val snapshots = ledger.snapshots()
+        assertEquals(2, snapshots.size)
+        assertEquals(snapshots.sortedBy { it.id.value }, snapshots)
+        assertEquals(2L, snapshots.single { it.id == firstId }.revision)
+        assertEquals(1L, snapshots.single { it.id == secondId }.revision)
+        assertTrue(snapshots.single { it.id == firstId }.nodes.contains(firstOutcome))
+    }
+
+    @Test
     fun `same node id cannot silently replace different metadata`() = runTest {
         val repository = MemoryRepository()
         val ledger = DecisionTraceLedger(repository)
@@ -92,8 +118,12 @@ class DecisionTraceLedgerTest {
     @Test
     fun `corrupt storage fails closed without mutation`() = runTest {
         val repository = MemoryRepository(unreadable = true)
+        val ledger = DecisionTraceLedger(repository)
         assertFailsWith<IllegalStateException> {
-            DecisionTraceLedger(repository).snapshot(DecisionTraceId.create("goal", "goal-corrupt"))
+            ledger.snapshot(DecisionTraceId.create("goal", "goal-corrupt"))
+        }
+        assertFailsWith<IllegalStateException> {
+            ledger.snapshots()
         }
         assertEquals(0, repository.saveCalls)
     }

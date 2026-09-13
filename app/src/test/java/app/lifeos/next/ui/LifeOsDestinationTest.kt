@@ -14,6 +14,7 @@ class LifeOsDestinationTest {
                 LifeOsDestination.MEMORY,
                 LifeOsDestination.ASSETS,
                 LifeOsDestination.GOALS,
+                LifeOsDestination.WHY,
                 LifeOsDestination.SYSTEM,
             ),
             LifeOsDestination.ordered,
@@ -35,5 +36,6 @@ class LifeOsDestinationTest {
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("unknown"))
         assertSame(LifeOsDestination.MEMORY, LifeOsDestination.fromKey("memory"))
         assertSame(LifeOsDestination.ASSETS, LifeOsDestination.fromKey("assets"))
+        assertSame(LifeOsDestination.WHY, LifeOsDestination.fromKey("why"))
     }
 }
