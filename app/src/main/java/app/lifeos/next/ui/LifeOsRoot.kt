@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.ui.chat.LifeOsChatScreen
+import app.lifeos.next.ui.system.SystemRuntimeHealthScreen
 
 @Composable
 fun LifeOsRoot(model: LifeOsChatViewModel) {
@@ -41,7 +42,7 @@ fun LifeOsRoot(model: LifeOsChatViewModel) {
                 LifeOsDestination.CHAT -> LifeOsChatScreen(model, contentModifier)
                 LifeOsDestination.MEMORY -> MemoryMigrationScreen(contentModifier)
                 LifeOsDestination.GOALS -> GoalsMigrationScreen(contentModifier)
-                LifeOsDestination.SYSTEM -> SystemMigrationScreen(contentModifier)
+                LifeOsDestination.SYSTEM -> SystemRuntimeHealthScreen(model, contentModifier)
             }
         }
     }
