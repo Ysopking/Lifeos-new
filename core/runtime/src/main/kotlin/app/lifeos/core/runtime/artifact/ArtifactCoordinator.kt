@@ -146,7 +146,18 @@ class ArtifactCoordinator(
                 ) {
                     "Artifact ${request.id.value} revision ${lifecycle.revision.revision} conflicts with persisted state"
                 }
-                canonicalizePersistedAssetLocator(existing, lifecycle)
+                val canonicalLifecycle = canonicalizePersistedAssetLocator(existing, lifecycle)
+                val expected = createPhoton(
+                    photonId = photonId,
+                    request = request,
+                    contributions = canonicalContributions,
+                    finalizedAt = existing.provenance.createdAt,
+                    lifecycle = canonicalLifecycle,
+                )
+                require(existing == expected) {
+                    "Artifact ${request.id.value} revision ${lifecycle.revision.revision} persisted state drift detected"
+                }
+                canonicalLifecycle
             }
             photon = existing
             effectiveFinalizedAt = existing.provenance.createdAt
