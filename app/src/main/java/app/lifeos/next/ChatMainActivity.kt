@@ -12,6 +12,7 @@ class ChatMainActivity : ComponentActivity() {
     private lateinit var model: LifeOsChatViewModel
     private lateinit var memoryModel: LifeOsMemoryViewModel
     private lateinit var assetReviewModel: OwnerAssetReviewViewModel
+    private lateinit var goalsModel: LifeOsGoalsViewModel
 
     private val initialDataPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -33,11 +34,13 @@ class ChatMainActivity : ComponentActivity() {
         model = ViewModelProvider(this)[LifeOsChatViewModel::class.java]
         memoryModel = ViewModelProvider(this)[LifeOsMemoryViewModel::class.java]
         assetReviewModel = ViewModelProvider(this)[OwnerAssetReviewViewModel::class.java]
+        goalsModel = ViewModelProvider(this)[LifeOsGoalsViewModel::class.java]
         setContent {
             LifeOsRoot(
                 model = model,
                 memoryModel = memoryModel,
                 assetReviewModel = assetReviewModel,
+                goalsModel = goalsModel,
                 onRequestMicrophonePermission = {
                     microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
                 },
