@@ -53,12 +53,6 @@ run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#seedProductGoldChatRoundTrip' \
   "$report_dir/seed-product-gold-chat.txt"
 
-# V17 IMAGE artifact closure: execute the real prompt -> renderer -> encrypted PNG vault -> reload
-# -> Android decode -> immutable IMAGE ArtifactRevision -> DERIVED generation-Photon contract.
-run_test \
-  'app.lifeos.next.OfflineImageArtifactDeviceTest#promptRendersPngReloadsAndEntersArtifactLifecycle' \
-  "$report_dir/offline-image-artifact-e2e.txt"
-
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
@@ -90,6 +84,13 @@ run_test \
 run_test \
   'app.lifeos.next.GoalPlanRecoveryDeviceTest#recoverGoalPlanAfterColdStart' \
   "$report_dir/recovered-goal-plan.txt"
+
+# V17 IMAGE artifact closure. Run after established cold-restart assertions so the new generated
+# Photons cannot perturb their seed/recovery baseline, but before the owner-policy test deliberately
+# revokes asset-write authority.
+run_test \
+  'app.lifeos.next.OfflineImageArtifactDeviceTest#promptRendersPngReloadsAndEntersArtifactLifecycle' \
+  "$report_dir/offline-image-artifact-e2e.txt"
 
 run_test \
   'app.lifeos.next.OwnerPolicyAssetWriteDeviceTest#assetWriteIsAllowedThenFailsClosedAfterRevokeAcrossFreshStore' \
