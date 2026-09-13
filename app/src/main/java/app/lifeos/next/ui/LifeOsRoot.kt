@@ -18,7 +18,10 @@ import app.lifeos.next.ui.chat.LifeOsChatScreen
 import app.lifeos.next.ui.system.SystemRuntimeHealthScreen
 
 @Composable
-fun LifeOsRoot(model: LifeOsChatViewModel) {
+fun LifeOsRoot(
+    model: LifeOsChatViewModel,
+    onRequestMicrophonePermission: () -> Unit = {},
+) {
     var selectedKey by rememberSaveable {
         mutableStateOf(LifeOsDestination.default.key)
     }
@@ -39,7 +42,11 @@ fun LifeOsRoot(model: LifeOsChatViewModel) {
         ) { innerPadding ->
             val contentModifier = Modifier.padding(innerPadding)
             when (selected) {
-                LifeOsDestination.CHAT -> LifeOsChatScreen(model, contentModifier)
+                LifeOsDestination.CHAT -> LifeOsChatScreen(
+                    model = model,
+                    modifier = contentModifier,
+                    onRequestMicrophonePermission = onRequestMicrophonePermission,
+                )
                 LifeOsDestination.MEMORY -> MemoryMigrationScreen(contentModifier)
                 LifeOsDestination.GOALS -> GoalsMigrationScreen(contentModifier)
                 LifeOsDestination.SYSTEM -> SystemRuntimeHealthScreen(model, contentModifier)
