@@ -42,11 +42,15 @@ data class CollaborativeArtifact(
     val contributions: List<ArtifactContribution>,
     val photon: Photon,
     val finalizedAt: Instant,
+    val lifecycle: ArtifactLifecycle = ArtifactLifecycle(),
 ) {
     init {
         require(contributions.isNotEmpty()) { "Collaborative artifact requires contributions" }
         require(finalizedAt >= request.requestedAt) {
             "Artifact finalization cannot predate its request"
+        }
+        require(photon.revision == lifecycle.revision.revision) {
+            "Artifact Photon revision must match lifecycle revision"
         }
     }
 }
