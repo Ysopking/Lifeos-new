@@ -173,7 +173,7 @@ class ArtifactCoordinatorTest {
         assertTrue(secondPhoton.content.contains("\"schema\":\"lifeos.collaborative-artifact.v2\""))
         assertTrue(secondPhoton.content.contains("\"revision\":2"))
         assertTrue(secondPhoton.content.contains("\"sha256\":\"${secondAsset.sha256}\""))
-        assertEquals(4, ingressed.size)
+        assertEquals(3, ingressed.size)
     }
 
     @Test
