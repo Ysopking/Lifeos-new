@@ -57,6 +57,7 @@ class CanonicalPhotonIngress(
 
     init {
         ownerAssetReview?.let { reviews ->
+            OwnerAssetReviewRuntimeRegistry.install(reviews)
             ImageArtifactLifecycleRuntimeRegistry.install(
                 photons = kernel.photonStore,
                 reviews = reviews,
