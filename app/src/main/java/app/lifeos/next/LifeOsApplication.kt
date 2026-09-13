@@ -1,6 +1,7 @@
 package app.lifeos.next
 
 import android.app.Application
+import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
@@ -44,7 +45,6 @@ import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
-import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
@@ -166,7 +166,8 @@ class LifeOsApplication : Application() {
                 },
                 createKernel = {
                     kernel = LifeOsKernelFactory(this).create()
-                    photonIngress = CanonicalPhotonIngress(kernel)
+                    val ownerAssetReviews = EncryptedOwnerAssetReviewRepository(this)
+                    photonIngress = CanonicalPhotonIngress(kernel, ownerAssetReviews)
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
                         productiveIngress = photonIngress::ingest,
@@ -321,7 +322,15 @@ class LifeOsApplication : Application() {
                         )
                     )
                 },
-                startKernel = { kernel.start() },
+                startKernel = {
+                    runBlocking {
+                        requireNotNull(photonIngress.ownerAssetReview) {
+                            "Owner asset review runtime must be installed before kernel start"
+                        }.reconcileApproved()
+                    }
+                    kernel.start()
+                    Unit
+                },
                 stageObserver = LifeOsRuntimeWiring::onStageReady,
             )
         )
