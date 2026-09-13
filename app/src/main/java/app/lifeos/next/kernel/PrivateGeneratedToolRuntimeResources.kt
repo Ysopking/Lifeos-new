@@ -56,6 +56,11 @@ internal data class PrivateGeneratedToolRuntimeResources(
         ): PrivateGeneratedToolRuntimeResources {
             val appContext = context.applicationContext
             val artifacts = EncryptedGeneratedToolArtifactRepository(appContext)
+            GeneratedToolOwnerReviewRuntime.configure(
+                artifactRepository = artifacts,
+                toolRegistry = tools,
+                lifecycleCoordinator = lifecycle,
+            )
             val catalog = PrivateToolBuildCatalog()
             val specificationBuilder = PrivateToolSpecificationBuilder()
             val designer = PrivateToolDesigner()
