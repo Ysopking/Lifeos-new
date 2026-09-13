@@ -63,22 +63,11 @@ internal object GeneratedToolOwnerReviewRuntime : GeneratedToolOwnerReviewGate {
             title = "Generated tool ${artifact.toolId}",
             targetMimeType = GENERATED_TOOL_MIME,
             createdAt = artifact.createdAt,
-            participatingModules = setOf(
-                "tool-workshop",
-                "generated-tool-security",
-                "generated-tool-verifier",
-            ),
+            participatingModules = REVIEW_MODULES,
             inputPhotonIds = emptySet(),
             stagedPhotons = emptyList(),
             previewText = artifact.canonicalProgram,
-            metadata = mapOf(
-                "artifactId" to artifact.id,
-                "sourceHash" to artifact.sourceHash,
-                "buildHash" to artifact.buildHash,
-                "capabilityId" to record.manifest.sourceCapability.value,
-                "verificationConfidence" to record.verificationConfidence.toString(),
-                "permissions" to record.manifest.permissions.sortedBy { it.name }.joinToString(",") { it.name },
-            ),
+            metadata = reviewMetadata(record, artifact.id, artifact.sourceHash, artifact.buildHash),
         )
         review.stage(candidate)
         return candidate.id
@@ -94,6 +83,19 @@ internal object GeneratedToolOwnerReviewRuntime : GeneratedToolOwnerReviewGate {
         require(candidate.kind == ArtifactKind.CODE) {
             "Generated-tool owner review candidate must be CODE"
         }
+        require(candidate.targetMimeType == GENERATED_TOOL_MIME) {
+            "Generated-tool owner review MIME changed after staging"
+        }
+        require(candidate.participatingModules == REVIEW_MODULES) {
+            "Generated-tool owner review module set changed after staging"
+        }
+        require(candidate.inputPhotonIds.isEmpty() && candidate.stagedPhotons.isEmpty()) {
+            "Generated-tool review must not smuggle Photon publication authority"
+        }
+        require(candidate.materializedAsset == null) {
+            "Generated-tool review must bind the encrypted tool artifact, not a binary asset"
+        }
+
         val artifactRepository = requireNotNull(artifacts) {
             "Generated-tool artifact repository is unavailable"
         }
@@ -106,15 +108,15 @@ internal object GeneratedToolOwnerReviewRuntime : GeneratedToolOwnerReviewGate {
         val artifact = requireNotNull(artifactRepository.load(candidate.subjectId)) {
             "Approved generated-tool artifact is missing"
         }
+        require(candidate.subjectId == artifact.toolId) {
+            "Owner review targets another generated-tool id"
+        }
         require(candidate.revisionKey == artifact.id) {
             "Owner review targets a stale generated-tool revision"
         }
         require(candidate.previewText == artifact.canonicalProgram) {
             "Owner review source does not match encrypted generated-tool artifact"
         }
-        require(candidate.metadata["artifactId"] == artifact.id)
-        require(candidate.metadata["sourceHash"] == artifact.sourceHash)
-        require(candidate.metadata["buildHash"] == artifact.buildHash)
 
         val record = requireNotNull(toolRegistry.get(artifact.toolId)) {
             "Approved generated tool is absent from lifecycle registry"
@@ -122,7 +124,16 @@ internal object GeneratedToolOwnerReviewRuntime : GeneratedToolOwnerReviewGate {
         require(artifact.matches(record)) {
             "Approved generated-tool artifact no longer matches lifecycle state"
         }
-        require(candidate.metadata["capabilityId"] == record.manifest.sourceCapability.value)
+        require(
+            candidate.metadata == reviewMetadata(
+                record = record,
+                artifactId = artifact.id,
+                sourceHash = artifact.sourceHash,
+                buildHash = artifact.buildHash,
+            )
+        ) {
+            "Generated-tool owner review metadata no longer matches VERIFIED evidence"
+        }
 
         when (record.state) {
             GeneratedToolState.VERIFIED -> when (
@@ -146,5 +157,26 @@ internal object GeneratedToolOwnerReviewRuntime : GeneratedToolOwnerReviewGate {
         }
     }
 
+    private fun reviewMetadata(
+        record: GeneratedToolRecord,
+        artifactId: String,
+        sourceHash: String,
+        buildHash: String,
+    ): Map<String, String> = mapOf(
+        "artifactId" to artifactId,
+        "sourceHash" to sourceHash,
+        "buildHash" to buildHash,
+        "capabilityId" to record.manifest.sourceCapability.value,
+        "verificationConfidence" to record.verificationConfidence.toString(),
+        "permissions" to record.manifest.permissions
+            .sortedBy { it.name }
+            .joinToString(",") { it.name },
+    )
+
     private const val GENERATED_TOOL_MIME = "application/vnd.lifeos.generated-tool+text"
+    private val REVIEW_MODULES = setOf(
+        "tool-workshop",
+        "generated-tool-security",
+        "generated-tool-verifier",
+    )
 }
