@@ -10,6 +10,7 @@ import app.lifeos.next.ui.LifeOsRoot
 
 class ChatMainActivity : ComponentActivity() {
     private lateinit var model: LifeOsChatViewModel
+    private lateinit var memoryModel: LifeOsMemoryViewModel
 
     private val initialDataPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -29,9 +30,11 @@ class ChatMainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val owner = application as LifeOsApplication
         model = ViewModelProvider(this)[LifeOsChatViewModel::class.java]
+        memoryModel = ViewModelProvider(this)[LifeOsMemoryViewModel::class.java]
         setContent {
             LifeOsRoot(
                 model = model,
+                memoryModel = memoryModel,
                 onRequestMicrophonePermission = {
                     microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
                 },

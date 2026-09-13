@@ -85,6 +85,12 @@ run_test \
   'app.lifeos.next.GoalPlanRecoveryDeviceTest#recoverGoalPlanAfterColdStart' \
   "$report_dir/recovered-goal-plan.txt"
 
+# F5 Memory workspace. Read the productive DurableLifeMemoryRuntime snapshot and prove that the UI
+# projection neither rebuilds the memory runtime nor writes Photon state.
+run_test \
+  'app.lifeos.next.MemoryWorkspaceDeviceTest#productiveSnapshotProjectsWithoutMemoryMutation' \
+  "$report_dir/memory-workspace-read-only.txt"
+
 # B01 persistent universal-field hardening. Exercise the real AndroidKeyStore + AtomicFile repository
 # against both explicit rollback and an interrupted write recovered by a fresh repository instance.
 run_suite \
