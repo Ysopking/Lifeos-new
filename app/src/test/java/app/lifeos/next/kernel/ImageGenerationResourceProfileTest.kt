@@ -58,12 +58,12 @@ class ImageGenerationResourceProfileTest {
         assertEquals(2L, permit.reservation.reserved.candidates)
 
         val account = requireNotNull(budgetRepository.accounts[permit.accountId])
-        assertEquals(30_000L, account.hardQuota.elapsedMillis)
-        assertEquals(256L, account.hardQuota.workUnits)
-        assertEquals(512L * MIB, account.hardQuota.memoryBytes)
-        assertEquals(160L * MIB, account.hardQuota.ioBytes)
-        assertEquals(0L, account.hardQuota.networkBytes)
-        assertEquals(8L, account.hardQuota.candidates)
+        assertEquals(30_000L, account.quota.elapsedMillis)
+        assertEquals(256L, account.quota.workUnits)
+        assertEquals(512L * MIB, account.quota.memoryBytes)
+        assertEquals(160L * MIB, account.quota.ioBytes)
+        assertEquals(0L, account.quota.networkBytes)
+        assertEquals(8L, account.quota.candidates)
     }
 
     private fun context(goalPhotonId: String): GoalActionContext {
