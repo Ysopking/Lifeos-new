@@ -92,8 +92,7 @@ private fun GoalWorkHint(label: String, value: String) {
 internal fun displayStepTitle(step: GoalStepUiModel): String = when (step.presentationKind) {
     GoalStepPresentationKind.INTERNAL_VERIFICATION -> "Ergebnis prüfen"
     GoalStepPresentationKind.OWNER_ACTION,
-    GoalStepPresentationKind.OTHER,
-    -> step.objective
+    GoalStepPresentationKind.OTHER -> step.objective
 }
 
 internal fun goalPlanStatusLabel(status: GoalPlanUiStatus): String = when (status) {
