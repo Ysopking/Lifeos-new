@@ -8,14 +8,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.core.runtime.chat.ChatEvent
 import app.lifeos.core.runtime.chat.ChatRole
 import app.lifeos.next.LifeOsChatViewModel
-import app.lifeos.next.LifeOsReadinessCard
-import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.ui.components.LifeOsRuntimeStatus
+import app.lifeos.next.ui.components.buildRuntimeHealthUiModel
+import app.lifeos.next.ui.system.RuntimeHealthModalSheet
 
 @Composable
 fun LifeOsChatScreen(
@@ -23,6 +27,13 @@ fun LifeOsChatScreen(
     modifier: Modifier = Modifier,
 ) {
     val state by model.state.collectAsStateWithLifecycle()
+    var showRuntimeHealth by rememberSaveable { mutableStateOf(false) }
+    val runtimeHealth = buildRuntimeHealthUiModel(
+        bootStatus = state.bootStatus,
+        readiness = state.readiness,
+        topologyEvidence = state.runtimeTopology,
+    )
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -31,17 +42,10 @@ fun LifeOsChatScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("LIFEOS", style = MaterialTheme.typography.headlineMedium)
-        Text(statusText(state.bootStatus), style = MaterialTheme.typography.labelMedium)
-        if (state.registeredSubsystems > 0) {
-            Text(
-                "${state.registeredSubsystems} Subsysteme · ${state.capabilityProviders} Provider · " +
-                    "${state.unavailableSubsystems} nicht verfügbar · ${state.generatedProviders} generiert",
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
-        state.readiness?.let { readiness ->
-            LifeOsReadinessCard(readiness)
-        }
+        LifeOsRuntimeStatus(
+            model = runtimeHealth,
+            onOpenDetails = { showRuntimeHealth = true },
+        )
         LazyColumn(
             Modifier
                 .weight(1f)
@@ -58,6 +62,15 @@ fun LifeOsChatScreen(
             processing = state.turnProcessing,
             onDraftChange = model::editDraft,
             onSend = model::sendMessage,
+        )
+    }
+
+    if (showRuntimeHealth) {
+        RuntimeHealthModalSheet(
+            health = runtimeHealth,
+            readiness = state.readiness,
+            topology = state.runtimeTopology,
+            onDismiss = { showRuntimeHealth = false },
         )
     }
 }
@@ -82,12 +95,4 @@ private fun ChatMessage(event: ChatEvent) {
             }
         }
     }
-}
-
-private fun statusText(status: KernelBootstrapStatus): String = when (status) {
-    KernelBootstrapStatus.CREATED -> "Start"
-    KernelBootstrapStatus.LOADING -> "Gedächtnis wird geladen"
-    KernelBootstrapStatus.READY -> "Bereit"
-    KernelBootstrapStatus.DEGRADED -> "Eingeschränkt"
-    KernelBootstrapStatus.FAILED -> "Fehler"
 }
