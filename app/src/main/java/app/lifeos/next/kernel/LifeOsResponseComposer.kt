@@ -20,8 +20,13 @@ object LifeOsResponseComposer {
             null -> Unit
         }
         when (val transformed = result.localImageTransform) {
-            is LocalImageTransformExecutionResult.Transformed ->
-                return "Ich habe das Bild lokal verarbeitet und das Ergebnis wieder als LIFEOS-Photon gespeichert."
+            is LocalImageTransformExecutionResult.Transformed -> {
+                return if (transformed.ownerReviewCandidateId != null) {
+                    "Ich habe das Bild lokal verarbeitet. Das Ergebnis wartet jetzt in Assets auf deine Freigabe und wird erst danach als LIFEOS-Photon veröffentlicht."
+                } else {
+                    "Ich habe das Bild lokal verarbeitet und das Ergebnis wieder als LIFEOS-Photon gespeichert."
+                }
+            }
             is LocalImageTransformExecutionResult.Blocked ->
                 return "Ich konnte die Bildverarbeitung nicht ausführen: ${transformed.reason}"
             is LocalImageTransformExecutionResult.Failed ->
