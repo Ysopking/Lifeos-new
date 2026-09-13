@@ -53,6 +53,12 @@ run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#seedProductGoldChatRoundTrip' \
   "$report_dir/seed-product-gold-chat.txt"
 
+# V17 IMAGE artifact closure: execute the real prompt -> renderer -> encrypted PNG vault -> reload
+# -> Android decode -> immutable IMAGE ArtifactRevision -> DERIVED generation-Photon contract.
+run_test \
+  'app.lifeos.next.OfflineImageArtifactDeviceTest#promptRendersPngReloadsAndEntersArtifactLifecycle' \
+  "$report_dir/offline-image-artifact-e2e.txt"
+
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
