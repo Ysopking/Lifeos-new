@@ -58,7 +58,7 @@ fun LifeOsMemoryScreen(
                 )
             }
         }
-        if (state.loading && state.workspace.now.isEmpty()) {
+        if (state.loading && !state.workspace.projectionAvailable && state.workspace.now.isEmpty()) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 CircularProgressIndicator()
             }
