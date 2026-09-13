@@ -15,6 +15,7 @@ import app.lifeos.core.runtime.life.LifeOsSelfValidation
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.LifeOsResponseComposer
+import app.lifeos.next.ui.chat.ChatTurnProcessingState
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +27,7 @@ import kotlinx.coroutines.launch
 data class LifeOsChatUiState(
     val events: List<ChatEvent> = emptyList(),
     val draft: String = "",
-    val sending: Boolean = false,
+    val turnProcessing: ChatTurnProcessingState = ChatTurnProcessingState.idle(),
     val bootStatus: KernelBootstrapStatus = KernelBootstrapStatus.CREATED,
     val registeredSubsystems: Int = 0,
     val unavailableSubsystems: Int = 0,
@@ -48,13 +49,20 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun editDraft(text: String) {
-        if (!mutableState.value.sending) {
-            mutableState.update { it.copy(draft = text) }
-        }
+        mutableState.update { it.copy(draft = text) }
     }
 
     fun dismissError() {
-        mutableState.update { it.copy(error = null) }
+        mutableState.update { current ->
+            current.copy(
+                error = null,
+                turnProcessing = if (current.turnProcessing.failureMessage != null) {
+                    ChatTurnProcessingState.idle()
+                } else {
+                    current.turnProcessing
+                },
+            )
+        }
     }
 
     fun sendMessage() {
@@ -62,7 +70,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
         val text = current.draft.trim()
         if (
             text.isBlank() ||
-            current.sending ||
+            current.turnProcessing.inFlight ||
             (current.bootStatus != KernelBootstrapStatus.READY &&
                 current.bootStatus != KernelBootstrapStatus.DEGRADED)
         ) return
@@ -82,14 +90,22 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
         mutableState.update {
             it.copy(
                 draft = "",
-                sending = true,
+                turnProcessing = ChatTurnProcessingState.submitting(turnId),
                 error = null,
             )
         }
 
         viewModelScope.launch {
+            var userTurnPersisted = false
             try {
                 val result = kernel.persistUserUtterance(userPhoton)
+                userTurnPersisted = true
+                mutableState.update {
+                    it.copy(
+                        turnProcessing = ChatTurnProcessingState.persistingResponse(turnId),
+                    )
+                }
+
                 val response = LifeOsResponseComposer.compose(result)
                 val assistantPhoton = Photon(
                     content = response,
@@ -107,22 +123,35 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                     tags = setOf("chat", "chat:assistant", conversationTag, turnTag),
                 )
                 val stored = kernel.persistAndIngest(assistantPhoton)
-                if (!stored.processingQueued) {
-                    mutableState.update {
-                        it.copy(
-                            error = stored.processingFailure
-                                ?: "Die LIFEOS-Antwort wurde gespeichert, aber nicht vollständig zur Cognition eingereiht.",
-                        )
-                    }
+                mutableState.update { state ->
+                    state.copy(
+                        turnProcessing = ChatTurnProcessingState.idle(),
+                        error = if (stored.processingQueued) {
+                            state.error
+                        } else {
+                            stored.processingFailure
+                                ?: "Die LIFEOS-Antwort wurde gespeichert, aber nicht vollständig zur Cognition eingereiht."
+                        },
+                    )
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                val failure = error.message ?: error::class.simpleName ?: "Chat-Verarbeitung fehlgeschlagen"
                 mutableState.update {
-                    it.copy(error = error.message ?: error::class.simpleName ?: "Chat-Verarbeitung fehlgeschlagen")
+                    it.copy(
+                        turnProcessing = ChatTurnProcessingState.failed(
+                            turnId = turnId,
+                            userTurnPersisted = userTurnPersisted,
+                            message = failure,
+                        ),
+                        error = if (userTurnPersisted) {
+                            "Deine Nachricht ist gespeichert, aber die LIFEOS-Antwort konnte nicht abgeschlossen werden: $failure"
+                        } else {
+                            "Die Nachricht konnte nicht gespeichert werden: $failure"
+                        },
+                    )
                 }
-            } finally {
-                mutableState.update { it.copy(sending = false) }
             }
         }
     }
