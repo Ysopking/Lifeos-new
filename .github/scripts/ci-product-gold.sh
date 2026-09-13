@@ -34,8 +34,25 @@ grep -q 'ChatMainActivity' app/src/main/AndroidManifest.xml
 
 step "Product Gold 07: immutable candidate evidence"
 test -s "$apk_path"
+checkout_sha="$(git rev-parse HEAD)"
+candidate_sha="${CANDIDATE_SHA:-$checkout_sha}"
+source_head_sha="${SOURCE_HEAD_SHA:-$candidate_sha}"
+if [[ ! "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "candidate-sha-invalid:$candidate_sha" >&2
+  exit 1
+fi
+if [[ ! "$source_head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "source-head-sha-invalid:$source_head_sha" >&2
+  exit 1
+fi
+if [[ "$candidate_sha" != "$checkout_sha" ]]; then
+  echo "candidate-sha-checkout-mismatch:candidate=$candidate_sha checkout=$checkout_sha" >&2
+  exit 1
+fi
 sha256sum "$apk_path" | tee "$evidence_dir/app-debug.sha256"
-printf 'candidate_sha=%s\n' "${CANDIDATE_SHA:-$(git rev-parse HEAD)}" | tee "$evidence_dir/candidate.txt"
+printf 'candidate_sha=%s\n' "$candidate_sha" | tee "$evidence_dir/candidate.txt"
+printf 'source_head_sha=%s\n' "$source_head_sha" | tee -a "$evidence_dir/candidate.txt"
+printf 'checkout_sha=%s\n' "$checkout_sha" | tee -a "$evidence_dir/candidate.txt"
 printf 'workflow_run_id=%s\n' "${GOLD_RUN_ID:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'workflow_job=%s\n' "${GOLD_JOB:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'product_gold_requires_emulator=true\n' | tee -a "$evidence_dir/candidate.txt"
