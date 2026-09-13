@@ -5,6 +5,8 @@ import app.lifeos.core.runtime.PhotonIngressMarkerStore
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.artifact.ArtifactCoordinator
 import app.lifeos.core.runtime.artifact.ArtifactGenerationCoordinator
+import app.lifeos.core.runtime.artifact.OwnerAssetReviewCoordinator
+import app.lifeos.core.runtime.artifact.OwnerAssetReviewRepository
 
 /**
  * Single productive Android ingress for Photons that must become immediately visible to the live
@@ -19,6 +21,7 @@ import app.lifeos.core.runtime.artifact.ArtifactGenerationCoordinator
  */
 class CanonicalPhotonIngress(
     private val kernel: LifeOsKernel,
+    ownerAssetReviews: OwnerAssetReviewRepository? = null,
 ) {
     private val artifactIngress by lazy {
         CanonicalArtifactPhotonIngress(::ingestWithReceipt)
@@ -33,8 +36,8 @@ class CanonicalPhotonIngress(
     }
 
     /**
-     * Productive document/code/image generation provenance. Both the materialized artifact revision
-     * and its generation-manifest Photon re-enter through the same DERIVED canonical boundary.
+     * Productive document/code/image generation provenance for callers that intentionally publish
+     * immediately. Owner-reviewed image generation uses a separate staging coordinator instead.
      */
     val artifactGeneration: ArtifactGenerationCoordinator by lazy {
         ArtifactGenerationCoordinator(
@@ -43,11 +46,22 @@ class CanonicalPhotonIngress(
         )
     }
 
+    /** Present only when product composition supplied the encrypted owner-review vault. */
+    val ownerAssetReview: OwnerAssetReviewCoordinator? = ownerAssetReviews?.let { repository ->
+        OwnerAssetReviewCoordinator(
+            reviews = repository,
+            photons = kernel.photonStore,
+            ingress = artifactIngress,
+        )
+    }
+
     init {
-        // Kernel construction precedes this canonical ingress in production. Install the already
-        // canonical artifact coordinator here so CREATE_IMAGE can attach lifecycle provenance before
-        // the action outcome is settled, without introducing a second Photon ingress path.
-        ImageArtifactLifecycleRuntimeRegistry.install(artifactGeneration)
+        ownerAssetReview?.let { reviews ->
+            ImageArtifactLifecycleRuntimeRegistry.install(
+                photons = kernel.photonStore,
+                reviews = reviews,
+            )
+        }
     }
 
     suspend fun ingest(
