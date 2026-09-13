@@ -46,8 +46,6 @@ class GoalActionDispatcher(
         GenesisCapabilityExpansionRuntime::process,
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
-        // V15 is observational only: project the already-computed router result into the shared
-        // trace before any capability expansion. The recorder owns no routing or execution authority.
         DecisionTraceRuntimeRegistry.currentOrNull()?.recordCapabilityRouting(
             goalPhotonId = context.goalPhotonId,
             goalPhotonRevision = context.goalPhotonRevision,
@@ -55,9 +53,6 @@ class GoalActionDispatcher(
             resolution = context.routing,
         )
 
-        // Missing capability expansion is now always Genesis-first. Genesis selects the smallest safe
-        // handoff; only TOOL_WORKSHOP handoffs may reach the bounded autonomous generator. BUILD_STUDIO
-        // and other module paths stay explicit non-activating proposals until a real host/gate exists.
         if (!context.routing.ready) {
             val gapReason = context.routing.blockingGaps
                 .joinToString(",") { gap -> "${gap.requirement.capabilityId.value}:${gap.type.name}" }
@@ -72,11 +67,9 @@ class GoalActionDispatcher(
             return blocked(context.goal.intent, "$gapReason;$expansionReason")
         }
 
-        // Production installs this runtime after kernel construction. Resolve it per execution rather than
-        // capturing the registry in the constructor so the kernel cannot accidentally bypass late wiring.
         val durableRuntime = durableRuntimeProvider()
         val durablePermit = when (val admission = durableRuntime?.prepare(context)) {
-            null -> null // unit/legacy composition only; production installs V7-F runtime.
+            null -> null
             is DurableGoalPlanAdmission.Ready -> admission.permit
             is DurableGoalPlanAdmission.Completed -> return GoalActionDispatchResult()
             is DurableGoalPlanAdmission.Blocked -> return blocked(context.goal.intent, admission.reason)
@@ -104,9 +97,15 @@ class GoalActionDispatcher(
                 )
             }
 
-            IntentType.TRANSFORM_IMAGE -> GoalActionDispatchResult(
-                localImageTransform = executeImageTransform(context),
-            )
+            IntentType.TRANSFORM_IMAGE -> {
+                val transformed = executeImageTransform(context)
+                GoalActionDispatchResult(
+                    localImageTransform = ImageArtifactLifecycleRuntimeRegistry.attachTransform(
+                        context,
+                        transformed,
+                    ),
+                )
+            }
 
             IntentType.SCHEDULE -> GoalActionDispatchResult(
                 localSchedule = executeSchedule(context),
@@ -119,8 +118,6 @@ class GoalActionDispatcher(
             else -> GoalActionDispatchResult()
         }
 
-        // Bind the already-persisted outcome to V7 before settling resource usage. If settlement is
-        // interrupted, restart sees a completed plan and cannot repeat the host/user-visible action.
         if (durableRuntime != null && durablePermit != null) {
             durableRuntime.complete(durablePermit, result)
         }
