@@ -31,6 +31,7 @@ class OwnerAssetReviewCoordinatorTest {
                 photons.save(photon)
                 ArtifactReentryReceipt(accepted = true, durableTaskId = "task-${ingressOrder.size}")
             },
+            authorizedOwnerActorId = OWNER,
         )
         val parent = stagedPhoton("parent")
         val child = stagedPhoton("child", parents = setOf(parent.id))
@@ -40,7 +41,7 @@ class OwnerAssetReviewCoordinatorTest {
         val first = coordinator.decide(
             candidateId = candidate.id,
             decision = OwnerAssetReviewDecision.APPROVED,
-            ownerActorId = "private-owner",
+            ownerActorId = OWNER,
             feedback = "passt",
             decidedAt = now.plusSeconds(5),
         )
@@ -55,7 +56,7 @@ class OwnerAssetReviewCoordinatorTest {
         val second = coordinator.decide(
             candidateId = candidate.id,
             decision = OwnerAssetReviewDecision.APPROVED,
-            ownerActorId = "private-owner",
+            ownerActorId = OWNER,
             feedback = "passt",
             decidedAt = now.plusSeconds(999),
         )
@@ -67,18 +68,82 @@ class OwnerAssetReviewCoordinatorTest {
     }
 
     @Test
+    fun `unauthorized actor cannot create a review decision or publish anything`() = runTest {
+        val reviews = InMemoryReviews()
+        val photons = RecordingPhotons()
+        val ingressOrder = mutableListOf<PhotonId>()
+        val coordinator = OwnerAssetReviewCoordinator(
+            reviews = reviews,
+            photons = photons,
+            ingress = ArtifactPhotonIngress { photon ->
+                ingressOrder += photon.id
+                photons.save(photon)
+                ArtifactReentryReceipt(true)
+            },
+            authorizedOwnerActorId = OWNER,
+        )
+        val staged = stagedPhoton("asset")
+        val candidate = candidate(staged = listOf(staged))
+        coordinator.stage(candidate)
+
+        assertFailsWith<IllegalArgumentException> {
+            coordinator.decide(
+                candidateId = candidate.id,
+                decision = OwnerAssetReviewDecision.APPROVED,
+                ownerActorId = "module-image-renderer",
+                feedback = null,
+                decidedAt = now.plusSeconds(1),
+            )
+        }
+
+        assertNull(reviews.load(candidate.id)?.decision)
+        assertNull(reviews.load(candidate.id)?.publishedAt)
+        assertTrue(ingressOrder.isEmpty())
+        assertNull(photons.load(staged.id))
+    }
+
+    @Test
+    fun `decision timestamp cannot predate generated candidate`() = runTest {
+        val reviews = InMemoryReviews()
+        val photons = RecordingPhotons()
+        val coordinator = OwnerAssetReviewCoordinator(
+            reviews = reviews,
+            photons = photons,
+            ingress = ArtifactPhotonIngress { photon ->
+                photons.save(photon)
+                ArtifactReentryReceipt(true)
+            },
+            authorizedOwnerActorId = OWNER,
+        )
+        val candidate = candidate(staged = listOf(stagedPhoton("asset")))
+        coordinator.stage(candidate)
+
+        assertFailsWith<IllegalArgumentException> {
+            coordinator.decide(
+                candidateId = candidate.id,
+                decision = OwnerAssetReviewDecision.REJECTED,
+                ownerActorId = OWNER,
+                feedback = null,
+                decidedAt = now.minusNanos(1),
+            )
+        }
+        assertNull(reviews.load(candidate.id)?.decision)
+    }
+
+    @Test
     fun `changes requested records feedback but does not publish staged asset`() = runTest {
         val reviews = InMemoryReviews()
         val photons = RecordingPhotons()
         val ingressOrder = mutableListOf<PhotonId>()
         val coordinator = OwnerAssetReviewCoordinator(
-            reviews,
-            photons,
-            ArtifactPhotonIngress { photon ->
+            reviews = reviews,
+            photons = photons,
+            ingress = ArtifactPhotonIngress { photon ->
                 ingressOrder += photon.id
                 photons.save(photon)
                 ArtifactReentryReceipt(true)
             },
+            authorizedOwnerActorId = OWNER,
         )
         val staged = stagedPhoton("asset")
         val candidate = candidate(staged = listOf(staged))
@@ -87,7 +152,7 @@ class OwnerAssetReviewCoordinatorTest {
         val result = coordinator.decide(
             candidate.id,
             OwnerAssetReviewDecision.CHANGES_REQUESTED,
-            "private-owner",
+            OWNER,
             "Bitte den Kontrast reduzieren",
             now.plusSeconds(2),
         )
@@ -108,13 +173,14 @@ class OwnerAssetReviewCoordinatorTest {
         val decision = decision(candidate, OwnerAssetReviewDecision.APPROVED, now.plusSeconds(1))
         reviews.recordDecision(decision)
         val coordinator = OwnerAssetReviewCoordinator(
-            reviews,
-            photons,
-            ArtifactPhotonIngress { photon ->
+            reviews = reviews,
+            photons = photons,
+            ingress = ArtifactPhotonIngress { photon ->
                 ingressOrder += photon.id
                 photons.save(photon)
                 ArtifactReentryReceipt(true)
             },
+            authorizedOwnerActorId = OWNER,
         )
 
         val first = coordinator.reconcileApproved()
@@ -128,6 +194,36 @@ class OwnerAssetReviewCoordinatorTest {
     }
 
     @Test
+    fun `reconcile rejects persisted approval from unauthorized actor`() = runTest {
+        val reviews = InMemoryReviews()
+        val photons = RecordingPhotons()
+        val candidate = candidate(staged = listOf(stagedPhoton("asset")))
+        reviews.stage(candidate)
+        reviews.recordDecision(
+            OwnerAssetReviewDecisionRecord(
+                candidateId = candidate.id,
+                decision = OwnerAssetReviewDecision.APPROVED,
+                ownerActorId = "module-image-renderer",
+                decidedAt = now.plusSeconds(1),
+                decisionPhotonId = PhotonId("unauthorized_owner_review"),
+            )
+        )
+        val coordinator = OwnerAssetReviewCoordinator(
+            reviews = reviews,
+            photons = photons,
+            ingress = ArtifactPhotonIngress { photon ->
+                photons.save(photon)
+                ArtifactReentryReceipt(true)
+            },
+            authorizedOwnerActorId = OWNER,
+        )
+
+        assertFailsWith<IllegalArgumentException> { coordinator.reconcileApproved() }
+        assertNull(reviews.load(candidate.id)?.publishedAt)
+        assertTrue(photons.loadAll().isEmpty())
+    }
+
+    @Test
     fun `canonical identity collision fails closed`() = runTest {
         val reviews = InMemoryReviews()
         val photons = RecordingPhotons()
@@ -136,19 +232,20 @@ class OwnerAssetReviewCoordinatorTest {
         reviews.stage(candidate)
         photons.save(staged.copy(content = "different canonical content"))
         val coordinator = OwnerAssetReviewCoordinator(
-            reviews,
-            photons,
-            ArtifactPhotonIngress { photon ->
+            reviews = reviews,
+            photons = photons,
+            ingress = ArtifactPhotonIngress { photon ->
                 photons.save(photon)
                 ArtifactReentryReceipt(true)
             },
+            authorizedOwnerActorId = OWNER,
         )
 
         assertFailsWith<IllegalArgumentException> {
             coordinator.decide(
                 candidate.id,
                 OwnerAssetReviewDecision.APPROVED,
-                "private-owner",
+                OWNER,
                 null,
                 now.plusSeconds(1),
             )
@@ -167,19 +264,20 @@ class OwnerAssetReviewCoordinatorTest {
         val candidate = candidate(staged = listOf(a, b))
         reviews.stage(candidate)
         val coordinator = OwnerAssetReviewCoordinator(
-            reviews,
-            photons,
-            ArtifactPhotonIngress { photon ->
+            reviews = reviews,
+            photons = photons,
+            ingress = ArtifactPhotonIngress { photon ->
                 photons.save(photon)
                 ArtifactReentryReceipt(true)
             },
+            authorizedOwnerActorId = OWNER,
         )
 
         assertFailsWith<IllegalArgumentException> {
             coordinator.decide(
                 candidate.id,
                 OwnerAssetReviewDecision.APPROVED,
-                "private-owner",
+                OWNER,
                 null,
                 now.plusSeconds(1),
             )
@@ -228,22 +326,14 @@ class OwnerAssetReviewCoordinatorTest {
         candidate: OwnerAssetReviewCandidate,
         value: OwnerAssetReviewDecision,
         decidedAt: Instant,
-    ): OwnerAssetReviewDecisionRecord {
-        val coordinator = OwnerAssetReviewCoordinator(
-            InMemoryReviews(),
-            RecordingPhotons(),
-            ArtifactPhotonIngress { ArtifactReentryReceipt(true) },
-        )
-        // The production id is deterministic, but this fixture only needs a valid persisted record.
-        return OwnerAssetReviewDecisionRecord(
-            candidateId = candidate.id,
-            decision = value,
-            ownerActorId = "private-owner",
-            feedback = null,
-            decidedAt = decidedAt,
-            decisionPhotonId = PhotonId("owner_asset_review_fixture"),
-        )
-    }
+    ): OwnerAssetReviewDecisionRecord = OwnerAssetReviewDecisionRecord(
+        candidateId = candidate.id,
+        decision = value,
+        ownerActorId = OWNER,
+        feedback = null,
+        decidedAt = decidedAt,
+        decisionPhotonId = PhotonId("owner_asset_review_fixture"),
+    )
 
     private class InMemoryReviews : OwnerAssetReviewRepository {
         private val records = linkedMapOf<OwnerAssetReviewCandidateId, OwnerAssetReviewRecord>()
@@ -295,5 +385,9 @@ class OwnerAssetReviewCoordinatorTest {
         override suspend fun delete(id: PhotonId) {
             values.remove(id)
         }
+    }
+
+    private companion object {
+        const val OWNER = "private-owner"
     }
 }
