@@ -13,11 +13,17 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -40,6 +46,9 @@ fun LifeOsToolCenterScreen(
     ToolCenterOverview(
         state = state,
         onRefresh = model::refresh,
+        onApproveGeneration = model::approveGeneration,
+        onReviewAndActivate = model::reviewAndActivate,
+        onDismissActionStatus = model::dismissActionStatus,
         modifier = modifier,
     )
 }
@@ -48,6 +57,9 @@ fun LifeOsToolCenterScreen(
 private fun ToolCenterOverview(
     state: LifeOsToolCenterUiState,
     onRefresh: () -> Unit,
+    onApproveGeneration: (String) -> Unit,
+    onReviewAndActivate: (String) -> Unit,
+    onDismissActionStatus: () -> Unit,
     modifier: Modifier,
 ) {
     Column(
@@ -65,13 +77,29 @@ private fun ToolCenterOverview(
             ) {
                 Text("Tool Center", style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    "Read-only Sicht auf Fähigkeiten, Provider und generierte Tools der produktiven Runtime.",
+                    "Owner-Oberfläche für fehlende Fähigkeiten, isolierte TRIALs und dauerhaft belegte Tool-Zustände.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Button(onClick = onRefresh, enabled = !state.loading) {
+            OutlinedButton(onClick = onRefresh, enabled = !state.loading && !state.actionInFlight) {
                 Text("Aktualisieren")
+            }
+        }
+
+        if (state.actionInFlight) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+
+        state.actionStatus?.let { message ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(message, style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = onDismissActionStatus) { Text("Schließen") }
+                }
             }
         }
 
@@ -85,19 +113,14 @@ private fun ToolCenterOverview(
 
         val workspace = state.workspace
         if (workspace == null && state.loading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
             return@Column
         }
-
         if (workspace == null) {
             Text(
-                "Der Runtime-Snapshot konnte nicht geladen werden.",
-                style = MaterialTheme.typography.bodyMedium,
+                "Der produktive Runtime-/Evidence-Stand konnte nicht geladen werden.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             return@Column
@@ -108,71 +131,117 @@ private fun ToolCenterOverview(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item(key = "summary") {
-                ToolCenterSummaryCard(workspace.summary)
+                OwnerSummaryCard(workspace)
             }
 
-            item(key = "generated-title") {
+            item(key = "gaps-title") {
                 SectionTitle(
-                    title = "Generierte Tools",
-                    subtitle = "Lifecycle-, Verifikations- und Evidence-Status ohne Mutationsrechte.",
+                    "Fehlende Fähigkeiten",
+                    "Eine Freigabe autorisiert genau einen begrenzten Genesis-Lauf. Sie aktiviert niemals ein Tool.",
                 )
             }
-
-            if (workspace.generatedTools.isEmpty()) {
-                item(key = "generated-empty") {
-                    EmptySection("Aktuell sind keine generierten Tools im produktiven Registry registriert.")
-                }
+            if (workspace.gaps.isEmpty()) {
+                item(key = "gaps-empty") { EmptySection("Keine blockierenden Capability-Gaps aus dem aktuellen produktiven Routing.") }
             } else {
-                items(
-                    items = workspace.generatedTools,
-                    key = { it.toolId },
-                ) { tool ->
-                    GeneratedToolCard(tool)
+                items(workspace.gaps, key = { "gap:${it.capabilityId}" }) { gap ->
+                    GapApprovalCard(
+                        gap = gap,
+                        actionRunning = state.generationInFlightCapabilityId == gap.capabilityId,
+                        actionsBlocked = state.actionInFlight,
+                        onApprove = { onApproveGeneration(gap.capabilityId) },
+                    )
                 }
+            }
+
+            item(key = "trial-divider") { HorizontalDivider() }
+            item(key = "trial-title") {
+                SectionTitle(
+                    "TRIAL — getrennte Aktivierungsprüfung",
+                    "Nur dauerhaft als TRIAL belegte Tools können die separate Owner-Prüfung starten.",
+                )
+            }
+            if (workspace.trialTools.isEmpty()) {
+                item(key = "trial-empty") { EmptySection("Keine dauerhaft belegten TRIAL-Tools.") }
+            } else {
+                items(workspace.trialTools, key = { "trial:${it.toolId}" }) { tool ->
+                    OwnerToolCard(
+                        tool = tool,
+                        actionLabel = "Canaries prüfen & aktivieren",
+                        actionRunning = state.activationInFlightToolId == tool.toolId,
+                        actionEnabled = tool.activationEligible && !state.actionInFlight,
+                        onAction = { onReviewAndActivate(tool.toolId) },
+                    )
+                }
+            }
+
+            item(key = "active-title") {
+                SectionTitle(
+                    "ACTIVE",
+                    "Hier erscheinen ausschließlich Tools, deren dauerhafter Promotion-State ACTIVE meldet.",
+                )
+            }
+            if (workspace.activeTools.isEmpty()) {
+                item(key = "active-empty") { EmptySection("Keine dauerhaft als ACTIVE belegten generierten Tools.") }
+            } else {
+                items(workspace.activeTools, key = { "active:${it.toolId}" }) { OwnerToolCard(it) }
+            }
+
+            if (workspace.attentionTools.isNotEmpty()) {
+                item(key = "attention-title") {
+                    SectionTitle(
+                        "Quarantäne / abgelehnt",
+                        "Diese Tools bleiben sichtbar, werden aber niemals als verfügbar oder aktivierbar dargestellt.",
+                    )
+                }
+                items(workspace.attentionTools, key = { "attention:${it.toolId}" }) { OwnerToolCard(it) }
+            }
+
+            if (workspace.pendingTools.isNotEmpty()) {
+                item(key = "pending-title") {
+                    SectionTitle(
+                        "In Vorbereitung",
+                        "Generiert, gebaut, getestet, verifiziert oder noch nicht dauerhaft belegbar — ohne ACTIVE-Claim.",
+                    )
+                }
+                items(workspace.pendingTools, key = { "pending:${it.toolId}" }) { OwnerToolCard(it) }
+            }
+
+            if (workspace.retiredTools.isNotEmpty()) {
+                item(key = "retired-title") { SectionTitle("Stillgelegt", "Retired Tools bleiben nachvollziehbar sichtbar.") }
+                items(workspace.retiredTools, key = { "retired:${it.toolId}" }) { OwnerToolCard(it) }
             }
 
             item(key = "providers-divider") { HorizontalDivider() }
             item(key = "providers-title") {
                 SectionTitle(
-                    title = "Capability Provider",
-                    subtitle = "Auch deaktivierte und quarantänisierte Provider bleiben für Diagnose sichtbar.",
+                    "Capability Provider",
+                    "Read-only Diagnose des produktiven Registry; deaktivierte und quarantänisierte Provider bleiben sichtbar.",
                 )
             }
-
-            if (workspace.providers.isEmpty()) {
-                item(key = "providers-empty") {
-                    EmptySection("Aktuell sind keine Capability Provider sichtbar.")
-                }
+            if (workspace.runtime.providers.isEmpty()) {
+                item(key = "providers-empty") { EmptySection("Aktuell sind keine Capability Provider sichtbar.") }
             } else {
                 items(
-                    items = workspace.providers,
-                    key = { "${it.capabilityId}:${it.providerId}" },
-                ) { provider ->
-                    ProviderCard(provider)
-                }
+                    workspace.runtime.providers,
+                    key = { "provider:${it.capabilityId}:${it.providerId}" },
+                ) { provider -> ProviderCard(provider) }
             }
         }
     }
 }
 
 @Composable
-private fun ToolCenterSummaryCard(summary: ToolCenterSummaryUiModel) {
+private fun OwnerSummaryCard(workspace: ToolCenterOwnerWorkspaceUiModel) {
+    val summary = workspace.runtime.summary
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            Text(summary.runtimeLabel, style = MaterialTheme.typography.titleMedium, color = toneColor(summary.runtimeTone))
+            Text("${summary.capabilityCount} Fähigkeiten · ${summary.providerCount} Provider", style = MaterialTheme.typography.bodyMedium)
             Text(
-                text = summary.runtimeLabel,
-                style = MaterialTheme.typography.titleMedium,
-                color = toneColor(summary.runtimeTone),
-            )
-            Text(
-                "${summary.capabilityCount} Fähigkeiten · ${summary.providerCount} Provider · ${summary.generatedToolCount} generierte Tools",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Text(
-                "Aktiv ${summary.activeToolCount} · Testlauf ${summary.trialToolCount} · Aufmerksamkeit ${summary.attentionToolCount}",
+                "Dauerhaft: ACTIVE ${workspace.activeTools.size} · TRIAL ${workspace.trialTools.size} · Aufmerksamkeit ${workspace.attentionTools.size} · Vorbereitung ${workspace.pendingTools.size}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -181,39 +250,89 @@ private fun ToolCenterSummaryCard(summary: ToolCenterSummaryUiModel) {
 }
 
 @Composable
-private fun GeneratedToolCard(tool: ToolCenterGeneratedToolUiModel) {
+private fun GapApprovalCard(
+    gap: ToolCenterGapUiModel,
+    actionRunning: Boolean,
+    actionsBlocked: Boolean,
+    onApprove: () -> Unit,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(gap.capabilityId, style = MaterialTheme.typography.titleSmall)
+            Text("${gap.gapTypeLabel} · ${gap.severityLabel}", style = MaterialTheme.typography.bodySmall)
+            DetailLine("Benötigte Inputs", gap.requiredInputs)
+            DetailLine("Benötigte Outputs", gap.requiredOutputs)
+            DetailLine("Kandidaten", gap.candidateProviderIds)
+            Text(
+                "Owner-Freigabe erlaubt nur den begrenzten Genesis-/Build-/Verify-Pfad. ACTIVE erfordert später eine separate TRIAL-Prüfung.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = onApprove,
+                enabled = gap.approvalEligible && !actionsBlocked,
+            ) {
+                Text(if (actionRunning) "Wird erzeugt …" else "Tool-Erzeugung freigeben")
+            }
+        }
+    }
+}
+
+@Composable
+private fun OwnerToolCard(
+    tool: ToolCenterOwnerToolUiModel,
+    actionLabel: String? = null,
+    actionRunning: Boolean = false,
+    actionEnabled: Boolean = false,
+    onAction: (() -> Unit)? = null,
+) {
+    var evidenceExpanded by rememberSaveable(tool.toolId) { mutableStateOf(false) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(tool.toolId, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    tool.stateLabel,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = toneColor(tool.tone),
-                )
+                Text(tool.stateLabel, style = MaterialTheme.typography.labelLarge, color = toneColor(tool.tone))
             }
+            Text("Fähigkeit: ${tool.capabilityId} · Verifikation ${tool.verificationPercent}%", style = MaterialTheme.typography.bodySmall)
             Text(
-                "Fähigkeit: ${tool.capabilityId} · Verifikation: ${tool.verificationPercent}%",
+                "Trials ${tool.trials} · Erfolge ${tool.successes} · Safety-Verstöße ${tool.safetyViolations}",
                 style = MaterialTheme.typography.bodySmall,
             )
             DetailLine("Berechtigungen", tool.permissions)
             DetailLine("Inputs", tool.requiredInputs)
             DetailLine("Outputs", tool.requiredOutputs)
-            tool.promotionEvidenceId?.let {
-                Text("Promotion-Evidence: $it", style = MaterialTheme.typography.bodySmall)
-            }
             tool.lastMessage?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            val evidenceIds = listOfNotNull(
+                tool.promotionEvidenceId?.let { "Promotion: $it" },
+                tool.boundedAdmissionEvidenceId?.let { "Admission: $it" },
+                tool.boundedReadinessEvidenceId?.let { "Readiness: $it" },
+                tool.boundedPromotionSealId?.let { "Promotion-Seal: $it" },
+            )
+            if (evidenceIds.isNotEmpty()) {
+                TextButton(onClick = { evidenceExpanded = !evidenceExpanded }) {
+                    Text(if (evidenceExpanded) "Evidence ausblenden" else "Evidence anzeigen")
+                }
+                if (evidenceExpanded) {
+                    evidenceIds.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                }
+            }
+
+            if (actionLabel != null && onAction != null) {
+                Button(onClick = onAction, enabled = actionEnabled) {
+                    Text(if (actionRunning) "Prüfung läuft …" else actionLabel)
+                }
             }
         }
     }
@@ -226,21 +345,11 @@ private fun ProviderCard(provider: ToolCenterProviderUiModel) {
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(provider.capabilityId, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    provider.stateLabel,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = toneColor(provider.tone),
-                )
+                Text(provider.stateLabel, style = MaterialTheme.typography.labelLarge, color = toneColor(provider.tone))
             }
-            Text(
-                "${provider.providerId} · ${provider.providerTypeLabel}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Text("${provider.providerId} · ${provider.providerTypeLabel}", style = MaterialTheme.typography.bodyMedium)
             Text(
                 "Trust ${provider.trustLabel} · Reliability ${provider.reliabilityPercent}%",
                 style = MaterialTheme.typography.bodySmall,
@@ -264,11 +373,7 @@ private fun DetailLine(label: String, values: List<String>) {
 private fun SectionTitle(title: String, subtitle: String) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(title, style = MaterialTheme.typography.titleMedium)
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
