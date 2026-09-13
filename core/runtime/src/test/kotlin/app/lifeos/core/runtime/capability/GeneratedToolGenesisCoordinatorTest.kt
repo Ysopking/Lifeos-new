@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.capability
 
+import app.lifeos.core.runtime.artifact.OwnerAssetReviewCandidateId
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -18,11 +19,12 @@ class GeneratedToolGenesisCoordinatorTest {
     )
 
     @Test
-    fun successfulGenesisStopsAtTrial() = runTest {
+    fun successfulGenesisStopsAtTrialWhenNoOwnerReviewGateIsInstalled() = runTest {
         val registry = GeneratedToolRegistry()
         val genesis = GeneratedToolGenesisCoordinator(
             workshop = workshop(registry, permissions = emptySet()),
             lifecycle = GeneratedToolLifecycleCoordinator(registry),
+            ownerReviewGate = { null },
         )
 
         val result = assertIs<GeneratedToolGenesisResult.TrialReady>(
@@ -36,6 +38,32 @@ class GeneratedToolGenesisCoordinatorTest {
     }
 
     @Test
+    fun verifiedToolStopsForExactOwnerReviewBeforeTrial() = runTest {
+        val registry = GeneratedToolRegistry()
+        val candidateId = OwnerAssetReviewCandidateId("a".repeat(64))
+        var reviewedRecord: GeneratedToolRecord? = null
+        val genesis = GeneratedToolGenesisCoordinator(
+            workshop = workshop(registry, permissions = emptySet()),
+            lifecycle = GeneratedToolLifecycleCoordinator(registry),
+            ownerReviewGate = {
+                GeneratedToolOwnerReviewGate { record ->
+                    reviewedRecord = record
+                    candidateId
+                }
+            },
+        )
+
+        val result = assertIs<GeneratedToolGenesisResult.OwnerReviewRequired>(
+            genesis.generateFor(gap)
+        )
+
+        assertEquals(candidateId, result.candidateId)
+        assertEquals(GeneratedToolState.VERIFIED, result.record.state)
+        assertEquals(GeneratedToolState.VERIFIED, reviewedRecord?.state)
+        assertEquals(GeneratedToolState.VERIFIED, registry.get("tool-genesis")?.state)
+    }
+
+    @Test
     fun sandboxDeniedGenesisNeverReachesTrial() = runTest {
         val registry = GeneratedToolRegistry()
         val genesis = GeneratedToolGenesisCoordinator(
@@ -44,6 +72,7 @@ class GeneratedToolGenesisCoordinatorTest {
                 permissions = setOf(ToolPermission.MODIFY_REPOSITORY),
             ),
             lifecycle = GeneratedToolLifecycleCoordinator(registry),
+            ownerReviewGate = { null },
         )
 
         val result = assertIs<GeneratedToolGenesisResult.Rejected>(
