@@ -12,6 +12,7 @@ import app.lifeos.core.runtime.resource.ResourceBudgetUsage
 import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
 import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
 import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
+import app.lifeos.core.runtime.trace.SelfHealingDecisionTraceRecorder
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 
@@ -69,6 +70,7 @@ class DurableSelfHealingCoordinator(
     private val sharedBudgetProvider: () -> SharedResourceBudgetGate? =
         { SharedResourceBudgetRuntimeRegistry.current() },
     private val now: () -> Instant = Instant::now,
+    private val traceRecorder: SelfHealingDecisionTraceRecorder? = null,
 ) {
     suspend fun recover(
         plan: RecoveryPlan,
@@ -76,6 +78,7 @@ class DurableSelfHealingCoordinator(
         resources: SelfHealingResourceProfile,
     ): DurableSelfHealingResult {
         var incident = ledger.open(plan, incidentFingerprint)
+        recordTrace(plan, incident)
         terminalResult(incident)?.let { return it }
 
         val accountId = ResourceBudgetAccountId("self-healing:${incident.incidentId.value}")
@@ -106,6 +109,7 @@ class DurableSelfHealingCoordinator(
                     detail = "restart-verification-recovered",
                     evidenceSummary = evidence.summary(),
                 )
+                recordTrace(plan, incident)
                 return DurableSelfHealingResult.Recovered(
                     incident = incident,
                     evidence = evidence,
@@ -117,6 +121,7 @@ class DurableSelfHealingCoordinator(
                 detail = "in-flight-action-not-verified-after-restart",
                 evidenceSummary = evidence.summary(),
             )
+            recordTrace(plan, incident)
         }
 
         while (incident.nextActionIndex < plan.actions.size) {
@@ -125,18 +130,20 @@ class DurableSelfHealingCoordinator(
             val budgetDecision = allocate(resources)
             val ready = budgetDecision as? SharedResourceBudgetDecision.Ready
                 ?: return block(
+                    plan,
                     incident,
                     "self-healing-world-budget:${(budgetDecision as SharedResourceBudgetDecision.Blocked).reason}",
                 )
             val allocation = ready.allocation.allocation(ResourceBudgetDomain.SELF_HEALING)
-                ?: return block(incident, "self-healing-world-budget-missing-allocation")
+                ?: return block(plan, incident, "self-healing-world-budget-missing-allocation")
             if (!resources.perActionRequested.isWithin(allocation.allocated)) {
-                return block(incident, "self-healing-world-budget-insufficient")
+                return block(plan, incident, "self-healing-world-budget-insufficient")
             }
 
             val reservation = reserve(accountId, incident, actionIndex, action.id, resources.perActionRequested)
-                ?: return block(incident, "self-healing-v16-budget-exhausted")
+                ?: return block(plan, incident, "self-healing-v16-budget-exhausted")
             incident = ledger.markPrepared(incident, actionIndex, action.id)
+            recordTrace(plan, incident)
 
             val actionResult = try {
                 action.execute()
@@ -153,6 +160,7 @@ class DurableSelfHealingCoordinator(
                 is RecoveryActionResult.Failure -> {
                     settle(reservation, accountId, resources.perActionRequested)
                     incident = ledger.markActionFailed(incident, actionResult.message)
+                    recordTrace(plan, incident)
                     if (!actionResult.retryable) {
                         return exhaust(plan, incident, "non-retryable:${actionResult.message}")
                     }
@@ -173,6 +181,7 @@ class DurableSelfHealingCoordinator(
                             detail = actionResult.message ?: "recovery-verified",
                             evidenceSummary = evidence.summary(),
                         )
+                        recordTrace(plan, incident)
                         return DurableSelfHealingResult.Recovered(
                             incident = incident,
                             evidence = evidence,
@@ -184,6 +193,7 @@ class DurableSelfHealingCoordinator(
                         detail = "verification-failed:${evidence.summary()}",
                         evidenceSummary = evidence.summary(),
                     )
+                    recordTrace(plan, incident)
                 }
             }
         }
@@ -259,10 +269,12 @@ class DurableSelfHealingCoordinator(
     }
 
     private suspend fun block(
+        plan: RecoveryPlan,
         incident: SelfHealingIncidentSnapshot,
         reason: String,
     ): DurableSelfHealingResult.Blocked {
         val blocked = ledger.markBlocked(incident, reason)
+        recordTrace(plan, blocked)
         return DurableSelfHealingResult.Blocked(blocked, reason)
     }
 
@@ -281,6 +293,7 @@ class DurableSelfHealingCoordinator(
             )
         )
         var terminal = ledger.markExhausted(incident, reason)
+        recordTrace(plan, terminal)
         var quarantined = false
         if (plan.quarantineOnFailure) {
             val at = now()
@@ -302,9 +315,17 @@ class DurableSelfHealingCoordinator(
                 )
             )
             terminal = ledger.markQuarantined(terminal, reason)
+            recordTrace(plan, terminal)
             quarantined = true
         }
         return DurableSelfHealingResult.Exhausted(terminal, quarantined)
+    }
+
+    private suspend fun recordTrace(
+        plan: RecoveryPlan,
+        incident: SelfHealingIncidentSnapshot,
+    ) {
+        traceRecorder?.record(plan, incident)
     }
 
     private fun terminalResult(snapshot: SelfHealingIncidentSnapshot): DurableSelfHealingResult? = when (snapshot.state) {
