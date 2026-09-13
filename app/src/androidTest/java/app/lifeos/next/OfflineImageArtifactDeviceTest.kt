@@ -8,6 +8,10 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.artifact.ArtifactKind
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapState
+import app.lifeos.next.ui.chat.ChatImagePreviewLoader
+import app.lifeos.next.ui.chat.ChatImagePreviewState
+import app.lifeos.next.ui.chat.ChatTimelineItem
+import app.lifeos.next.ui.chat.ChatTimelineProjector
 import java.security.MessageDigest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -23,7 +27,7 @@ import org.junit.runner.RunWith
 /**
  * Real Android proof for the productive offline image path:
  * prompt -> GoalFrame -> renderer -> PNG -> encrypted BinaryAssetStore -> reload/decode -> IMAGE
- * artifact revision -> DERIVED generation Photon.
+ * artifact revision -> DERIVED generation Photon -> multimodal chat timeline/preview.
  */
 @RunWith(AndroidJUnit4::class)
 class OfflineImageArtifactDeviceTest {
@@ -96,6 +100,30 @@ class OfflineImageArtifactDeviceTest {
         val secondReload = app.kernel.loadImageAsset(generated.image.photon)
         assertNotNull("Repeated encrypted-vault reload must remain readable", secondReload)
         assertArrayEquals(png, secondReload!!)
+
+        val timeline = ChatTimelineProjector.project(app.kernel.photonStore.loadAll())
+        val imageItem = timeline
+            .filterIsInstance<ChatTimelineItem.Image>()
+            .singleOrNull { it.photon.id == generated.image.photon.id }
+        assertNotNull(
+            "Chat-derived generated image must enter the F4 multimodal timeline",
+            imageItem,
+        )
+
+        val previewLoader = ChatImagePreviewLoader(app.kernel)
+        try {
+            val previewState = previewLoader.load(generated.image.photon)
+            assertTrue(
+                "F4 image preview must load through the encrypted kernel asset API: $previewState",
+                previewState is ChatImagePreviewState.Ready,
+            )
+            val preview = (previewState as ChatImagePreviewState.Ready).preview
+            assertEquals(descriptor.width, preview.width)
+            assertEquals(descriptor.height, preview.height)
+            assertEquals(descriptor.rendererId, preview.rendererId)
+        } finally {
+            previewLoader.clear()
+        }
 
         val artifactGeneration = generated.artifactGeneration
         assertNotNull("Productive image generation must attach the IMAGE artifact lifecycle", artifactGeneration)
