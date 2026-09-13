@@ -76,10 +76,9 @@ class OfflineImageArtifactDeviceTest {
             result is ImageGenerationResult.Generated,
         )
         val generated = (result as ImageGenerationResult.Generated).value
-        val candidateId = assertNotNull(
-            "Generated image must expose the exact owner-review candidate",
-            generated.ownerReviewCandidateId,
-        )
+        val candidateId = requireNotNull(generated.ownerReviewCandidateId) {
+            "Generated image must expose the exact owner-review candidate"
+        }
         assertFalse("Scene Photon must wait for owner review", generated.scene.processingQueued)
         assertFalse("Image Photon must wait for owner review", generated.image.processingQueued)
         assertEquals("awaiting-owner-review", generated.scene.processingFailure)
@@ -110,15 +109,13 @@ class OfflineImageArtifactDeviceTest {
             bitmap.recycle()
         }
 
-        val artifactGeneration = assertNotNull(
-            "Productive image generation must attach the staged IMAGE artifact lifecycle",
-            generated.artifactGeneration,
-        )
+        val artifactGeneration = requireNotNull(generated.artifactGeneration) {
+            "Productive image generation must attach the staged IMAGE artifact lifecycle"
+        }
         val artifact = artifactGeneration.finalization.artifact
-        val revision = assertNotNull(
-            "Generated IMAGE artifact requires an immutable revision manifest",
-            artifact.revision,
-        )
+        val revision = requireNotNull(artifact.revision) {
+            "Generated IMAGE artifact requires an immutable revision manifest"
+        }
         assertEquals(ArtifactKind.IMAGE, artifact.request.kind)
         assertEquals("image/png", artifact.request.targetMimeType)
         assertEquals(descriptor.asset, revision.materializedAsset)
@@ -165,14 +162,14 @@ class OfflineImageArtifactDeviceTest {
                 .singleOrNull { it.photon.id == generated.image.photon.id },
         )
 
-        val reviews = assertNotNull(
-            "Owner review coordinator must be installed in productive composition",
-            app.photonIngress.ownerAssetReview,
-        )
-        val staged = assertNotNull(
-            "Exact generated image candidate must be durably staged",
+        val reviews = requireNotNull(app.photonIngress.ownerAssetReview) {
+            "Owner review coordinator must be installed in productive composition"
+        }
+        val staged = requireNotNull(
             reviews.snapshot().singleOrNull { it.candidate.id == candidateId },
-        )
+        ) {
+            "Exact generated image candidate must be durably staged"
+        }
         assertNull(staged.decision)
         assertNull(staged.publishedAt)
         assertEquals(descriptor.asset, staged.candidate.materializedAsset)
