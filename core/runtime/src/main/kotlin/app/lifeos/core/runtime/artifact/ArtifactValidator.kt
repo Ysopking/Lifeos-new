@@ -9,6 +9,11 @@ class ArtifactValidator(
         require(minimumDistinctModules > 0) { "Minimum artifact module count must be positive" }
     }
 
+    val profile: ArtifactValidationProfile
+        get() = ArtifactValidationProfile(
+            minimumDistinctModules = minimumDistinctModules,
+        )
+
     fun validate(
         request: CollaborativeArtifactRequest,
         contributions: List<ArtifactContribution>,
@@ -86,12 +91,16 @@ class ArtifactValidator(
         request: CollaborativeArtifactRequest,
         contributions: List<ArtifactContribution>,
         finalizedAt: Instant,
-    ) {
+    ): ArtifactValidationEvidence {
         val result = validate(request, contributions, finalizedAt)
         require(result.isValid) {
             result.issues.joinToString(separator = "; ") { issue ->
                 "${issue.code}: ${issue.message}"
             }
         }
+        return ArtifactValidationEvidence(
+            profile = profile,
+            result = result,
+        )
     }
 }
