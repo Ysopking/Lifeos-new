@@ -13,9 +13,9 @@ failure=0
 
 while IFS= read -r workflow; do
   while IFS= read -r line; do
-    usage="$(sed -E 's/^[[:space:]]*-[[:space:]]*uses:[[:space:]]*([^[:space:]#]+).*/\1/' <<< "$line")"
+    usage="$(sed -E 's/^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*([^[:space:]#]+).*/\2/' <<< "$line")"
 
-    # Repository-local actions are bound to the checked-out LIFEOS candidate SHA.
+    # Repository-local actions/workflows are bound to the checked-out LIFEOS candidate SHA.
     if [[ "$usage" == ./* ]]; then
       continue
     fi
@@ -32,7 +32,7 @@ while IFS= read -r workflow; do
       echo "mutable-action-ref:$workflow:$usage" >&2
       failure=1
     fi
-  done < <(grep -E '^[[:space:]]*-[[:space:]]*uses:[[:space:]]*[^[:space:]#]+' "$workflow" || true)
+  done < <(grep -E '^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*[^[:space:]#]+' "$workflow" || true)
 done < <(find "$workflow_dir" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print | LC_ALL=C sort)
 
 if [[ "$found_external" -ne 1 ]]; then
