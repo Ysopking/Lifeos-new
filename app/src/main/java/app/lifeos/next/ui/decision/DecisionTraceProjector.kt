@@ -1,177 +1,203 @@
 package app.lifeos.next.ui.decision
 
-import app.lifeos.core.runtime.convergence.ConvergenceDecisionCheckpoint
-import app.lifeos.core.runtime.convergence.ConvergenceDecisionState
-import app.lifeos.core.runtime.convergence.ConvergenceEscalationTarget
+import app.lifeos.core.runtime.trace.DecisionTrace
+import app.lifeos.core.runtime.trace.DecisionTraceNode
+import app.lifeos.core.runtime.trace.DecisionTraceNodeType
+import app.lifeos.core.runtime.trace.DecisionTraceProjector as CoreDecisionTraceProjector
 
-/** Pure read-only explanation projection over durable convergence decision checkpoints. */
+/** Pure read-only UI projection over the authoritative durable DecisionTrace graph. */
 object DecisionTraceProjector {
-    fun project(
-        checkpoints: Iterable<ConvergenceDecisionCheckpoint>,
-    ): DecisionTraceWorkspaceUiModel = DecisionTraceWorkspaceUiModel(
-        traces = checkpoints
-            .map(::projectCheckpoint)
-            .sortedBy { it.checkpointId.value },
-    )
+    private val coreProjector = CoreDecisionTraceProjector()
 
-    private fun projectCheckpoint(checkpoint: ConvergenceDecisionCheckpoint): DecisionTraceUiModel {
-        val decision = checkpoint.decision
-        val selected = decision.selectedHypothesisIds.toSet()
+    fun project(traces: Iterable<DecisionTrace>): DecisionTraceWorkspaceUiModel =
+        DecisionTraceWorkspaceUiModel(
+            traces = traces
+                .map(::projectTrace)
+                .sortedWith(
+                    compareByDescending<DecisionTraceUiModel> {
+                        it.lastRecordedAt?.toEpochMilli() ?: Long.MIN_VALUE
+                    }.thenBy { it.traceId.value }
+                ),
+        )
+
+    private fun projectTrace(trace: DecisionTrace): DecisionTraceUiModel {
+        val core = coreProjector.project(trace)
+        val nodes = trace.nodes.map(::projectNode)
+        val firstRecordedAt = trace.nodes.minOfOrNull { it.recordedAt }
+        val lastRecordedAt = trace.nodes.maxOfOrNull { it.recordedAt }
+        val kind = kind(trace)
         return DecisionTraceUiModel(
-            checkpointId = checkpoint.id,
-            decisionId = decision.id,
-            state = decision.state,
-            headline = headline(decision.state),
-            summary = summary(decision.state),
-            reasons = decision.reasons.map(::projectReason),
-            candidates = decision.candidates.map { candidate ->
-                DecisionCandidateUiModel(
-                    domainId = candidate.domainId,
-                    hypothesisId = candidate.hypothesisId,
-                    selected = candidate.hypothesisId in selected,
-                    totalScore = candidate.totalScore,
-                    evidenceScore = candidate.evidenceScore,
-                    contradiction = candidate.contradiction,
-                    marginToRunnerUp = candidate.marginToRunnerUp,
-                    conflictSeverity = candidate.conflictSeverity,
-                    freshSupportingEvidence = candidate.freshSupportingEvidence,
-                    confidenceLower = candidate.confidenceBand.lower,
-                    confidencePoint = candidate.confidenceBand.point,
-                    confidenceUpper = candidate.confidenceBand.upper,
-                )
-            },
-            evidenceRequests = decision.evidenceRequests.map { request ->
-                DecisionEvidenceRequestUiModel(
-                    kind = request.kind,
-                    domainId = request.domainId,
-                    hypothesisIds = request.hypothesisIds.sortedBy { it.value },
-                    semanticKey = request.semanticKey,
-                    reason = request.reason,
-                )
-            },
-            capabilityGaps = decision.capabilityGaps.map { gap ->
-                DecisionCapabilityGapUiModel(
-                    capabilityId = gap.requirement.capabilityId.value,
-                    severity = gap.requirement.severity.name,
-                    gapType = gap.type.name,
-                    candidateProviderIds = gap.candidateProviderIds.sorted(),
-                )
-            },
-            escalation = decision.escalation?.let { escalation ->
-                DecisionEscalationUiModel(
-                    target = escalation.target,
-                    reason = escalation.reason,
-                    hypothesisIds = escalation.hypothesisIds.sortedBy { it.value },
-                    evidenceRequestIds = escalation.evidenceRequestIds.map { it.value }.sorted(),
-                    capabilityIds = escalation.capabilityIds.sorted(),
-                )
-            },
-            snapshots = checkpoint.snapshots
-                .sortedBy { it.domainId.value }
-                .map { snapshot ->
-                    DecisionSnapshotUiModel(
-                        domainId = snapshot.domainId,
-                        snapshotId = snapshot.snapshotId.value,
-                        contentFingerprint = snapshot.contentFingerprint,
+            traceId = trace.id,
+            revision = trace.revision,
+            kind = kind,
+            title = trace.nodes.mapNotNull { it.displayLabel }.firstOrNull() ?: title(kind),
+            summary = summary(core.unresolved, nodes),
+            firstRecordedAt = firstRecordedAt,
+            lastRecordedAt = lastRecordedAt,
+            unresolved = core.unresolved,
+            facts = nodes.filter { it.section == DecisionTraceSection.FACT },
+            constraints = nodes.filter { it.section == DecisionTraceSection.CONSTRAINT },
+            alternatives = nodes.filter { it.section == DecisionTraceSection.ALTERNATIVE },
+            outcomes = nodes.filter { it.section == DecisionTraceSection.OUTCOME },
+            uncertainties = nodes.filter { it.section == DecisionTraceSection.UNCERTAINTY },
+            links = trace.links
+                .sortedWith(compareBy({ it.from.value }, { it.to.value }, { it.type.name }))
+                .map { link ->
+                    DecisionTraceLinkUiModel(
+                        from = link.from,
+                        to = link.to,
+                        type = link.type,
                     )
                 },
-            selectedHypothesisIds = decision.selectedHypothesisIds.sortedBy { it.value },
-            sourceRequestId = checkpoint.sourceRequestId,
-            sourceFingerprint = checkpoint.sourceFingerprint,
-            policyFingerprint = checkpoint.policyFingerprint,
-            workingSetFingerprint = checkpoint.workingSetFingerprint,
         )
     }
 
-    private fun headline(state: ConvergenceDecisionState): String = when (state) {
-        ConvergenceDecisionState.ACTIONABLE -> "Handlungsfähig"
-        ConvergenceDecisionState.EVIDENCE_REQUIRED -> "Mehr Evidenz nötig"
-        ConvergenceDecisionState.CAPABILITY_REQUIRED -> "Fähigkeit fehlt"
-        ConvergenceDecisionState.CONFLICTED -> "Widersprüchliche Lage"
-        ConvergenceDecisionState.UNRESOLVED -> "Noch nicht entschieden"
-    }
+    private fun projectNode(node: DecisionTraceNode): DecisionTraceNodeUiModel =
+        DecisionTraceNodeUiModel(
+            id = node.id,
+            type = node.type,
+            sourceType = node.sourceType,
+            sourceId = node.sourceId,
+            sourceRevision = node.sourceRevision,
+            label = node.displayLabel ?: sourceLabel(node.sourceType),
+            reasons = node.reasonCodes.map { raw ->
+                DecisionTraceReasonUiModel(raw = raw, summary = reasonSummary(raw))
+            },
+            recordedAt = node.recordedAt,
+            section = section(node.type),
+            tone = tone(node),
+        )
 
-    private fun summary(state: ConvergenceDecisionState): String = when (state) {
-        ConvergenceDecisionState.ACTIONABLE ->
-            "Die vorhandene Evidenz erfüllt die Entscheidungsbedingungen."
-        ConvergenceDecisionState.EVIDENCE_REQUIRED ->
-            "LIFEOS hält die Entscheidung zurück, bis die ausgewiesenen Evidenzlücken geklärt sind."
-        ConvergenceDecisionState.CAPABILITY_REQUIRED ->
-            "Die Entscheidung kann nicht ausgeführt werden, weil mindestens eine benötigte Fähigkeit fehlt."
-        ConvergenceDecisionState.CONFLICTED ->
-            "Widersprüche oder Konflikte sind zu stark für eine belastbare Entscheidung."
-        ConvergenceDecisionState.UNRESOLVED ->
-            "Die vorhandene Lage reicht noch nicht für eine belastbare Entscheidung aus."
-    }
-
-    private fun projectReason(raw: String): DecisionReasonUiModel {
-        val category = when {
-            raw == "all-convergence-action-gates-satisfied" -> DecisionReasonCategory.SUCCESS
-            raw.startsWith("evidence-request:") ||
-                raw.startsWith("evidence-score-below-threshold:") ||
-                raw.startsWith("fresh-support-below-threshold:") -> DecisionReasonCategory.EVIDENCE
-            raw.startsWith("total-score-below-threshold:") ||
-                raw.startsWith("winner-margin-below-threshold:") ||
-                raw.startsWith("confidence-bands-overlap:") -> DecisionReasonCategory.CONFIDENCE
-            raw.startsWith("contradiction-above-threshold:") ||
-                raw.startsWith("conflict-above-threshold:") -> DecisionReasonCategory.CONFLICT
-            raw.startsWith("capability-gap:") || raw.startsWith("capability-required:") ->
-                DecisionReasonCategory.CAPABILITY
-            raw.startsWith("escalation:") -> DecisionReasonCategory.ESCALATION
-            raw.startsWith("cross-domain-not-converged:") ||
-                raw.startsWith("domain-not-converged:") ||
-                raw.startsWith("convergence-failure:") ||
-                raw.startsWith("missing-source-domain:") ||
-                raw.startsWith("no-hypothesis:") ||
-                raw == "convergence-unresolved" -> DecisionReasonCategory.CONVERGENCE
-            else -> DecisionReasonCategory.OTHER
+    private fun kind(trace: DecisionTrace): DecisionTraceKind {
+        val sourceTypes = trace.nodes.mapTo(hashSetOf()) { it.sourceType }
+        return when {
+            "goal-photon" in sourceTypes -> DecisionTraceKind.GOAL
+            sourceTypes.any { it.startsWith("self-healing-") || it == "health-node" } ->
+                DecisionTraceKind.SELF_HEALING
+            sourceTypes.any { it.startsWith("evolution-") || it == "generated-tool" } ->
+                DecisionTraceKind.EVOLUTION
+            sourceTypes.any { it.startsWith("artifact-") } -> DecisionTraceKind.ARTIFACT
+            else -> DecisionTraceKind.SYSTEM
         }
-        return DecisionReasonUiModel(
-            raw = raw,
-            category = category,
-            summary = reasonSummary(raw, category),
-        )
     }
 
-    private fun reasonSummary(raw: String, category: DecisionReasonCategory): String = when {
-        raw == "all-convergence-action-gates-satisfied" ->
-            "Alle Bedingungen für eine belastbare Handlung sind erfüllt."
-        raw.startsWith("cross-domain-not-converged:") ->
-            "Die beteiligten Bereiche haben noch kein gemeinsames Ergebnis erreicht."
-        raw.startsWith("domain-not-converged:") ->
-            "Mindestens ein Entscheidungsbereich ist noch nicht konvergiert."
-        raw.startsWith("convergence-failure:") ->
-            "Im Konvergenzlauf wurde ein Fehler erhalten."
-        raw.startsWith("missing-source-domain:") ->
-            "Für einen Entscheidungsbereich fehlt die zugehörige Quelllage."
-        raw.startsWith("no-hypothesis:") ->
-            "Für einen Entscheidungsbereich liegt keine bewertbare Hypothese vor."
-        raw.startsWith("total-score-below-threshold:") ->
-            "Die stärkste Hypothese erreicht die erforderliche Gesamtbewertung nicht."
-        raw.startsWith("evidence-score-below-threshold:") ->
-            "Die Evidenzstärke reicht für eine Handlung noch nicht aus."
-        raw.startsWith("winner-margin-below-threshold:") ->
-            "Die führende Hypothese liegt nicht deutlich genug vor der Alternative."
-        raw.startsWith("confidence-bands-overlap:") ->
-            "Die Unsicherheitsbereiche der führenden Hypothesen überlappen sich."
-        raw.startsWith("contradiction-above-threshold:") ->
-            "Der Widerspruch gegen die führende Hypothese ist zu hoch."
-        raw.startsWith("conflict-above-threshold:") ->
-            "Ein erhaltener Konflikt ist zu stark für eine sichere Handlung."
-        raw.startsWith("fresh-support-below-threshold:") ->
-            "Es gibt nicht genug frische stützende Evidenz."
-        raw.startsWith("evidence-request:") ->
-            "Zusätzliche Evidenz wurde gezielt angefordert."
-        raw.startsWith("capability-gap:") || raw.startsWith("capability-required:") ->
-            "Eine benötigte Fähigkeit ist derzeit nicht ausreichend verfügbar."
-        raw.startsWith("escalation:${ConvergenceEscalationTarget.DEEP_SEARCH.name}:") ->
-            "Die Evidenzlücke wurde an Deep Search eskaliert."
-        raw.startsWith("escalation:${ConvergenceEscalationTarget.TOOL_WORKSHOP.name}:") ->
-            "Die fehlende Fähigkeit wurde an die Toolwerkstatt eskaliert."
-        raw == "convergence-unresolved" ->
-            "Die Lage bleibt ohne belastbares Ergebnis."
-        category == DecisionReasonCategory.OTHER ->
-            "Weitere technische Entscheidungsbegründung liegt vor."
+    private fun title(kind: DecisionTraceKind): String = when (kind) {
+        DecisionTraceKind.GOAL -> "Zielentscheidung"
+        DecisionTraceKind.SELF_HEALING -> "Self-Healing-Entscheidung"
+        DecisionTraceKind.EVOLUTION -> "Evolution-Entscheidung"
+        DecisionTraceKind.ARTIFACT -> "Artefakt-Entscheidung"
+        DecisionTraceKind.SYSTEM -> "Systementscheidung"
+    }
+
+    private fun summary(
+        unresolved: Boolean,
+        nodes: List<DecisionTraceNodeUiModel>,
+    ): String {
+        val constraints = nodes.count { it.section == DecisionTraceSection.CONSTRAINT }
+        val alternatives = nodes.count { it.section == DecisionTraceSection.ALTERNATIVE }
+        val outcomes = nodes.count { it.section == DecisionTraceSection.OUTCOME }
+        return when {
+            unresolved -> "Mindestens eine Unsicherheit ist in dieser Entscheidung noch ausdrücklich offen."
+            outcomes > 0 -> "Die Entscheidungskette enthält dokumentierte Ausführungs- oder Recovery-Ergebnisse."
+            alternatives > 0 && constraints > 0 ->
+                "Alternativen wurden unter dokumentierten Policy- oder Ressourcenbedingungen bewertet."
+            alternatives > 0 -> "Die Entscheidungskette enthält dokumentierte Alternativen oder Selektionen."
+            constraints > 0 -> "Die Entscheidung wurde durch dokumentierte Bedingungen eingeschränkt."
+            else -> "Die Entscheidungskette enthält ${nodes.size} dokumentierte Evidenzknoten."
+        }
+    }
+
+    private fun section(type: DecisionTraceNodeType): DecisionTraceSection = when (type) {
+        DecisionTraceNodeType.OBSERVED_FACT -> DecisionTraceSection.FACT
+        DecisionTraceNodeType.POLICY_CONSTRAINT,
+        DecisionTraceNodeType.RESOURCE_CONSTRAINT -> DecisionTraceSection.CONSTRAINT
+        DecisionTraceNodeType.INFERRED_HYPOTHESIS,
+        DecisionTraceNodeType.CANDIDATE_ALTERNATIVE,
+        DecisionTraceNodeType.REJECTION,
+        DecisionTraceNodeType.SELECTION -> DecisionTraceSection.ALTERNATIVE
+        DecisionTraceNodeType.EXECUTION_OUTCOME,
+        DecisionTraceNodeType.RECOVERY_OUTCOME -> DecisionTraceSection.OUTCOME
+        DecisionTraceNodeType.UNRESOLVED_UNCERTAINTY -> DecisionTraceSection.UNCERTAINTY
+    }
+
+    private fun tone(node: DecisionTraceNode): DecisionTraceTone = when {
+        node.type == DecisionTraceNodeType.REJECTION -> DecisionTraceTone.NEGATIVE
+        node.type == DecisionTraceNodeType.UNRESOLVED_UNCERTAINTY -> DecisionTraceTone.WARNING
+        node.type == DecisionTraceNodeType.POLICY_CONSTRAINT ||
+            node.type == DecisionTraceNodeType.RESOURCE_CONSTRAINT -> DecisionTraceTone.WARNING
+        node.type == DecisionTraceNodeType.SELECTION -> DecisionTraceTone.POSITIVE
+        node.type == DecisionTraceNodeType.EXECUTION_OUTCOME ||
+            node.type == DecisionTraceNodeType.RECOVERY_OUTCOME -> {
+            if (node.reasonCodes.any(::isFailureReason)) {
+                DecisionTraceTone.NEGATIVE
+            } else {
+                DecisionTraceTone.POSITIVE
+            }
+        }
+        else -> DecisionTraceTone.NEUTRAL
+    }
+
+    private fun isFailureReason(reason: String): Boolean =
+        reason == "FAILED" ||
+            reason == "EXPECTED_OUTPUT_MISSING" ||
+            reason == "BLOCKED" ||
+            reason == "EXHAUSTED" ||
+            reason == "QUARANTINED" ||
+            reason.startsWith("HARD_FAILURE_")
+
+    private fun sourceLabel(sourceType: String): String = when (sourceType) {
+        "goal-photon" -> "Ziel"
+        "goal-plan" -> "Plan"
+        "convergence-decision" -> "Konvergenzentscheidung"
+        "convergence-candidate" -> "Konvergenzalternative"
+        "owner-policy-decision" -> "Owner-Policy"
+        "world-formula-resource-allocation" -> "Ressourcenzuteilung"
+        "resource-decision" -> "Ressourcenentscheidung"
+        "resource-reservation" -> "Ressourcenreservierung"
+        "capability-provider-selection" -> "Fähigkeitsanbieter"
+        "capability-gap" -> "Fähigkeitslücke"
+        "language-goal-routing" -> "Sprachrouting"
+        "deepsearch-request" -> "Deep Search"
+        "deepsearch-mission" -> "Deep-Search-Mission"
+        "deepsearch-branch" -> "Deep-Search-Alternative"
+        "deepsearch-evidence" -> "Deep-Search-Evidenz"
+        "deepsearch-source" -> "Deep-Search-Quelle"
+        "self-healing-incident" -> "Self-Healing-Incident"
+        "self-healing-action" -> "Self-Healing-Aktion"
+        "self-healing-verification-evidence" -> "Recovery-Evidenz"
+        "health-node" -> "Health Node"
+        "evolution-adoption-evidence" -> "Evolution-Adoption"
+        "evolution-canary-invocation" -> "Evolution-Canary"
+        "evolution-canary-reservation" -> "Canary-Ressource"
+        "evolution-canary-outcome" -> "Canary-Ergebnis"
+        "evolution-kill-switch" -> "Kill Switch"
+        "generated-tool" -> "Generiertes Tool"
+        "artifact-request" -> "Artefakt-Anfrage"
+        "artifact-contribution" -> "Artefakt-Beitrag"
+        "artifact-parent-photon" -> "Quell-Photon"
+        "artifact-photon" -> "Artefakt"
+        else -> sourceType
+    }
+
+    private fun reasonSummary(raw: String): String = when {
+        raw == "ALLOWED" -> "Die Owner-Policy erlaubt diesen Schritt."
+        raw == "SUCCEEDED" || raw == "SUCCESS" -> "Der dokumentierte Schritt war erfolgreich."
+        raw == "FAILED" -> "Der dokumentierte Schritt ist fehlgeschlagen."
+        raw == "EXPECTED_OUTPUT" -> "Die erwartete Ausgabe wurde erzeugt."
+        raw == "EXPECTED_OUTPUT_MISSING" -> "Die erwartete Ausgabe fehlt."
+        raw == "LANGUAGE_BLOCKING" -> "Die Sprachauflösung blockiert den nächsten Schritt."
+        raw == "SOURCE_BLOCKED" -> "Die Quelle wurde blockiert."
+        raw == "SOURCE_FAILED" -> "Die Quelle ist fehlgeschlagen."
+        raw == "CONTRADICTION" -> "Diese Evidenz widerspricht der ausgewählten Richtung."
+        raw == "SUPPORTING" -> "Diese Evidenz stützt die ausgewählte Richtung."
+        raw.startsWith("STATUS_") -> "Status: ${raw.removePrefix("STATUS_")}"
+        raw.startsWith("CAPABILITY_") -> "Fähigkeit: ${raw.removePrefix("CAPABILITY_")}"
+        raw.startsWith("PROVIDER_STATE_") -> "Provider-Status: ${raw.removePrefix("PROVIDER_STATE_")}"
+        raw.startsWith("PROVIDER_TYPE_") -> "Provider-Typ: ${raw.removePrefix("PROVIDER_TYPE_")}"
+        raw.startsWith("TRUST_") -> "Vertrauensstufe: ${raw.removePrefix("TRUST_")}"
+        raw.startsWith("DOMAIN_") -> "Ressourcendomäne: ${raw.removePrefix("DOMAIN_")}"
+        raw.startsWith("ATTEMPT_") -> "Recovery-Versuch ${raw.removePrefix("ATTEMPT_")}"
+        raw.startsWith("HARD_FAILURE_") -> "Harter Fehler: ${raw.removePrefix("HARD_FAILURE_")}"
         else -> raw
     }
 }
