@@ -2,7 +2,6 @@ name: Core Fast Gate
 
 on:
   push:
-    branches-ignore: [main]
     paths:
       - "core/**"
       - "app/src/main/**"
@@ -13,6 +12,7 @@ on:
       - "gradle/**"
       - "gradle.properties"
       - ".github/scripts/ci-core-fast.sh"
+      - ".github/scripts/ci-gold-coverage-contract.sh"
       - ".github/workflows/core-fast.yml"
       - ".github/workflows/android-emulator-recovery.yml"
   workflow_dispatch:
