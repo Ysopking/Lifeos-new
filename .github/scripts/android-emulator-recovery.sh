@@ -98,11 +98,11 @@ run_suite \
   '2' \
   "$report_dir/field-snapshot-atomic-recovery.txt"
 
-# V17 IMAGE artifact closure. Run after established cold-restart assertions so the new generated
-# Photons cannot perturb their seed/recovery baseline, but before the owner-policy test deliberately
-# revokes asset-write authority.
+# F5A owner-reviewed IMAGE artifact closure. Run after established cold-restart assertions so the
+# new generated Photons cannot perturb their seed/recovery baseline, but before the owner-policy
+# test deliberately revokes asset-write authority.
 run_test \
-  'app.lifeos.next.OfflineImageArtifactDeviceTest#promptRendersPngReloadsAndEntersArtifactLifecycle' \
+  'app.lifeos.next.OfflineImageArtifactDeviceTest#promptRendersPngButPublishesOnlyAfterExactOwnerApproval' \
   "$report_dir/offline-image-artifact-e2e.txt"
 
 run_test \
