@@ -1,0 +1,126 @@
+package app.lifeos.next
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import app.lifeos.core.runtime.goal.GoalPlanId
+import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.ui.goals.GoalPlanUiModel
+import app.lifeos.next.ui.goals.GoalPlanUiStatus
+import app.lifeos.next.ui.goals.GoalWorkspaceProjector
+import app.lifeos.next.ui.goals.GoalWorkspaceUiModel
+import java.time.Instant
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+enum class GoalWorkspaceFilter {
+    ACTIVE,
+    WAITING,
+    DONE,
+}
+
+data class LifeOsGoalsUiState(
+    val workspace: GoalWorkspaceUiModel = GoalWorkspaceUiModel.empty(),
+    val filter: GoalWorkspaceFilter = GoalWorkspaceFilter.ACTIVE,
+    val selectedPlanId: GoalPlanId? = null,
+    val loading: Boolean = true,
+    val error: String? = null,
+) {
+    val visiblePlans: List<GoalPlanUiModel>
+        get() = workspace.plans.filter { plan ->
+            when (filter) {
+                GoalWorkspaceFilter.ACTIVE -> plan.status in ACTIVE_STATUSES
+                GoalWorkspaceFilter.WAITING -> plan.status == GoalPlanUiStatus.WAITING
+                GoalWorkspaceFilter.DONE -> plan.status in DONE_STATUSES
+            }
+        }
+
+    val selectedPlan: GoalPlanUiModel?
+        get() = selectedPlanId?.let { id -> workspace.plans.firstOrNull { it.id == id } }
+
+    private companion object {
+        val ACTIVE_STATUSES = setOf(
+            GoalPlanUiStatus.ACTIVE,
+            GoalPlanUiStatus.REPLAN_REQUIRED,
+            GoalPlanUiStatus.FAILED,
+            GoalPlanUiStatus.BLOCKED,
+            GoalPlanUiStatus.PLANNED,
+        )
+        val DONE_STATUSES = setOf(
+            GoalPlanUiStatus.COMPLETED,
+            GoalPlanUiStatus.CANCELLED,
+        )
+    }
+}
+
+/** Read-only UI adapter over the productive durable long-horizon goal-plan ledger. */
+class LifeOsGoalsViewModel(application: Application) : AndroidViewModel(application) {
+    private val owner = application as LifeOsApplication
+    private val kernel = owner.kernel
+    private val mutableState = MutableStateFlow(LifeOsGoalsUiState())
+
+    val state = mutableState.asStateFlow()
+
+    init {
+        observeGoalPlans()
+        observeBootstrap()
+    }
+
+    fun selectFilter(filter: GoalWorkspaceFilter) {
+        mutableState.update { it.copy(filter = filter) }
+    }
+
+    fun selectPlan(planId: GoalPlanId) {
+        if (mutableState.value.workspace.plans.none { it.id == planId }) return
+        mutableState.update { it.copy(selectedPlanId = planId) }
+    }
+
+    fun dismissDetails() {
+        mutableState.update { it.copy(selectedPlanId = null) }
+    }
+
+    /** Recomputes only time-derived UI fields such as deadline expiry. Never mutates the ledger. */
+    fun refreshProjection() {
+        project(kernel.goalPlans.states.value, Instant.now())
+    }
+
+    private fun observeGoalPlans() {
+        viewModelScope.launch {
+            kernel.goalPlans.states.collect { states ->
+                project(states, Instant.now())
+            }
+        }
+    }
+
+    private fun observeBootstrap() {
+        viewModelScope.launch {
+            kernel.bootstrapState.collect { boot ->
+                mutableState.update { current ->
+                    current.copy(
+                        loading = boot.status == KernelBootstrapStatus.CREATED ||
+                            boot.status == KernelBootstrapStatus.LOADING,
+                        error = boot.failureMessage,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun project(
+        states: Map<GoalPlanId, app.lifeos.core.runtime.goal.GoalPlanRuntimeState>,
+        at: Instant,
+    ) {
+        val workspace = GoalWorkspaceProjector.project(states, at)
+        mutableState.update { current ->
+            current.copy(
+                workspace = workspace,
+                selectedPlanId = current.selectedPlanId?.takeIf { selected ->
+                    workspace.plans.any { it.id == selected }
+                },
+            )
+        }
+    }
+}
