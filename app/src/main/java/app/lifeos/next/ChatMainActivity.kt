@@ -14,6 +14,7 @@ class ChatMainActivity : ComponentActivity() {
     private lateinit var assetReviewModel: OwnerAssetReviewViewModel
     private lateinit var goalsModel: LifeOsGoalsViewModel
     private lateinit var decisionTraceModel: LifeOsDecisionTraceViewModel
+    private lateinit var toolCenterModel: LifeOsToolCenterViewModel
 
     private val initialDataPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -37,6 +38,7 @@ class ChatMainActivity : ComponentActivity() {
         assetReviewModel = ViewModelProvider(this)[OwnerAssetReviewViewModel::class.java]
         goalsModel = ViewModelProvider(this)[LifeOsGoalsViewModel::class.java]
         decisionTraceModel = ViewModelProvider(this)[LifeOsDecisionTraceViewModel::class.java]
+        toolCenterModel = ViewModelProvider(this)[LifeOsToolCenterViewModel::class.java]
         setContent {
             LifeOsRoot(
                 model = model,
@@ -44,6 +46,7 @@ class ChatMainActivity : ComponentActivity() {
                 assetReviewModel = assetReviewModel,
                 goalsModel = goalsModel,
                 decisionTraceModel = decisionTraceModel,
+                toolCenterModel = toolCenterModel,
                 onRequestMicrophonePermission = {
                     microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
                 },

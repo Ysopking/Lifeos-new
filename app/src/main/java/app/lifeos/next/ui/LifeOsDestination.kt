@@ -11,6 +11,7 @@ enum class LifeOsDestination(
     ASSETS(key = "assets", label = "Assets", glyph = "▣"),
     GOALS(key = "goals", label = "Ziele", glyph = "◎"),
     WHY(key = "why", label = "Warum", glyph = "?"),
+    TOOLS(key = "tools", label = "Tools", glyph = "⚙"),
     SYSTEM(key = "system", label = "System", glyph = "◇"),
     ;
 
