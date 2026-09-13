@@ -42,16 +42,10 @@ internal fun AssetReviewSummaryCard(
     onOpen: () -> Unit,
 ) {
     val candidate = record.candidate
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1f)) {
                     Text(candidate.title, style = MaterialTheme.typography.titleMedium)
                     Text(
                         "${assetKindLabel(candidate.kind)} · ${ASSET_REVIEW_TIME.format(candidate.createdAt)}",
@@ -73,11 +67,7 @@ internal fun AssetReviewSummaryCard(
                 candidate.inputPhotonIds.takeIf { it.isNotEmpty() }?.let { "${it.size} Quellen" },
             ).joinToString(" · ")
             if (context.isNotBlank()) {
-                Text(
-                    context,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(context, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             OutlinedButton(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
                 Text(if (record.decision == null) "Prüfen" else "Details ansehen")
@@ -96,8 +86,9 @@ internal fun AssetReviewDecisionPanel(
     onRequestChanges: () -> Unit,
     onReject: () -> Unit,
 ) {
+    val decision = record.decision
     val busy = record.candidate.id.value in state.busyCandidateIds
-    if (record.decision != null) {
+    if (decision != null) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
@@ -106,9 +97,9 @@ internal fun AssetReviewDecisionPanel(
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Entscheidung", style = MaterialTheme.typography.titleSmall)
                 Text(reviewStatus(record))
-                record.decision.feedback?.takeIf { it.isNotBlank() }?.let { Text("Rückmeldung: $it") }
+                decision.feedback?.takeIf { it.isNotBlank() }?.let { Text("Rückmeldung: $it") }
                 Text(
-                    "Entschieden ${ASSET_REVIEW_TIME.format(record.decision.decidedAt)}",
+                    "Entschieden ${ASSET_REVIEW_TIME.format(decision.decidedAt)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -140,21 +131,15 @@ internal fun AssetReviewDecisionPanel(
             onClick = onRequestChanges,
             enabled = !busy && feedback.isNotBlank(),
             modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Änderungen anfordern")
-        }
+        ) { Text("Änderungen anfordern") }
         TextButton(
             onClick = onReject,
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-        ) {
-            Text("Asset ablehnen")
-        }
+        ) { Text("Asset ablehnen") }
         if (busy) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                CircularProgressIndicator()
-            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { CircularProgressIndicator() }
         }
     }
 }
@@ -164,22 +149,19 @@ internal fun AssetReviewPreview(record: OwnerAssetReviewRecord, state: PhotonIma
     val candidate = record.candidate
     if (candidate.kind == ArtifactKind.IMAGE) {
         AssetImagePreview(state, 420)
-    } else {
-        candidate.previewText?.takeIf { it.isNotBlank() }?.let { preview ->
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    if (candidate.kind == ArtifactKind.CODE) "Exakte Code-Revision" else "Vorschau",
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-                    SelectionContainer {
-                        Text(
-                            preview,
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = if (candidate.kind == ArtifactKind.CODE) FontFamily.Monospace else null,
-                        )
-                    }
+        return
+    }
+    candidate.previewText?.takeIf { it.isNotBlank() }?.let { preview ->
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(if (candidate.kind == ArtifactKind.CODE) "Exakte Code-Revision" else "Vorschau", style = MaterialTheme.typography.titleSmall)
+            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                SelectionContainer {
+                    Text(
+                        preview,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = if (candidate.kind == ArtifactKind.CODE) FontFamily.Monospace else null,
+                    )
                 }
             }
         }
@@ -221,17 +203,13 @@ internal fun ReviewStatusBadge(record: OwnerAssetReviewRecord) {
         OwnerAssetReviewDecision.REJECTED -> MaterialTheme.colorScheme.errorContainer
     }
     Surface(shape = RoundedCornerShape(999.dp), color = background) {
-        Text(reviewStatus(record), modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
+        Text(reviewStatus(record), Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
     }
 }
 
 @Composable
 internal fun AssetReviewErrorNotice(error: String, onDismiss: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.errorContainer,
-    ) {
+    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.errorContainer) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(error, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = onDismiss) { Text("Hinweis schließen") }
@@ -242,9 +220,7 @@ internal fun AssetReviewErrorNotice(error: String, onDismiss: () -> Unit) {
 @Composable
 private fun AssetImagePreview(state: PhotonImagePreviewState?, maxHeight: Int) {
     when (state) {
-        PhotonImagePreviewState.Loading -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-            CircularProgressIndicator()
-        }
+        PhotonImagePreviewState.Loading -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { CircularProgressIndicator() }
         is PhotonImagePreviewState.Ready -> Image(
             bitmap = state.preview.bitmap.asImageBitmap(),
             contentDescription = "Vorschau des generierten Assets",
