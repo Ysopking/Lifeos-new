@@ -30,7 +30,7 @@ class FieldSnapshotAtomicRecoveryDeviceTest {
     private val now = Instant.parse("2026-09-13T14:45:00Z")
 
     @Test
-    fun failWriteRestoresLastCommittedEncryptedSnapshot() = runBlocking {
+    fun failWritePreservesLastCommittedEncryptedSnapshot() = runBlocking {
         withIsolatedFiles("fail-write") { context, root ->
             val repository = EncryptedFieldSnapshotRepository(context)
             val snapshot = snapshot("field-atomic-fail-write")
@@ -46,13 +46,17 @@ class FieldSnapshotAtomicRecoveryDeviceTest {
             atomic.failWrite(stream)
 
             assertEquals(snapshot, EncryptedFieldSnapshotRepository(context).load(snapshot.id))
-            assertTrue("Rollback must restore the committed encrypted bytes", committedCiphertext.contentEquals(vault.readBytes()))
-            assertFalse("Successful rollback must not leave a stale backup", File("${vault.path}.bak").exists())
+            assertTrue(
+                "Failed replacement must leave the committed encrypted bytes unchanged",
+                committedCiphertext.contentEquals(vault.readBytes()),
+            )
+            assertFalse("failWrite must remove the uncommitted replacement", newFile(vault).exists())
+            assertFalse("Modern AtomicFile must not leave a legacy backup", legacyBackupFile(vault).exists())
         }
     }
 
     @Test
-    fun interruptedWriteRecoversBackupAcrossFreshRepositoryInstance() = runBlocking {
+    fun interruptedWriteIsDiscardedAcrossFreshRepositoryInstance() = runBlocking {
         withIsolatedFiles("process-death") { context, root ->
             val repository = EncryptedFieldSnapshotRepository(context)
             val snapshot = snapshot("field-atomic-process-death")
@@ -66,14 +70,21 @@ class FieldSnapshotAtomicRecoveryDeviceTest {
             stream.flush()
             stream.close()
 
-            val backup = File("${vault.path}.bak")
-            assertTrue("Interrupted AtomicFile write must retain the previous committed backup", backup.isFile)
-            assertFalse("Interrupted base must not equal committed ciphertext", committedCiphertext.contentEquals(vault.readBytes()))
+            val uncommitted = newFile(vault)
+            assertTrue("Interrupted AtomicFile write must leave the uncommitted .new file", uncommitted.isFile)
+            assertTrue(
+                "Interrupted write must not mutate the last committed encrypted snapshot",
+                committedCiphertext.contentEquals(vault.readBytes()),
+            )
+            assertFalse("Current AtomicFile must not require a legacy .bak for crash safety", legacyBackupFile(vault).exists())
 
             val recovered = EncryptedFieldSnapshotRepository(context).load(snapshot.id)
             assertEquals(snapshot, recovered)
-            assertTrue("Fresh load must restore the previous committed encrypted bytes", committedCiphertext.contentEquals(vault.readBytes()))
-            assertFalse("Recovery must consume the stale backup", backup.exists())
+            assertTrue(
+                "Fresh repository load must keep the previous committed encrypted bytes",
+                committedCiphertext.contentEquals(vault.readBytes()),
+            )
+            assertFalse("Reading the committed snapshot must discard the interrupted .new file", uncommitted.exists())
         }
     }
 
@@ -118,4 +129,8 @@ class FieldSnapshotAtomicRecoveryDeviceTest {
         require(digest.matches(Regex("[0-9a-f]{64}")))
         return root.resolve("field-snapshot-vault/$digest.fsnapshot")
     }
+
+    private fun newFile(vault: File): File = File("${vault.path}.new")
+
+    private fun legacyBackupFile(vault: File): File = File("${vault.path}.bak")
 }
