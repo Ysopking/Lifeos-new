@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.lifeos.core.image.ImagePhotonFactory
+import app.lifeos.core.runtime.artifact.ArtifactKind
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewCandidateId
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewDecision
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewRecord
@@ -94,7 +95,7 @@ class OwnerAssetReviewViewModel(application: Application) : AndroidViewModel(app
                     current.copy(records = snapshot, error = null)
                 }
                 snapshot.forEach { record ->
-                    if (record.candidate.kind.name == "IMAGE") {
+                    if (record.candidate.kind == ArtifactKind.IMAGE) {
                         loadPreview(record)
                     }
                 }
@@ -145,7 +146,7 @@ class OwnerAssetReviewViewModel(application: Application) : AndroidViewModel(app
                 reviews.decide(
                     candidateId = candidateId,
                     decision = decision,
-                    ownerActorId = PrivateOwnerPolicyBaseline.ownerActorId,
+                    ownerActorId = PrivateOwnerPolicyBaseline.ownerActorId.value,
                     feedback = feedback,
                     decidedAt = Instant.now(),
                 )
