@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.trace
 import app.lifeos.core.runtime.health.RecoveryPlan
 import app.lifeos.core.runtime.health.SelfHealingIncidentSnapshot
 import app.lifeos.core.runtime.health.SelfHealingIncidentState
+import app.lifeos.core.runtime.health.selfHealingFingerprint
 import kotlinx.coroutines.CancellationException
 
 /**
