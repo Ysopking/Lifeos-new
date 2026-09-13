@@ -36,17 +36,24 @@ data class OwnerAssetReviewApplyResult(
  * Human-in-the-loop publication boundary for generated assets.
  *
  * The review repository is the source of truth for pending/decision state. Candidate Photons stay
- * outside the canonical PhotonRepository until the private owner approves the exact candidate id.
- * Publication is replay-safe: exact canonical Photons are skipped, identity collisions fail closed,
- * staged parent dependencies are published before their children, and approved subject-specific
- * effects are replayed before the review is marked published.
+ * outside the canonical PhotonRepository until the configured private owner approves the exact
+ * candidate id. Publication is replay-safe: exact canonical Photons are skipped, identity collisions
+ * fail closed, staged parent dependencies are published before their children, and approved
+ * subject-specific effects are replayed before the review is marked published.
  */
 class OwnerAssetReviewCoordinator(
     private val reviews: OwnerAssetReviewRepository,
     private val photons: PhotonRepository,
     private val ingress: ArtifactPhotonIngress,
+    private val authorizedOwnerActorId: String,
     private val onApproved: suspend (OwnerAssetReviewCandidate) -> Unit = {},
 ) {
+    init {
+        require(authorizedOwnerActorId.isNotBlank()) {
+            "Owner asset review requires one nonblank authorized owner actor"
+        }
+    }
+
     suspend fun stage(candidate: OwnerAssetReviewCandidate): OwnerAssetReviewRecord =
         reviews.stage(candidate)
 
@@ -59,8 +66,14 @@ class OwnerAssetReviewCoordinator(
         feedback: String?,
         decidedAt: Instant,
     ): OwnerAssetReviewApplyResult {
+        require(ownerActorId == authorizedOwnerActorId) {
+            "Owner asset review decision is not authorized for actor $ownerActorId"
+        }
         val current = requireNotNull(reviews.load(candidateId)) {
             "Owner asset review candidate ${candidateId.value} does not exist"
+        }
+        require(decidedAt >= current.candidate.createdAt) {
+            "Owner asset review decision cannot predate the generated candidate"
         }
         val decisionRecord = current.decision ?: createDecisionRecord(
             candidate = current.candidate,
@@ -113,6 +126,12 @@ class OwnerAssetReviewCoordinator(
             .filter { it.decision?.decision == OwnerAssetReviewDecision.APPROVED }
             .forEach { record ->
                 val decision = requireNotNull(record.decision)
+                require(decision.ownerActorId == authorizedOwnerActorId) {
+                    "Persisted owner asset approval is not authorized for actor ${decision.ownerActorId}"
+                }
+                require(decision.decidedAt >= record.candidate.createdAt) {
+                    "Persisted owner asset approval predates its generated candidate"
+                }
                 publishExact(createDecisionPhoton(record.candidate, decision))
                 publishApprovedCandidate(record.candidate)
                 reconciled += if (record.publishedAt == null) {
@@ -140,7 +159,8 @@ class OwnerAssetReviewCoordinator(
         feedback: String?,
         decidedAt: Instant,
     ): OwnerAssetReviewDecisionRecord {
-        require(ownerActorId.isNotBlank())
+        require(ownerActorId == authorizedOwnerActorId)
+        require(decidedAt >= candidate.createdAt)
         val fingerprint = StableCognitiveIds.fingerprint(
             "owner-asset-review-decision/v1",
             candidate.id.value,
