@@ -14,7 +14,7 @@ import androidx.compose.ui.unit.dp
 fun MemoryMigrationScreen(modifier: Modifier = Modifier) {
     MigrationScreen(
         title = "Gedächtnis",
-        detail = "Photon-Suche, Verlauf und Artefakte werden im nächsten Frontend-Block aus der bestehenden Gedankenansicht hierher migriert.",
+        detail = "Photon-Suche, Verlauf und Artefakte werden in einem späteren Frontend-Block aus der bestehenden Gedankenansicht hierher migriert.",
         modifier = modifier,
     )
 }
