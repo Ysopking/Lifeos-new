@@ -25,6 +25,7 @@ import app.lifeos.next.ui.system.RuntimeHealthModalSheet
 fun LifeOsChatScreen(
     model: LifeOsChatViewModel,
     modifier: Modifier = Modifier,
+    onRequestMicrophonePermission: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
     var showRuntimeHealth by rememberSaveable { mutableStateOf(false) }
@@ -52,16 +53,39 @@ fun LifeOsChatScreen(
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (state.events.isEmpty()) item { Text("Schreib LIFEOS eine Nachricht.") }
-            items(state.events, key = { it.id }) { ChatMessage(it) }
+            if (state.timeline.isEmpty()) item { Text("Schreib LIFEOS eine Nachricht.") }
+            items(state.timeline, key = { it.id }) { item ->
+                when (item) {
+                    is ChatTimelineItem.Message -> ChatMessage(item.event)
+                    is ChatTimelineItem.Image -> Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Start,
+                    ) {
+                        ChatImageContent(
+                            photon = item.photon,
+                            loadPreview = model::loadChatImagePreview,
+                            modifier = Modifier.fillMaxWidth(0.92f),
+                        )
+                    }
+                }
+            }
         }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         ChatComposer(
             draft = state.draft,
             bootStatus = state.bootStatus,
             processing = state.turnProcessing,
+            voice = state.voice,
             onDraftChange = model::editDraft,
             onSend = model::sendMessage,
+            onStartVoice = {
+                if (model.beginVoiceCapture() == ChatVoiceStartResult.PERMISSION_REQUIRED) {
+                    onRequestMicrophonePermission()
+                }
+            },
+            onStopVoice = model::stopVoiceCapture,
+            onAcceptStagedVoice = model::acceptStagedVoiceTranscript,
+            onDiscardStagedVoice = model::discardStagedVoiceTranscript,
         )
     }
 

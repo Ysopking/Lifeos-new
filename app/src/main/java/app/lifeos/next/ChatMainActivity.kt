@@ -1,5 +1,6 @@
 package app.lifeos.next
 
+import android.Manifest
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -8,17 +9,34 @@ import androidx.lifecycle.ViewModelProvider
 import app.lifeos.next.ui.LifeOsRoot
 
 class ChatMainActivity : ComponentActivity() {
+    private lateinit var model: LifeOsChatViewModel
+
     private val initialDataPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         (application as? LifeOsApplication)?.refreshInitialDataBootstrap()
     }
 
+    private val microphonePermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (::model.isInitialized) {
+            model.onMicrophonePermissionResult(granted)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val owner = application as LifeOsApplication
-        val model = ViewModelProvider(this)[LifeOsChatViewModel::class.java]
-        setContent { LifeOsRoot(model) }
+        model = ViewModelProvider(this)[LifeOsChatViewModel::class.java]
+        setContent {
+            LifeOsRoot(
+                model = model,
+                onRequestMicrophonePermission = {
+                    microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+                },
+            )
+        }
 
         if (savedInstanceState == null && owner.shouldRequestInitialDataPermissions()) {
             val missing = owner.initialDataPermissionsToRequest()

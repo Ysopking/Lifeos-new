@@ -17,6 +17,22 @@ on:
       - ".github/scripts/ci-action-pin-contract.sh"
       - ".github/scripts/android-emulator-recovery.sh"
       - ".github/workflows/**"
+  pull_request:
+    paths:
+      - "core/**"
+      - "app/src/main/**"
+      - "app/src/test/**"
+      - "app/src/androidTest/**"
+      - "app/build.gradle*"
+      - "build.gradle*"
+      - "settings.gradle*"
+      - "gradle/**"
+      - "gradle.properties"
+      - ".github/scripts/ci-core-fast.sh"
+      - ".github/scripts/ci-gold-coverage-contract.sh"
+      - ".github/scripts/ci-action-pin-contract.sh"
+      - ".github/scripts/android-emulator-recovery.sh"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
