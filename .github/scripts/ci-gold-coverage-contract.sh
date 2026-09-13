@@ -59,8 +59,26 @@ grep -Fq 'branches: [main]' "$recovery_workflow" || { echo "emulator-recovery-ma
 
 product_gold_workflow=".github/workflows/product-gold.yml"
 grep -Fq 'push:' "$product_gold_workflow" || { echo "product-gold-missing-push-trigger" >&2; exit 1; }
+grep -Fq 'CANDIDATE_SHA: ${{ github.sha }}' "$product_gold_workflow" || {
+  echo "product-gold-candidate-sha-not-bound-to-checkout-ref" >&2
+  exit 1
+}
+grep -Fq 'SOURCE_HEAD_SHA:' "$product_gold_workflow" || {
+  echo "product-gold-source-head-sha-not-recorded" >&2
+  exit 1
+}
 grep -Fq 'offline_image_artifact_e2e=PASS' "$product_gold_workflow" || {
   echo "product-gold-image-e2e-not-sealed" >&2
+  exit 1
+}
+
+product_gold_script=".github/scripts/ci-product-gold.sh"
+grep -Fq 'candidate-sha-checkout-mismatch' "$product_gold_script" || {
+  echo "product-gold-checkout-sha-not-verified" >&2
+  exit 1
+}
+grep -Fq 'source_head_sha=' "$product_gold_script" || {
+  echo "product-gold-source-head-evidence-missing" >&2
   exit 1
 }
 
