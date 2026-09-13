@@ -8,6 +8,8 @@ on:
       - ".github/scripts/android-emulator-recovery.sh"
       - ".github/scripts/ci-emulator-preflight.sh"
       - "app/src/androidTest/**"
+      - "app/src/main/java/app/lifeos/next/ChatMainActivity.kt"
+      - "app/src/main/java/app/lifeos/next/ui/**"
       - "app/src/main/java/app/lifeos/next/LifeOsApplication.kt"
       - "app/src/main/java/app/lifeos/next/LifeOsStartupComposition.kt"
       - "app/src/main/java/app/lifeos/next/LifeOsRuntimeWiring.kt"
