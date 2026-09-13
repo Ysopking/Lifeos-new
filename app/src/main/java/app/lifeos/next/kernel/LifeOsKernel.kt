@@ -501,7 +501,11 @@ class LifeOsKernel internal constructor(
                         goalPhotonId = goalPhotonId,
                         createdAt = createdAt,
                     )
-                    val sceneSubmission = persistAndIngest(sceneGraphPhoton.photon)
+                    val sceneSubmission = PhotonSubmissionResult(
+                        photon = sceneGraphPhoton.photon,
+                        processingQueued = false,
+                        processingFailure = OWNER_ASSET_REVIEW_PENDING,
+                    )
                     val pngBytes = pngEncoder.encode(rendered.image)
                     val asset = imageAssets.save(pngBytes, "image/png")
                     try {
@@ -519,7 +523,11 @@ class LifeOsKernel internal constructor(
                             confidence = rendered.graph.confidence,
                             createdAt = createdAt,
                         )
-                        val imageSubmission = persistAndIngest(imagePhoton)
+                        val imageSubmission = PhotonSubmissionResult(
+                            photon = imagePhoton,
+                            processingQueued = false,
+                            processingFailure = OWNER_ASSET_REVIEW_PENDING,
+                        )
                         ImageGenerationResult.Generated(
                             GeneratedImageResult(
                                 scene = sceneSubmission,
@@ -645,6 +653,7 @@ class LifeOsKernel internal constructor(
 
     private companion object {
         const val PRIVATE_OWNER_ACTOR_ID = "private-owner"
+        const val OWNER_ASSET_REVIEW_PENDING = "awaiting-owner-review"
         val LIVE_SUBMISSION_BUDGET = CognitiveWorkBudget(
             maxDurationMs = 30_000,
             maxModuleInvocations = 16,
