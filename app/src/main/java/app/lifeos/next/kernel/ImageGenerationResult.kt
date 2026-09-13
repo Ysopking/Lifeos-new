@@ -2,6 +2,7 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.image.ImageAssetDescriptor
 import app.lifeos.core.runtime.artifact.ArtifactGenerationResult
+import app.lifeos.core.runtime.artifact.OwnerAssetReviewCandidateId
 
 data class GeneratedImageResult(
     val scene: PhotonSubmissionResult,
@@ -9,6 +10,8 @@ data class GeneratedImageResult(
     val descriptor: ImageAssetDescriptor,
     val rendererId: String,
     val artifactGeneration: ArtifactGenerationResult? = null,
+    /** Exact immutable generated revision waiting for owner approval before canonical publication. */
+    val ownerReviewCandidateId: OwnerAssetReviewCandidateId? = null,
 )
 
 sealed interface ImageGenerationResult {
