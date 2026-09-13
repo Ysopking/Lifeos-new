@@ -21,6 +21,13 @@ data class LanguageSubmissionResult(
     val localCommunication: LocalCommunicationExecutionResult? = null,
     val languageFailure: String? = null,
 ) {
+    init {
+        val resolvedRouting = (goalResume as? GoalResumeExecutionResult.Resumed)?.routing ?: routing
+        if (resolvedRouting != null) {
+            ToolCenterCapabilityGapRuntimeRegistry.publish(resolvedRouting.blockingGaps)
+        }
+    }
+
     val sourceStored: Boolean get() = true
     val languageUnderstood: Boolean get() = understanding != null && goalPhoton != null && languageFailure == null
     val effectiveGoal: GoalFrame? get() = when (val resume = goalResume) {
