@@ -1,97 +1,84 @@
 package app.lifeos.next.ui.decision
 
-import app.lifeos.core.field.FieldDomainId
-import app.lifeos.core.field.HypothesisId
-import app.lifeos.core.model.PhotonId
-import app.lifeos.core.runtime.convergence.ConvergenceDecisionCheckpointId
-import app.lifeos.core.runtime.convergence.ConvergenceDecisionId
-import app.lifeos.core.runtime.convergence.ConvergenceDecisionState
-import app.lifeos.core.runtime.convergence.ConvergenceEscalationTarget
-import app.lifeos.core.runtime.convergence.ConvergenceEvidenceGapKind
+import app.lifeos.core.runtime.trace.DecisionTraceId
+import app.lifeos.core.runtime.trace.DecisionTraceLinkType
+import app.lifeos.core.runtime.trace.DecisionTraceNodeId
+import app.lifeos.core.runtime.trace.DecisionTraceNodeType
+import java.time.Instant
 
-enum class DecisionReasonCategory {
-    SUCCESS,
-    CONVERGENCE,
-    EVIDENCE,
-    CONFIDENCE,
-    CONFLICT,
-    CAPABILITY,
-    ESCALATION,
-    OTHER,
+enum class DecisionTraceKind {
+    GOAL,
+    SELF_HEALING,
+    EVOLUTION,
+    ARTIFACT,
+    SYSTEM,
 }
 
-data class DecisionReasonUiModel(
+enum class DecisionTraceSection {
+    FACT,
+    CONSTRAINT,
+    ALTERNATIVE,
+    OUTCOME,
+    UNCERTAINTY,
+}
+
+enum class DecisionTraceTone {
+    NEUTRAL,
+    POSITIVE,
+    WARNING,
+    NEGATIVE,
+}
+
+data class DecisionTraceReasonUiModel(
     val raw: String,
-    val category: DecisionReasonCategory,
     val summary: String,
 )
 
-data class DecisionCandidateUiModel(
-    val domainId: FieldDomainId,
-    val hypothesisId: HypothesisId,
-    val selected: Boolean,
-    val totalScore: Double,
-    val evidenceScore: Double,
-    val contradiction: Double,
-    val marginToRunnerUp: Double,
-    val conflictSeverity: Double,
-    val freshSupportingEvidence: Int,
-    val confidenceLower: Double,
-    val confidencePoint: Double,
-    val confidenceUpper: Double,
+data class DecisionTraceNodeUiModel(
+    val id: DecisionTraceNodeId,
+    val type: DecisionTraceNodeType,
+    val sourceType: String,
+    val sourceId: String,
+    val sourceRevision: Long,
+    val label: String,
+    val reasons: List<DecisionTraceReasonUiModel>,
+    val recordedAt: Instant,
+    val section: DecisionTraceSection,
+    val tone: DecisionTraceTone,
 )
 
-data class DecisionEvidenceRequestUiModel(
-    val kind: ConvergenceEvidenceGapKind,
-    val domainId: FieldDomainId,
-    val hypothesisIds: List<HypothesisId>,
-    val semanticKey: String,
-    val reason: String,
-)
-
-data class DecisionCapabilityGapUiModel(
-    val capabilityId: String,
-    val severity: String,
-    val gapType: String,
-    val candidateProviderIds: List<String>,
-)
-
-data class DecisionEscalationUiModel(
-    val target: ConvergenceEscalationTarget,
-    val reason: String,
-    val hypothesisIds: List<HypothesisId>,
-    val evidenceRequestIds: List<String>,
-    val capabilityIds: List<String>,
-)
-
-data class DecisionSnapshotUiModel(
-    val domainId: FieldDomainId,
-    val snapshotId: String,
-    val contentFingerprint: String,
+data class DecisionTraceLinkUiModel(
+    val from: DecisionTraceNodeId,
+    val to: DecisionTraceNodeId,
+    val type: DecisionTraceLinkType,
 )
 
 data class DecisionTraceUiModel(
-    val checkpointId: ConvergenceDecisionCheckpointId,
-    val decisionId: ConvergenceDecisionId,
-    val state: ConvergenceDecisionState,
-    val headline: String,
+    val traceId: DecisionTraceId,
+    val revision: Long,
+    val kind: DecisionTraceKind,
+    val title: String,
     val summary: String,
-    val reasons: List<DecisionReasonUiModel>,
-    val candidates: List<DecisionCandidateUiModel>,
-    val evidenceRequests: List<DecisionEvidenceRequestUiModel>,
-    val capabilityGaps: List<DecisionCapabilityGapUiModel>,
-    val escalation: DecisionEscalationUiModel?,
-    val snapshots: List<DecisionSnapshotUiModel>,
-    val selectedHypothesisIds: List<HypothesisId>,
-    val sourceRequestId: String,
-    val sourceFingerprint: String,
-    val policyFingerprint: String,
-    val workingSetFingerprint: String?,
-)
+    val firstRecordedAt: Instant?,
+    val lastRecordedAt: Instant?,
+    val unresolved: Boolean,
+    val facts: List<DecisionTraceNodeUiModel>,
+    val constraints: List<DecisionTraceNodeUiModel>,
+    val alternatives: List<DecisionTraceNodeUiModel>,
+    val outcomes: List<DecisionTraceNodeUiModel>,
+    val uncertainties: List<DecisionTraceNodeUiModel>,
+    val links: List<DecisionTraceLinkUiModel>,
+) {
+    val nodeCount: Int
+        get() = facts.size + constraints.size + alternatives.size + outcomes.size + uncertainties.size
+}
 
 data class DecisionTraceWorkspaceUiModel(
     val traces: List<DecisionTraceUiModel>,
 ) {
+    val unresolvedCount: Int
+        get() = traces.count { it.unresolved }
+
     companion object {
         fun empty(): DecisionTraceWorkspaceUiModel = DecisionTraceWorkspaceUiModel(emptyList())
     }
