@@ -3,10 +3,8 @@ package app.lifeos.next.ui.chat
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -54,26 +52,13 @@ fun LifeOsChatScreen(
             items(state.events, key = { it.id }) { ChatMessage(it) }
         }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                value = state.draft,
-                onValueChange = model::editDraft,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Nachricht an LIFEOS") },
-                enabled = !state.sending,
-            )
-            Button(
-                onClick = model::sendMessage,
-                enabled = state.draft.isNotBlank() && !state.sending &&
-                    (state.bootStatus == KernelBootstrapStatus.READY ||
-                        state.bootStatus == KernelBootstrapStatus.DEGRADED),
-            ) {
-                Text(if (state.sending) "…" else "Senden")
-            }
-        }
+        ChatComposer(
+            draft = state.draft,
+            bootStatus = state.bootStatus,
+            processing = state.turnProcessing,
+            onDraftChange = model::editDraft,
+            onSend = model::sendMessage,
+        )
     }
 }
 

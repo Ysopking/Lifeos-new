@@ -9,6 +9,7 @@ on:
       - ".github/scripts/ci-emulator-preflight.sh"
       - "app/src/androidTest/**"
       - "app/src/main/java/app/lifeos/next/ChatMainActivity.kt"
+      - "app/src/main/java/app/lifeos/next/LifeOsChatViewModel.kt"
       - "app/src/main/java/app/lifeos/next/ui/**"
       - "app/src/main/java/app/lifeos/next/LifeOsApplication.kt"
       - "app/src/main/java/app/lifeos/next/LifeOsStartupComposition.kt"
