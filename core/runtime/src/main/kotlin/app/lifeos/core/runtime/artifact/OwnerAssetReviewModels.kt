@@ -200,7 +200,9 @@ data class OwnerAssetReviewRecord(
         require(publishedAt == null || decision?.decision == OwnerAssetReviewDecision.APPROVED) {
             "Only an approved candidate may be marked published"
         }
-        require(publishedAt == null || publishedAt >= decision.decidedAt)
+        require(publishedAt == null || (decision != null && publishedAt >= decision.decidedAt)) {
+            "Publication cannot predate owner approval"
+        }
     }
 
     val pending: Boolean get() = decision == null
