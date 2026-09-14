@@ -16,8 +16,18 @@ object MemoryWorkspaceProjector {
         snapshot: DurableLifeMemorySnapshot?,
         photons: Iterable<Photon>,
         query: String = "",
+    ): MemoryWorkspaceUiModel = project(
+        snapshot = snapshot,
+        searchIndex = MemorySearchIndex.build(photons),
+        query = query,
+    )
+
+    fun project(
+        snapshot: DurableLifeMemorySnapshot?,
+        searchIndex: MemorySearchIndex,
+        query: String = "",
     ): MemoryWorkspaceUiModel {
-        val latest = latestRevisions(photons)
+        val latest = searchIndex.latestRevisions()
         val sourceById = latest
             .filterNot(::isLifeMemoryManagementPhoton)
             .associateBy { it.id }
@@ -37,7 +47,9 @@ object MemoryWorkspaceProjector {
             .map { it.toUi(stage = null, isNew = true) }
 
         val now = (projectedNow + newEvidence)
-            .filter { it.matches(normalizedQuery) }
+            .filter { source ->
+                normalizedQuery.isBlank() || searchIndex.matchesSource(source.photonId, normalizedQuery)
+            }
             .sortedWith(
                 compareByDescending<MemorySourceUi> { it.createdAt }
                     .thenBy { it.photonId.value }
@@ -46,7 +58,7 @@ object MemoryWorkspaceProjector {
 
         val atoms = projection?.atoms.orEmpty()
             .asSequence()
-            .filter { atom -> atom.matches(normalizedQuery, sourceById) }
+            .filter { atom -> atom.matches(normalizedQuery, sourceById, searchIndex) }
             .map { atom -> atom.toUi(sourceById) }
             .toList()
         val topicGroups = atoms
@@ -66,7 +78,7 @@ object MemoryWorkspaceProjector {
 
         val crystals = projection?.crystals.orEmpty()
             .asSequence()
-            .filter { crystal -> crystal.matches(normalizedQuery, sourceById) }
+            .filter { crystal -> crystal.matches(normalizedQuery, sourceById, searchIndex) }
             .map { crystal -> crystal.toUi(sourceById) }
             .sortedWith(
                 compareByDescending<MemoryCrystalUi> { it.endedAt }
@@ -76,7 +88,7 @@ object MemoryWorkspaceProjector {
 
         val episodes = projection?.episodes.orEmpty()
             .asSequence()
-            .filter { episode -> episode.matches(normalizedQuery, sourceById) }
+            .filter { episode -> episode.matches(normalizedQuery, sourceById, searchIndex) }
             .map { episode -> episode.toUi(sourceById) }
             .sortedWith(
                 compareByDescending<MemoryEpisodeUi> { it.endedAt }
@@ -101,16 +113,24 @@ object MemoryWorkspaceProjector {
         photonId: PhotonId,
         photons: Iterable<Photon>,
         snapshot: DurableLifeMemorySnapshot?,
-    ): MemorySourceUi? {
-        val source = latestRevisions(photons).firstOrNull { it.id == photonId } ?: return null
-        if (isLifeMemoryManagementPhoton(source)) return null
-        return source.toUi(snapshot?.memory?.stageOf(photonId), isNew = snapshot?.memory?.stageOf(photonId) == null)
-    }
+    ): MemorySourceUi? = resolveSource(
+        photonId = photonId,
+        searchIndex = MemorySearchIndex.build(photons),
+        snapshot = snapshot,
+    )
 
-    private fun latestRevisions(photons: Iterable<Photon>): List<Photon> = photons
-        .groupBy { it.id }
-        .map { (_, revisions) -> revisions.maxBy { it.revision } }
-        .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+    fun resolveSource(
+        photonId: PhotonId,
+        searchIndex: MemorySearchIndex,
+        snapshot: DurableLifeMemorySnapshot?,
+    ): MemorySourceUi? {
+        val source = searchIndex.source(photonId) ?: return null
+        if (isLifeMemoryManagementPhoton(source)) return null
+        return source.toUi(
+            snapshot?.memory?.stageOf(photonId),
+            isNew = snapshot?.memory?.stageOf(photonId) == null,
+        )
+    }
 
     private fun browsableSource(photon: Photon): Boolean {
         if (isLifeMemoryManagementPhoton(photon)) return false
@@ -137,36 +157,33 @@ object MemoryWorkspaceProjector {
         relationCount = relations.size,
     )
 
-    private fun Photon.searchText(): String = buildString {
-        append(content).append('\n')
-        append(tags.sorted().joinToString(" ")).append('\n')
-        append(provenance.source).append('\n')
-        append(provenance.actor)
-    }.lowercase(Locale.ROOT)
-
-    private fun MemorySourceUi.matches(query: String): Boolean =
-        query.isBlank() || buildString {
-            append(content).append('\n')
-            append(tags.sorted().joinToString(" ")).append('\n')
-            append(source).append('\n')
-            append(actor)
-        }.lowercase(Locale.ROOT).contains(query)
-
-    private fun MemoryAtom.matches(query: String, sources: Map<PhotonId, Photon>): Boolean =
+    private fun MemoryAtom.matches(
+        query: String,
+        sources: Map<PhotonId, Photon>,
+        searchIndex: MemorySearchIndex,
+    ): Boolean =
         query.isBlank() ||
             content.lowercase(Locale.ROOT).contains(query) ||
             kind.name.lowercase(Locale.ROOT).contains(query) ||
-            sourcePhotonIds.any { sources[it]?.searchText()?.contains(query) == true }
+            sourcePhotonIds.any { id -> id in sources && searchIndex.matchesSource(id, query) }
 
-    private fun MemoryCrystal.matches(query: String, sources: Map<PhotonId, Photon>): Boolean =
+    private fun MemoryCrystal.matches(
+        query: String,
+        sources: Map<PhotonId, Photon>,
+        searchIndex: MemorySearchIndex,
+    ): Boolean =
         query.isBlank() ||
             semanticCore.lowercase(Locale.ROOT).contains(query) ||
-            sourcePhotonIds.any { sources[it]?.searchText()?.contains(query) == true }
+            sourcePhotonIds.any { id -> id in sources && searchIndex.matchesSource(id, query) }
 
-    private fun MemoryEpisode.matches(query: String, sources: Map<PhotonId, Photon>): Boolean =
+    private fun MemoryEpisode.matches(
+        query: String,
+        sources: Map<PhotonId, Photon>,
+        searchIndex: MemorySearchIndex,
+    ): Boolean =
         query.isBlank() ||
             semanticKeys.any { it.lowercase(Locale.ROOT).contains(query) } ||
-            sourcePhotonIds.any { sources[it]?.searchText()?.contains(query) == true }
+            sourcePhotonIds.any { id -> id in sources && searchIndex.matchesSource(id, query) }
 
     private fun MemoryAtom.toUi(sources: Map<PhotonId, Photon>): MemoryAtomUi {
         val resolved = sourcePhotonIds.count { it in sources }
