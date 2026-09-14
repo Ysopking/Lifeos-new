@@ -203,8 +203,6 @@ class PrivateV1DeviceSmokeTest {
                 scenario.onActivity { activity -> assertFalse(activity.isFinishing) }
             }
 
-            // Simulate the exact durable-save / missing-task crash window. The workflow kills
-            // this target process next; only cold-start reconciliation may create its task.
             val orphan = Photon(
                 content = "saved-before-cognition-task",
                 provenance = Provenance("v2-cognition-recovery", "instrumentation"),
@@ -214,9 +212,6 @@ class PrivateV1DeviceSmokeTest {
             assertEquals(orphan, app.kernel.photonStore.load(orphan.id))
             assertTrue(cognitiveTasks(orphan).isEmpty())
 
-            // Simulate the V3 projection crash window: the immutable projection intent and its
-            // exact authoritative FieldSnapshot are durable, but the ThoughtGraph delta is not.
-            // The workflow force-stops this process after the seed method returns.
             val projection = v3ProjectionRecoveryFixture()
             val projectionOutbox =
                 EncryptedFieldThoughtGraphProjectionOutboxRepository(instrumentation.targetContext)
@@ -316,9 +311,6 @@ class PrivateV1DeviceSmokeTest {
             assertNotNull("Cold restart must preserve encrypted recovery sentinel", sentinel)
             sentinel!!
 
-            // This assertion occurs before any re-ingest in the recovered process. Because boot
-            // ThoughtMatrix warmup is intentionally non-reprojecting, success proves that module
-            // rehydration restored the encrypted matrix state written before the process kill.
             withTimeout(BOOT_TIMEOUT_MS) {
                 app.kernel.matrix.state.first { it.nodes[sentinel.id]?.revision == sentinel.revision }
             }
@@ -449,7 +441,6 @@ class PrivateV1DeviceSmokeTest {
 
     private suspend fun assertSingleCognitiveTask(photon: Photon) {
         val tasks = cognitiveTasks(photon)
-        // REPROCESS_PHOTON is a distinct, outcome-triggered reevaluation, not duplicate ingestion.
         assertEquals("Each revision must have one initial task; found " +
             tasks.joinToString { "${it.id.value}:${it.idempotencyKey}" }, 1, tasks.size)
         assertEquals(
@@ -460,6 +451,13 @@ class PrivateV1DeviceSmokeTest {
     }
 
     private suspend fun awaitBoot(): KernelBootstrapState = withTimeout(BOOT_TIMEOUT_MS) {
+        val processStartup = app.startupState.first { state ->
+            state.phase == LifeOsProcessStartupPhase.READY ||
+                state.phase == LifeOsProcessStartupPhase.FAILED
+        }
+        if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
+            error("Process startup failed during emulator recovery: ${processStartup.failure ?: "unknown"}")
+        }
         app.kernel.bootstrapState.first { state ->
             state.status == KernelBootstrapStatus.READY ||
                 state.status == KernelBootstrapStatus.DEGRADED ||
