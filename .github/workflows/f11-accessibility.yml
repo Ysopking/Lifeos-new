@@ -32,20 +32,22 @@ jobs:
           script: |
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            launch="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
-            printf '%s\n' "$launch" | tee f11-launcher.txt
-            printf '%s\n' "$launch" | grep -q 'Status: ok'
+            # Do not depend on `am start -W` text output: on slow AOSP ATD images it can
+            # return exit 0 with an empty stdout after waiting for the first permission overlay.
+            # Process liveness + ActivityManager state below are the actual launcher proof.
+            adb shell am start -n app.lifeos.next/.ChatMainActivity > f11-launcher.txt 2>&1
             pid=""
-            for attempt in $(seq 1 20); do
+            for attempt in $(seq 1 40); do
               pid="$(adb shell pidof app.lifeos.next 2>/dev/null | tr -d '\r' || true)"
               test -n "$pid" && break
               sleep 0.25
             done
             test -n "$pid"
+            printf '%s\n' "$pid" > f11-process.txt
             activities="$(adb shell dumpsys activity activities)"
             printf '%s\n' "$activities" > f11-activities.txt
             if ! printf '%s\n' "$activities" | grep -Eq 'app\.lifeos\.next/(\.|app\.lifeos\.next\.)ChatMainActivity'; then
-              printf '%s\n' "$launch" | grep -q 'com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity'
+              printf '%s\n' "$activities" | grep -q 'com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity'
             fi
             adb shell am force-stop app.lifeos.next
             adb shell am instrument -w -e class app.lifeos.next.LifeOsFrontendAccessibilityDeviceTest app.lifeos.next.test/androidx.test.runner.AndroidJUnitRunner | tee f11-accessibility.txt
