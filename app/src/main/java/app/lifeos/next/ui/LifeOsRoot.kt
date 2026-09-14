@@ -18,7 +18,7 @@ import app.lifeos.next.ui.decision.LifeOsDecisionTraceScreen
 import app.lifeos.next.ui.goals.LifeOsGoalsScreen
 import app.lifeos.next.ui.layout.AdaptiveLifeOsScaffold
 import app.lifeos.next.ui.memory.LifeOsMemoryScreen
-import app.lifeos.next.ui.system.SystemRuntimeHealthScreen
+import app.lifeos.next.ui.system.LifeOsSystemHub
 import app.lifeos.next.ui.theme.LifeOsTheme
 import app.lifeos.next.ui.tools.LifeOsToolCenterScreen
 
@@ -72,7 +72,13 @@ fun LifeOsRoot(
                     model = toolCenterModel,
                     modifier = contentModifier,
                 )
-                LifeOsDestination.SYSTEM -> SystemRuntimeHealthScreen(model, contentModifier)
+                LifeOsDestination.SYSTEM -> LifeOsSystemHub(
+                    model = model,
+                    decisionTraceModel = decisionTraceModel,
+                    toolCenterModel = toolCenterModel,
+                    assetReviewModel = assetReviewModel,
+                    modifier = contentModifier,
+                )
             }
         }
     }

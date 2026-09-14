@@ -18,6 +18,15 @@ class LifeOsFrontendAccessibilityContractTest {
     @Test
     fun readableContractsRemainStable() {
         assertEquals(
+            listOf(
+                LifeOsDestination.CHAT,
+                LifeOsDestination.GOALS,
+                LifeOsDestination.MEMORY,
+                LifeOsDestination.SYSTEM,
+            ),
+            LifeOsDestination.ordered,
+        )
+        assertEquals(
             LifeOsDestination.ordered.size,
             LifeOsDestination.ordered
                 .map { destination -> LifeOsSemantics.navigationLabel(destination.label) }
