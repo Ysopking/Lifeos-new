@@ -12,7 +12,7 @@ android {
         targetSdk = 36
         versionCode = 3
         versionName = "2.0.0-rc1"
-        testInstrumentationRunner = "app.lifeos.next.LifeOsTestRunner"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
     buildTypes {
