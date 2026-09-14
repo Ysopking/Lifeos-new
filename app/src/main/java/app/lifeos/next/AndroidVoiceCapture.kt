@@ -12,6 +12,8 @@ import app.lifeos.core.language.BidirectionalSpeechFieldEngine
 import app.lifeos.core.language.DeterministicVoiceActivitySegmenter
 import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.Pcm16MonoAudio
+import app.lifeos.core.language.PhraseFieldDecoder
+import app.lifeos.core.language.PhraseWordCandidate
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -46,6 +48,7 @@ class AndroidVoiceCaptureEngine(
     private val context: Context,
     private val segmenter: DeterministicVoiceActivitySegmenter = DeterministicVoiceActivitySegmenter(),
     private val speechEngine: BidirectionalSpeechFieldEngine = BidirectionalSpeechFieldEngine(),
+    private val phraseDecoder: PhraseFieldDecoder = PhraseFieldDecoder(),
 ) {
     fun hasPermission(): Boolean =
         context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -127,12 +130,18 @@ class AndroidVoiceCaptureEngine(
         val segments = segmenter.segment(audio)
         if (segments.isEmpty()) return LocalVoiceCaptureResult.NoSpeech
 
-        val hypotheses = segments.mapNotNull { segment ->
+        val hypotheses = segments.flatMap { segment ->
             val result = speechEngine.understand(segment.extract(audio), context = languageContext)
-            val candidates = result.lexicalField.lexicalCandidates
-            val winner = candidates.firstOrNull() ?: return@mapNotNull null
-            if (winner.activation < MIN_WORD_CONFIDENCE) return@mapNotNull null
-            winner.toHypothesis(candidates.drop(1).take(3))
+            val phrase = phraseDecoder.decode(result.rawAcousticLattice, context = languageContext)
+            val phraseWinner = phrase.winner
+            if (phraseWinner != null && phraseWinner.activation >= MIN_PHRASE_CONFIDENCE) {
+                phraseWinner.words
+                    .filter { it.activation >= MIN_WORD_CONFIDENCE }
+                    .map { word -> word.toHypothesis(phrase.alternativesFor(word)) }
+                    .ifEmpty { lexicalFallback(result.lexicalField.lexicalCandidates) }
+            } else {
+                lexicalFallback(result.lexicalField.lexicalCandidates)
+            }
         }
         if (hypotheses.isEmpty()) return LocalVoiceCaptureResult.NoSpeech
         val capturedMillis = samples.size.toLong() * 1000L / SAMPLE_RATE_HZ
@@ -146,6 +155,21 @@ class AndroidVoiceCaptureEngine(
             observedUntil = observedAt.plusMillis(capturedMillis),
         )
     }
+
+    private fun lexicalFallback(candidates: List<AcousticLexemeCandidate>): List<VoiceWordHypothesis> {
+        val winner = candidates.firstOrNull() ?: return emptyList()
+        if (winner.activation < MIN_WORD_CONFIDENCE) return emptyList()
+        return listOf(winner.toHypothesis(candidates.drop(1).take(3)))
+    }
+
+    private fun PhraseWordCandidate.toHypothesis(
+        alternatives: List<Pair<String, Double>>,
+    ): VoiceWordHypothesis = VoiceWordHypothesis(
+        canonical = canonical,
+        semanticTag = semanticTag,
+        confidence = activation,
+        alternatives = alternatives,
+    )
 
     private fun AcousticLexemeCandidate.toHypothesis(
         alternatives: List<AcousticLexemeCandidate>,
@@ -189,5 +213,6 @@ class AndroidVoiceCaptureEngine(
         const val MAX_CAPTURE_SECONDS = 20
         private const val MAX_CAPTURE_SAMPLES = SAMPLE_RATE_HZ * MAX_CAPTURE_SECONDS
         private const val MIN_WORD_CONFIDENCE = 0.24
+        private const val MIN_PHRASE_CONFIDENCE = 0.32
     }
 }
