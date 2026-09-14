@@ -184,4 +184,6 @@ data class LanguageUnderstandingResult(
     val intentEvidence: List<IntentEvidence>,
     val goal: GoalFrame,
     val linguisticField: LinguisticFieldResult? = null,
+    /** Exact caller-supplied context that participated in this interpretation; null for context-free calls. */
+    val context: LanguageContext? = null,
 )
