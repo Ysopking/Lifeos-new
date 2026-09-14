@@ -1,17 +1,11 @@
 package app.lifeos.next.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.LifeOsDecisionTraceViewModel
 import app.lifeos.next.LifeOsGoalsViewModel
@@ -22,6 +16,7 @@ import app.lifeos.next.ui.assets.OwnerAssetReviewScreen
 import app.lifeos.next.ui.chat.LifeOsChatScreen
 import app.lifeos.next.ui.decision.LifeOsDecisionTraceScreen
 import app.lifeos.next.ui.goals.LifeOsGoalsScreen
+import app.lifeos.next.ui.layout.AdaptiveLifeOsScaffold
 import app.lifeos.next.ui.memory.LifeOsMemoryScreen
 import app.lifeos.next.ui.system.SystemRuntimeHealthScreen
 import app.lifeos.next.ui.theme.LifeOsTheme
@@ -47,15 +42,10 @@ fun LifeOsRoot(
     }
 
     LifeOsTheme {
-        Scaffold(
-            bottomBar = {
-                LifeOsNavigationBar(
-                    selected = selected,
-                    onSelect = { destination -> selectedKey = destination.key },
-                )
-            },
-        ) { innerPadding ->
-            val contentModifier = Modifier.padding(innerPadding)
+        AdaptiveLifeOsScaffold(
+            selected = selected,
+            onSelect = { destination -> selectedKey = destination.key },
+        ) { contentModifier ->
             when (selected) {
                 LifeOsDestination.CHAT -> LifeOsChatScreen(
                     model = model,
@@ -84,24 +74,6 @@ fun LifeOsRoot(
                 )
                 LifeOsDestination.SYSTEM -> SystemRuntimeHealthScreen(model, contentModifier)
             }
-        }
-    }
-}
-
-@Composable
-private fun LifeOsNavigationBar(
-    selected: LifeOsDestination,
-    onSelect: (LifeOsDestination) -> Unit,
-) {
-    NavigationBar {
-        LifeOsDestination.ordered.forEach { destination ->
-            NavigationBarItem(
-                selected = destination == selected,
-                onClick = { onSelect(destination) },
-                icon = { Text(destination.glyph) },
-                label = { Text(destination.label) },
-                alwaysShowLabel = true,
-            )
         }
     }
 }
