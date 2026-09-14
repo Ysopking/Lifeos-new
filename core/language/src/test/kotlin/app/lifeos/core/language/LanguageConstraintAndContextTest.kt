@@ -153,6 +153,77 @@ class LanguageConstraintAndContextTest {
     }
 
     @Test
+    fun `german conversational deictic resolves recent text context`() {
+        val now = Instant.parse("2026-09-14T16:00:00Z")
+        val prior = LanguageContextItem(
+            photonId = PhotonId("assistant-prior"),
+            kind = "text",
+            tags = setOf("chat", "chat:assistant"),
+            createdAt = now.minusSeconds(30),
+            active = true,
+            contentTerms = setOf("balkonbank", "höhe"),
+        )
+        val result = LanguageUnderstandingEngine().understand(
+            "Kannst du das genauer erklären?",
+            LanguageContext(items = listOf(prior), now = now),
+        )
+
+        assertEquals(IntentType.QUERY, result.goal.intent)
+        assertEquals(ReferenceKind.THAT, result.goal.references.single().expression.kind)
+        assertEquals(prior.photonId, result.goal.references.single().targetPhotonId)
+        assertTrue(
+            result.goal.ambiguities.none {
+                it.code == "unresolved_reference" || it.code == "reference_competition"
+            }
+        )
+    }
+
+    @Test
+    fun `english conversational deictic resolves recent text context`() {
+        val now = Instant.parse("2026-09-14T16:00:00Z")
+        val prior = LanguageContextItem(
+            photonId = PhotonId("assistant-prior-en"),
+            kind = "text",
+            tags = setOf("chat", "chat:assistant"),
+            createdAt = now.minusSeconds(30),
+            active = true,
+            contentTerms = setOf("bench", "height"),
+        )
+        val result = LanguageUnderstandingEngine().understand(
+            "Can you explain that in more detail?",
+            LanguageContext(items = listOf(prior), now = now),
+        )
+
+        assertEquals(IntentType.QUERY, result.goal.intent)
+        assertEquals(ReferenceKind.THAT, result.goal.references.single().expression.kind)
+        assertEquals(prior.photonId, result.goal.references.single().targetPhotonId)
+        assertTrue(
+            result.goal.ambiguities.none {
+                it.code == "unresolved_reference" || it.code == "reference_competition"
+            }
+        )
+    }
+
+    @Test
+    fun `ordinary german article does not become conversational reference`() {
+        val now = Instant.parse("2026-09-14T16:00:00Z")
+        val prior = LanguageContextItem(
+            photonId = PhotonId("assistant-weather-context"),
+            kind = "text",
+            tags = setOf("chat", "chat:assistant"),
+            createdAt = now.minusSeconds(30),
+            active = true,
+            contentTerms = setOf("wetter"),
+        )
+        val result = LanguageUnderstandingEngine().understand(
+            "Was ist das Wetter morgen?",
+            LanguageContext(items = listOf(prior), now = now),
+        )
+
+        assertTrue(result.goal.references.isEmpty())
+    }
+
+    @Test
     fun `context records are metadata and never become language candidates`() {
         val target = Photon(
             id = PhotonId("image-target"),
