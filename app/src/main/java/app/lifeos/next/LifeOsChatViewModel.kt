@@ -24,7 +24,6 @@ import app.lifeos.next.kernel.LifeOsResponseComposer
 import app.lifeos.next.ui.chat.ChatImagePreviewLoader
 import app.lifeos.next.ui.chat.ChatImagePreviewState
 import app.lifeos.next.ui.chat.ChatTimelineItem
-import app.lifeos.next.ui.chat.ChatTimelineProjector
 import app.lifeos.next.ui.chat.ChatTurnProcessingState
 import app.lifeos.next.ui.chat.ChatVoicePhase
 import app.lifeos.next.ui.chat.ChatVoicePolicy
@@ -32,6 +31,7 @@ import app.lifeos.next.ui.chat.ChatVoiceStartResult
 import app.lifeos.next.ui.chat.ChatVoiceUiState
 import app.lifeos.next.ui.chat.VoiceDraftResolution
 import app.lifeos.next.ui.components.RuntimeTopologyUiEvidence
+import app.lifeos.next.ui.perf.StableChatProjection
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
@@ -66,6 +66,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
     private val voiceStopRequested = AtomicBoolean(false)
     private val imagePreviewLoader = ChatImagePreviewLoader(kernel)
+    private val stableChatProjection = StableChatProjection()
     private val mutableState = MutableStateFlow(LifeOsChatUiState())
 
     private var latestPhotons: List<Photon> = emptyList()
@@ -520,10 +521,11 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                 } else {
                     mutableState.value.readiness
                 }
+                val chatProjection = stableChatProjection.project(boot.photons)
                 mutableState.update { current ->
                     current.copy(
-                        events = ConversationProjector.project(boot.photons),
-                        timeline = ChatTimelineProjector.project(boot.photons),
+                        events = chatProjection.events,
+                        timeline = chatProjection.timeline,
                         bootStatus = boot.status,
                         registeredSubsystems = topology?.registeredSubsystemCount ?: 0,
                         unavailableSubsystems = topology?.unavailableSubsystems?.size ?: 0,
@@ -541,6 +543,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     override fun onCleared() {
         voiceStopRequested.set(true)
         imagePreviewLoader.clear()
+        stableChatProjection.clear()
         super.onCleared()
     }
 
