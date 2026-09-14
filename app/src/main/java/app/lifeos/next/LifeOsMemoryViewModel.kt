@@ -9,6 +9,7 @@ import app.lifeos.core.runtime.life.DurableLifeMemorySnapshot
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.ui.components.PhotonImagePreviewLoader
 import app.lifeos.next.ui.components.PhotonImagePreviewState
+import app.lifeos.next.ui.memory.MemorySearchIndex
 import app.lifeos.next.ui.memory.MemorySourceUi
 import app.lifeos.next.ui.memory.MemoryWorkspaceProjector
 import app.lifeos.next.ui.memory.MemoryWorkspaceUiModel
@@ -36,6 +37,7 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
 
     private var latestPhotons: List<Photon> = emptyList()
     private var latestSnapshot: DurableLifeMemorySnapshot? = null
+    private var searchIndex: MemorySearchIndex = MemorySearchIndex.build(emptyList())
 
     val state = mutableState.asStateFlow()
 
@@ -49,7 +51,7 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
                 query = query,
                 workspace = MemoryWorkspaceProjector.project(
                     snapshot = latestSnapshot,
-                    photons = latestPhotons,
+                    searchIndex = searchIndex,
                     query = query,
                 ),
             )
@@ -59,7 +61,7 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
     fun selectSource(photonId: PhotonId) {
         val resolved = MemoryWorkspaceProjector.resolveSource(
             photonId = photonId,
-            photons = latestPhotons,
+            searchIndex = searchIndex,
             snapshot = latestSnapshot,
         )
         mutableState.update {
@@ -77,9 +79,7 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
     }
 
     suspend fun loadImagePreview(photonId: PhotonId): PhotonImagePreviewState {
-        val photon = latestPhotons
-            .filter { it.id == photonId }
-            .maxByOrNull { it.revision }
+        val photon = searchIndex.source(photonId)
             ?: return PhotonImagePreviewState.Failed("Quell-Photon ist nicht verfügbar.")
         return imagePreviewLoader.load(photon)
     }
@@ -88,19 +88,20 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch {
             kernel.bootstrapState.collect { boot ->
                 latestPhotons = boot.photons
+                searchIndex = MemorySearchIndex.reuseOrBuild(searchIndex, latestPhotons)
                 latestSnapshot = owner.lifeMemoryRuntime.current()
                 mutableState.update { current ->
                     val selected = current.selectedSourceId?.let { id ->
                         MemoryWorkspaceProjector.resolveSource(
                             photonId = id,
-                            photons = latestPhotons,
+                            searchIndex = searchIndex,
                             snapshot = latestSnapshot,
                         )
                     }
                     current.copy(
                         workspace = MemoryWorkspaceProjector.project(
                             snapshot = latestSnapshot,
-                            photons = latestPhotons,
+                            searchIndex = searchIndex,
                             query = current.query,
                         ),
                         loading = boot.status == KernelBootstrapStatus.CREATED ||
