@@ -62,6 +62,7 @@ fun SystemRuntimeHealthScreen(
         health = health,
         readiness = state.readiness,
         topology = state.runtimeTopology,
+        showWebDeepSearchControl = true,
         modifier = modifier.fillMaxSize(),
     )
 }
@@ -72,6 +73,7 @@ fun RuntimeHealthContent(
     readiness: LifeOsReadinessSnapshot?,
     topology: RuntimeTopologyUiEvidence?,
     modifier: Modifier = Modifier,
+    showWebDeepSearchControl: Boolean = false,
 ) {
     var showReadinessBlocks by rememberSaveable { mutableStateOf(false) }
     val readinessModel = readiness?.let(::buildReadinessUiModel)
@@ -85,6 +87,11 @@ fun RuntimeHealthContent(
         Text("System", style = MaterialTheme.typography.headlineMedium)
         Text(health.compactLabel, style = MaterialTheme.typography.titleLarge)
         Text(health.summary, style = MaterialTheme.typography.bodyMedium)
+
+        if (showWebDeepSearchControl) {
+            Spacer(Modifier.height(4.dp))
+            WebDeepSearchOwnerControl()
+        }
 
         Spacer(Modifier.height(4.dp))
         Text("Boot", style = MaterialTheme.typography.titleMedium)
