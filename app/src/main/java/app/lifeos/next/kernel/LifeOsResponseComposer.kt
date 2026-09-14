@@ -2,6 +2,7 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.LanguageResponseAct
 import app.lifeos.core.language.LanguageResponseFact
 import app.lifeos.core.language.LanguageResponseGenerationEngine
@@ -264,7 +265,7 @@ object LifeOsResponseComposer {
         semanticTags: Set<String> = emptySet(),
     ): String = runCatching {
         responseGeneration.generate(
-            LanguageResponseTarget(
+            target = LanguageResponseTarget(
                 act = act,
                 language = language(result),
                 facts = listOf(
@@ -274,7 +275,8 @@ object LifeOsResponseComposer {
                         confidence = confidence.coerceIn(0.0, 1.0),
                     )
                 ),
-            )
+            ),
+            context = result.understanding?.context ?: LanguageContext(),
         ).text
     }.getOrElse { statement }
 

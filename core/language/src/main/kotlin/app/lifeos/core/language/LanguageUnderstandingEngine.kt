@@ -20,7 +20,17 @@ class LanguageUnderstandingEngine(
     private val linguisticFieldEngine: LinguisticFieldEngine = LinguisticFieldEngine(),
     private val fieldAdapter: FieldLanguageAdapter = FieldLanguageAdapter(),
 ) {
-    fun understand(text: String, context: LanguageContext = LanguageContext()): LanguageUnderstandingResult {
+    fun understand(text: String): LanguageUnderstandingResult =
+        understand(text, LanguageContext(), retainContext = false)
+
+    fun understand(text: String, context: LanguageContext): LanguageUnderstandingResult =
+        understand(text, context, retainContext = true)
+
+    private fun understand(
+        text: String,
+        context: LanguageContext,
+        retainContext: Boolean,
+    ): LanguageUnderstandingResult {
         val utterance = normalizer.normalize(text)
         val linguisticField = linguisticFieldEngine.converge(utterance, context)
         val ruleEvidence = intentClassifier.classify(utterance)
@@ -42,7 +52,13 @@ class LanguageUnderstandingEngine(
             confidence = confidence,
             language = utterance.language,
         )
-        return LanguageUnderstandingResult(utterance, evidence, goal, linguisticField)
+        return LanguageUnderstandingResult(
+            utterance = utterance,
+            intentEvidence = evidence,
+            goal = goal,
+            linguisticField = linguisticField,
+            context = context.takeIf { retainContext },
+        )
     }
 
     private fun canonicalObjective(utterance: NormalizedUtterance, intent: IntentType): String =

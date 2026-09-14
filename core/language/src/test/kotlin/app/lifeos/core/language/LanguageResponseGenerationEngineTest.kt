@@ -1,5 +1,7 @@
 package app.lifeos.core.language
 
+import app.lifeos.core.model.PhotonId
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -68,6 +70,40 @@ class LanguageResponseGenerationEngineTest {
         assertTrue(result.winner.factCoverage >= 0.99)
         assertTrue(result.text.contains("Quelle A"))
         assertTrue(result.text.contains("Quelle B"))
+    }
+
+    @Test
+    fun `response round trip resolves references against the supplied language context`() {
+        val imageId = PhotonId("image-context")
+        val context = LanguageContext(
+            items = listOf(
+                LanguageContextItem(
+                    photonId = imageId,
+                    kind = "image",
+                    tags = setOf("image"),
+                    createdAt = Instant.parse("2026-09-14T14:00:00Z"),
+                    active = true,
+                    contentTerms = setOf("bild"),
+                )
+            ),
+            now = Instant.parse("2026-09-14T14:01:00Z"),
+        )
+        val target = LanguageResponseTarget(
+            act = LanguageResponseAct.ASSERT,
+            language = LanguageCode.DE,
+            facts = listOf(
+                LanguageResponseFact(
+                    statement = "Mach dieses Bild heller",
+                    semanticTags = setOf("IMAGE"),
+                    confidence = 0.95,
+                )
+            ),
+        )
+
+        val result = generation.generate(target, context)
+
+        assertEquals(context, result.winner.roundTrip.context)
+        assertTrue(result.winner.roundTrip.goal.references.any { it.targetPhotonId == imageId })
     }
 
     @Test
