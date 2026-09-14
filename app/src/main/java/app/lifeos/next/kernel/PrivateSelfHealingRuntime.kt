@@ -26,6 +26,7 @@ import app.lifeos.core.runtime.health.SelfHealingResourceProfile
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRuntimeRegistry
 import kotlinx.coroutines.CoroutineScope
 
 internal data class PrivateSelfHealingRuntime(
@@ -58,6 +59,7 @@ internal data class PrivateSelfHealingRuntime(
                 healthGraph = graph,
                 quarantineRegistry = quarantineRegistry,
                 budgets = budgets,
+                lifecycleTraceRecorder = LifecycleDecisionTraceRuntimeRegistry.currentOrNull(),
             )
             val runtimeNode = app.lifeos.core.runtime.health.HealthNodeId("runtime")
             val plans = AutomaticSelfHealingPlanRegistry(
