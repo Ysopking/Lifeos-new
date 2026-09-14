@@ -148,7 +148,6 @@ class ChatMainActivity : ComponentActivity() {
 
     private suspend fun awaitInitialBootstrap(owner: LifeOsApplication) {
         while (
-            isActive &&
             owner.latestInitialDataBootstrap == null &&
             owner.initialDataBootstrapFailure == null
         ) {
