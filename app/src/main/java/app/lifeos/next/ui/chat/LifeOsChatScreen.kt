@@ -17,6 +17,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.core.runtime.chat.ChatEvent
 import app.lifeos.core.runtime.chat.ChatRole
 import app.lifeos.next.LifeOsChatViewModel
+import app.lifeos.next.kernel.InitialCognitiveContextRuntimeRegistry
 import app.lifeos.next.ui.components.LifeOsRuntimeStatus
 import app.lifeos.next.ui.components.buildRuntimeHealthUiModel
 import app.lifeos.next.ui.system.RuntimeHealthModalSheet
@@ -28,6 +29,7 @@ fun LifeOsChatScreen(
     onRequestMicrophonePermission: () -> Unit = {},
 ) {
     val state by model.state.collectAsStateWithLifecycle()
+    val cognitiveContext by InitialCognitiveContextRuntimeRegistry.state.collectAsStateWithLifecycle()
     var showRuntimeHealth by rememberSaveable { mutableStateOf(false) }
     val runtimeHealth = buildRuntimeHealthUiModel(
         bootStatus = state.bootStatus,
@@ -53,7 +55,17 @@ fun LifeOsChatScreen(
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (state.timeline.isEmpty()) item { Text("Schreib LIFEOS eine Nachricht.") }
+            if (state.timeline.isEmpty()) {
+                item {
+                    Text(
+                        if (cognitiveContext.contextReady) {
+                            "Schreib LIFEOS eine Nachricht."
+                        } else {
+                            "LIFEOS baut zuerst den persönlichen Gedächtniskontext auf."
+                        }
+                    )
+                }
+            }
             items(state.timeline, key = { it.id }) { item ->
                 when (item) {
                     is ChatTimelineItem.Message -> ChatMessage(item.event)
@@ -76,6 +88,7 @@ fun LifeOsChatScreen(
             bootStatus = state.bootStatus,
             processing = state.turnProcessing,
             voice = state.voice,
+            cognitiveContext = cognitiveContext,
             onDraftChange = model::editDraft,
             onSend = model::sendMessage,
             onStartVoice = {

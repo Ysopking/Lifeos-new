@@ -17,6 +17,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import app.lifeos.next.kernel.InitialCognitiveContextPhase
+import app.lifeos.next.kernel.InitialCognitiveContextReadiness
+import app.lifeos.next.kernel.InitialCognitiveContextRuntimeRegistry
 import app.lifeos.next.kernel.KernelBootstrapStatus
 
 @Composable
@@ -25,6 +28,7 @@ fun ChatComposer(
     bootStatus: KernelBootstrapStatus,
     processing: ChatTurnProcessingState,
     voice: ChatVoiceUiState = ChatVoiceUiState(),
+    cognitiveContext: InitialCognitiveContextReadiness = InitialCognitiveContextRuntimeRegistry.current(),
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onStartVoice: () -> Unit = {},
@@ -49,11 +53,32 @@ fun ChatComposer(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        if (!cognitiveContext.contextReady || cognitiveContext.phase == InitialCognitiveContextPhase.PARTIAL) {
+            Text(
+                text = cognitiveContextStatus(cognitiveContext),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (cognitiveContext.phase == InitialCognitiveContextPhase.FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+
         OutlinedTextField(
             value = draft,
             onValueChange = onDraftChange,
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Nachricht an LIFEOS") },
+            placeholder = {
+                Text(
+                    if (cognitiveContext.contextReady) {
+                        "Nachricht an LIFEOS"
+                    } else {
+                        "Gedächtnismatrix wird vorbereitet"
+                    }
+                )
+            },
+            enabled = cognitiveContext.contextReady && !processing.inFlight,
             minLines = 1,
             maxLines = 5,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -96,10 +121,10 @@ fun ChatComposer(
 
             Button(
                 modifier = Modifier.semantics {
-                    contentDescription = if (processing.inFlight) {
-                        "Nachricht wird verarbeitet"
-                    } else {
-                        "Senden"
+                    contentDescription = when {
+                        !cognitiveContext.contextReady -> "Gedächtnismatrix wird vorbereitet"
+                        processing.inFlight -> "Nachricht wird verarbeitet"
+                        else -> "Senden"
                     }
                 },
                 onClick = onSend,
@@ -152,4 +177,18 @@ fun ChatComposer(
             )
         }
     }
+}
+
+private fun cognitiveContextStatus(context: InitialCognitiveContextReadiness): String = when (context.phase) {
+    InitialCognitiveContextPhase.PREPARING -> "Kognitiver Kontext wird vorbereitet …"
+    InitialCognitiveContextPhase.WAITING_FOR_PERMISSIONS -> "Erststart: Datenfreigaben werden geprüft …"
+    InitialCognitiveContextPhase.BUILDING_MEMORY -> "Daten werden eingelesen und die Gedächtnismatrix wird aufgebaut …"
+    InitialCognitiveContextPhase.PARTIAL -> buildString {
+        append("Gedächtnismatrix ist mit Teilkontext bereit")
+        val missing = context.unauthorizedSources + context.unavailableSources
+        if (missing > 0) append(" · $missing Quelle(n) fehlen")
+        append('.')
+    }
+    InitialCognitiveContextPhase.FAILED -> "Gedächtnismatrix konnte nicht aufgebaut werden: ${context.failure.orEmpty()}"
+    InitialCognitiveContextPhase.READY -> "Gedächtnismatrix bereit."
 }
