@@ -17,6 +17,7 @@ import app.lifeos.core.runtime.goal.LocalDeepSearchGoalEngine
 import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
 import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
+import java.io.InputStream
 import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -66,12 +67,23 @@ internal class DuckDuckGoHtmlSearchTransport : WebSearchTransport {
             val code = connection.responseCode
             require(code == HttpsURLConnection.HTTP_OK) { "web-search-http-$code" }
             val body = connection.inputStream.use { input ->
-                input.readNBytes(maxBytes).toString(StandardCharsets.UTF_8)
+                readBoundedUtf8(input, maxBytes)
             }
             WebSearchHtmlParser.parse(body, query)
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun readBoundedUtf8(input: InputStream, maxBytes: Int): String {
+        val buffer = ByteArray(maxBytes)
+        var offset = 0
+        while (offset < maxBytes) {
+            val read = input.read(buffer, offset, maxBytes - offset)
+            if (read <= 0) break
+            offset += read
+        }
+        return String(buffer, 0, offset, StandardCharsets.UTF_8)
     }
 
     private companion object {
