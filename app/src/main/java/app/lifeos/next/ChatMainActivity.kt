@@ -12,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -50,7 +51,9 @@ class ChatMainActivity : ComponentActivity() {
         val owner = application as? LifeOsApplication ?: return@registerForActivityResult
         owner.markAllRuntimePermissionsRequested()
         beginPostPermissionRefresh(owner)
-        requestBroadFileAccessIfNeeded(owner)
+        if (!requestBroadFileAccessIfNeeded(owner)) {
+            requestNotificationAccessIfNeeded()
+        }
     }
 
     private val broadFileAccess = registerForActivityResult(
@@ -58,6 +61,15 @@ class ChatMainActivity : ComponentActivity() {
     ) {
         val owner = application as? LifeOsApplication ?: return@registerForActivityResult
         beginPostPermissionRefresh(owner)
+        requestNotificationAccessIfNeeded()
+    }
+
+    private val notificationAccess = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (InitialCognitiveContextRuntimeRegistry.current().phase == InitialCognitiveContextPhase.WAITING_FOR_PERMISSIONS) {
+            InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
+        }
     }
 
     private val microphonePermission = registerForActivityResult(
@@ -127,7 +139,8 @@ class ChatMainActivity : ComponentActivity() {
             return
         }
 
-        requestBroadFileAccessIfNeeded(owner)
+        if (requestBroadFileAccessIfNeeded(owner)) return
+        if (requestNotificationAccessIfNeeded()) return
         if (InitialCognitiveContextRuntimeRegistry.current().phase == InitialCognitiveContextPhase.PREPARING) {
             InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
         }
@@ -143,8 +156,8 @@ class ChatMainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestBroadFileAccessIfNeeded(owner: LifeOsApplication) {
-        if (!owner.shouldRequestBroadFileAccess()) return
+    private fun requestBroadFileAccessIfNeeded(owner: LifeOsApplication): Boolean {
+        if (!owner.shouldRequestBroadFileAccess()) return false
         owner.markBroadFileAccessRequested()
         InitialCognitiveContextRuntimeRegistry.markWaitingForPermissions()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -153,7 +166,23 @@ class ChatMainActivity : ComponentActivity() {
                 Uri.parse("package:$packageName"),
             )
             broadFileAccess.launch(intent)
+            return true
         }
+        return false
+    }
+
+    private fun requestNotificationAccessIfNeeded(): Boolean {
+        if (NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)) {
+            return false
+        }
+        val preferences = getSharedPreferences(ASSISTANT_ACCESS_PREFS, MODE_PRIVATE)
+        if (preferences.getBoolean(NOTIFICATION_ACCESS_REQUESTED, false)) {
+            return false
+        }
+        preferences.edit().putBoolean(NOTIFICATION_ACCESS_REQUESTED, true).apply()
+        InitialCognitiveContextRuntimeRegistry.markWaitingForPermissions()
+        notificationAccess.launch(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        return true
     }
 
     private fun beginPostPermissionRefresh(owner: LifeOsApplication) {
@@ -189,5 +218,10 @@ class ChatMainActivity : ComponentActivity() {
                 delay(100)
             }
         }
+    }
+
+    private companion object {
+        const val ASSISTANT_ACCESS_PREFS = "lifeos-assistant-access"
+        const val NOTIFICATION_ACCESS_REQUESTED = "notification-access-requested"
     }
 }
