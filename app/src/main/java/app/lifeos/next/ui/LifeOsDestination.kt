@@ -16,7 +16,8 @@ enum class LifeOsDestination(
     ;
 
     companion object {
-        val ordered: List<LifeOsDestination> = entries.toList()
+        /** Daily owner-facing destinations. Technical workspaces remain addressable from System. */
+        val ordered: List<LifeOsDestination> = listOf(CHAT, GOALS, MEMORY, SYSTEM)
         val default: LifeOsDestination = entries.single { it.isDefault }
 
         fun fromKey(key: String?): LifeOsDestination =
