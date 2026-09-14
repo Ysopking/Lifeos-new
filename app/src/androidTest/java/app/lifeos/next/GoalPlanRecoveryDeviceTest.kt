@@ -30,12 +30,24 @@ class GoalPlanRecoveryDeviceTest {
     private val at = Instant.parse("2026-09-11T14:00:00Z")
 
     private suspend fun awaitBoot() {
+        val processStartup = withTimeout(30_000) {
+            app.startupState.first { state ->
+                state.phase == LifeOsProcessStartupPhase.READY ||
+                    state.phase == LifeOsProcessStartupPhase.FAILED
+            }
+        }
+        if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
+            error("Process startup failed during V7 recovery: ${processStartup.failure ?: "unknown"}")
+        }
         val boot = withTimeout(30_000) {
             app.kernel.bootstrapState.first {
                 it.status == KernelBootstrapStatus.READY ||
                     it.status == KernelBootstrapStatus.DEGRADED ||
                     it.status == KernelBootstrapStatus.FAILED
             }
+        }
+        if (boot.status == KernelBootstrapStatus.FAILED) {
+            error("Kernel boot failed during V7 recovery: ${boot.failureMessage ?: "unknown"}")
         }
         assertTrue("Kernel must restore V7 before runtime start", boot.ready)
     }
