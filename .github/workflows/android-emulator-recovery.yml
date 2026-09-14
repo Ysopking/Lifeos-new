@@ -15,6 +15,7 @@ on:
       - "app/src/main/java/app/lifeos/next/LifeOsStartupComposition.kt"
       - "app/src/main/java/app/lifeos/next/LifeOsRuntimeWiring.kt"
       - "app/src/main/java/app/lifeos/next/kernel/**"
+      - "core/language/src/main/**"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/ThoughtMatrix*.kt"
       - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/artifact/**"
       - "core/runtime/src/test/kotlin/app/lifeos/core/runtime/artifact/**"
