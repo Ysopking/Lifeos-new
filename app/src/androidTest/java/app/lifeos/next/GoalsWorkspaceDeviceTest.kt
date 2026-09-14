@@ -7,7 +7,10 @@ import app.lifeos.core.runtime.goal.GoalStepState
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.ui.goals.GoalPlanUiStatus
 import app.lifeos.next.ui.goals.GoalWorkspaceProjector
+import app.lifeos.next.ui.goals.TodayPlanProjector
+import app.lifeos.next.ui.goals.TodayPlanTiming
 import java.time.Instant
+import java.time.ZoneOffset
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -38,6 +41,7 @@ class GoalsWorkspaceDeviceTest {
             at = projectionAt,
         )
         val projected = workspace.plans.single { it.id == before.definition.id }
+        val today = TodayPlanProjector.project(workspace, projectionAt, ZoneOffset.UTC)
 
         assertEquals(GoalPlanUiStatus.ACTIVE, projected.status)
         assertEquals(1, projected.completedSteps)
@@ -55,6 +59,9 @@ class GoalsWorkspaceDeviceTest {
             GoalStepState.PAUSED,
             projected.steps.single { it.key == "paused" }.state,
         )
+        assertEquals(1, today.items.size)
+        assertEquals(projected.currentStepId, today.items.single().stepId)
+        assertEquals(TodayPlanTiming.NOW, today.items.single().timing)
         assertEquals(before, fixtureState())
     }
 
@@ -70,9 +77,14 @@ class GoalsWorkspaceDeviceTest {
             states = app.kernel.goalPlans.states.value,
             at = projectionAt,
         )
+        val firstToday = TodayPlanProjector.project(first, projectionAt, ZoneOffset.UTC)
+        val secondToday = TodayPlanProjector.project(second, projectionAt, ZoneOffset.UTC)
         val projected = first.plans.single { it.id == before.definition.id }
 
         assertEquals(first, second)
+        assertEquals(firstToday, secondToday)
+        assertEquals(1, firstToday.items.size)
+        assertEquals(TodayPlanTiming.NOW, firstToday.items.single().timing)
         assertEquals(before.definition.id, projected.id)
         assertEquals(before.revision, projected.revision)
         assertEquals(before.definition.sourceGoalPhotonId, projected.sourceGoalPhotonId)
