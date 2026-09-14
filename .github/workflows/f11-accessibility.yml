@@ -39,8 +39,7 @@ jobs:
             adb shell dumpsys activity activities > f11-activities.txt
             grep -Eq 'app\.lifeos\.next/(\.|app\.lifeos\.next\.)ChatMainActivity|com\.android\.permissioncontroller/.permission\.ui\.GrantPermissionsActivity' f11-activities.txt
             adb logcat -d -t 400 > f11-launcher-logcat.txt
-            pid="$(adb shell pidof app.lifeos.next 2>/dev/null | tr -d '\r' || true)"
-            test -n "$pid" || (cat f11-launcher-logcat.txt; exit 1)
+            adb shell pidof app.lifeos.next 2>/dev/null | tr -d '\r' | grep -Eq '[0-9]+' || (cat f11-launcher-logcat.txt; exit 1)
       - name: Upload F11 accessibility evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
