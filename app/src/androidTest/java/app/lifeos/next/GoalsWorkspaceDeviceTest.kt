@@ -85,12 +85,24 @@ class GoalsWorkspaceDeviceTest {
     }
 
     private suspend fun awaitBoot() {
+        val processStartup = withTimeout(30_000) {
+            app.startupState.first { state ->
+                state.phase == LifeOsProcessStartupPhase.READY ||
+                    state.phase == LifeOsProcessStartupPhase.FAILED
+            }
+        }
+        if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
+            error("Process startup failed before Goals workspace proof: ${processStartup.failure ?: "unknown"}")
+        }
         val boot = withTimeout(30_000) {
             app.kernel.bootstrapState.first {
                 it.status == KernelBootstrapStatus.READY ||
                     it.status == KernelBootstrapStatus.DEGRADED ||
                     it.status == KernelBootstrapStatus.FAILED
             }
+        }
+        if (boot.status == KernelBootstrapStatus.FAILED) {
+            error("Kernel boot failed before Goals workspace proof: ${boot.failureMessage ?: "unknown"}")
         }
         assertTrue("Kernel must restore goal plans before Goals workspace proof", boot.ready)
     }
