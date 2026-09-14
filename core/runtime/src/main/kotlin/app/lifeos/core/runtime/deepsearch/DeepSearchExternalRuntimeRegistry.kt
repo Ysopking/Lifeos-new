@@ -27,3 +27,32 @@ object DeepSearchExternalRuntimeRegistry {
         installedSources = emptyList()
     }
 }
+
+/**
+ * Process-local indirection for the authoritative external-source permission decision.
+ * Production installs an Owner-Policy-backed gate before the kernel is composed. The registry does
+ * not retain a permission bit; every call delegates to the current authoritative gate.
+ */
+object DeepSearchPermissionRuntimeRegistry {
+    @Volatile
+    private var installedGate: DeepSearchPermissionGate? = null
+
+    fun install(gate: DeepSearchPermissionGate) {
+        installedGate = gate
+    }
+
+    fun currentOrNull(): DeepSearchPermissionGate? = installedGate
+
+    internal fun clearForTests() {
+        installedGate = null
+    }
+}
+
+object RuntimeDeepSearchPermissionGate : DeepSearchPermissionGate {
+    override suspend fun permissionFor(source: DeepSearchSourceDescriptor): DeepSearchPermissionState {
+        if (source.kind == DeepSearchSourceKind.LOCAL) return DeepSearchPermissionState.NOT_REQUIRED
+        return DeepSearchPermissionRuntimeRegistry.currentOrNull()
+            ?.permissionFor(source)
+            ?: DeepSearchPermissionState.DENIED
+    }
+}
