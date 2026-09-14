@@ -6,6 +6,9 @@ import app.lifeos.core.runtime.evolution.EvolutionCanaryOutcome
 import app.lifeos.core.runtime.health.DurableSelfHealingResult
 import app.lifeos.core.runtime.health.SelfHealingIncidentSnapshot
 import app.lifeos.core.runtime.health.SelfHealingIncidentState
+import app.lifeos.core.runtime.resource.ResourceBudgetReservation
+import app.lifeos.core.runtime.resource.ResourceDecisionTraceRecorder
+import app.lifeos.core.runtime.resource.ResourceExecutionBinding
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 
@@ -16,6 +19,32 @@ import kotlinx.coroutines.CancellationException
 class LifecycleDecisionTraceRecorder(
     private val ledger: DecisionTraceLedger,
 ) {
+    private val resourceTraceRecorder = ResourceDecisionTraceRecorder(ledger)
+
+    /** V16 resource evidence is observational and shares the exact V15 lifecycle ledger. */
+    suspend fun recordResourceReservation(
+        binding: ResourceExecutionBinding,
+        reservation: ResourceBudgetReservation,
+        reasonCodes: List<String>,
+    ): DecisionTraceRecordResult = record("resource-reservation") {
+        resourceTraceRecorder.recordReservation(binding, reservation, reasonCodes)
+    }
+
+    /** Settlement is projected only after the owning subsystem has persisted its outcome. */
+    suspend fun recordResourceSettlement(
+        binding: ResourceExecutionBinding,
+        reservation: ResourceBudgetReservation,
+        authoritativeOutcomeId: String,
+        recordedAt: Instant,
+    ): DecisionTraceRecordResult = record("resource-settlement") {
+        resourceTraceRecorder.recordSettlement(
+            binding = binding,
+            reservation = reservation,
+            authoritativeOutcomeId = authoritativeOutcomeId,
+            recordedAt = recordedAt,
+        )
+    }
+
     suspend fun recordEvolutionOutcome(
         outcome: EvolutionCanaryOutcome,
         killSwitch: EvolutionCanaryKillSwitchEvidence?,
@@ -108,7 +137,7 @@ class LifecycleDecisionTraceRecorder(
             is DurableSelfHealingResult.Exhausted -> result.incident
             is DurableSelfHealingResult.Blocked -> result.incident
         }
-        val traceId = DecisionTraceId.create("self-healing-incident", incident.incidentId.value)
+        val traceId = selfHealingDecisionTraceId(incident.incidentId.value)
         val incidentNode = DecisionTraceNode.create(
             type = when (incident.state) {
                 SelfHealingIncidentState.RECOVERED -> DecisionTraceNodeType.RECOVERY_OUTCOME
@@ -280,6 +309,12 @@ class LifecycleDecisionTraceRecorder(
             reason = error.message ?: error::class.simpleName.orEmpty().ifBlank { "trace-unavailable" },
         )
     }
+}
+
+/** Canonical V15 root identity shared by lifecycle and V16 resource projections. */
+internal fun selfHealingDecisionTraceId(incidentId: String): DecisionTraceId {
+    require(incidentId.isNotBlank())
+    return DecisionTraceId.create("self-healing-incident", incidentId)
 }
 
 /** Process-local observer registry; it carries no lifecycle authority. */
