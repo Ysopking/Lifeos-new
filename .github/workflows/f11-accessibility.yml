@@ -32,13 +32,13 @@ jobs:
           script: |
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            # android-emulator-runner executes this script line-by-line on the ATD host. Keep the
-            # launcher proof deliberately linear: am-start exit status, short stabilization delay,
-            # a live LIFEOS process, then ActivityManager evidence. First-launch permission UI is
-            # allowed to own foreground focus, but an absent LIFEOS process still fails closed.
+            # The no-KVM ATD runner may need several seconds after am-start before ActivityManager
+            # exposes the application pid. Poll with a hard bound instead of treating a fixed 2s
+            # delay as an application crash. On timeout, persist ActivityManager and logcat evidence
+            # and still fail closed before instrumentation.
+            adb logcat -c
             adb shell am start -n app.lifeos.next/.ChatMainActivity > f11-launcher.txt 2>&1
-            sleep 2
-            adb shell pidof app.lifeos.next | tr -d '\r' | tee f11-process.txt | grep -Eq '[0-9]+'
+            timeout 30 sh -c 'until adb shell pidof app.lifeos.next 2>/dev/null | tr -d "\r" | tee f11-process.txt | grep -Eq "[0-9]+"; do sleep 2; done' || (adb shell dumpsys activity activities > f11-activities-timeout.txt; adb logcat -d > f11-logcat-timeout.txt; exit 1)
             adb shell dumpsys activity activities > f11-activities.txt
             grep -Eq 'app\.lifeos\.next/(\.|app\.lifeos\.next\.)ChatMainActivity|com\.android\.permissioncontroller/.permission\.ui\.GrantPermissionsActivity' f11-activities.txt
             adb shell am force-stop app.lifeos.next
