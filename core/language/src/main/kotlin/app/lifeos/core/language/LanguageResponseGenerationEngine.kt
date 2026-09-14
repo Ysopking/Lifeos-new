@@ -69,6 +69,11 @@ data class LanguageResponseGenerationResult(
  * [LanguageUnderstandingEngine] and ranked by semantic round-trip preservation. This is the response
  * counterpart to [LanguageGenerationEngine]: meaning is chosen before wording and wording is checked
  * again by the same understanding field before publication.
+ *
+ * CONVERSATION is intentionally different from factual acts. The productive composer supplies the
+ * current social utterance as a semantic conversation cue, not as an external-world fact that must
+ * be repeated verbatim. The realizer therefore answers greetings, courtesy and short check-ins with
+ * bounded conversational surfaces while still round-tripping every candidate through understanding.
  */
 class LanguageResponseGenerationEngine(
     private val understanding: LanguageUnderstandingEngine = LanguageUnderstandingEngine(),
@@ -117,13 +122,25 @@ class LanguageResponseGenerationEngine(
         val actCuePreserved = actCuePreserved(target.act, text, target.language)
         val languagePreserved = target.language == LanguageCode.UNKNOWN || roundTrip.goal.language == target.language
         val confidenceAgreement = 1.0 - kotlin.math.abs(target.confidence - roundTrip.goal.confidence)
-        val score = (
-            factCoverage * 0.52 +
-                semanticCoverage * 0.28 +
-                (if (actCuePreserved) 0.08 else 0.0) +
-                (if (languagePreserved) 0.07 else 0.0) +
-                confidenceAgreement.coerceIn(0.0, 1.0) * 0.05
-            ).coerceIn(0.0, 1.0)
+        val score = if (isConversationTarget(target)) {
+            val prompt = conversationPrompt(target.facts)
+            val fit = conversationFit(prompt, text, target.language)
+            val surfaceQuality = conversationSurfaceQuality(text)
+            (
+                fit * 0.64 +
+                    surfaceQuality * 0.18 +
+                    (if (languagePreserved) 0.10 else 0.0) +
+                    confidenceAgreement.coerceIn(0.0, 1.0) * 0.08
+                ).coerceIn(0.0, 1.0)
+        } else {
+            (
+                factCoverage * 0.52 +
+                    semanticCoverage * 0.28 +
+                    (if (actCuePreserved) 0.08 else 0.0) +
+                    (if (languagePreserved) 0.07 else 0.0) +
+                    confidenceAgreement.coerceIn(0.0, 1.0) * 0.05
+                ).coerceIn(0.0, 1.0)
+        }
         return LanguageResponseCandidate(
             text = text,
             roundTrip = roundTrip,
@@ -153,6 +170,14 @@ class LanguageResponseGenerationEngine(
 
     private fun propose(target: LanguageResponseTarget): List<String> {
         val language = if (target.language == LanguageCode.UNKNOWN) LanguageCode.DE else target.language
+        if (isConversationTarget(target)) {
+            val prompt = conversationPrompt(target.facts)
+            return when (language) {
+                LanguageCode.DE -> germanConversationCandidates(prompt)
+                LanguageCode.EN -> englishConversationCandidates(prompt)
+                LanguageCode.UNKNOWN -> error("resolved above")
+            }
+        }
         val facts = target.facts.joinToString(" ") { sentence(it.statement) }
         return when (language) {
             LanguageCode.DE -> germanCandidates(target.act, facts)
@@ -189,6 +214,109 @@ class LanguageResponseGenerationEngine(
         LanguageResponseAct.REPORT_SUCCESS -> listOf("Successful: $facts", "Result: $facts", facts)
         LanguageResponseAct.REPORT_BLOCKED -> listOf("Blocked: $facts", "Not executable: $facts", facts)
         LanguageResponseAct.REPORT_FAILURE -> listOf("Failed: $facts", "Error: $facts", facts)
+    }
+
+    private fun germanConversationCandidates(prompt: String): List<String> = when (conversationKind(prompt, LanguageCode.DE)) {
+        ConversationKind.GREETING -> listOf("Hallo!", "Hi!", "Hey!")
+        ConversationKind.THANKS -> listOf("Gern!", "Sehr gern!", "Gern geschehen!")
+        ConversationKind.CHECK_IN -> listOf(
+            "Danke der Nachfrage. Ich bin bereit.",
+            "Ich bin bereit. Womit machen wir weiter?",
+            "Bereit – womit möchtest du weitermachen?",
+        )
+        ConversationKind.GENERAL -> listOf(
+            "Ich höre zu.",
+            "Verstanden. Erzähl gern weiter.",
+            "Okay. Wir können daran anknüpfen.",
+        )
+    }
+
+    private fun englishConversationCandidates(prompt: String): List<String> = when (conversationKind(prompt, LanguageCode.EN)) {
+        ConversationKind.GREETING -> listOf("Hello!", "Hi!", "Hey!")
+        ConversationKind.THANKS -> listOf("You're welcome!", "Gladly!", "Of course!")
+        ConversationKind.CHECK_IN -> listOf(
+            "Thanks for asking. I'm ready.",
+            "I'm ready. What should we continue with?",
+            "Ready — what would you like to do next?",
+        )
+        ConversationKind.GENERAL -> listOf(
+            "I'm listening.",
+            "Understood. Go ahead.",
+            "Okay. We can continue from there.",
+        )
+    }
+
+    private fun isConversationTarget(target: LanguageResponseTarget): Boolean =
+        target.facts.any { fact -> fact.semanticTags.any { it.equals(CONVERSATION_TAG, ignoreCase = true) } }
+
+    private fun conversationPrompt(facts: List<LanguageResponseFact>): String {
+        val statement = facts.firstOrNull()?.statement?.trim().orEmpty()
+        if (statement.isBlank()) return ""
+        val lower = statement.lowercase()
+        val germanMarker = "semantisch erfasst:"
+        val englishMarker = "captured semantically:"
+        return when {
+            lower.contains(germanMarker) -> statement.substring(lower.indexOf(germanMarker) + germanMarker.length).trim()
+            lower.contains(englishMarker) -> statement.substring(lower.indexOf(englishMarker) + englishMarker.length).trim()
+            lower.startsWith("der gesprächskontext ist aktiv") -> ""
+            lower.startsWith("the conversation context is active") -> ""
+            else -> statement
+        }
+    }
+
+    private fun conversationKind(prompt: String, language: LanguageCode): ConversationKind {
+        val normalized = prompt.lowercase().trim().trimEnd('.', '!', '?', ';', ':')
+        if (normalized.isBlank()) return ConversationKind.GENERAL
+        return when (language) {
+            LanguageCode.DE -> when {
+                normalized.startsWith("hallo") || normalized.startsWith("hi") || normalized.startsWith("hey") ||
+                    normalized.startsWith("moin") || normalized.startsWith("servus") ||
+                    normalized.startsWith("guten morgen") || normalized.startsWith("guten tag") ||
+                    normalized.startsWith("guten abend") -> ConversationKind.GREETING
+                normalized.contains("danke") || normalized.contains("dankeschön") ||
+                    normalized.contains("dankeschoen") -> ConversationKind.THANKS
+                normalized.contains("wie geht") -> ConversationKind.CHECK_IN
+                else -> ConversationKind.GENERAL
+            }
+            LanguageCode.EN -> when {
+                normalized.startsWith("hello") || normalized.startsWith("hi") || normalized.startsWith("hey") ||
+                    normalized.startsWith("good morning") || normalized.startsWith("good afternoon") ||
+                    normalized.startsWith("good evening") -> ConversationKind.GREETING
+                normalized.contains("thank you") || normalized.contains("thanks") -> ConversationKind.THANKS
+                normalized.contains("how are you") -> ConversationKind.CHECK_IN
+                else -> ConversationKind.GENERAL
+            }
+            LanguageCode.UNKNOWN -> ConversationKind.GENERAL
+        }
+    }
+
+    private fun conversationFit(prompt: String, text: String, language: LanguageCode): Double {
+        val normalized = text.lowercase()
+        return when (conversationKind(prompt, language)) {
+            ConversationKind.GREETING -> if (
+                listOf("hallo", "hi", "hey", "hello").any(normalized::contains)
+            ) 1.0 else 0.25
+            ConversationKind.THANKS -> if (
+                listOf("gern", "welcome", "gladly", "of course").any(normalized::contains)
+            ) 1.0 else 0.25
+            ConversationKind.CHECK_IN -> if (
+                listOf("bereit", "ready").any(normalized::contains)
+            ) 1.0 else 0.35
+            ConversationKind.GENERAL -> if (
+                listOf("höre zu", "erzähl", "anknüpfen", "listening", "go ahead", "continue").any(normalized::contains)
+            ) 1.0 else 0.50
+        }
+    }
+
+    private fun conversationSurfaceQuality(text: String): Double {
+        val lower = text.lowercase()
+        val internalLeak = INTERNAL_CONVERSATION_TERMS.any(lower::contains)
+        val lengthScore = when {
+            text.length in 2..120 -> 1.0
+            text.length <= 180 -> 0.75
+            else -> 0.45
+        }
+        return if (internalLeak) lengthScore * 0.20 else lengthScore
     }
 
     private fun actCuePreserved(
@@ -245,7 +373,23 @@ class LanguageResponseGenerationEngine(
         .replace(" :", ":")
         .trim()
 
+    private enum class ConversationKind {
+        GREETING,
+        THANKS,
+        CHECK_IN,
+        GENERAL,
+    }
+
     private companion object {
+        const val CONVERSATION_TAG = "CONVERSATION"
+        val INTERNAL_CONVERSATION_TERMS = setOf(
+            "gesprächskontext",
+            "conversation context",
+            "semantisch erfasst",
+            "captured semantically",
+            "lifeos-photon",
+            "intent:",
+        )
         // Sentence punctuation is surface syntax, not factual identity. Keeping dots inside the
         // token caused a preserved terminal fact such as `Fußball` -> `Fußball.` to score as lost.
         val TERM = Regex("[\\p{L}\\p{N}_-]+")
