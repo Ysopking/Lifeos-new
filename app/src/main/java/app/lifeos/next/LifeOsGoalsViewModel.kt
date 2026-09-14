@@ -9,7 +9,10 @@ import app.lifeos.next.ui.goals.GoalPlanUiModel
 import app.lifeos.next.ui.goals.GoalPlanUiStatus
 import app.lifeos.next.ui.goals.GoalWorkspaceProjector
 import app.lifeos.next.ui.goals.GoalWorkspaceUiModel
+import app.lifeos.next.ui.goals.TodayPlanProjector
+import app.lifeos.next.ui.goals.TodayPlanUiModel
 import java.time.Instant
+import java.time.ZoneId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
@@ -24,6 +27,7 @@ enum class GoalWorkspaceFilter {
 
 data class LifeOsGoalsUiState(
     val workspace: GoalWorkspaceUiModel = GoalWorkspaceUiModel.empty(),
+    val today: TodayPlanUiModel? = null,
     val filter: GoalWorkspaceFilter = GoalWorkspaceFilter.ACTIVE,
     val selectedPlanId: GoalPlanId? = null,
     val loading: Boolean = true,
@@ -82,7 +86,7 @@ class LifeOsGoalsViewModel(application: Application) : AndroidViewModel(applicat
         mutableState.update { it.copy(selectedPlanId = null) }
     }
 
-    /** Recomputes only time-derived UI fields such as deadline expiry. Never mutates the ledger. */
+    /** Recomputes only time-derived UI fields such as deadline expiry and Today's projection. */
     fun refreshProjection() {
         project(kernel.goalPlans.states.value, Instant.now())
     }
@@ -114,9 +118,11 @@ class LifeOsGoalsViewModel(application: Application) : AndroidViewModel(applicat
         at: Instant,
     ) {
         val workspace = GoalWorkspaceProjector.project(states, at)
+        val today = TodayPlanProjector.project(workspace, at, ZoneId.systemDefault())
         mutableState.update { current ->
             current.copy(
                 workspace = workspace,
+                today = today,
                 selectedPlanId = current.selectedPlanId?.takeIf { selected ->
                     workspace.plans.any { it.id == selected }
                 },
