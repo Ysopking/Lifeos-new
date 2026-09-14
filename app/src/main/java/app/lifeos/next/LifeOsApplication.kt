@@ -258,7 +258,7 @@ class LifeOsApplication : Application() {
                             checkpoints = DeepSearchCheckpointStore(EncryptedDeepSearchCheckpointRepository(this)),
                             resultPhotons = object : DeepSearchResultPhotonPersistence {
                                 override suspend fun save(photon: Photon) {
-                                    photonIngress.ingest(photon, PhotonIngressMode.ORIGIN)
+                                    photonIngress.ingest(photon, PhotonIngressMode.DERIVED)
                                 }
 
                                 override suspend fun load(id: PhotonId): Photon? = kernel.photonStore.load(id)

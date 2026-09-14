@@ -14,6 +14,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
+import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootContext
@@ -121,12 +122,16 @@ class LifeOsKernel internal constructor(
     private val localImageTransformExecutor = LocalImageTransformActionExecutor(
         photons = photonStore,
         assets = imageAssets,
-        persistAndIngest = ::persistAndIngest,
+        persistAndIngest = { photon ->
+            persistAndIngest(photon, PhotonIngressMode.DERIVED)
+        },
     )
 
     private val localScheduleExecutor = LocalScheduleActionExecutor(
         scheduler = localReminderScheduler,
-        persistAndIngest = ::persistAndIngest,
+        persistAndIngest = { photon ->
+            persistAndIngest(photon, PhotonIngressMode.DERIVED)
+        },
     )
 
     private val goalActionDispatcher = GoalActionDispatcher(
@@ -209,7 +214,7 @@ class LifeOsKernel internal constructor(
                 sourcePhotonId = photon.id,
                 createdAt = photon.provenance.createdAt,
             )
-            val goal = persistAndIngest(goalPhoton.photon)
+            val goal = persistAndIngest(goalPhoton.photon, PhotonIngressMode.DERIVED)
             val goalResume = when {
                 understanding.goal.intent != IntentType.CONTINUE -> null
                 !routing.ready -> null
@@ -280,7 +285,10 @@ class LifeOsKernel internal constructor(
 
     /** Records only local handoff to Android's chooser; it never claims external delivery. */
     suspend fun recordCommunicationHandoff(share: LocalSharePreparation): PhotonSubmissionResult =
-        persistAndIngest(localCommunicationGoalEngine.createHandoffReceipt(share))
+        persistAndIngest(
+            localCommunicationGoalEngine.createHandoffReceipt(share),
+            PhotonIngressMode.DERIVED,
+        )
 
     /** Reads and integrity-verifies an image asset referenced by a generated image photon. */
     suspend fun loadImageAsset(photon: Photon): ByteArray? {
@@ -289,7 +297,15 @@ class LifeOsKernel internal constructor(
         return imageAssets.load(descriptor.asset)
     }
 
-    suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult {
+    /** Backward-compatible external boundary: direct submissions are ORIGIN. */
+    suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult =
+        persistAndIngest(photon, PhotonIngressMode.ORIGIN)
+
+    internal suspend fun persistAndIngest(
+        photon: Photon,
+        mode: PhotonIngressMode,
+    ): PhotonSubmissionResult {
+        ProductivePhotonIngressClassification.requireOrMark(photonStore, photon, mode)
         val previous = photonStore.load(photon.id)
         photonStore.save(photon)
         mutableBootstrapState.update { current ->
@@ -367,7 +383,10 @@ class LifeOsKernel internal constructor(
                     message = result.message,
                 )
                 is GoalResumeResult.Resumed -> {
-                    val resumedGoal = persistAndIngest(result.resumedPhoton)
+                    val resumedGoal = persistAndIngest(
+                        result.resumedPhoton,
+                        PhotonIngressMode.DERIVED,
+                    )
                     val resumedRouting = goalCapabilityRouter.route(result.frame)
                     GoalResumeExecutionResult.Resumed(
                         targetGoalId = result.targetGoal.id,
@@ -403,7 +422,7 @@ class LifeOsKernel internal constructor(
             when (result) {
                 is LocalKnowledgeGoalResult.Produced -> LocalKnowledgeExecutionResult.Produced(
                     kind = result.kind,
-                    output = persistAndIngest(result.photon),
+                    output = persistAndIngest(result.photon, PhotonIngressMode.DERIVED),
                     evidencePhotonIds = result.evidencePhotonIds,
                 )
                 is LocalKnowledgeGoalResult.Unsupported -> LocalKnowledgeExecutionResult.Failed(
@@ -436,7 +455,7 @@ class LifeOsKernel internal constructor(
             ) {
                 is LocalDeepSearchGoalResult.Produced -> LocalDeepSearchExecutionResult.Produced(
                     status = result.result.status,
-                    output = persistAndIngest(result.photon),
+                    output = persistAndIngest(result.photon, PhotonIngressMode.DERIVED),
                     evidencePhotonIds = result.evidencePhotonIds,
                     workUnitsUsed = result.result.workUnitsUsed,
                 )
