@@ -16,6 +16,7 @@ data class LanguageGenerationTarget(
     val entities: List<SemanticEntity> = emptyList(),
     val constraints: List<GoalConstraint> = emptyList(),
     val semanticTags: Set<String> = emptySet(),
+    val semanticGraph: LanguageSemanticGraph = LanguageSemanticGraph.empty(language),
     val confidence: Double = 1.0,
 ) {
     init {
@@ -33,6 +34,7 @@ data class LanguageGenerationTarget(
                 .filter { it.key.startsWith("field.semantic.") }
                 .map { it.key.removePrefix("field.semantic.").uppercase() }
                 .toSet(),
+            semanticGraph = goal.semanticGraph,
             confidence = goal.confidence,
         )
     }
@@ -45,12 +47,14 @@ data class LanguageGenerationCandidate(
     val intentPreserved: Boolean,
     val entityCoverage: Double,
     val semanticCoverage: Double,
+    val semanticGraphCoverage: Double,
 ) {
     init {
         require(text.isNotBlank())
         require(semanticPreservation.isFinite() && semanticPreservation in 0.0..1.0)
         require(entityCoverage.isFinite() && entityCoverage in 0.0..1.0)
         require(semanticCoverage.isFinite() && semanticCoverage in 0.0..1.0)
+        require(semanticGraphCoverage.isFinite() && semanticGraphCoverage in 0.0..1.0)
     }
 }
 
@@ -69,14 +73,10 @@ data class LanguageGenerationResult(
 /**
  * Reverse path for LIFEOS language processing.
  *
- * Understanding is bottom-up: surface text -> linguistic field -> semantic goal.
- * Generation is top-down: semantic goal -> lexical/surface candidates -> linguistic field ->
+ * Understanding is bottom-up: surface text -> linguistic field -> semantic goal/graph.
+ * Generation is top-down: semantic graph/goal -> lexical/surface candidates -> linguistic field ->
  * semantic verification. This makes generation auditable and keeps the same language engine on
  * both sides of the communication loop.
- *
- * The current realizer is intentionally small and deterministic. It is a seed grammar, not the
- * source of semantic authority. Vocabulary growth belongs in the linguistic lexicon / learned
- * language field; semantic correctness is guarded by the mandatory round-trip check below.
  */
 class LanguageGenerationEngine(
     private val understanding: LanguageUnderstandingEngine = LanguageUnderstandingEngine(),
@@ -105,6 +105,7 @@ class LanguageGenerationEngine(
             evaluate(target, text, context)
         }.sortedWith(
             compareByDescending<LanguageGenerationCandidate> { it.semanticPreservation }
+                .thenByDescending { it.semanticGraphCoverage }
                 .thenByDescending { it.roundTrip.goal.confidence }
                 .thenBy { it.text.length }
                 .thenBy { it.text }
@@ -127,11 +128,13 @@ class LanguageGenerationEngine(
         val intentPreserved = parsed.goal.intent == target.intent
         val entityCoverage = entityCoverage(target.entities, parsed.goal.entities)
         val semanticCoverage = semanticCoverage(target, parsed)
+        val graphCoverage = semanticGraphCoverage(target.semanticGraph, parsed.goal.semanticGraph)
         val confidenceAgreement = 1.0 - abs(target.confidence - parsed.goal.confidence)
         val score = (
-            (if (intentPreserved) 0.46 else 0.0) +
-                entityCoverage * 0.28 +
-                semanticCoverage * 0.18 +
+            (if (intentPreserved) 0.34 else 0.0) +
+                entityCoverage * 0.20 +
+                semanticCoverage * 0.14 +
+                graphCoverage * 0.24 +
                 confidenceAgreement.coerceIn(0.0, 1.0) * 0.08
             ).coerceIn(0.0, 1.0)
         return LanguageGenerationCandidate(
@@ -141,6 +144,7 @@ class LanguageGenerationEngine(
             intentPreserved = intentPreserved,
             entityCoverage = entityCoverage,
             semanticCoverage = semanticCoverage,
+            semanticGraphCoverage = graphCoverage,
         )
     }
 
@@ -195,11 +199,16 @@ class LanguageGenerationEngine(
             else -> target.language
         }
         val payload = payload(target, language)
-        return when (language) {
+        val ordinary = when (language) {
             LanguageCode.DE -> germanCandidates(target.intent, payload)
             LanguageCode.EN -> englishCandidates(target.intent, payload)
             LanguageCode.UNKNOWN -> error("resolved above")
         }
+        val structural = target.semanticGraph
+            .takeIf { it.requiresStructuralPreservation() && it.clauses.isNotEmpty() }
+            ?.sourceSurface()
+            ?.takeIf { it.isNotBlank() }
+        return if (structural == null) ordinary else listOf(structural) + ordinary
     }
 
     private fun payload(target: LanguageGenerationTarget, language: LanguageCode): String {
