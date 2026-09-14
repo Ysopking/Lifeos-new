@@ -1,7 +1,6 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.model.Photon
-import app.lifeos.core.runtime.PhotonIngressMarkerStore
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.artifact.ArtifactCoordinator
 import app.lifeos.core.runtime.artifact.ArtifactGenerationCoordinator
@@ -95,24 +94,6 @@ class CanonicalPhotonIngress(
             }
         }
 
-        val durableMode = PhotonIngressMarkerStore.mode(kernel.photonStore, photon)
-        when (mode) {
-            PhotonIngressMode.ORIGIN -> check(durableMode == PhotonIngressMode.ORIGIN) {
-                "Photon ${photon.id.value}@${photon.revision} is already classified as $durableMode"
-            }
-            PhotonIngressMode.DERIVED,
-            PhotonIngressMode.REPLAY -> {
-                if (durableMode == PhotonIngressMode.ORIGIN) {
-                    PhotonIngressMarkerStore.mark(kernel.photonStore, photon, mode)
-                } else {
-                    check(durableMode == mode) {
-                        "Photon ${photon.id.value}@${photon.revision} cannot change ingress mode " +
-                            "from $durableMode to $mode"
-                    }
-                }
-            }
-        }
-
         val live = kernel.bootstrapState.value.photons.firstOrNull { it.id == photon.id }
         if (live != null) {
             check(live.revision <= photon.revision) {
@@ -125,7 +106,7 @@ class CanonicalPhotonIngress(
             }
         }
 
-        val submission = kernel.persistAndIngest(photon)
+        val submission = kernel.persistAndIngest(photon, mode)
         check(submission.processingQueued) {
             submission.processingFailure ?: "Photon cognitive work was not durabilized"
         }
