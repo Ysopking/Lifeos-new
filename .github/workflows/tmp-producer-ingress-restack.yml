@@ -1,0 +1,123 @@
+name: Temporary Producer Ingress Restack
+on:
+  push:
+    branches:
+      - automation/producer-ingress-restack
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - name: Apply current-tree producer ingress audit
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          kernel_path = Path('app/src/main/java/app/lifeos/next/kernel/LifeOsKernel.kt')
+          kernel = kernel_path.read_text()
+          kernel = replace_once(
+              kernel,
+              'import app.lifeos.core.runtime.LifeOsRuntime\n',
+              'import app.lifeos.core.runtime.LifeOsRuntime\nimport app.lifeos.core.runtime.PhotonIngressMode\n',
+              'kernel import',
+          )
+          kernel = replace_once(
+              kernel,
+              '''    private val localImageTransformExecutor = LocalImageTransformActionExecutor(\n        photons = photonStore,\n        assets = imageAssets,\n        persistAndIngest = ::persistAndIngest,\n    )''',
+              '''    private val localImageTransformExecutor = LocalImageTransformActionExecutor(\n        photons = photonStore,\n        assets = imageAssets,\n        persistAndIngest = { photon ->\n            persistAndIngest(photon, PhotonIngressMode.DERIVED)\n        },\n    )''',
+              'image transform ingress',
+          )
+          kernel = replace_once(
+              kernel,
+              '''    private val localScheduleExecutor = LocalScheduleActionExecutor(\n        scheduler = localReminderScheduler,\n        persistAndIngest = ::persistAndIngest,\n    )''',
+              '''    private val localScheduleExecutor = LocalScheduleActionExecutor(\n        scheduler = localReminderScheduler,\n        persistAndIngest = { photon ->\n            persistAndIngest(photon, PhotonIngressMode.DERIVED)\n        },\n    )''',
+              'schedule ingress',
+          )
+          kernel = replace_once(
+              kernel,
+              '            val goal = persistAndIngest(goalPhoton.photon)\n',
+              '            val goal = persistAndIngest(goalPhoton.photon, PhotonIngressMode.DERIVED)\n',
+              'goal ingress',
+          )
+          kernel = replace_once(
+              kernel,
+              '''    suspend fun recordCommunicationHandoff(share: LocalSharePreparation): PhotonSubmissionResult =\n        persistAndIngest(localCommunicationGoalEngine.createHandoffReceipt(share))''',
+              '''    suspend fun recordCommunicationHandoff(share: LocalSharePreparation): PhotonSubmissionResult =\n        persistAndIngest(\n            localCommunicationGoalEngine.createHandoffReceipt(share),\n            PhotonIngressMode.DERIVED,\n        )''',
+              'communication ingress',
+          )
+          kernel = replace_once(
+              kernel,
+              '''    suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult {\n        val previous = photonStore.load(photon.id)''',
+              '''    /** Backward-compatible external boundary: unclassified direct submissions are ORIGIN. */\n    suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult =\n        persistAndIngest(photon, PhotonIngressMode.ORIGIN)\n\n    /**\n     * Single productive kernel boundary for one Photon revision. Classification is durably fixed\n     * before persistence and cognitive submission so internal outputs cannot restart causal roots.\n     */\n    internal suspend fun persistAndIngest(\n        photon: Photon,\n        mode: PhotonIngressMode,\n    ): PhotonSubmissionResult {\n        ProductivePhotonIngressClassification.requireOrMark(photonStore, photon, mode)\n        val previous = photonStore.load(photon.id)''',
+              'kernel boundary',
+          )
+          kernel = replace_once(
+              kernel,
+              '                    val resumedGoal = persistAndIngest(result.resumedPhoton)\n',
+              '''                    val resumedGoal = persistAndIngest(\n                        result.resumedPhoton,\n                        PhotonIngressMode.DERIVED,\n                    )\n''',
+              'resume ingress',
+          )
+          kernel = replace_once(
+              kernel,
+              '                    output = persistAndIngest(result.photon),\n',
+              '                    output = persistAndIngest(result.photon, PhotonIngressMode.DERIVED),\n',
+              'knowledge ingress',
+          )
+          kernel = replace_once(
+              kernel,
+              '                    output = persistAndIngest(result.photon),\n',
+              '                    output = persistAndIngest(result.photon, PhotonIngressMode.DERIVED),\n',
+              'deep search ingress',
+          )
+          kernel_path.write_text(kernel)
+
+          canonical_path = Path('app/src/main/java/app/lifeos/next/kernel/CanonicalPhotonIngress.kt')
+          canonical = canonical_path.read_text()
+          canonical = replace_once(
+              canonical,
+              'import app.lifeos.core.runtime.PhotonIngressMarkerStore\n',
+              '',
+              'canonical marker import',
+          )
+          marker_block = '''        val durableMode = PhotonIngressMarkerStore.mode(kernel.photonStore, photon)\n        when (mode) {\n            PhotonIngressMode.ORIGIN -> check(durableMode == PhotonIngressMode.ORIGIN) {\n                "Photon ${photon.id.value}@${photon.revision} is already classified as $durableMode"\n            }\n            PhotonIngressMode.DERIVED,\n            PhotonIngressMode.REPLAY -> {\n                if (durableMode == PhotonIngressMode.ORIGIN) {\n                    PhotonIngressMarkerStore.mark(kernel.photonStore, photon, mode)\n                } else {\n                    check(durableMode == mode) {\n                        "Photon ${photon.id.value}@${photon.revision} cannot change ingress mode " +\n                            "from $durableMode to $mode"\n                    }\n                }\n            }\n        }\n\n'''
+          canonical = replace_once(canonical, marker_block, '', 'canonical marker block')
+          canonical = replace_once(
+              canonical,
+              '        val submission = kernel.persistAndIngest(photon)\n',
+              '        val submission = kernel.persistAndIngest(photon, mode)\n',
+              'canonical kernel call',
+          )
+          canonical_path.write_text(canonical)
+
+          app_path = Path('app/src/main/java/app/lifeos/next/LifeOsApplication.kt')
+          app = app_path.read_text()
+          old = '''                                override suspend fun save(photon: Photon) {\n                                    photonIngress.ingest(photon, PhotonIngressMode.ORIGIN)\n                                }'''
+          new = '''                                override suspend fun save(photon: Photon) {\n                                    photonIngress.ingest(photon, PhotonIngressMode.DERIVED)\n                                }'''
+          app = replace_once(app, old, new, 'deep search mission result ingress')
+          app_path.write_text(app)
+
+          Path('app/src/main/java/app/lifeos/next/kernel/ProductivePhotonIngressClassification.kt').write_text('''package app.lifeos.next.kernel\n\nimport app.lifeos.core.model.Photon\nimport app.lifeos.core.model.PhotonRepository\nimport app.lifeos.core.runtime.PhotonIngressMarkerStore\nimport app.lifeos.core.runtime.PhotonIngressMode\n\n/**\n * Single fail-closed ingress-mode classifier used immediately before productive kernel submission.\n * ORIGIN stays marker-free; DERIVED and REPLAY are durably marked before the Photon is persisted and\n * submitted so a crash cannot later reinterpret internal/replayed work as a causal root.\n */\ninternal object ProductivePhotonIngressClassification {\n    suspend fun requireOrMark(\n        photons: PhotonRepository,\n        photon: Photon,\n        mode: PhotonIngressMode,\n    ) {\n        val durableMode = PhotonIngressMarkerStore.mode(photons, photon)\n        when (mode) {\n            PhotonIngressMode.ORIGIN -> check(durableMode == PhotonIngressMode.ORIGIN) {\n                "Photon ${photon.id.value}@${photon.revision} is already classified as $durableMode"\n            }\n\n            PhotonIngressMode.DERIVED,\n            PhotonIngressMode.REPLAY -> {\n                if (durableMode == PhotonIngressMode.ORIGIN) {\n                    PhotonIngressMarkerStore.mark(photons, photon, mode)\n                } else {\n                    check(durableMode == mode) {\n                        "Photon ${photon.id.value}@${photon.revision} cannot change ingress mode " +\n                            "from $durableMode to $mode"\n                    }\n                }\n            }\n        }\n    }\n}\n''')
+
+          Path('app/src/test/java/app/lifeos/next/kernel/ProductivePhotonIngressClassificationTest.kt').write_text('''package app.lifeos.next.kernel\n\nimport app.lifeos.core.model.Photon\nimport app.lifeos.core.model.PhotonId\nimport app.lifeos.core.model.PhotonLoadReport\nimport app.lifeos.core.model.PhotonRepository\nimport app.lifeos.core.model.Provenance\nimport app.lifeos.core.runtime.PhotonIngressMarkerStore\nimport app.lifeos.core.runtime.PhotonIngressMode\nimport java.time.Instant\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertFailsWith\nimport kotlinx.coroutines.test.runTest\n\nclass ProductivePhotonIngressClassificationTest {\n    @Test\n    fun `derived classification is durable idempotent and cannot become origin`() = runTest {\n        val repository = RecordingPhotonRepository()\n        val photon = photon(revision = 1L)\n\n        ProductivePhotonIngressClassification.requireOrMark(repository, photon, PhotonIngressMode.DERIVED)\n        ProductivePhotonIngressClassification.requireOrMark(repository, photon, PhotonIngressMode.DERIVED)\n\n        assertEquals(PhotonIngressMode.DERIVED, PhotonIngressMarkerStore.mode(repository, photon))\n        assertFailsWith<IllegalStateException> {\n            ProductivePhotonIngressClassification.requireOrMark(repository, photon, PhotonIngressMode.ORIGIN)\n        }\n    }\n\n    @Test\n    fun `classification is revision scoped and modes cannot mutate`() = runTest {\n        val repository = RecordingPhotonRepository()\n        val first = photon(revision = 1L)\n        val second = photon(revision = 2L)\n\n        ProductivePhotonIngressClassification.requireOrMark(repository, first, PhotonIngressMode.DERIVED)\n        ProductivePhotonIngressClassification.requireOrMark(repository, second, PhotonIngressMode.REPLAY)\n\n        assertEquals(PhotonIngressMode.DERIVED, PhotonIngressMarkerStore.mode(repository, first))\n        assertEquals(PhotonIngressMode.REPLAY, PhotonIngressMarkerStore.mode(repository, second))\n        assertFailsWith<IllegalStateException> {\n            ProductivePhotonIngressClassification.requireOrMark(repository, first, PhotonIngressMode.REPLAY)\n        }\n    }\n\n    @Test\n    fun `origin remains marker free`() = runTest {\n        val repository = RecordingPhotonRepository()\n        val photon = photon(revision = 1L)\n\n        ProductivePhotonIngressClassification.requireOrMark(repository, photon, PhotonIngressMode.ORIGIN)\n\n        assertEquals(PhotonIngressMode.ORIGIN, PhotonIngressMarkerStore.mode(repository, photon))\n    }\n\n    private fun photon(revision: Long): Photon = Photon(\n        id = PhotonId("producer-audit-photon"),\n        revision = revision,\n        content = "revision-$revision",\n        provenance = Provenance(\n            source = "producer-audit-test",\n            actor = "test",\n            createdAt = Instant.parse("2026-09-13T01:00:00Z").plusSeconds(revision),\n        ),\n    )\n\n    private class RecordingPhotonRepository : PhotonRepository {\n        private val values = linkedMapOf<PhotonId, Photon>()\n\n        override suspend fun save(photon: Photon) { values[photon.id] = photon }\n        override suspend fun load(id: PhotonId): Photon? = values[id]\n        override suspend fun loadAll(): List<Photon> = values.values.toList()\n        override suspend fun loadReport(): PhotonLoadReport = PhotonLoadReport(\n            photons = values.values.toList(),\n            unreadableFiles = emptyList(),\n        )\n        override suspend fun delete(id: PhotonId) { values.remove(id) }\n    }\n}\n''')
+          PY
+          rm .github/workflows/tmp-producer-ingress-restack.yml
+          git diff --check
+      - name: Commit clean audit patch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Audit: classify internal Photon producers at kernel boundary"
+          git push origin HEAD:automation/producer-ingress-restack
