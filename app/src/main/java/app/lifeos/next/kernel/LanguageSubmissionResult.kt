@@ -38,6 +38,16 @@ data class LanguageSubmissionResult(
     }
     val effectiveRouting: GoalCapabilityResolution? get() =
         (goalResume as? GoalResumeExecutionResult.Resumed)?.routing ?: routing
+
+    /** Process-local view of the already durably settled conversation-response Photon. */
+    val localConversation: LocalConversationExecutionResult?
+        get() {
+            val id = (goalResume as? GoalResumeExecutionResult.Resumed)?.resumedGoal?.photon?.id
+                ?: goalPhoton?.photon?.id
+                ?: return null
+            return ConversationExecutionResultRegistry.current(id)
+        }
+
     val fullyQueued: Boolean get() =
         source.processingQueued &&
             goal?.processingQueued == true &&
@@ -45,7 +55,8 @@ data class LanguageSubmissionResult(
             ((localKnowledge as? LocalKnowledgeExecutionResult.Produced)?.output?.processingQueued != false) &&
             ((localDeepSearch as? LocalDeepSearchExecutionResult.Produced)?.output?.processingQueued != false) &&
             ((localImageTransform as? LocalImageTransformExecutionResult.Transformed)?.output?.processingQueued != false) &&
-            ((localSchedule as? LocalScheduleExecutionResult.Scheduled)?.output?.processingQueued != false)
+            ((localSchedule as? LocalScheduleExecutionResult.Scheduled)?.output?.processingQueued != false) &&
+            localConversation !is LocalConversationExecutionResult.Failed
     val actionReady: Boolean get() = effectiveRouting?.ready == true
     val generatedImage: GeneratedImageResult? get() =
         (imageGeneration as? ImageGenerationResult.Generated)?.value
