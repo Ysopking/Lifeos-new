@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lifeos.core.runtime.life.MemoryStage
 import app.lifeos.next.kernel.KernelBootstrapState
+import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.ui.memory.MemoryWorkspaceProjector
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -75,8 +76,27 @@ class MemoryWorkspaceDeviceTest {
         )
     }
 
-    private suspend fun awaitBoot(): KernelBootstrapState = withTimeout(BOOT_TIMEOUT_MS) {
-        app.kernel.bootstrapState.first { state -> state.ready || state.failureMessage != null }
+    private suspend fun awaitBoot(): KernelBootstrapState {
+        val processStartup = withTimeout(BOOT_TIMEOUT_MS) {
+            app.startupState.first { state ->
+                state.phase == LifeOsProcessStartupPhase.READY ||
+                    state.phase == LifeOsProcessStartupPhase.FAILED
+            }
+        }
+        if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
+            error("Process startup failed during F5 memory proof: ${processStartup.failure ?: "unknown"}")
+        }
+        return withTimeout(BOOT_TIMEOUT_MS) {
+            app.kernel.bootstrapState.first { state ->
+                state.status == KernelBootstrapStatus.READY ||
+                    state.status == KernelBootstrapStatus.DEGRADED ||
+                    state.status == KernelBootstrapStatus.FAILED
+            }
+        }.also { state ->
+            if (state.status == KernelBootstrapStatus.FAILED) {
+                error("Kernel boot failed during F5 memory proof: ${state.failureMessage ?: "unknown"}")
+            }
+        }
     }
 
     private companion object {
