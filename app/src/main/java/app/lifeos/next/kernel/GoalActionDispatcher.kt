@@ -30,6 +30,7 @@ data class GoalActionDispatchResult(
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
     val localSchedule: LocalScheduleExecutionResult? = null,
     val localCommunication: LocalCommunicationExecutionResult? = null,
+    val localConversation: LocalConversationExecutionResult? = null,
 )
 
 class GoalActionDispatcher(
@@ -39,6 +40,9 @@ class GoalActionDispatcher(
     private val executeImageTransform: suspend (GoalActionContext) -> LocalImageTransformExecutionResult,
     private val executeSchedule: suspend (GoalActionContext) -> LocalScheduleExecutionResult,
     private val prepareCommunication: suspend (GoalActionContext) -> LocalCommunicationExecutionResult,
+    private val executeConversation: suspend (GoalActionContext) -> LocalConversationExecutionResult = {
+        LocalConversationExecutionResult.Failed("conversation-executor-not-installed")
+    },
     private val executionGuard: GoalActionExecutionGuard = GoalExecutionRuntimeRegistry.current(),
     private val durableRuntimeProvider: () -> DurableGoalPlanRuntime? =
         DurableGoalPlanRuntimeRegistry::currentOrNull,
@@ -115,6 +119,10 @@ class GoalActionDispatcher(
                 localCommunication = prepareCommunication(context),
             )
 
+            IntentType.CONVERSATION -> GoalActionDispatchResult(
+                localConversation = executeConversation(context),
+            )
+
             else -> GoalActionDispatchResult()
         }
 
@@ -144,6 +152,9 @@ class GoalActionDispatcher(
         )
         IntentType.COMMUNICATE -> GoalActionDispatchResult(
             localCommunication = LocalCommunicationExecutionResult.Blocked(reason)
+        )
+        IntentType.CONVERSATION -> GoalActionDispatchResult(
+            localConversation = LocalConversationExecutionResult.Failed("blocked:$reason")
         )
         else -> GoalActionDispatchResult()
     }
