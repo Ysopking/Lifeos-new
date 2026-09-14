@@ -1,6 +1,8 @@
 package app.lifeos.next.ui.goals
 
+import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.goal.GoalPlanId
 import app.lifeos.core.runtime.goal.GoalStepId
 import app.lifeos.core.runtime.goal.GoalStepState
@@ -159,6 +161,113 @@ class TodayPlanProjectorTest {
         assertFalse(first.items.single().blockedByDependencies)
     }
 
+    @Test
+    fun matchingLiveContextReordersOnlyWithinSameTimingClass() {
+        val highPriority = step(
+            id = stepId('a'),
+            objective = "Wohnung aufräumen",
+            state = GoalStepState.READY,
+            priority = 100,
+            kind = GoalStepPresentationKind.OWNER_ACTION,
+        )
+        val related = step(
+            id = stepId('b'),
+            objective = "Apotheke Rezept abholen",
+            state = GoalStepState.READY,
+            priority = 1,
+            kind = GoalStepPresentationKind.OWNER_ACTION,
+        )
+        val plan = plan(
+            id = planId('a'),
+            steps = listOf(highPriority, related),
+            nextStepId = highPriority.id,
+        )
+        val workspace = GoalWorkspaceUiModel(listOf(plan))
+        val photon = notificationPhoton(
+            suffix = "today",
+            createdAt = at.minusSeconds(60),
+            text = "Kannst du bitte heute das Rezept in der Apotheke abholen?",
+        )
+
+        val projected = TodayPlanProjector.project(
+            workspace = workspace,
+            at = at,
+            zoneId = utc,
+            photons = listOf(photon),
+        )
+
+        assertEquals(listOf(related.id, highPriority.id), projected.items.map { it.stepId })
+        assertTrue(projected.items.all { it.timing == TodayPlanTiming.UNSCHEDULED })
+        assertEquals(1, projected.liveContext.size)
+        assertTrue(related.id in projected.liveContext.single().relatedStepIds)
+    }
+
+    @Test
+    fun liveContextCannotCrossRealTimingBoundaries() {
+        val overdue = step(
+            id = stepId('a'),
+            objective = "Rechnung bezahlen",
+            state = GoalStepState.READY,
+            deadline = at.minusSeconds(60),
+            priority = 1,
+            kind = GoalStepPresentationKind.OWNER_ACTION,
+        )
+        val related = step(
+            id = stepId('b'),
+            objective = "Apotheke Rezept abholen",
+            state = GoalStepState.READY,
+            priority = 100,
+            kind = GoalStepPresentationKind.OWNER_ACTION,
+        )
+        val workspace = GoalWorkspaceUiModel(
+            listOf(plan(planId('a'), listOf(overdue, related), nextStepId = related.id))
+        )
+        val photon = notificationPhoton(
+            suffix = "urgent",
+            createdAt = at.minusSeconds(30),
+            text = "Dringend: bitte jetzt das Rezept in der Apotheke abholen.",
+        )
+
+        val projected = TodayPlanProjector.project(workspace, at, utc, listOf(photon))
+
+        assertEquals(overdue.id, projected.items.first().stepId)
+        assertEquals(TodayPlanTiming.OVERDUE, projected.items.first().timing)
+        assertEquals(related.id, projected.items[1].stepId)
+        assertEquals(TodayPlanTiming.UNSCHEDULED, projected.items[1].timing)
+    }
+
+    @Test
+    fun oldOrNonLivePhotonsDoNotInfluenceToday() {
+        val ready = step(
+            id = stepId('a'),
+            objective = "Apotheke Rezept abholen",
+            state = GoalStepState.READY,
+            kind = GoalStepPresentationKind.OWNER_ACTION,
+        )
+        val workspace = GoalWorkspaceUiModel(listOf(plan(planId('a'), listOf(ready), nextStepId = ready.id)))
+        val yesterday = notificationPhoton(
+            suffix = "old",
+            createdAt = Instant.parse("2026-09-13T10:00:00Z"),
+            text = "Apotheke Rezept",
+        )
+        val ordinaryPhoton = Photon(
+            id = PhotonId("ordinary-chat-photon"),
+            content = "Apotheke Rezept",
+            provenance = Provenance(source = "chat", actor = "owner", createdAt = at.minusSeconds(10)),
+            tags = setOf("chat"),
+        )
+
+        val projected = TodayPlanProjector.project(
+            workspace = workspace,
+            at = at,
+            zoneId = utc,
+            photons = listOf(yesterday, ordinaryPhoton),
+        )
+
+        assertTrue(projected.liveContext.isEmpty())
+        assertEquals(ready.id, projected.items.single().stepId)
+    }
+
     private fun plan(
         id: GoalPlanId,
         steps: List<GoalStepUiModel>,
@@ -202,6 +311,21 @@ class TodayPlanProjectorTest {
         expired = deadline?.isBefore(at) == true,
         activeActionId = if (state == GoalStepState.RUNNING) "active-${id.value.takeLast(4)}" else null,
         outcomePhotonId = null,
+    )
+
+    private fun notificationPhoton(
+        suffix: String,
+        createdAt: Instant,
+        text: String,
+    ): Photon = Photon(
+        id = PhotonId("android-notification-$suffix"),
+        content = "package=com.example.messages\ncategory=msg\ntitle=Alex\nconversation=Alex\ntext=$text\nposted_at=$createdAt",
+        provenance = Provenance(
+            source = "android-notification-listener",
+            actor = "com.example.messages",
+            createdAt = createdAt,
+        ),
+        tags = setOf("notification", "live-context", "message"),
     )
 
     private fun planId(hex: Char): GoalPlanId = GoalPlanId("goal-plan:${hex.toString().repeat(64)}")
