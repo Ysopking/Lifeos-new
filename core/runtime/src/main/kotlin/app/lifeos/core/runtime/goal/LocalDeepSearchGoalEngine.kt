@@ -14,6 +14,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchBudget
 import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointResultProjector
 import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointSink
 import app.lifeos.core.runtime.deepsearch.DeepSearchEvidenceDraft
+import app.lifeos.core.runtime.deepsearch.DeepSearchExternalRuntimeRegistry
 import app.lifeos.core.runtime.deepsearch.DeepSearchFindingDraft
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionDefinition
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
@@ -28,6 +29,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchSourceDescriptor
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceKind
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceSnapshot
 import app.lifeos.core.runtime.deepsearch.DeepSearchStatus
+import app.lifeos.core.runtime.deepsearch.RuntimeAwareDeepSearchCapabilityGate
 import app.lifeos.core.runtime.resource.ResourceBudgetDemand
 import app.lifeos.core.runtime.resource.ResourceBudgetDomain
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
@@ -51,15 +53,18 @@ sealed interface LocalDeepSearchGoalResult {
 }
 
 /**
- * Private-v1 local DeepSearch adapter. V12 routes SEARCH through the resumable planner while keeping
- * the existing public call shape compatible. Production installs a durable mission coordinator;
- * legacy/unit compositions simply run V2 in-memory. World Formula/V16 bounds the planner limits and
- * no network source is claimed here.
+ * Private-v1 DeepSearch adapter. V12 routes SEARCH through the resumable planner while keeping the
+ * existing public call shape compatible. Production installs a durable mission coordinator;
+ * optional external sources are composed into the same bounded planner through the runtime registry.
+ * World Formula/V16 continues to bound depth, breadth, work, elapsed time and network demand.
  */
 class LocalDeepSearchGoalEngine(
-    private val planner: DeepSearchPlannerV2 = DeepSearchPlannerV2(),
+    private val planner: DeepSearchPlannerV2 = DeepSearchPlannerV2(
+        capabilityGate = RuntimeAwareDeepSearchCapabilityGate,
+    ),
     private val checkpointProjector: DeepSearchCheckpointResultProjector = DeepSearchCheckpointResultProjector(),
     private val sharedBudgets: SharedResourceBudgetGate? = SharedResourceBudgetRuntimeRegistry.current(),
+    private val externalSourcesProvider: () -> List<DeepSearchSource> = DeepSearchExternalRuntimeRegistry::sources,
 ) {
     fun supports(intent: IntentType): Boolean = intent == IntentType.SEARCH
 
@@ -84,13 +89,14 @@ class LocalDeepSearchGoalEngine(
                     .filter(::isPrimarySearchEvidence)
                     .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
                     .toList()
+                val missionSources = searchSources(missionEvidence)
                 val definition = DeepSearchMissionDefinition.create(
                     goalPhotonId = goalPhotonId,
                     sourcePhotonId = sourcePhoton.id,
                     sourceRevision = sourcePhoton.revision,
                     query = goal.objective,
                     searchPolicyVersion = SEARCH_POLICY_VERSION,
-                    sourceScopeIds = setOf(LOCAL_SOURCE_ID),
+                    sourceScopeIds = missionSources.mapTo(sortedSetOf()) { it.descriptor.sourceId },
                     sourceSnapshotFingerprint = DeepSearchSourceSnapshot.fingerprint(missionEvidence),
                     createdAt = createdAt,
                 )
@@ -135,10 +141,12 @@ class LocalDeepSearchGoalEngine(
             .filter(::isPrimarySearchEvidence)
             .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
             .toList()
+        val sources = searchSources(candidates)
+        val wantsExternal = sources.any { it.descriptor.kind == DeepSearchSourceKind.EXTERNAL }
         val freshRequest = DeepSearchRequest(
             query = query,
             contextTerms = goal.entities.map { it.normalizedValue }.filter { it.isNotBlank() }.toSet(),
-            budget = effectiveBudget(goal),
+            budget = effectiveBudget(goal, wantsExternal),
         )
         val request = if (resume == null) {
             freshRequest
@@ -161,7 +169,7 @@ class LocalDeepSearchGoalEngine(
         } else {
             planner.search(
                 request = request,
-                sources = listOf(PhotonDeepSearchSource(candidates)),
+                sources = sources,
                 resume = resume,
                 checkpointSink = checkpointSink,
             )
@@ -178,6 +186,7 @@ class LocalDeepSearchGoalEngine(
             evidenceIds = evidenceIds,
             createdAt = createdAt,
             missionId = missionId,
+            externalConfigured = wantsExternal,
         )
         return LocalDeepSearchGoalResult.Produced(
             photon = output,
@@ -187,11 +196,24 @@ class LocalDeepSearchGoalEngine(
         )
     }
 
-    private suspend fun effectiveBudget(goal: GoalFrame): DeepSearchBudget {
+    private fun searchSources(candidates: List<Photon>): List<DeepSearchSource> {
+        val external = externalSourcesProvider().sortedBy { it.descriptor.sourceId }
+        require(external.all { it.descriptor.kind == DeepSearchSourceKind.EXTERNAL }) {
+            "DeepSearch external source provider returned a non-external source"
+        }
+        val sources = listOf<DeepSearchSource>(PhotonDeepSearchSource(candidates)) + external
+        require(sources.map { it.descriptor.sourceId }.distinct().size == sources.size) {
+            "DeepSearch source ids must be unique across local and external sources"
+        }
+        return sources
+    }
+
+    private suspend fun effectiveBudget(goal: GoalFrame, wantsExternal: Boolean): DeepSearchBudget {
         val broker = sharedBudgets ?: return DEFAULT_BUDGET
+        val requestedUsage = if (wantsExternal) DEEP_SEARCH_WEB_REQUEST else DEEP_SEARCH_LOCAL_REQUEST
         val demand = ResourceBudgetDemand(
             domain = ResourceBudgetDomain.DEEP_SEARCH,
-            requested = DEEP_SEARCH_REQUEST,
+            requested = requestedUsage,
             goalRelevance = goal.confidence.coerceIn(0.0, 1.0),
             priority = 0.80,
             expectedUtility = 0.90,
@@ -210,6 +232,11 @@ class LocalDeepSearchGoalEngine(
         val elapsedMillis = minOf(MAX_SECONDS * 1_000L, allocation.allocated.elapsedMillis)
         require(work > 0 && breadth > 0 && elapsedMillis > 0L) {
             "deepsearch-world-formula-allocation-too-small"
+        }
+        if (wantsExternal) {
+            require(allocation.allocated.networkBytes >= WEB_NETWORK_BYTES) {
+                "deepsearch-web-network-budget-too-small"
+            }
         }
         return DeepSearchBudget(
             maxDepth = if (work >= 4) 2 else 1,
@@ -235,8 +262,9 @@ class LocalDeepSearchGoalEngine(
         evidenceIds: List<PhotonId>,
         createdAt: Instant,
         missionId: DeepSearchMissionId?,
+        externalConfigured: Boolean,
     ): Photon {
-        val content = render(result, goal.language)
+        val content = render(result, goal.language, externalConfigured)
         val confidence = result.best?.score?.total ?: NO_EVIDENCE_CONFIDENCE
         val deterministicId = missionId?.let {
             PhotonId(
@@ -247,16 +275,17 @@ class LocalDeepSearchGoalEngine(
                 )
             )
         }
+        val evidenceSourceIds = result.evidence.mapTo(sortedSetOf()) { it.sourceId }
         return Photon(
             id = deterministicId ?: PhotonId.new(),
             content = content,
             mimeType = RESULT_MIME,
             phase = if (result.status == DeepSearchStatus.RESOLVED) PhotonPhase.CONVERGED else PhotonPhase.REFLECTING,
-            semanticMass = 1.0 + evidenceIds.size * EVIDENCE_MASS,
+            semanticMass = 1.0 + result.evidence.size * EVIDENCE_MASS,
             energy = 1.0,
             confidence = confidence.coerceIn(0.0, 1.0),
             provenance = Provenance(
-                source = "local-deepsearch-v2",
+                source = "deepsearch-v2",
                 actor = "LocalDeepSearchGoalEngine",
                 createdAt = createdAt,
                 parentIds = buildSet {
@@ -278,7 +307,8 @@ class LocalDeepSearchGoalEngine(
                 add("answer")
                 add("deepsearch")
                 add("deepsearch-v2")
-                add("local-search")
+                if (LOCAL_SOURCE_ID in evidenceSourceIds) add("local-search")
+                if (evidenceSourceIds.any { it != LOCAL_SOURCE_ID }) add("web-search")
                 add("deepsearch-answer")
                 add("evidence-backed")
                 add("deepsearch-status:${result.status.name.lowercase(Locale.ROOT)}")
@@ -288,28 +318,43 @@ class LocalDeepSearchGoalEngine(
         )
     }
 
-    private fun render(result: DeepSearchResult, language: LanguageCode): String {
+    private fun render(
+        result: DeepSearchResult,
+        language: LanguageCode,
+        externalConfigured: Boolean,
+    ): String {
         val best = result.best
         if (best == null || result.evidence.isEmpty()) {
             return when (language) {
-                LanguageCode.DE -> "Keine passende lokale DeepSearch-Evidenz gefunden."
-                else -> "No matching local DeepSearch evidence found."
+                LanguageCode.DE -> if (externalConfigured) {
+                    "Keine passende lokale oder Web-DeepSearch-Evidenz gefunden."
+                } else {
+                    "Keine passende lokale DeepSearch-Evidenz gefunden."
+                }
+                else -> if (externalConfigured) {
+                    "No matching local or web DeepSearch evidence found."
+                } else {
+                    "No matching local DeepSearch evidence found."
+                }
             }
         }
 
         val ordered = (listOf(best) + result.alternatives)
             .distinctBy { it.id }
             .take(MAX_RESULTS)
+        val hasWebEvidence = result.evidence.any { it.sourceId != LOCAL_SOURCE_ID }
         val heading = when (language) {
-            LanguageCode.DE -> if (result.status == DeepSearchStatus.RESOLVED) {
-                "Lokale DeepSearch-Evidenz:"
-            } else {
-                "Lokale DeepSearch-Evidenz (noch nicht eindeutig aufgelöst):"
+            LanguageCode.DE -> when {
+                hasWebEvidence && result.status == DeepSearchStatus.RESOLVED -> "DeepSearch-Evidenz (lokal + Web):"
+                hasWebEvidence -> "DeepSearch-Evidenz (lokal + Web, noch nicht eindeutig aufgelöst):"
+                result.status == DeepSearchStatus.RESOLVED -> "Lokale DeepSearch-Evidenz:"
+                else -> "Lokale DeepSearch-Evidenz (noch nicht eindeutig aufgelöst):"
             }
-            else -> if (result.status == DeepSearchStatus.RESOLVED) {
-                "Local DeepSearch evidence:"
-            } else {
-                "Local DeepSearch evidence (not uniquely resolved):"
+            else -> when {
+                hasWebEvidence && result.status == DeepSearchStatus.RESOLVED -> "DeepSearch evidence (local + web):"
+                hasWebEvidence -> "DeepSearch evidence (local + web, not uniquely resolved):"
+                result.status == DeepSearchStatus.RESOLVED -> "Local DeepSearch evidence:"
+                else -> "Local DeepSearch evidence (not uniquely resolved):"
             }
         }
         return buildString {
@@ -402,7 +447,8 @@ class LocalDeepSearchGoalEngine(
     companion object {
         const val RESULT_MIME = "application/vnd.lifeos.deepsearch+text"
         const val LOCAL_SOURCE_ID = "local-photon-evidence"
-        const val SEARCH_POLICY_VERSION = "deepsearch-v2-local-2026-09"
+        const val SEARCH_POLICY_VERSION = "deepsearch-v2-hybrid-2026-09"
+        const val WEB_NETWORK_BYTES = 256L * 1024L
         private const val MAX_RESULTS = 6
         private const val MAX_WORK_UNITS = 16
         private const val MAX_SECONDS = 4L
@@ -420,16 +466,19 @@ class LocalDeepSearchGoalEngine(
             workUnits = 24,
             memoryBytes = 96L * 1024L * 1024L,
             ioBytes = 12L * 1024L * 1024L,
-            networkBytes = 0,
+            networkBytes = WEB_NETWORK_BYTES,
             candidates = 8,
         )
-        private val DEEP_SEARCH_REQUEST = ResourceBudgetUsage(
+        private val DEEP_SEARCH_LOCAL_REQUEST = ResourceBudgetUsage(
             elapsedMillis = MAX_SECONDS * 1_000L,
             workUnits = MAX_WORK_UNITS.toLong(),
             memoryBytes = 48L * 1024L * 1024L,
             ioBytes = 4L * 1024L * 1024L,
             networkBytes = 0,
             candidates = MAX_RESULTS.toLong(),
+        )
+        private val DEEP_SEARCH_WEB_REQUEST = DEEP_SEARCH_LOCAL_REQUEST.copy(
+            networkBytes = WEB_NETWORK_BYTES,
         )
         private val TERM_REGEX = Regex("[\\p{L}\\p{N}]+")
         private val WHITESPACE_REGEX = Regex("\\s+")
