@@ -10,6 +10,7 @@ import app.lifeos.core.runtime.chat.ConversationProjector
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.topology.LifeOsSubsystemState
 import app.lifeos.next.kernel.KernelBootstrapState
+import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.LifeOsResponseComposer
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -133,7 +134,22 @@ class ProductGoldenChatDeviceTest {
     }
 
     private suspend fun awaitBoot(): KernelBootstrapState = withTimeout(BOOT_TIMEOUT_MS) {
-        app.kernel.bootstrapState.first { state -> state.ready || state.failureMessage != null }
+        val processStartup = app.startupState.first { state ->
+            state.phase == LifeOsProcessStartupPhase.READY ||
+                state.phase == LifeOsProcessStartupPhase.FAILED
+        }
+        if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
+            error("Process startup failed during Product-Gold chat recovery: ${processStartup.failure ?: "unknown"}")
+        }
+        app.kernel.bootstrapState.first { state ->
+            state.status == KernelBootstrapStatus.READY ||
+                state.status == KernelBootstrapStatus.DEGRADED ||
+                state.status == KernelBootstrapStatus.FAILED
+        }.also { state ->
+            if (state.status == KernelBootstrapStatus.FAILED) {
+                error("Kernel boot failed during Product-Gold chat recovery: ${state.failureMessage ?: "unknown"}")
+            }
+        }
     }
 
     companion object {
