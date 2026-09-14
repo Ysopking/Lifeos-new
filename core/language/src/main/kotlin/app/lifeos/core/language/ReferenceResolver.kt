@@ -90,10 +90,56 @@ class ReferenceExpressionExtractor {
                 result += ReferenceExpression(ReferenceKind.THAT, utterance.original, preferred, 0.82)
             }
         }
+        if (result.isEmpty()) {
+            conversationalDeicticKind(words, topIntent)?.let { kind ->
+                result += ReferenceExpression(kind, utterance.original, emptySet(), 0.80)
+            }
+        }
         if (topIntent == IntentType.CONTINUE && result.isEmpty()) {
             result += ReferenceExpression(ReferenceKind.PREVIOUS, utterance.original, setOf("goal"), 0.98)
         }
         return result.distinctBy { Triple(it.kind, it.rawText, it.preferredKinds) }
+    }
+
+    /**
+     * Detects noun-free conversational follow-ups such as "Kannst du das genauer erklären?" or
+     * "Can you explain that in more detail?". The fallback is deliberately restricted to QUERY
+     * and CONVERSATION and requires a follow-up cue (or a terminal deictic) so ordinary articles
+     * such as "das Wetter" / "the weather" never become references merely because context exists.
+     */
+    private fun conversationalDeicticKind(words: List<String>, topIntent: IntentType): ReferenceKind? {
+        if (topIntent !in setOf(IntentType.QUERY, IntentType.CONVERSATION) || words.isEmpty()) return null
+
+        val thisMarkers = setOf("dies", "dieses", "diese", "diesen", "dieser", "this", "these")
+        val thatMarkers = setOf(
+            "das", "jene", "jener", "jenes", "that", "those",
+            "es", "it", "dazu", "damit", "davon", "darüber",
+        )
+        val followUpCues = setOf(
+            "erkläre", "erklären", "erklärst", "erklärt", "erklärung",
+            "genauer", "näher", "ausführen", "ausführlicher", "meinen", "meinst",
+            "bedeuten", "bedeutet", "mehr", "detail", "details", "weiter",
+            "explain", "clarify", "elaborate", "expand", "mean", "means", "more", "further",
+            "true", "correct", "wahr", "richtig",
+        )
+
+        words.forEachIndexed { index, word ->
+            val kind = when (word) {
+                in thisMarkers -> ReferenceKind.THIS
+                in thatMarkers -> ReferenceKind.THAT
+                else -> null
+            } ?: return@forEachIndexed
+
+            if (index == words.lastIndex) return kind
+            val start = maxOf(0, index - 3)
+            val end = minOf(words.lastIndex, index + 3)
+            val nearbyFollowUpCue = (start..end).any { cueIndex ->
+                cueIndex != index && words[cueIndex] in followUpCues
+            }
+            val compactStateFollowUp = words.getOrNull(index + 1) in setOf("so", "true", "correct", "wahr", "richtig")
+            if (nearbyFollowUpCue || compactStateFollowUp) return kind
+        }
+        return null
     }
 
     private fun hasNearbyPreferredNoun(
