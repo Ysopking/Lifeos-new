@@ -13,25 +13,39 @@ class LifeOsResponseComposerTest {
     private val understanding = LanguageUnderstandingEngine()
 
     @Test
-    fun conversationUsesProductiveSemanticResponseGenerationInsteadOfLegacyCannedReply() {
+    fun conversationUsesNaturalSemanticResponseInsteadOfInternalMetadataOrLegacyCannedReply() {
         val result = submission("Hallo")
 
         val response = LifeOsResponseComposer.compose(result)
 
         assertFalse(response == "Ich bin da. Wobei soll ich dir helfen?")
-        assertTrue(response.contains("Gesprächskontext", ignoreCase = true))
+        assertTrue(response in setOf("Hallo!", "Hi!", "Hey!"))
+        assertFalse(response.contains("Gesprächskontext", ignoreCase = true))
+        assertFalse(response.contains("semantisch erfasst", ignoreCase = true))
     }
 
     @Test
-    fun englishConversationGeneratesEnglishSurface() {
-        // "Thank you" is both deterministically classified as CONVERSATION and carries the English
-        // marker "you"; a bare "Hello" intentionally remains language-UNKNOWN in the normalizer.
+    fun englishConversationGeneratesNaturalEnglishCourtesySurface() {
+        // "Thank you" is deterministically classified as CONVERSATION and carries an English marker.
         val result = submission("Thank you")
 
         val response = LifeOsResponseComposer.compose(result)
 
-        assertTrue(response.contains("conversation context", ignoreCase = true))
+        assertTrue(response in setOf("You're welcome!", "Gladly!", "Of course!"))
+        assertFalse(response.contains("conversation context", ignoreCase = true))
+        assertFalse(response.contains("captured semantically", ignoreCase = true))
         assertFalse(response.contains("Gesprächskontext", ignoreCase = true))
+    }
+
+    @Test
+    fun germanCheckInProducesNaturalReadyResponse() {
+        val result = submission("Wie geht es dir?")
+
+        val response = LifeOsResponseComposer.compose(result)
+
+        assertTrue(response.contains("bereit", ignoreCase = true))
+        assertFalse(response.contains("Gesprächskontext", ignoreCase = true))
+        assertFalse(response.contains("semantisch erfasst", ignoreCase = true))
     }
 
     @Test

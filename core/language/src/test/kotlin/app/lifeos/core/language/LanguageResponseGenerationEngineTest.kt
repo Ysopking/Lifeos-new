@@ -2,6 +2,7 @@ package app.lifeos.core.language
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class LanguageResponseGenerationEngineTest {
@@ -67,6 +68,91 @@ class LanguageResponseGenerationEngineTest {
         assertTrue(result.winner.factCoverage >= 0.99)
         assertTrue(result.text.contains("Quelle A"))
         assertTrue(result.text.contains("Quelle B"))
+    }
+
+    @Test
+    fun `german greeting becomes a natural reply without internal conversation metadata`() {
+        val target = LanguageResponseTarget(
+            act = LanguageResponseAct.ASSERT,
+            language = LanguageCode.DE,
+            facts = listOf(
+                LanguageResponseFact(
+                    statement = "Der Gesprächskontext ist aktiv und dein Anliegen wurde semantisch erfasst: Hallo",
+                    semanticTags = setOf("CONVERSATION"),
+                    confidence = 0.95,
+                )
+            ),
+        )
+
+        val result = generation.generate(target)
+
+        assertTrue(result.text in setOf("Hallo!", "Hi!", "Hey!"))
+        assertFalse(result.text.contains("Gesprächskontext", ignoreCase = true))
+        assertFalse(result.text.contains("semantisch erfasst", ignoreCase = true))
+    }
+
+    @Test
+    fun `english thanks becomes a courtesy reply without internal conversation metadata`() {
+        val target = LanguageResponseTarget(
+            act = LanguageResponseAct.ASSERT,
+            language = LanguageCode.EN,
+            facts = listOf(
+                LanguageResponseFact(
+                    statement = "The conversation context is active and your request was captured semantically: Thank you",
+                    semanticTags = setOf("CONVERSATION"),
+                    confidence = 0.95,
+                )
+            ),
+        )
+
+        val result = generation.generate(target)
+
+        assertTrue(result.text in setOf("You're welcome!", "Gladly!", "Of course!"))
+        assertFalse(result.text.contains("conversation context", ignoreCase = true))
+        assertFalse(result.text.contains("captured semantically", ignoreCase = true))
+    }
+
+    @Test
+    fun `german check in produces a bounded ready response without metadata leakage`() {
+        val target = LanguageResponseTarget(
+            act = LanguageResponseAct.ASSERT,
+            language = LanguageCode.DE,
+            facts = listOf(
+                LanguageResponseFact(
+                    statement = "Der Gesprächskontext ist aktiv und dein Anliegen wurde semantisch erfasst: Wie geht es dir?",
+                    semanticTags = setOf("CONVERSATION"),
+                    confidence = 0.95,
+                )
+            ),
+        )
+
+        val result = generation.generate(target)
+
+        assertTrue(result.text.contains("bereit", ignoreCase = true))
+        assertFalse(result.text.contains("Gesprächskontext", ignoreCase = true))
+        assertFalse(result.text.contains("semantisch erfasst", ignoreCase = true))
+    }
+
+    @Test
+    fun `general conversation remains natural and bounded`() {
+        val target = LanguageResponseTarget(
+            act = LanguageResponseAct.ASSERT,
+            language = LanguageCode.DE,
+            facts = listOf(
+                LanguageResponseFact(
+                    statement = "Der Gesprächskontext ist aktiv und dein Anliegen wurde semantisch erfasst: Ich wollte dir nur kurz etwas erzählen",
+                    semanticTags = setOf("CONVERSATION"),
+                    confidence = 0.95,
+                )
+            ),
+        )
+
+        val result = generation.generate(target)
+
+        assertTrue(result.text.length <= 120)
+        assertFalse(result.text.contains("Gesprächskontext", ignoreCase = true))
+        assertFalse(result.text.contains("semantisch erfasst", ignoreCase = true))
+        assertFalse(result.text.contains("intent:", ignoreCase = true))
     }
 
     @Test
