@@ -359,7 +359,9 @@ class LifeOsApplication : Application() {
     fun refreshInitialDataBootstrap() {
         initialDataScope.launch {
             try {
-                lifePhotonRepository.reconcilePersisted()
+                // Persisted productive life Photons are reconciled once during kernel creation.
+                // Every subsequent productive save goes through CanonicalLifePhotonRepository's
+                // ingress boundary, so rescanning the entire store here would only replay them.
                 latestInitialDataBootstrap = initialDataBootstrap.run()
                 initialDataBootstrapFailure = null
             } catch (error: Exception) {
