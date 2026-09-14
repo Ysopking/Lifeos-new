@@ -14,7 +14,6 @@ permissions = {
     for node in root.findall("uses-permission")
 }
 for forbidden in {
-    "android.permission.INTERNET",
     "android.permission.READ_EXTERNAL_STORAGE",
     "android.permission.WRITE_EXTERNAL_STORAGE",
     "android.permission.MANAGE_EXTERNAL_STORAGE",
@@ -49,12 +48,47 @@ for activity in application.findall("activity"):
 if len(main_activities) != 1 or main_activities[0].attrib.get(android + "exported") != "true":
     raise SystemExit("exactly-one-exported-launcher-required")
 
+internet = "android.permission.INTERNET" in permissions
+if internet:
+    required = [
+        Path("app/src/main/java/app/lifeos/next/kernel/AndroidWebDeepSearchSource.kt"),
+        Path("app/src/main/java/app/lifeos/next/kernel/WebDeepSearchOwnerPolicy.kt"),
+        Path("app/src/main/java/app/lifeos/next/kernel/WebDeepSearchRuntime.kt"),
+        Path("app/src/test/java/app/lifeos/next/kernel/AndroidWebDeepSearchSourceTest.kt"),
+    ]
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise SystemExit("internet-without-web-deepsearch-contract:" + ",".join(missing))
+
 print("PRIVATE_DEBUG_SECURITY_STATIC_OK")
 PY
 
 if grep -Eq 'assembleRelease|bundleRelease|signingConfig' .github/scripts/ci-v17-gold.sh .github/workflows/v17-gold.yml; then
   echo "release-path-present-in-private-gold-gate" >&2
   exit 1
+fi
+
+if grep -Fq 'android.permission.INTERNET' app/src/main/AndroidManifest.xml; then
+  grep -Fq 'OwnerEffectType.NETWORK_ACCESS' app/src/main/java/app/lifeos/next/kernel/WebDeepSearchOwnerPolicy.kt || {
+    echo "internet-without-owner-network-policy" >&2
+    exit 1
+  }
+  grep -Fq 'OwnerPolicyEffectGate' app/src/main/java/app/lifeos/next/kernel/AndroidWebDeepSearchSource.kt || {
+    echo "internet-without-jit-owner-effect-gate" >&2
+    exit 1
+  }
+  grep -Fq 'HttpsURLConnection' app/src/main/java/app/lifeos/next/kernel/AndroidWebDeepSearchSource.kt || {
+    echo "internet-without-https-only-transport" >&2
+    exit 1
+  }
+  grep -Fq 'DeepSearchPermissionRuntimeRegistry.install' app/src/main/java/app/lifeos/next/kernel/WebDeepSearchRuntime.kt || {
+    echo "internet-without-dynamic-deepsearch-permission" >&2
+    exit 1
+  }
+  if grep -Fq 'OwnerEffectType.NETWORK_ACCESS' app/src/main/java/app/lifeos/next/kernel/PrivateOwnerPolicyBaseline.kt; then
+    echo "network-access-must-not-be-baseline-granted" >&2
+    exit 1
+  fi
 fi
 
 echo "PRIVATE_DEBUG_RELEASE_PATH_ABSENT_OK"

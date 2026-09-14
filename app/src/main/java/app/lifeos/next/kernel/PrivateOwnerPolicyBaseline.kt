@@ -28,6 +28,8 @@ object PrivateOwnerPolicyBaseline {
     private val mutex = Mutex()
 
     suspend fun ensure(policy: OwnerPolicyLedger) = mutex.withLock {
+        // Install only the dynamic authority view. Web network authority itself is never seeded.
+        WebDeepSearchRuntime.installPolicy(policy)
         if (policy.snapshot().revision != 0L) return@withLock
         DEFAULT_GRANTS.forEach { policy.grant(it) }
     }

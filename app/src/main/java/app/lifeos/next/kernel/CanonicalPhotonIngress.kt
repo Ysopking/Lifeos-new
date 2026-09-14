@@ -64,6 +64,13 @@ class CanonicalPhotonIngress(
                 reviews = reviews,
             )
         }
+        WebDeepSearchRuntime.installSource(
+            loadPhoton = kernel.photonStore::load,
+            persistPhoton = { photon ->
+                ingest(photon, PhotonIngressMode.ORIGIN)
+                photon
+            },
+        )
     }
 
     suspend fun ingest(
