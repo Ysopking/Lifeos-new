@@ -122,6 +122,10 @@ data class PhraseFieldResult(
  * It does not mutate microphone evidence. Raw acoustic features and their original lattice remain
  * available in [PhraseFieldResult.rawLattice]. Sentence/Photon context only changes the separate
  * interpretation lattice returned as [PhraseFieldResult.revisedLattice].
+ *
+ * Beam evidence is accumulated per covered acoustic frame rather than per emitted word. This keeps
+ * segmentation neutral: splitting one strong lexical span into several shorter words cannot create
+ * evidence merely by increasing the number of words in a hypothesis.
  */
 class PhraseFieldDecoder(
     private val lexicon: DeterministicLinguisticFieldLexicon = DeterministicLinguisticFieldLexicon(),
@@ -173,7 +177,7 @@ class PhraseFieldDecoder(
                                 position = word.endSpeechFrameExclusive,
                                 words = state.words + word,
                                 coveredFrames = state.coveredFrames + word.speechFrameCount,
-                                wordActivationSum = state.wordActivationSum + word.activation,
+                                activationMass = state.activationMass + word.activation * word.speechFrameCount,
                                 coherenceSum = state.coherenceSum + pairForce,
                                 coherenceEdges = state.coherenceEdges + if (state.words.isEmpty()) 0 else 1,
                             ),
@@ -291,6 +295,7 @@ class PhraseFieldDecoder(
     private fun durationCompatibility(actual: Int, target: Int): Double =
         minOf(actual, target).toDouble() / maxOf(actual, target).toDouble()
 
+    /** Match the existing acoustic lexical bridge: deterministic left-closed proportional bins. */
     private fun expectedAt(
         expected: List<AcousticPhonemeClass>,
         offset: Int,
@@ -298,7 +303,7 @@ class PhraseFieldDecoder(
     ): AcousticPhonemeClass {
         if (expected.size == 1 || spanLength <= 1) return expected.first()
         val normalized = offset.toDouble() / (spanLength - 1).toDouble()
-        val index = (normalized * (expected.size - 1)).roundToInt().coerceIn(expected.indices)
+        val index = (normalized * (expected.size - 1)).toInt().coerceIn(expected.indices)
         return expected[index]
     }
 
@@ -417,17 +422,28 @@ class PhraseFieldDecoder(
         val words: List<PhraseWordCandidate> = emptyList(),
         val coveredFrames: Int = 0,
         val skippedFrames: Int = 0,
-        val wordActivationSum: Double = 0.0,
+        val activationMass: Double = 0.0,
         val coherenceSum: Double = 0.0,
         val coherenceEdges: Int = 0,
     ) {
+        /**
+         * Frame-weighted evidence prevents a fragmented reading from winning just because it emits
+         * more words. A small segmentation cost only breaks otherwise comparable hypotheses.
+         */
         fun priority(): Double =
-            wordActivationSum + coveredFrames * 0.010 - skippedFrames * 0.040 + coherenceSum * 0.12
+            activationMass -
+                skippedFrames * SKIPPED_FRAME_PRIORITY_COST +
+                coherenceSum * COHERENCE_PRIORITY_WEIGHT -
+                maxOf(0, words.size - 1) * EXTRA_WORD_PRIORITY_COST
 
         fun toHypothesis(totalSpeechFrames: Int): PhraseHypothesis {
             val coverage = (coveredFrames.toDouble() / totalSpeechFrames.toDouble()).coerceIn(0.0, 1.0)
             val unresolvedRatio = (skippedFrames.toDouble() / totalSpeechFrames.toDouble()).coerceIn(0.0, 1.0)
-            val meanWordActivation = (wordActivationSum / words.size.toDouble()).coerceIn(0.0, 1.0)
+            val meanWordActivation = if (coveredFrames == 0) {
+                0.0
+            } else {
+                (activationMass / coveredFrames.toDouble()).coerceIn(0.0, 1.0)
+            }
             val coherence = if (coherenceEdges == 0) {
                 0.5
             } else {
@@ -460,5 +476,8 @@ class PhraseFieldDecoder(
         private const val BOUNDARY_WEIGHT = 0.05
         private const val TOP_DOWN_FRAME_WEIGHT = 0.20
         private const val REVISION_TRACE_DELTA = 0.005
+        private const val SKIPPED_FRAME_PRIORITY_COST = 0.20
+        private const val COHERENCE_PRIORITY_WEIGHT = 0.20
+        private const val EXTRA_WORD_PRIORITY_COST = 0.10
     }
 }
