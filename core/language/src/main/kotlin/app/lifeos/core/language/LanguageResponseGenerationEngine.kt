@@ -13,6 +13,7 @@ data class LanguageResponseFact(
     val statement: String,
     val semanticTags: Set<String> = emptySet(),
     val confidence: Double = 1.0,
+    val semanticGraph: LanguageSemanticGraph? = null,
 ) {
     init {
         require(statement.isNotBlank())
@@ -39,6 +40,7 @@ data class LanguageResponseCandidate(
     val semanticPreservation: Double,
     val factCoverage: Double,
     val semanticCoverage: Double,
+    val semanticGraphCoverage: Double,
     val actCuePreserved: Boolean,
 ) {
     init {
@@ -46,6 +48,7 @@ data class LanguageResponseCandidate(
         require(semanticPreservation.isFinite() && semanticPreservation in 0.0..1.0)
         require(factCoverage.isFinite() && factCoverage in 0.0..1.0)
         require(semanticCoverage.isFinite() && semanticCoverage in 0.0..1.0)
+        require(semanticGraphCoverage.isFinite() && semanticGraphCoverage in 0.0..1.0)
     }
 }
 
@@ -65,10 +68,10 @@ data class LanguageResponseGenerationResult(
  * Top-down response realization for LIFEOS.
  *
  * Facts/evidence remain the authority. The realizer may add only bounded discourse words around the
- * supplied statements. Every candidate is then fed through the productive
- * [LanguageUnderstandingEngine] and ranked by semantic round-trip preservation. This is the response
- * counterpart to [LanguageGenerationEngine]: meaning is chosen before wording and wording is checked
- * again by the same understanding field before publication.
+ * supplied statements. Every factual statement is normalized into the same canonical semantic graph
+ * used by [LanguageUnderstandingEngine], unless the caller already supplies that graph. Every output
+ * candidate is then parsed through the productive understanding engine and ranked by graph round-trip
+ * preservation as well as factual/field coverage.
  *
  * CONVERSATION is intentionally different from factual acts. The productive composer supplies the
  * current social utterance as a semantic conversation cue, not as an external-world fact that must
@@ -98,6 +101,7 @@ class LanguageResponseGenerationEngine(
                     target.act == LanguageResponseAct.ASSERT || it.actCuePreserved
                 }
                     .thenByDescending { it.semanticPreservation }
+                    .thenByDescending { it.semanticGraphCoverage }
                     .thenByDescending { it.roundTrip.goal.confidence }
                     .thenBy { it.text.length }
                     .thenBy { it.text }
@@ -119,6 +123,7 @@ class LanguageResponseGenerationEngine(
         val roundTrip = understanding.understand(text, context)
         val factCoverage = factCoverage(target.facts, text)
         val semanticCoverage = semanticCoverage(target.facts, roundTrip)
+        val graphCoverage = responseSemanticGraphCoverage(target, roundTrip)
         val actCuePreserved = actCuePreserved(target.act, text, target.language)
         val languagePreserved = target.language == LanguageCode.UNKNOWN || roundTrip.goal.language == target.language
         val confidenceAgreement = 1.0 - kotlin.math.abs(target.confidence - roundTrip.goal.confidence)
@@ -134,11 +139,12 @@ class LanguageResponseGenerationEngine(
                 ).coerceIn(0.0, 1.0)
         } else {
             (
-                factCoverage * 0.52 +
-                    semanticCoverage * 0.28 +
-                    (if (actCuePreserved) 0.08 else 0.0) +
-                    (if (languagePreserved) 0.07 else 0.0) +
-                    confidenceAgreement.coerceIn(0.0, 1.0) * 0.05
+                factCoverage * 0.40 +
+                    semanticCoverage * 0.20 +
+                    graphCoverage * 0.24 +
+                    (if (actCuePreserved) 0.07 else 0.0) +
+                    (if (languagePreserved) 0.05 else 0.0) +
+                    confidenceAgreement.coerceIn(0.0, 1.0) * 0.04
                 ).coerceIn(0.0, 1.0)
         }
         return LanguageResponseCandidate(
@@ -147,8 +153,21 @@ class LanguageResponseGenerationEngine(
             semanticPreservation = score,
             factCoverage = factCoverage,
             semanticCoverage = semanticCoverage,
+            semanticGraphCoverage = graphCoverage,
             actCuePreserved = actCuePreserved,
         )
+    }
+
+    private fun responseSemanticGraphCoverage(
+        target: LanguageResponseTarget,
+        roundTrip: LanguageUnderstandingResult,
+    ): Double {
+        if (isConversationTarget(target)) return 1.0
+        val expected = target.facts.map { fact ->
+            fact.semanticGraph ?: understanding.understand(fact.statement).goal.semanticGraph
+        }
+        if (expected.isEmpty()) return 1.0
+        return expected.map { semanticGraphCoverage(it, roundTrip.goal.semanticGraph) }.average()
     }
 
     private fun factCoverage(facts: List<LanguageResponseFact>, text: String): Double {
@@ -390,8 +409,6 @@ class LanguageResponseGenerationEngine(
             "lifeos-photon",
             "intent:",
         )
-        // Sentence punctuation is surface syntax, not factual identity. Keeping dots inside the
-        // token caused a preserved terminal fact such as `Fußball` -> `Fußball.` to score as lost.
         val TERM = Regex("[\\p{L}\\p{N}_-]+")
         val STOP_WORDS = setOf(
             "aber", "als", "auf", "aus", "bei", "das", "dass", "der", "die", "ein", "eine", "einer",
