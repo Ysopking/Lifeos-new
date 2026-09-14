@@ -17,6 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import app.lifeos.next.LifeOsApplication
 import app.lifeos.next.kernel.WebDeepSearchOwnerPolicy
 import kotlinx.coroutines.Dispatchers
@@ -49,7 +50,7 @@ internal fun WebDeepSearchOwnerControl(
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(androidx.compose.ui.unit.dp(4f)),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
