@@ -172,6 +172,7 @@ data class GoalFrame(
     val ambiguities: List<Ambiguity>,
     val confidence: Double,
     val language: LanguageCode,
+    val semanticGraph: LanguageSemanticGraph = LanguageSemanticGraph.empty(language),
 ) {
     init {
         require(objective.isNotBlank())
