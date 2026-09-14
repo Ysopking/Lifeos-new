@@ -14,7 +14,10 @@ import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
 import app.lifeos.core.runtime.cognition.PhotonDelta
 import app.lifeos.core.runtime.cognition.PhotonDeltaType
 import app.lifeos.core.runtime.cognition.SalienceVector
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRecorder
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRuntimeRegistry
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
 
 object ArtifactCoordinatorContract {
     const val ENVELOPE_MIME_TYPE = "application/vnd.lifeos.collaborative-artifact+json"
@@ -91,6 +94,8 @@ class ArtifactCoordinator(
     private val photons: PhotonRepository,
     private val ingress: ArtifactPhotonIngress,
     private val validator: ArtifactValidator = ArtifactValidator(),
+    private val lifecycleTraceRecorder: LifecycleDecisionTraceRecorder? =
+        LifecycleDecisionTraceRuntimeRegistry.currentOrNull(),
 ) {
     suspend fun finalize(
         request: CollaborativeArtifactRequest,
@@ -143,7 +148,7 @@ class ArtifactCoordinator(
         }
 
         val receipt = ingress.ingest(photon)
-        return ArtifactFinalizationResult(
+        val result = ArtifactFinalizationResult(
             artifact = CollaborativeArtifact(
                 request = request,
                 contributions = canonicalContributions,
@@ -153,6 +158,26 @@ class ArtifactCoordinator(
             ),
             reentry = receipt,
         )
+        traceIfDurablyPublished(result)
+        return result
+    }
+
+    /**
+     * Staged owner-review artifacts deliberately remain outside [PhotonRepository]. V15 tracing is
+     * therefore emitted only when canonical ingress has made the exact finalized Photon durable.
+     */
+    private suspend fun traceIfDurablyPublished(result: ArtifactFinalizationResult) {
+        val artifactPhoton = result.artifact.photon
+        val durable = try {
+            photons.load(artifactPhoton.id)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
+        }
+        if (durable == artifactPhoton) {
+            lifecycleTraceRecorder?.recordArtifact(result)
+        }
     }
 
     private suspend fun requireParentRevision(
