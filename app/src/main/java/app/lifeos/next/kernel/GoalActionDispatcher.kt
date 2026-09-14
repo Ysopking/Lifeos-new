@@ -5,6 +5,8 @@ import app.lifeos.core.language.IntentType
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
+import app.lifeos.core.runtime.goal.LocalConversationGoalEngine
+import app.lifeos.core.runtime.goal.LocalConversationGoalResult
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import kotlinx.coroutines.CancellationException
 
@@ -40,9 +42,7 @@ class GoalActionDispatcher(
     private val executeImageTransform: suspend (GoalActionContext) -> LocalImageTransformExecutionResult,
     private val executeSchedule: suspend (GoalActionContext) -> LocalScheduleExecutionResult,
     private val prepareCommunication: suspend (GoalActionContext) -> LocalCommunicationExecutionResult,
-    private val executeConversation: suspend (GoalActionContext) -> LocalConversationExecutionResult = {
-        LocalConversationExecutionResult.Failed("conversation-executor-not-installed")
-    },
+    private val conversationPlanner: LocalConversationGoalEngine = LocalConversationGoalEngine(),
     private val executionGuard: GoalActionExecutionGuard = GoalExecutionRuntimeRegistry.current(),
     private val durableRuntimeProvider: () -> DurableGoalPlanRuntime? =
         DurableGoalPlanRuntimeRegistry::currentOrNull,
@@ -119,18 +119,57 @@ class GoalActionDispatcher(
                 localCommunication = prepareCommunication(context),
             )
 
-            IntentType.CONVERSATION -> GoalActionDispatchResult(
-                localConversation = executeConversation(context),
-            )
+            IntentType.CONVERSATION -> {
+                val photons = durableRuntime?.loadPlanningPhotons().orEmpty()
+                when (
+                    val planned = conversationPlanner.execute(
+                        goal = context.goal,
+                        sourcePhoton = context.sourcePhoton,
+                        goalPhotonId = context.goalPhotonId,
+                        photons = photons,
+                        createdAt = context.sourcePhoton.provenance.createdAt,
+                    )
+                ) {
+                    is LocalConversationGoalResult.Produced -> GoalActionDispatchResult(
+                        localConversation = LocalConversationExecutionResult.Produced(
+                            move = planned.move,
+                            photon = planned.photon,
+                            evidencePhotonIds = planned.evidencePhotonIds,
+                        )
+                    )
+                    is LocalConversationGoalResult.Unsupported -> GoalActionDispatchResult(
+                        localConversation = LocalConversationExecutionResult.Failed(
+                            "Conversation planner does not support ${planned.intent.name}",
+                        )
+                    )
+                }
+            }
 
             else -> GoalActionDispatchResult()
         }
 
-        if (durableRuntime != null && durablePermit != null) {
+        val durableCompleted = if (durableRuntime != null && durablePermit != null) {
             durableRuntime.complete(durablePermit, result)
+        } else {
+            true
         }
-        executionGuard.settle(permit, result)
-        return result
+        val settledResult = when (val conversation = result.localConversation) {
+            is LocalConversationExecutionResult.Produced -> {
+                if (durableCompleted) {
+                    ConversationExecutionResultRegistry.publish(context.goalPhotonId, conversation)
+                    result
+                } else {
+                    result.copy(
+                        localConversation = LocalConversationExecutionResult.Failed(
+                            "conversation-outcome-was-not-durably-persisted",
+                        )
+                    )
+                }
+            }
+            else -> result
+        }
+        executionGuard.settle(permit, settledResult)
+        return settledResult
     }
 
     private fun blocked(intent: IntentType, reason: String): GoalActionDispatchResult = when (intent) {
