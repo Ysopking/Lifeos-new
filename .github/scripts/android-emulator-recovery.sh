@@ -46,16 +46,20 @@ assert_cold_launcher() {
 
   activities="$(adb shell dumpsys activity activities)"
   printf '%s\n' "$activities" > "$report_dir/cold-start-activities.txt"
-  if printf '%s\n' "$activities" | grep -Eq 'app\.lifeos\.next/(\.|app\.lifeos\.next\.)ChatMainActivity'; then
+  top_activity="$(printf '%s\n' "$activities" | grep -m1 -E 'topResumedActivity=|ResumedActivity:' || true)"
+
+  if printf '%s\n' "$top_activity" | grep -Eq 'app\.lifeos\.next/(\.|app\.lifeos\.next\.)ChatMainActivity'; then
     printf 'launcher_state=lifeos-activity-visible\n' | tee "$report_dir/cold-start-overlay.txt"
     return 0
   fi
 
   # On the first legitimate launch ChatMainActivity may immediately delegate foreground focus to
   # Android's runtime-permission controller while the LIFEOS process stays alive. That is a valid
-  # launcher outcome, not a process crash. Accept only this explicit system overlay; every other
-  # foreground replacement still fails closed.
-  if printf '%s\n' "$cold_start" | grep -q 'com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity'; then
+  # launcher outcome, not a process crash. Accept only this explicit system overlay, linked back to
+  # ChatMainActivity as its result target; every other foreground replacement still fails closed.
+  if printf '%s\n' "$cold_start" | grep -q 'com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity' && \
+     printf '%s\n' "$top_activity" | grep -q 'com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity' && \
+     printf '%s\n' "$activities" | grep -Eq 'resultTo=.*app\.lifeos\.next/(\.|app\.lifeos\.next\.)ChatMainActivity'; then
     printf 'launcher_state=lifeos-alive-with-system-permission-overlay\n' | tee "$report_dir/cold-start-overlay.txt"
     return 0
   fi
