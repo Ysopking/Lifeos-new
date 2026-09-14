@@ -22,6 +22,7 @@ import app.lifeos.next.ui.assets.OwnerAssetReviewScreen
 import app.lifeos.next.ui.chat.LifeOsChatScreen
 import app.lifeos.next.ui.decision.LifeOsDecisionTraceScreen
 import app.lifeos.next.ui.goals.LifeOsGoalsScreen
+import app.lifeos.next.ui.layout.AdaptiveLifeOsScaffold
 import app.lifeos.next.ui.memory.LifeOsMemoryScreen
 import app.lifeos.next.ui.system.SystemRuntimeHealthScreen
 import app.lifeos.next.ui.theme.LifeOsTheme
