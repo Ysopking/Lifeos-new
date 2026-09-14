@@ -28,6 +28,7 @@ import app.lifeos.core.runtime.capability.PrivateToolWorkshopBuildStateRehydrato
 import app.lifeos.core.runtime.capability.ToolWorkshopBootRuntimeRegistry
 import app.lifeos.core.runtime.capability.ToolWorkshopCoordinator
 import app.lifeos.core.runtime.capability.ToolWorkshopJobLedger
+import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityResourceRuntimeRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import kotlinx.coroutines.runBlocking
@@ -85,6 +86,7 @@ internal data class PrivateGeneratedToolRuntimeResources(
             val ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(appContext))
             runBlocking { PrivateOwnerPolicyBaseline.ensure(ownerPolicy) }
             val budgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(appContext))
+            PrivateNovelCapabilityResourceRuntimeRegistry.install(budgets)
             val workshopJobs = ToolWorkshopJobLedger(
                 EncryptedToolWorkshopJobRepository(appContext)
             )
