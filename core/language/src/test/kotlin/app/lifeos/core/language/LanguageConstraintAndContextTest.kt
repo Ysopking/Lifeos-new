@@ -7,6 +7,7 @@ import app.lifeos.core.model.Provenance
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LanguageConstraintAndContextTest {
@@ -85,6 +86,30 @@ class LanguageConstraintAndContextTest {
 
         assertEquals(substantive.id, context.activeGoalId)
         assertTrue(context.items.single { it.photonId == substantive.id }.active)
+    }
+
+    @Test
+    fun `understanding retains only explicitly supplied language context`() {
+        val context = LanguageContext(
+            items = listOf(
+                LanguageContextItem(
+                    photonId = PhotonId("image-context"),
+                    kind = "image",
+                    tags = setOf("image"),
+                    createdAt = Instant.parse("2026-09-14T14:00:00Z"),
+                    active = true,
+                    contentTerms = setOf("bild"),
+                )
+            ),
+            now = Instant.parse("2026-09-14T14:01:00Z"),
+        )
+        val engine = LanguageUnderstandingEngine()
+
+        val contextual = engine.understand("Mach dieses Bild heller", context)
+        val contextFree = engine.understand("Hallo")
+
+        assertEquals(context, contextual.context)
+        assertNull(contextFree.context)
     }
 
     @Test
