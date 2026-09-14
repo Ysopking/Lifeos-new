@@ -1,6 +1,10 @@
 package app.lifeos.next
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Environment
 import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
@@ -73,11 +77,14 @@ import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /** Process-level owner for the LIFEOS kernel instance and read-only private diagnostics. */
-class LifeOsApplication : Application() {
+class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     lateinit var kernel: LifeOsKernel
         private set
 
@@ -124,9 +131,28 @@ class LifeOsApplication : Application() {
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
+
+    override val startupState: StateFlow<LifeOsProcessStartupState> = mutableStartupState.asStateFlow()
 
     override fun onCreate() {
         super.onCreate()
+        // Android must be allowed to render the launcher Activity immediately. The complete LIFEOS
+        // stage DAG is still deterministic, but it no longer blocks the UI/main thread at process start.
+        startupScope.launch {
+            try {
+                initializeRuntime()
+                mutableStartupState.value = LifeOsProcessStartupState.ready()
+            } catch (error: Throwable) {
+                mutableStartupState.value = LifeOsProcessStartupState.failed(
+                    error.message ?: error::class.simpleName ?: "lifeos-startup-failed",
+                )
+            }
+        }
+    }
+
+    private fun initializeRuntime() {
         generatedToolStatusReader = GeneratedToolRuntimeStatusReader(
             EncryptedGeneratedToolStateRepository(this),
         )
@@ -327,7 +353,12 @@ class LifeOsApplication : Application() {
                     kernel.start()
                     Unit
                 },
-                stageObserver = LifeOsRuntimeWiring::onStageReady,
+                stageObserver = { evidence ->
+                    LifeOsRuntimeWiring.onStageReady(evidence)
+                    mutableStartupState.value = LifeOsProcessStartupState.starting(
+                        stage = "BootEngine · ${evidence.stage.name.lowercase().replace('_', ' ')}",
+                    )
+                },
             )
         )
 
@@ -335,18 +366,62 @@ class LifeOsApplication : Application() {
         initialDataBootstrap = InitialDataBootstrapRuntime(
             photons = lifePhotonRepository,
             memory = lifeMemoryRuntime,
-            sources = initialDataSources.sources,
+            sources = initialDataSources.sources + AndroidSharedFilesInitialDataSource(this),
         )
         refreshInitialDataBootstrap()
     }
 
     fun initialDataPermissionsToRequest(): List<String> = initialDataSources.missingRuntimePermissions()
 
+    fun allRuntimePermissionsToRequest(): List<String> {
+        if (!startupState.value.ready) return emptyList()
+        return buildList {
+            addAll(initialDataSources.missingRuntimePermissions())
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                add(Manifest.permission.RECORD_AUDIO)
+            }
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (
+                Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+        }.distinct().sorted()
+    }
+
+    fun hasBroadFileAccess(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+
+    fun shouldRequestBroadFileAccess(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || hasBroadFileAccess()) return false
+        return !getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
+            .getBoolean(BROAD_FILE_ACCESS_REQUESTED, false)
+    }
+
+    fun markBroadFileAccessRequested() {
+        getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean(BROAD_FILE_ACCESS_REQUESTED, true)
+            .apply()
+    }
+
     fun shouldRequestInitialDataPermissions(): Boolean {
         if (initialDataSources.missingRuntimePermissions().isEmpty()) return false
         val schema = initialDataSources.permissionSchemaFingerprint()
         return getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
             .getString(INITIAL_DATA_PERMISSION_SCHEMA, null) != schema
+    }
+
+    fun shouldRequestAllRuntimePermissions(): Boolean {
+        if (allRuntimePermissionsToRequest().isEmpty()) return false
+        return getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
+            .getString(ALL_RUNTIME_PERMISSION_SCHEMA, null) != allRuntimePermissionSchema()
     }
 
     fun markInitialDataPermissionsRequested() {
@@ -356,12 +431,17 @@ class LifeOsApplication : Application() {
             .apply()
     }
 
+    fun markAllRuntimePermissionsRequested() {
+        getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
+            .edit()
+            .putString(ALL_RUNTIME_PERMISSION_SCHEMA, allRuntimePermissionSchema())
+            .apply()
+    }
+
     fun refreshInitialDataBootstrap() {
+        if (!startupState.value.ready && !::initialDataBootstrap.isInitialized) return
         initialDataScope.launch {
             try {
-                // Persisted productive life Photons are reconciled once during kernel creation.
-                // Every subsequent productive save goes through CanonicalLifePhotonRepository's
-                // ingress boundary, so rescanning the entire store here would only replay them.
                 latestInitialDataBootstrap = initialDataBootstrap.run()
                 initialDataBootstrapFailure = null
             } catch (error: Exception) {
@@ -370,8 +450,17 @@ class LifeOsApplication : Application() {
         }
     }
 
+    private fun allRuntimePermissionSchema(): String = buildString {
+        append(initialDataSources.permissionSchemaFingerprint())
+        append("|record-audio")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) append("|post-notifications")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) append("|read-external-storage")
+    }
+
     private companion object {
         const val INITIAL_DATA_PREFS = "lifeos-initial-data-bootstrap"
         const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"
+        const val ALL_RUNTIME_PERMISSION_SCHEMA = "all-runtime-permission-schema"
+        const val BROAD_FILE_ACCESS_REQUESTED = "broad-file-access-requested"
     }
 }
