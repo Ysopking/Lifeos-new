@@ -3,7 +3,6 @@ package app.lifeos.next.kernel
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.GoalPhoton
 import app.lifeos.core.language.IntentType
-import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.LanguageUnderstandingResult
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
 
@@ -20,7 +19,6 @@ data class LanguageSubmissionResult(
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
     val localSchedule: LocalScheduleExecutionResult? = null,
     val localCommunication: LocalCommunicationExecutionResult? = null,
-    val languageContext: LanguageContext? = null,
     val languageFailure: String? = null,
 ) {
     init {
