@@ -56,3 +56,21 @@ object RuntimeDeepSearchPermissionGate : DeepSearchPermissionGate {
             ?: DeepSearchPermissionState.DENIED
     }
 }
+
+/**
+ * Safe default for unit/legacy compositions. Product composition replaces this with
+ * CapabilityRegistryDeepSearchGate so external admission still requires the shared registry.
+ */
+object RuntimeAwareDeepSearchCapabilityGate : DeepSearchCapabilityGate {
+    override suspend fun authorize(source: DeepSearchSourceDescriptor): DeepSearchSourceAuthorization {
+        if (source.kind == DeepSearchSourceKind.LOCAL) {
+            return DeepSearchSourceAuthorization(true, "local-source")
+        }
+        val permission = RuntimeDeepSearchPermissionGate.permissionFor(source)
+        return if (permission == DeepSearchPermissionState.GRANTED) {
+            DeepSearchSourceAuthorization(true, "runtime-permission-granted")
+        } else {
+            DeepSearchSourceAuthorization(false, "runtime-permission-${permission.name.lowercase()}")
+        }
+    }
+}
