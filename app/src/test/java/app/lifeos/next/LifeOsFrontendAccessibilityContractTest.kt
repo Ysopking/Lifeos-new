@@ -1,18 +1,22 @@
 package app.lifeos.next
 
-import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.lifeos.next.ui.LifeOsDestination
 import app.lifeos.next.ui.accessibility.LifeOsSemantics
 import app.lifeos.next.ui.components.LifeOsStateKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.junit.runner.RunWith
 
-@RunWith(AndroidJUnit4::class)
-class LifeOsFrontendAccessibilityDeviceTest {
+/**
+ * Deterministic accessibility semantics contract.
+ *
+ * These assertions are pure Kotlin and intentionally run on the JVM. The F11 workflow separately
+ * cold-starts the real ChatMainActivity/LifeOsApplication on an Android emulator, so this contract
+ * does not need to boot the productive kernel a second time through instrumentation.
+ */
+class LifeOsFrontendAccessibilityContractTest {
     @Test
-    fun readableContractsRemainAvailableOnDevice() {
+    fun readableContractsRemainStable() {
         assertEquals(
             LifeOsDestination.ordered.size,
             LifeOsDestination.ordered

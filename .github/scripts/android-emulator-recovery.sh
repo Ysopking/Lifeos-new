@@ -29,6 +29,45 @@ run_suite() {
   printf '%s\n' "$output" | grep -q "OK ($expected tests)"
 }
 
+assert_cold_launcher() {
+  cold_start="$1"
+  printf '%s\n' "$cold_start" | grep -q 'Status: ok'
+  printf '%s\n' "$cold_start" | grep -q 'LaunchState: COLD'
+
+  pid=""
+  attempt=0
+  while [ -z "$pid" ] && [ "$attempt" -lt 20 ]; do
+    pid="$(adb shell pidof app.lifeos.next 2>/dev/null | tr -d '\r' || true)"
+    [ -n "$pid" ] || sleep 0.25
+    attempt=$((attempt + 1))
+  done
+  printf 'pid=%s\n' "$pid" | tee "$report_dir/cold-start-process.txt"
+  test -n "$pid"
+
+  activities="$(adb shell dumpsys activity activities)"
+  printf '%s\n' "$activities" > "$report_dir/cold-start-activities.txt"
+  top_activity="$(printf '%s\n' "$activities" | grep -m1 -E 'topResumedActivity=|ResumedActivity:' || true)"
+
+  if printf '%s\n' "$top_activity" | grep -Eq 'app\.lifeos\.next/(\.|app\.lifeos\.next\.)ChatMainActivity'; then
+    printf 'launcher_state=lifeos-activity-visible\n' | tee "$report_dir/cold-start-overlay.txt"
+    return 0
+  fi
+
+  # On the first legitimate launch ChatMainActivity may immediately delegate foreground focus to
+  # Android's runtime-permission controller while the LIFEOS process stays alive. That is a valid
+  # launcher outcome, not a process crash. Accept only this explicit system overlay, linked back to
+  # ChatMainActivity as its result target; every other foreground replacement still fails closed.
+  if printf '%s\n' "$cold_start" | grep -q 'com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity' && \
+     printf '%s\n' "$top_activity" | grep -q 'com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity' && \
+     printf '%s\n' "$activities" | grep -Eq 'resultTo=.*app\.lifeos\.next/(\.|app\.lifeos\.next\.)ChatMainActivity'; then
+    printf 'launcher_state=lifeos-alive-with-system-permission-overlay\n' | tee "$report_dir/cold-start-overlay.txt"
+    return 0
+  fi
+
+  printf 'launcher_state=unexpected-foreground\n' | tee "$report_dir/cold-start-overlay.txt"
+  return 1
+}
+
 run_test \
   'app.lifeos.next.PrivateV1DeviceSmokeTest#seedGeneratedToolAndAssertRuntime' \
   "$report_dir/seed-active.txt"
@@ -62,10 +101,7 @@ run_test \
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
-pid="$(adb shell pidof app.lifeos.next | tr -d '\r')"
-test -n "$pid"
-activities="$(adb shell dumpsys activity activities)"
-printf '%s\n' "$activities" | grep -q 'app.lifeos.next/.ChatMainActivity'
+assert_cold_launcher "$cold_start"
 
 run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' \
