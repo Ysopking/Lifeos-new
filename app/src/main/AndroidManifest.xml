@@ -27,6 +27,16 @@
         </activity>
         <activity android:name=".MainActivity" android:exported="false" />
 
+        <service
+            android:name=".LiveNotificationListenerService"
+            android:label="LIFEOS Live-Kontext"
+            android:exported="false"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <provider
             android:name=".kernel.HotSwapStartupProvider"
             android:authorities="${applicationId}.hotswap-init"
