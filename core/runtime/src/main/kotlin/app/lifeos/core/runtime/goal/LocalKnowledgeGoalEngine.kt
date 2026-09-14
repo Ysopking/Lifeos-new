@@ -96,8 +96,13 @@ class LocalKnowledgeGoalEngine {
         val queryTerms = if (significant.isNotEmpty()) significant else rawQueryTerms.toSet()
         val excluded = setOf(source.id, goalPhotonId)
 
-        val matches = photons.asSequence()
-            .filter { candidate -> candidate.id !in excluded }
+        // A resolved conversational reference is stronger than lexical overlap. It may only become
+        // evidence when language understanding found no unresolved/competing reference. Otherwise
+        // the query deliberately falls back to ordinary lexical retrieval instead of guessing.
+        val referencedMatches = resolvedReferenceMatches(goal, photons, excluded)
+        val referencedIds = referencedMatches.mapTo(mutableSetOf()) { it.photon.id }
+        val lexicalMatches = photons.asSequence()
+            .filter { candidate -> candidate.id !in excluded && candidate.id !in referencedIds }
             .filter(::isKnowledgeCandidate)
             .mapNotNull { candidate -> score(candidate, queryTerms, queryText) }
             .sortedWith(
@@ -105,8 +110,9 @@ class LocalKnowledgeGoalEngine {
                     .thenByDescending { it.photon.provenance.createdAt }
                     .thenBy { it.photon.id.value }
             )
-            .take(MAX_QUERY_RESULTS)
             .toList()
+        val matches = (referencedMatches + lexicalMatches)
+            .take(MAX_QUERY_RESULTS)
 
         val content = if (matches.isEmpty()) {
             when (goal.language) {
@@ -166,6 +172,30 @@ class LocalKnowledgeGoalEngine {
             photon = photon,
             evidencePhotonIds = evidenceIds,
         )
+    }
+
+    private fun resolvedReferenceMatches(
+        goal: GoalFrame,
+        photons: List<Photon>,
+        excluded: Set<PhotonId>,
+    ): List<ScoredPhoton> {
+        if (goal.ambiguities.any { it.code in REFERENCE_BLOCKING_AMBIGUITIES }) return emptyList()
+        val byId = photons.associateBy { it.id }
+        return goal.references.asSequence()
+            .filter { it.score >= MIN_REFERENCE_SCORE }
+            .mapNotNull { reference ->
+                val id = reference.targetPhotonId ?: return@mapNotNull null
+                val photon = byId[id] ?: return@mapNotNull null
+                if (id in excluded || !isKnowledgeCandidate(photon)) return@mapNotNull null
+                ScoredPhoton(photon, reference.score)
+            }
+            .groupBy { it.photon.id }
+            .map { (_, candidates) -> candidates.maxBy { it.score } }
+            .sortedWith(
+                compareByDescending<ScoredPhoton> { it.score }
+                    .thenByDescending { it.photon.provenance.createdAt }
+                    .thenBy { it.photon.id.value }
+            )
     }
 
     private fun score(
@@ -231,6 +261,7 @@ class LocalKnowledgeGoalEngine {
         private const val MAX_EXCERPT_CHARS = 240
         private const val MIN_TERM_LENGTH = 2
         private const val MIN_PHRASE_LENGTH = 4
+        private const val MIN_REFERENCE_SCORE = 0.55
         private const val MEMORY_MASS_BOOST = 0.35
         private const val ANSWER_EVIDENCE_MASS = 0.08
         private const val NO_MATCH_CONFIDENCE = 0.75
@@ -239,6 +270,7 @@ class LocalKnowledgeGoalEngine {
         private const val CONFIDENCE_WEIGHT = 0.10
         private const val PHRASE_BONUS = 0.03
         private const val MEMORY_SCORE_BOOST = 0.02
+        private val REFERENCE_BLOCKING_AMBIGUITIES = setOf("unresolved_reference", "reference_competition")
         private val TERM_REGEX = Regex("[\\p{L}\\p{N}]+")
         private val WHITESPACE_REGEX = Regex("\\s+")
         private val MEMORY_PREFIX = Regex(

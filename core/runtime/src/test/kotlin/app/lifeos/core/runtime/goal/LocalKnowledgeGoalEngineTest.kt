@@ -1,8 +1,12 @@
 package app.lifeos.core.runtime.goal
 
+import app.lifeos.core.language.Ambiguity
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.ReferenceExpression
+import app.lifeos.core.language.ReferenceKind
+import app.lifeos.core.language.ResolvedReference
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
@@ -90,6 +94,88 @@ class LocalKnowledgeGoalEngineTest {
     }
 
     @Test
+    fun `query uses unambiguous resolved conversational reference without lexical overlap`() {
+        val source = photon("source-follow-up", "Kannst du das genauer erklären?", createdAt = now)
+        val referenced = photon(
+            "assistant-prior",
+            "Meine Balkonbank ist 68 cm hoch und steht auf Holzbalken.",
+            tags = setOf("chat", "chat:assistant"),
+            createdAt = now.minusSeconds(30),
+        )
+        val unrelated = photon("other-follow-up", "Heute gibt es Nudeln.")
+        val reference = ResolvedReference(
+            expression = ReferenceExpression(
+                kind = ReferenceKind.THAT,
+                rawText = source.content,
+                confidence = 0.80,
+            ),
+            targetPhotonId = referenced.id,
+            score = 0.80,
+        )
+
+        val result = assertIs<LocalKnowledgeGoalResult.Produced>(
+            engine.execute(
+                goal = goal(
+                    intent = IntentType.QUERY,
+                    objective = "query: ${source.content}",
+                    references = listOf(reference),
+                ),
+                sourcePhoton = source,
+                goalPhotonId = PhotonId("goal-follow-up"),
+                photons = listOf(source, unrelated, referenced),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(listOf(referenced.id), result.evidencePhotonIds)
+        assertTrue(result.photon.content.contains(referenced.content))
+        assertFalse(result.photon.content.contains(unrelated.content))
+        assertTrue(result.photon.relations.any { it.target == referenced.id && it.type == RelationType.REFERENCES })
+    }
+
+    @Test
+    fun `query does not trust competing conversational reference`() {
+        val source = photon("source-ambiguous", "Kannst du das genauer erklären?", createdAt = now)
+        val first = photon("candidate-one", "Die erste frühere Aussage behandelt Holzbalken.")
+        val second = photon("candidate-two", "Die zweite frühere Aussage behandelt Metallrahmen.")
+        val reference = ResolvedReference(
+            expression = ReferenceExpression(
+                kind = ReferenceKind.THAT,
+                rawText = source.content,
+                confidence = 0.80,
+            ),
+            targetPhotonId = first.id,
+            score = 0.80,
+            alternatives = listOf(second.id to 0.78),
+        )
+        val ambiguity = Ambiguity(
+            code = "reference_competition",
+            message = "Reference has multiple close candidates",
+            alternatives = listOf(first.id.value, second.id.value),
+            severity = 0.70,
+        )
+
+        val result = assertIs<LocalKnowledgeGoalResult.Produced>(
+            engine.execute(
+                goal = goal(
+                    intent = IntentType.QUERY,
+                    objective = "query: ${source.content}",
+                    references = listOf(reference),
+                    ambiguities = listOf(ambiguity),
+                ),
+                sourcePhoton = source,
+                goalPhotonId = PhotonId("goal-ambiguous"),
+                photons = listOf(source, first, second),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(emptyList(), result.evidencePhotonIds)
+        assertEquals("Keine passende lokale Information gefunden.", result.photon.content)
+        assertTrue(result.photon.relations.none { it.target == first.id || it.target == second.id })
+    }
+
+    @Test
     fun `query with no matching local evidence states no match instead of synthesizing`() {
         val source = photon("source", "Was weißt du über Quantenananas?")
         val result = assertIs<LocalKnowledgeGoalResult.Produced>(
@@ -122,13 +208,18 @@ class LocalKnowledgeGoalEngineTest {
         assertFalse(engine.supports(IntentType.CONTINUE))
     }
 
-    private fun goal(intent: IntentType, objective: String) = GoalFrame(
+    private fun goal(
+        intent: IntentType,
+        objective: String,
+        references: List<ResolvedReference> = emptyList(),
+        ambiguities: List<Ambiguity> = emptyList(),
+    ) = GoalFrame(
         intent = intent,
         objective = objective,
         entities = emptyList(),
-        references = emptyList(),
+        references = references,
         constraints = emptyList(),
-        ambiguities = emptyList(),
+        ambiguities = ambiguities,
         confidence = 0.92,
         language = LanguageCode.DE,
     )
