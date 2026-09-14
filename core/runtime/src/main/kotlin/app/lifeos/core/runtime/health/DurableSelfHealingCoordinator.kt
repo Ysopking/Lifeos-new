@@ -9,10 +9,12 @@ import app.lifeos.core.runtime.resource.ResourceBudgetReservation
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationResult
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
+import app.lifeos.core.runtime.resource.ResourceExecutionBinding
 import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
 import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
 import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRecorder
+import app.lifeos.core.runtime.trace.selfHealingDecisionTraceId
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 
@@ -61,7 +63,7 @@ sealed interface DurableSelfHealingResult {
  * Restart-safe V9 self-healing boundary. An action is durably marked in-flight before execution.
  * A restart verifies an in-flight repair before doing anything else and never blindly repeats it.
  * Every fresh action also needs a persisted SELF_HEALING World Formula allocation and V16 reserve.
- * V15 lifecycle tracing is observational only and runs after the owning terminal ledger transition.
+ * V15 lifecycle/resource tracing is observational only and runs after owning durable transitions.
  */
 class DurableSelfHealingCoordinator(
     private val ledger: SelfHealingLedger,
@@ -94,8 +96,10 @@ class DurableSelfHealingCoordinator(
         )
 
         if (incident.state == SelfHealingIncidentState.ACTION_IN_FLIGHT) {
+            val actionIndex = requireNotNull(incident.inFlightActionIndex)
+            val actionId = requireNotNull(incident.inFlightActionId)
             val evidence = CompositeRepairProbe(plan.verificationProbes, now).collect(plan.nodeId)
-            settleExistingReservation(accountId, incident, resources.perActionRequested)
+            val settledReservation = settleExistingReservation(accountId, incident, resources.perActionRequested)
             if (evidence.verifiedHealthy) {
                 quarantineRegistry.release(plan.nodeId)
                 healthGraph.recordHealthy(
@@ -109,6 +113,13 @@ class DurableSelfHealingCoordinator(
                     detail = "restart-verification-recovered",
                     evidenceSummary = evidence.summary(),
                 )
+                traceSettlement(
+                    accountId = accountId,
+                    incident = incident,
+                    actionIndex = actionIndex,
+                    actionId = actionId,
+                    reservation = settledReservation,
+                )
                 return traced(
                     DurableSelfHealingResult.Recovered(
                         incident = incident,
@@ -121,6 +132,13 @@ class DurableSelfHealingCoordinator(
                 incident,
                 detail = "in-flight-action-not-verified-after-restart",
                 evidenceSummary = evidence.summary(),
+            )
+            traceSettlement(
+                accountId = accountId,
+                incident = incident,
+                actionIndex = actionIndex,
+                actionId = actionId,
+                reservation = settledReservation,
             )
         }
 
@@ -156,15 +174,16 @@ class DurableSelfHealingCoordinator(
 
             when (actionResult) {
                 is RecoveryActionResult.Failure -> {
-                    settle(reservation, accountId, resources.perActionRequested)
+                    val settledReservation = settle(reservation, accountId, resources.perActionRequested)
                     incident = ledger.markActionFailed(incident, actionResult.message)
+                    traceSettlement(accountId, incident, actionIndex, action.id, settledReservation)
                     if (!actionResult.retryable) {
                         return exhaust(plan, incident, "non-retryable:${actionResult.message}")
                     }
                 }
                 is RecoveryActionResult.Success -> {
                     val evidence = CompositeRepairProbe(plan.verificationProbes, now).collect(plan.nodeId)
-                    settle(reservation, accountId, resources.perActionRequested)
+                    val settledReservation = settle(reservation, accountId, resources.perActionRequested)
                     if (evidence.verifiedHealthy) {
                         quarantineRegistry.release(plan.nodeId)
                         healthGraph.recordHealthy(
@@ -178,6 +197,7 @@ class DurableSelfHealingCoordinator(
                             detail = actionResult.message ?: "recovery-verified",
                             evidenceSummary = evidence.summary(),
                         )
+                        traceSettlement(accountId, incident, actionIndex, action.id, settledReservation)
                         return traced(
                             DurableSelfHealingResult.Recovered(
                                 incident = incident,
@@ -191,6 +211,7 @@ class DurableSelfHealingCoordinator(
                         detail = "verification-failed:${evidence.summary()}",
                         evidenceSummary = evidence.summary(),
                     )
+                    traceSettlement(accountId, incident, actionIndex, action.id, settledReservation)
                 }
             }
         }
@@ -224,7 +245,7 @@ class DurableSelfHealingCoordinator(
         usage: ResourceBudgetUsage,
     ): ResourceBudgetReservation? {
         val key = reservationKey(incident, actionIndex, actionId)
-        return when (val result = budgets.reserve(accountId, key, usage)) {
+        val reservation = when (val result = budgets.reserve(accountId, key, usage)) {
             is ResourceBudgetReservationResult.Denied -> null
             is ResourceBudgetReservationResult.Reserved -> result.reservation
             is ResourceBudgetReservationResult.Existing -> when (result.reservation.state) {
@@ -233,25 +254,40 @@ class DurableSelfHealingCoordinator(
                 ResourceBudgetReservationState.RELEASED -> null
             }
         }
+        if (reservation?.state == ResourceBudgetReservationState.RESERVED) {
+            lifecycleTraceRecorder?.recordResourceReservation(
+                binding = resourceBinding(
+                    accountId = accountId,
+                    incident = incident,
+                    actionIndex = actionIndex,
+                    actionId = actionId,
+                    reservation = reservation,
+                    authoritativeStateId = incidentStateId(incident),
+                ),
+                reservation = reservation,
+                reasonCodes = listOf("ACTION_$actionId", "ATTEMPT_${actionIndex + 1}"),
+            )
+        }
+        return reservation
     }
 
     private suspend fun settle(
         reservation: ResourceBudgetReservation,
         accountId: ResourceBudgetAccountId,
         usage: ResourceBudgetUsage,
-    ) {
-        when (reservation.state) {
-            ResourceBudgetReservationState.RESERVED -> budgets.commit(accountId, reservation.id, usage)
-            ResourceBudgetReservationState.COMMITTED -> require(reservation.settledUsage == usage)
-            ResourceBudgetReservationState.RELEASED -> error("Self-healing reservation was released after action exposure")
+    ): ResourceBudgetReservation = when (reservation.state) {
+        ResourceBudgetReservationState.RESERVED -> budgets.commit(accountId, reservation.id, usage)
+        ResourceBudgetReservationState.COMMITTED -> reservation.also {
+            require(it.settledUsage == usage)
         }
+        ResourceBudgetReservationState.RELEASED -> error("Self-healing reservation was released after action exposure")
     }
 
     private suspend fun settleExistingReservation(
         accountId: ResourceBudgetAccountId,
         incident: SelfHealingIncidentSnapshot,
         usage: ResourceBudgetUsage,
-    ) {
+    ): ResourceBudgetReservation {
         val actionIndex = requireNotNull(incident.inFlightActionIndex)
         val actionId = requireNotNull(incident.inFlightActionId)
         val key = reservationKey(incident, actionIndex, actionId)
@@ -262,8 +298,52 @@ class DurableSelfHealingCoordinator(
         require(reservation.reserved == usage) {
             "Restarted self-healing request changed its resource envelope"
         }
-        settle(reservation, accountId, usage)
+        return settle(reservation, accountId, usage)
     }
+
+    private suspend fun traceSettlement(
+        accountId: ResourceBudgetAccountId,
+        incident: SelfHealingIncidentSnapshot,
+        actionIndex: Int,
+        actionId: String,
+        reservation: ResourceBudgetReservation,
+    ) {
+        val authoritativeOutcomeId = incidentStateId(incident)
+        lifecycleTraceRecorder?.recordResourceSettlement(
+            binding = resourceBinding(
+                accountId = accountId,
+                incident = incident,
+                actionIndex = actionIndex,
+                actionId = actionId,
+                reservation = reservation,
+                authoritativeStateId = authoritativeOutcomeId,
+            ),
+            reservation = reservation,
+            authoritativeOutcomeId = authoritativeOutcomeId,
+            recordedAt = reservation.settledAt ?: incident.lastRecordedAt,
+        )
+    }
+
+    private fun resourceBinding(
+        accountId: ResourceBudgetAccountId,
+        incident: SelfHealingIncidentSnapshot,
+        actionIndex: Int,
+        actionId: String,
+        reservation: ResourceBudgetReservation,
+        authoritativeStateId: String,
+    ): ResourceExecutionBinding = ResourceExecutionBinding(
+        traceId = selfHealingDecisionTraceId(incident.incidentId.value),
+        domain = ResourceBudgetDomain.SELF_HEALING,
+        operationId = reservationKey(incident, actionIndex, actionId),
+        accountId = accountId,
+        reservationId = reservation.id,
+        authoritativeStateId = authoritativeStateId,
+        revision = actionIndex.toLong() + 1L,
+        boundAt = reservation.createdAt,
+    )
+
+    private fun incidentStateId(incident: SelfHealingIncidentSnapshot): String =
+        "self-healing:${incident.incidentId.value}:ledger-${incident.ledgerRevision}"
 
     private suspend fun block(
         incident: SelfHealingIncidentSnapshot,
