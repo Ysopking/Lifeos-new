@@ -12,6 +12,7 @@ import app.lifeos.core.runtime.resource.ResourceBudgetUsage
 import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
 import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
 import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRecorder
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 
@@ -60,6 +61,7 @@ sealed interface DurableSelfHealingResult {
  * Restart-safe V9 self-healing boundary. An action is durably marked in-flight before execution.
  * A restart verifies an in-flight repair before doing anything else and never blindly repeats it.
  * Every fresh action also needs a persisted SELF_HEALING World Formula allocation and V16 reserve.
+ * V15 lifecycle tracing is observational only and runs after the owning terminal ledger transition.
  */
 class DurableSelfHealingCoordinator(
     private val ledger: SelfHealingLedger,
@@ -69,6 +71,7 @@ class DurableSelfHealingCoordinator(
     private val sharedBudgetProvider: () -> SharedResourceBudgetGate? =
         { SharedResourceBudgetRuntimeRegistry.current() },
     private val now: () -> Instant = Instant::now,
+    private val lifecycleTraceRecorder: LifecycleDecisionTraceRecorder? = null,
 ) {
     suspend fun recover(
         plan: RecoveryPlan,
@@ -76,7 +79,7 @@ class DurableSelfHealingCoordinator(
         resources: SelfHealingResourceProfile,
     ): DurableSelfHealingResult {
         var incident = ledger.open(plan, incidentFingerprint)
-        terminalResult(incident)?.let { return it }
+        terminalResult(incident)?.let { return traced(it) }
 
         val accountId = ResourceBudgetAccountId("self-healing:${incident.incidentId.value}")
         budgets.createAccount(accountId, resources.hardQuota)
@@ -106,10 +109,12 @@ class DurableSelfHealingCoordinator(
                     detail = "restart-verification-recovered",
                     evidenceSummary = evidence.summary(),
                 )
-                return DurableSelfHealingResult.Recovered(
-                    incident = incident,
-                    evidence = evidence,
-                    recoveredAfterRestart = true,
+                return traced(
+                    DurableSelfHealingResult.Recovered(
+                        incident = incident,
+                        evidence = evidence,
+                        recoveredAfterRestart = true,
+                    )
                 )
             }
             incident = ledger.markInterrupted(
@@ -173,10 +178,12 @@ class DurableSelfHealingCoordinator(
                             detail = actionResult.message ?: "recovery-verified",
                             evidenceSummary = evidence.summary(),
                         )
-                        return DurableSelfHealingResult.Recovered(
-                            incident = incident,
-                            evidence = evidence,
-                            recoveredAfterRestart = false,
+                        return traced(
+                            DurableSelfHealingResult.Recovered(
+                                incident = incident,
+                                evidence = evidence,
+                                recoveredAfterRestart = false,
+                            )
                         )
                     }
                     incident = ledger.markVerificationFailed(
@@ -263,7 +270,7 @@ class DurableSelfHealingCoordinator(
         reason: String,
     ): DurableSelfHealingResult.Blocked {
         val blocked = ledger.markBlocked(incident, reason)
-        return DurableSelfHealingResult.Blocked(blocked, reason)
+        return traced(DurableSelfHealingResult.Blocked(blocked, reason))
     }
 
     private suspend fun exhaust(
@@ -304,7 +311,12 @@ class DurableSelfHealingCoordinator(
             terminal = ledger.markQuarantined(terminal, reason)
             quarantined = true
         }
-        return DurableSelfHealingResult.Exhausted(terminal, quarantined)
+        return traced(DurableSelfHealingResult.Exhausted(terminal, quarantined))
+    }
+
+    private suspend fun <T : DurableSelfHealingResult> traced(result: T): T {
+        lifecycleTraceRecorder?.recordSelfHealing(result)
+        return result
     }
 
     private fun terminalResult(snapshot: SelfHealingIncidentSnapshot): DurableSelfHealingResult? = when (snapshot.state) {

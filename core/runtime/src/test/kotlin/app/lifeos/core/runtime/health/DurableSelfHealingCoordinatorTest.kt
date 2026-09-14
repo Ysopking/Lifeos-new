@@ -8,11 +8,19 @@ import app.lifeos.core.runtime.resource.ResourceBudgetRepository
 import app.lifeos.core.runtime.resource.ResourceBudgetRepositoryLoadReport
 import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
 import app.lifeos.core.runtime.resource.ResourceBudgetUsage
+import app.lifeos.core.runtime.trace.DecisionTrace
+import app.lifeos.core.runtime.trace.DecisionTraceId
+import app.lifeos.core.runtime.trace.DecisionTraceLedger
+import app.lifeos.core.runtime.trace.DecisionTraceNodeType
+import app.lifeos.core.runtime.trace.DecisionTraceRepository
+import app.lifeos.core.runtime.trace.DecisionTraceRepositoryLoadReport
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRecorder
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class DurableSelfHealingCoordinatorTest {
@@ -104,6 +112,78 @@ class DurableSelfHealingCoordinatorTest {
         assertTrue(budgetRepository.accounts.isEmpty())
     }
 
+    @Test
+    fun `terminal self healing outcome is projected into the shared lifecycle trace`() = runTest {
+        val healingRepository = MemorySelfHealingRepository()
+        val budgetRepository = MemoryBudgetRepository()
+        val traceRepository = MemoryDecisionTraceRepository()
+        val traceLedger = DecisionTraceLedger(traceRepository)
+        val plan = healthyPlan {}
+        val coordinator = DurableSelfHealingCoordinator(
+            ledger = SelfHealingLedger(healingRepository) { NOW },
+            healthGraph = HealthGraph(now = { NOW }),
+            quarantineRegistry = QuarantineRegistry(),
+            budgets = ResourceBudgetCoordinator(budgetRepository) { NOW },
+            sharedBudgetProvider = { null },
+            now = { NOW },
+            lifecycleTraceRecorder = LifecycleDecisionTraceRecorder(traceLedger),
+        )
+
+        val blocked = assertIs<DurableSelfHealingResult.Blocked>(
+            coordinator.recover(plan, "runtime-trace-1", resources())
+        )
+        val trace = assertNotNull(
+            traceLedger.snapshot(
+                DecisionTraceId.create("self-healing-incident", blocked.incident.incidentId.value)
+            )
+        )
+
+        assertTrue(trace.nodes.any {
+            it.sourceType == "self-healing-incident" &&
+                it.sourceRevision == blocked.incident.ledgerRevision &&
+                it.type == DecisionTraceNodeType.REJECTION
+        })
+        assertTrue(trace.nodes.any {
+            it.sourceType == "health-node" && it.sourceId == blocked.incident.nodeId.value
+        })
+        assertTrue(trace.nodes.any {
+            it.reasonCodes.any { reason -> reason.contains("shared-world-budget-gate-not-installed") }
+        })
+    }
+
+    @Test
+    fun `trace persistence failure cannot change self healing result`() = runTest {
+        val healingRepository = MemorySelfHealingRepository()
+        val budgetRepository = MemoryBudgetRepository()
+        val failingTraceLedger = DecisionTraceLedger(
+            object : DecisionTraceRepository {
+                override suspend fun loadReport() = DecisionTraceRepositoryLoadReport(
+                    traces = emptyList(),
+                    unreadableEntries = listOf("corrupt-trace"),
+                )
+
+                override suspend fun save(expectedRevision: Long, trace: DecisionTrace): Boolean = false
+            }
+        )
+        val plan = healthyPlan {}
+        val coordinator = DurableSelfHealingCoordinator(
+            ledger = SelfHealingLedger(healingRepository) { NOW },
+            healthGraph = HealthGraph(now = { NOW }),
+            quarantineRegistry = QuarantineRegistry(),
+            budgets = ResourceBudgetCoordinator(budgetRepository) { NOW },
+            sharedBudgetProvider = { null },
+            now = { NOW },
+            lifecycleTraceRecorder = LifecycleDecisionTraceRecorder(failingTraceLedger),
+        )
+
+        val blocked = assertIs<DurableSelfHealingResult.Blocked>(
+            coordinator.recover(plan, "runtime-trace-2", resources())
+        )
+
+        assertEquals(SelfHealingIncidentState.BLOCKED, blocked.incident.state)
+        assertTrue(blocked.reason.contains("shared-world-budget-gate-not-installed"))
+    }
+
     private fun healthyPlan(onExecute: () -> Unit) = RecoveryPlan(
         nodeId = HealthNodeId("runtime"),
         source = "self-healing-test",
@@ -171,6 +251,20 @@ class DurableSelfHealingCoordinatorTest {
             val current = accounts[accountId] ?: return false
             if (current.revision != expectedRevision) return false
             accounts[accountId] = updated
+            return true
+        }
+    }
+
+    private class MemoryDecisionTraceRepository : DecisionTraceRepository {
+        private val traces = mutableListOf<DecisionTrace>()
+
+        override suspend fun loadReport() = DecisionTraceRepositoryLoadReport(traces.toList())
+
+        override suspend fun save(expectedRevision: Long, trace: DecisionTrace): Boolean {
+            val current = traces.filter { it.id == trace.id }.maxOfOrNull { it.revision } ?: 0L
+            if (current != expectedRevision) return false
+            require(trace.revision == expectedRevision + 1L)
+            traces += trace
             return true
         }
     }
