@@ -71,6 +71,9 @@ class CanonicalPhotonIngress(
                 photon
             },
         )
+        LiveNotificationPhotonIngress.install { photon ->
+            ingest(photon, PhotonIngressMode.ORIGIN)
+        }
     }
 
     suspend fun ingest(
