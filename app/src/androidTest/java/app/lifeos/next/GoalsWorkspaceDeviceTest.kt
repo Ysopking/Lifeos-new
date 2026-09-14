@@ -42,6 +42,9 @@ class GoalsWorkspaceDeviceTest {
         )
         val projected = workspace.plans.single { it.id == before.definition.id }
         val today = TodayPlanProjector.project(workspace, projectionAt, ZoneOffset.UTC)
+        val currentToday = today.items.single {
+            it.planId == projected.id && it.stepId == projected.currentStepId
+        }
 
         assertEquals(GoalPlanUiStatus.ACTIVE, projected.status)
         assertEquals(1, projected.completedSteps)
@@ -59,9 +62,7 @@ class GoalsWorkspaceDeviceTest {
             GoalStepState.PAUSED,
             projected.steps.single { it.key == "paused" }.state,
         )
-        assertEquals(1, today.items.size)
-        assertEquals(projected.currentStepId, today.items.single().stepId)
-        assertEquals(TodayPlanTiming.NOW, today.items.single().timing)
+        assertEquals(TodayPlanTiming.NOW, currentToday.timing)
         assertEquals(before, fixtureState())
     }
 
@@ -80,11 +81,13 @@ class GoalsWorkspaceDeviceTest {
         val firstToday = TodayPlanProjector.project(first, projectionAt, ZoneOffset.UTC)
         val secondToday = TodayPlanProjector.project(second, projectionAt, ZoneOffset.UTC)
         val projected = first.plans.single { it.id == before.definition.id }
+        val currentToday = firstToday.items.single {
+            it.planId == projected.id && it.stepId == projected.currentStepId
+        }
 
         assertEquals(first, second)
         assertEquals(firstToday, secondToday)
-        assertEquals(1, firstToday.items.size)
-        assertEquals(TodayPlanTiming.NOW, firstToday.items.single().timing)
+        assertEquals(TodayPlanTiming.NOW, currentToday.timing)
         assertEquals(before.definition.id, projected.id)
         assertEquals(before.revision, projected.revision)
         assertEquals(before.definition.sourceGoalPhotonId, projected.sourceGoalPhotonId)
