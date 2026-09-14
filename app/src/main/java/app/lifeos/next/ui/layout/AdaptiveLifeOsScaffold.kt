@@ -14,7 +14,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import app.lifeos.next.ui.LifeOsDestination
+import app.lifeos.next.ui.accessibility.LifeOsSemantics
 
 @Composable
 fun AdaptiveLifeOsScaffold(
@@ -31,9 +35,17 @@ fun AdaptiveLifeOsScaffold(
                     NavigationBar {
                         LifeOsDestination.ordered.forEach { destination ->
                             NavigationBarItem(
+                                modifier = Modifier.semantics {
+                                    contentDescription = LifeOsSemantics.navigationLabel(destination.label)
+                                },
                                 selected = destination == selected,
                                 onClick = { onSelect(destination) },
-                                icon = { Text(destination.glyph) },
+                                icon = {
+                                    Text(
+                                        text = destination.glyph,
+                                        modifier = Modifier.clearAndSetSemantics { },
+                                    )
+                                },
                                 label = { Text(destination.label) },
                                 alwaysShowLabel = true,
                             )
@@ -49,9 +61,17 @@ fun AdaptiveLifeOsScaffold(
                 NavigationRail(modifier = Modifier.fillMaxHeight()) {
                     LifeOsDestination.ordered.forEach { destination ->
                         NavigationRailItem(
+                            modifier = Modifier.semantics {
+                                contentDescription = LifeOsSemantics.navigationLabel(destination.label)
+                            },
                             selected = destination == selected,
                             onClick = { onSelect(destination) },
-                            icon = { Text(destination.glyph) },
+                            icon = {
+                                Text(
+                                    text = destination.glyph,
+                                    modifier = Modifier.clearAndSetSemantics { },
+                                )
+                            },
                             label = { Text(destination.label) },
                         )
                     }
