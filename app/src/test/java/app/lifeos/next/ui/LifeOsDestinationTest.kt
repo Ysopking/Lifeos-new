@@ -11,24 +11,25 @@ class LifeOsDestinationTest {
         assertEquals(
             listOf(
                 LifeOsDestination.CHAT,
-                LifeOsDestination.MEMORY,
-                LifeOsDestination.ASSETS,
                 LifeOsDestination.GOALS,
-                LifeOsDestination.WHY,
-                LifeOsDestination.TOOLS,
+                LifeOsDestination.MEMORY,
                 LifeOsDestination.SYSTEM,
             ),
             LifeOsDestination.ordered,
         )
-        val keys = LifeOsDestination.ordered.map { it.key }
-        assertEquals(keys.size, keys.distinct().size)
-        assertTrue(keys.all { it.isNotBlank() })
+        val primaryKeys = LifeOsDestination.ordered.map { it.key }
+        assertEquals(primaryKeys.size, primaryKeys.distinct().size)
+        assertTrue(primaryKeys.all { it.isNotBlank() })
+
+        val allKeys = LifeOsDestination.entries.map { it.key }
+        assertEquals(allKeys.size, allKeys.distinct().size)
+        assertTrue(allKeys.all { it.isNotBlank() })
     }
 
     @Test
     fun chatIsTheSingleDefaultDestination() {
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.default)
-        assertEquals(1, LifeOsDestination.ordered.count { it.isDefault })
+        assertEquals(1, LifeOsDestination.entries.count { it.isDefault })
     }
 
     @Test
