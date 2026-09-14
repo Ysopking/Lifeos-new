@@ -2,7 +2,7 @@ name: F11 Accessibility Device Gate
 on:
   pull_request:
     paths:
-      - "app/src/androidTest/**"
+      - "app/src/test/java/app/lifeos/next/LifeOsFrontendAccessibilityContractTest.kt"
       - "app/src/main/java/app/lifeos/next/ui/**"
       - ".github/workflows/f11-accessibility.yml"
 permissions:
@@ -20,9 +20,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c
         with:
           gradle-version: "9.3.1"
-      - name: Build accessibility test inputs
-        run: gradle :app:assembleDebug :app:assembleDebugAndroidTest
-      - name: Run accessibility device contract
+      - name: Verify accessibility semantics contract
+        run: gradle :app:testDebugUnitTest --tests app.lifeos.next.LifeOsFrontendAccessibilityContractTest
+      - name: Build productive launcher input
+        run: gradle :app:assembleDebug
+      - name: Verify productive launcher on device
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: 36
@@ -31,24 +33,14 @@ jobs:
           disable-animations: true
           script: |
             adb install -r app/build/outputs/apk/debug/app-debug.apk
-            adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-            # First prove the productive launcher with the real LifeOsApplication. This remains a
-            # separate failure boundary from the pure accessibility contract below.
             adb logcat -c
             adb shell am start -n app.lifeos.next/.ChatMainActivity > f11-launcher.txt 2>&1
             timeout 30 sh -c 'until adb shell pidof app.lifeos.next 2>/dev/null | tr -d "\r" | tee f11-process.txt | grep -Eq "[0-9]+"; do sleep 2; done' || (adb shell dumpsys activity activities > f11-activities-timeout.txt; adb logcat -d > f11-logcat-timeout.txt; exit 1)
             adb shell dumpsys activity activities > f11-activities.txt
             grep -Eq 'app\.lifeos\.next/(\.|app\.lifeos\.next\.)ChatMainActivity|com\.android\.permissioncontroller/.permission\.ui\.GrantPermissionsActivity' f11-activities.txt
-            adb shell am force-stop app.lifeos.next
-            # The default AndroidJUnitRunner remains registered for all product/recovery suites.
-            # F11 alone uses an explicitly registered lightweight runner because this contract only
-            # reads accessibility constants and must not boot the entire kernel a second time.
-            adb shell pm list instrumentation app.lifeos.next > f11-instrumentations.txt
-            grep -q 'app.lifeos.next.test/app.lifeos.next.LifeOsAccessibilityContractRunner' f11-instrumentations.txt
-            adb logcat -c
-            adb shell am instrument -w -e class app.lifeos.next.LifeOsFrontendAccessibilityDeviceTest app.lifeos.next.test/app.lifeos.next.LifeOsAccessibilityContractRunner | tee f11-accessibility.txt
-            adb logcat -d -t 400 > f11-instrumentation-logcat.txt
-            grep -q 'OK (1 test)' f11-accessibility.txt || (cat f11-instrumentation-logcat.txt; exit 1)
+            adb logcat -d -t 400 > f11-launcher-logcat.txt
+            pid="$(adb shell pidof app.lifeos.next 2>/dev/null | tr -d '\r' || true)"
+            test -n "$pid" || (cat f11-launcher-logcat.txt; exit 1)
       - name: Upload F11 accessibility evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
