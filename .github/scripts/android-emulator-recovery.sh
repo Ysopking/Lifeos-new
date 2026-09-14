@@ -137,6 +137,12 @@ run_test \
   'app.lifeos.next.MemoryWorkspaceDeviceTest#productiveSnapshotProjectsWithoutMemoryMutation' \
   "$report_dir/memory-workspace-read-only.txt"
 
+# V17 resource-pressure proof. Read real Android battery/thermal/RAM/storage state and prove that the
+# productive World Formula resource path persists the observation and never expands the hard quota.
+run_test \
+  'app.lifeos.next.HardwareResourceIntelligenceDeviceTest#localSignalsFeedPersistedWorldFormulaWithoutExpandingHardQuota' \
+  "$report_dir/hardware-resource-intelligence.txt"
+
 # B01 persistent universal-field hardening. Exercise the real AndroidKeyStore + AtomicFile repository
 # against both explicit rollback and an interrupted write recovered by a fresh repository instance.
 run_suite \
