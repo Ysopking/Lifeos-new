@@ -1,6 +1,9 @@
 package app.lifeos.next.ui.chat
 
+import app.lifeos.next.kernel.InitialCognitiveContextRuntimeRegistry
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -8,6 +11,16 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class ChatVoiceStateTest {
+    @BeforeTest
+    fun setUpCognitiveContext() {
+        InitialCognitiveContextRuntimeRegistry.markReadyForTest()
+    }
+
+    @AfterTest
+    fun tearDownCognitiveContext() {
+        InitialCognitiveContextRuntimeRegistry.resetForTest()
+    }
+
     @Test
     fun readyIdleStateAllowsCapture() {
         assertTrue(
@@ -24,6 +37,28 @@ class ChatVoiceStateTest {
         assertTrue(
             ChatVoicePolicy.canStartVoice(
                 KernelBootstrapStatus.DEGRADED,
+                ChatTurnProcessingState.idle(),
+                ChatVoiceUiState(),
+            )
+        )
+    }
+
+    @Test
+    fun cognitiveContextBuildBlocksTextAndVoiceEvenWhenKernelIsReady() {
+        InitialCognitiveContextRuntimeRegistry.resetForTest()
+        InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
+
+        assertFalse(
+            ChatVoicePolicy.canStartVoice(
+                KernelBootstrapStatus.READY,
+                ChatTurnProcessingState.idle(),
+                ChatVoiceUiState(),
+            )
+        )
+        assertFalse(
+            ChatVoicePolicy.canSend(
+                "Hallo",
+                KernelBootstrapStatus.READY,
                 ChatTurnProcessingState.idle(),
                 ChatVoiceUiState(),
             )

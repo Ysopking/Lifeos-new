@@ -1,5 +1,6 @@
 package app.lifeos.next.ui.chat
 
+import app.lifeos.next.kernel.InitialCognitiveContextRuntimeRegistry
 import app.lifeos.next.kernel.KernelBootstrapStatus
 
 enum class ChatVoicePhase {
@@ -34,7 +35,8 @@ object ChatVoicePolicy {
         processing: ChatTurnProcessingState,
         voice: ChatVoiceUiState,
     ): Boolean =
-        !processing.inFlight &&
+        InitialCognitiveContextRuntimeRegistry.current().contextReady &&
+            !processing.inFlight &&
             voice.phase == ChatVoicePhase.IDLE &&
             voice.stagedTranscript == null &&
             (bootStatus == KernelBootstrapStatus.READY || bootStatus == KernelBootstrapStatus.DEGRADED)
@@ -45,7 +47,8 @@ object ChatVoicePolicy {
         processing: ChatTurnProcessingState,
         voice: ChatVoiceUiState,
     ): Boolean =
-        ChatComposerPolicy.canSend(draft, bootStatus, processing) &&
+        InitialCognitiveContextRuntimeRegistry.current().contextReady &&
+            ChatComposerPolicy.canSend(draft, bootStatus, processing) &&
             voice.phase == ChatVoicePhase.IDLE &&
             voice.stagedTranscript == null
 
