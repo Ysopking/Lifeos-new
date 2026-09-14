@@ -4,6 +4,8 @@ import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.capability.GeneratedToolLifecycleCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.capability.GeneratedToolTrialResult
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRecorder
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRuntimeRegistry
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -183,11 +185,14 @@ data class EvolutionCanaryOutcomeRecordResult(
 /**
  * Records only outcomes backed by an exact J06 reservation. New outcomes are mirrored into the
  * existing J03 trial ledger so canary failures cannot be hidden from promotion eligibility.
+ * V15 lifecycle tracing is observational and is emitted only after durable outcome state exists.
  */
 class EvolutionCanaryOutcomeCoordinator(
     private val runtimeStore: EvolutionCanaryRuntimeStore,
     private val outcomeStore: EvolutionCanaryOutcomeStore,
     private val lifecycle: GeneratedToolLifecycleCoordinator,
+    private val lifecycleTraceRecorder: LifecycleDecisionTraceRecorder? =
+        LifecycleDecisionTraceRuntimeRegistry.currentOrNull(),
 ) {
     private val trustedAdoptionGate = EvolutionAdoptionGate()
     private val mutex = Mutex()
@@ -203,10 +208,12 @@ class EvolutionCanaryOutcomeCoordinator(
             }
             require(existing.candidateToolId == evidence.subject.candidateToolId)
             require(existing.candidateRecordFingerprint == evidence.subject.candidateRecordFingerprint)
-            return@withLock EvolutionCanaryOutcomeRecordResult(
-                outcome = existing,
-                duplicate = true,
-                killSwitch = runtimeStore.killSwitch(evidence.adoptionEvidence.id),
+            return@withLock traced(
+                EvolutionCanaryOutcomeRecordResult(
+                    outcome = existing,
+                    duplicate = true,
+                    killSwitch = runtimeStore.killSwitch(evidence.adoptionEvidence.id),
+                )
             )
         }
 
@@ -257,10 +264,12 @@ class EvolutionCanaryOutcomeCoordinator(
             is EvolutionCanaryOutcomeWriteResult.Conflict ->
                 error("Conflicting canary outcome already recorded: ${write.existingOutcomeId}")
             is EvolutionCanaryOutcomeWriteResult.Duplicate ->
-                return@withLock EvolutionCanaryOutcomeRecordResult(
-                    write.outcome,
-                    duplicate = true,
-                    killSwitch = runtimeStore.killSwitch(evidence.adoptionEvidence.id),
+                return@withLock traced(
+                    EvolutionCanaryOutcomeRecordResult(
+                        write.outcome,
+                        duplicate = true,
+                        killSwitch = runtimeStore.killSwitch(evidence.adoptionEvidence.id),
+                    )
                 )
             is EvolutionCanaryOutcomeWriteResult.Recorded -> Unit
         }
@@ -292,14 +301,23 @@ class EvolutionCanaryOutcomeCoordinator(
                 )
             )
         } catch (cancelled: CancellationException) {
-            withContext(NonCancellable) { tripLedgerSyncFailure(outcome, now) }
+            withContext(NonCancellable) {
+                val syncFailure = tripLedgerSyncFailure(outcome, now)
+                lifecycleTraceRecorder?.recordEvolutionOutcome(outcome, syncFailure)
+            }
             throw cancelled
         } catch (failure: Exception) {
-            tripLedgerSyncFailure(outcome, now)
+            val syncFailure = tripLedgerSyncFailure(outcome, now)
+            lifecycleTraceRecorder?.recordEvolutionOutcome(outcome, syncFailure)
             throw failure
         }
 
-        EvolutionCanaryOutcomeRecordResult(outcome, duplicate = false, killSwitch = killSwitch)
+        traced(EvolutionCanaryOutcomeRecordResult(outcome, duplicate = false, killSwitch = killSwitch))
+    }
+
+    private suspend fun traced(result: EvolutionCanaryOutcomeRecordResult): EvolutionCanaryOutcomeRecordResult {
+        lifecycleTraceRecorder?.recordEvolutionOutcome(result.outcome, result.killSwitch)
+        return result
     }
 
     private suspend fun tripLedgerSyncFailure(
