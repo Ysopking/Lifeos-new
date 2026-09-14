@@ -1,0 +1,260 @@
+package app.lifeos.core.language
+
+enum class LanguageResponseAct {
+    ASSERT,
+    EVIDENCE,
+    UNCERTAINTY,
+    REPORT_SUCCESS,
+    REPORT_BLOCKED,
+    REPORT_FAILURE,
+}
+
+data class LanguageResponseFact(
+    val statement: String,
+    val semanticTags: Set<String> = emptySet(),
+    val confidence: Double = 1.0,
+) {
+    init {
+        require(statement.isNotBlank())
+        require(semanticTags.none { it.isBlank() })
+        require(confidence.isFinite() && confidence in 0.0..1.0)
+    }
+}
+
+data class LanguageResponseTarget(
+    val act: LanguageResponseAct,
+    val language: LanguageCode,
+    val facts: List<LanguageResponseFact>,
+    val confidence: Double = facts.map { it.confidence }.averageOrOne(),
+) {
+    init {
+        require(facts.isNotEmpty())
+        require(confidence.isFinite() && confidence in 0.0..1.0)
+    }
+}
+
+data class LanguageResponseCandidate(
+    val text: String,
+    val roundTrip: LanguageUnderstandingResult,
+    val semanticPreservation: Double,
+    val factCoverage: Double,
+    val semanticCoverage: Double,
+    val actCuePreserved: Boolean,
+) {
+    init {
+        require(text.isNotBlank())
+        require(semanticPreservation.isFinite() && semanticPreservation in 0.0..1.0)
+        require(factCoverage.isFinite() && factCoverage in 0.0..1.0)
+        require(semanticCoverage.isFinite() && semanticCoverage in 0.0..1.0)
+    }
+}
+
+data class LanguageResponseGenerationResult(
+    val text: String,
+    val target: LanguageResponseTarget,
+    val winner: LanguageResponseCandidate,
+    val alternatives: List<LanguageResponseCandidate>,
+) {
+    init {
+        require(text == winner.text)
+        require(alternatives.none { it.text == winner.text })
+    }
+}
+
+/**
+ * Top-down response realization for LIFEOS.
+ *
+ * Facts/evidence remain the authority. The realizer may add only bounded discourse words around the
+ * supplied statements. Every candidate is then fed through the productive
+ * [LanguageUnderstandingEngine] and ranked by semantic round-trip preservation. This is the response
+ * counterpart to [LanguageGenerationEngine]: meaning is chosen before wording and wording is checked
+ * again by the same understanding field before publication.
+ */
+class LanguageResponseGenerationEngine(
+    private val understanding: LanguageUnderstandingEngine = LanguageUnderstandingEngine(),
+    private val maximumCandidates: Int = 12,
+) {
+    init { require(maximumCandidates in 1..64) }
+
+    fun generate(
+        target: LanguageResponseTarget,
+        context: LanguageContext = LanguageContext(),
+    ): LanguageResponseGenerationResult {
+        val proposed = propose(target)
+            .map(::normalizeSurface)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(maximumCandidates)
+        require(proposed.isNotEmpty()) { "Language response generation produced no candidate" }
+
+        val ranked = proposed.map { text -> evaluate(target, text, context) }
+            .sortedWith(
+                compareByDescending<LanguageResponseCandidate> {
+                    target.act == LanguageResponseAct.ASSERT || it.actCuePreserved
+                }
+                    .thenByDescending { it.semanticPreservation }
+                    .thenByDescending { it.roundTrip.goal.confidence }
+                    .thenBy { it.text.length }
+                    .thenBy { it.text }
+            )
+        val winner = ranked.first()
+        return LanguageResponseGenerationResult(
+            text = winner.text,
+            target = target,
+            winner = winner,
+            alternatives = ranked.drop(1).take(4),
+        )
+    }
+
+    private fun evaluate(
+        target: LanguageResponseTarget,
+        text: String,
+        context: LanguageContext,
+    ): LanguageResponseCandidate {
+        val roundTrip = understanding.understand(text, context)
+        val factCoverage = factCoverage(target.facts, text)
+        val semanticCoverage = semanticCoverage(target.facts, roundTrip)
+        val actCuePreserved = actCuePreserved(target.act, text, target.language)
+        val languagePreserved = target.language == LanguageCode.UNKNOWN || roundTrip.goal.language == target.language
+        val confidenceAgreement = 1.0 - kotlin.math.abs(target.confidence - roundTrip.goal.confidence)
+        val score = (
+            factCoverage * 0.52 +
+                semanticCoverage * 0.28 +
+                (if (actCuePreserved) 0.08 else 0.0) +
+                (if (languagePreserved) 0.07 else 0.0) +
+                confidenceAgreement.coerceIn(0.0, 1.0) * 0.05
+            ).coerceIn(0.0, 1.0)
+        return LanguageResponseCandidate(
+            text = text,
+            roundTrip = roundTrip,
+            semanticPreservation = score,
+            factCoverage = factCoverage,
+            semanticCoverage = semanticCoverage,
+            actCuePreserved = actCuePreserved,
+        )
+    }
+
+    private fun factCoverage(facts: List<LanguageResponseFact>, text: String): Double {
+        val actual = contentTerms(text)
+        val expected = facts.flatMapTo(sortedSetOf()) { contentTerms(it.statement) }
+        if (expected.isEmpty()) return 1.0
+        return expected.count(actual::contains).toDouble() / expected.size.toDouble()
+    }
+
+    private fun semanticCoverage(
+        facts: List<LanguageResponseFact>,
+        roundTrip: LanguageUnderstandingResult,
+    ): Double {
+        val expected = facts.flatMapTo(sortedSetOf()) { fact -> fact.semanticTags.map { it.uppercase() } }
+        if (expected.isEmpty()) return 1.0
+        val field = roundTrip.linguisticField ?: return 0.0
+        return expected.map { tag -> field.semanticActivation(tag).coerceIn(0.0, 1.0) }.average()
+    }
+
+    private fun propose(target: LanguageResponseTarget): List<String> {
+        val language = if (target.language == LanguageCode.UNKNOWN) LanguageCode.DE else target.language
+        val facts = target.facts.joinToString(" ") { sentence(it.statement) }
+        return when (language) {
+            LanguageCode.DE -> germanCandidates(target.act, facts)
+            LanguageCode.EN -> englishCandidates(target.act, facts)
+            LanguageCode.UNKNOWN -> error("resolved above")
+        }
+    }
+
+    private fun germanCandidates(act: LanguageResponseAct, facts: String): List<String> = when (act) {
+        LanguageResponseAct.ASSERT -> listOf(facts, "Ergebnis: $facts")
+        LanguageResponseAct.EVIDENCE -> listOf(
+            "Die Evidenz zeigt: $facts",
+            "Auf Basis der Evidenz: $facts",
+            facts,
+        )
+        LanguageResponseAct.UNCERTAINTY -> listOf(
+            "Die Evidenz ist noch nicht eindeutig: $facts",
+            "Unsicher ist derzeit: $facts",
+            "Vorläufiges Ergebnis: $facts",
+        )
+        LanguageResponseAct.REPORT_SUCCESS -> listOf("Erfolgreich: $facts", "Ergebnis: $facts", facts)
+        LanguageResponseAct.REPORT_BLOCKED -> listOf("Blockiert: $facts", "Nicht ausführbar: $facts", facts)
+        LanguageResponseAct.REPORT_FAILURE -> listOf("Fehlgeschlagen: $facts", "Fehler: $facts", facts)
+    }
+
+    private fun englishCandidates(act: LanguageResponseAct, facts: String): List<String> = when (act) {
+        LanguageResponseAct.ASSERT -> listOf(facts, "Result: $facts")
+        LanguageResponseAct.EVIDENCE -> listOf("The evidence shows: $facts", "Based on the evidence: $facts", facts)
+        LanguageResponseAct.UNCERTAINTY -> listOf(
+            "The evidence is not conclusive yet: $facts",
+            "Current uncertainty: $facts",
+            "Preliminary result: $facts",
+        )
+        LanguageResponseAct.REPORT_SUCCESS -> listOf("Successful: $facts", "Result: $facts", facts)
+        LanguageResponseAct.REPORT_BLOCKED -> listOf("Blocked: $facts", "Not executable: $facts", facts)
+        LanguageResponseAct.REPORT_FAILURE -> listOf("Failed: $facts", "Error: $facts", facts)
+    }
+
+    private fun actCuePreserved(
+        act: LanguageResponseAct,
+        text: String,
+        language: LanguageCode,
+    ): Boolean {
+        if (act == LanguageResponseAct.ASSERT) return true
+        val normalized = text.lowercase()
+        val cues = when (act) {
+            LanguageResponseAct.ASSERT -> emptySet()
+            LanguageResponseAct.EVIDENCE -> if (language == LanguageCode.EN) {
+                setOf("evidence", "based on")
+            } else {
+                setOf("evidenz", "basis")
+            }
+            LanguageResponseAct.UNCERTAINTY -> if (language == LanguageCode.EN) {
+                setOf("not conclusive", "uncertainty", "preliminary")
+            } else {
+                setOf("nicht eindeutig", "unsicher", "vorläufig")
+            }
+            LanguageResponseAct.REPORT_SUCCESS -> if (language == LanguageCode.EN) {
+                setOf("successful", "result")
+            } else {
+                setOf("erfolgreich", "ergebnis")
+            }
+            LanguageResponseAct.REPORT_BLOCKED -> if (language == LanguageCode.EN) {
+                setOf("blocked", "not executable")
+            } else {
+                setOf("blockiert", "nicht ausführbar")
+            }
+            LanguageResponseAct.REPORT_FAILURE -> if (language == LanguageCode.EN) {
+                setOf("failed", "error")
+            } else {
+                setOf("fehlgeschlagen", "fehler")
+            }
+        }
+        return cues.any(normalized::contains)
+    }
+
+    private fun contentTerms(value: String): Set<String> = TERM.findAll(value.lowercase())
+        .map { it.value.replace("ß", "ss") }
+        .filter { it.length >= 3 && it !in STOP_WORDS }
+        .toSortedSet()
+
+    private fun sentence(value: String): String {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return trimmed
+        return if (trimmed.last() in ".!?;") trimmed else "$trimmed."
+    }
+
+    private fun normalizeSurface(value: String): String = value
+        .replace(Regex("\\s+"), " ")
+        .replace(" :", ":")
+        .trim()
+
+    private companion object {
+        // Sentence punctuation is surface syntax, not factual identity. Keeping dots inside the
+        // token caused a preserved terminal fact such as `Fußball` -> `Fußball.` to score as lost.
+        val TERM = Regex("[\\p{L}\\p{N}_-]+")
+        val STOP_WORDS = setOf(
+            "aber", "als", "auf", "aus", "bei", "das", "dass", "der", "die", "ein", "eine", "einer",
+            "für", "hat", "ist", "mit", "oder", "und", "von", "war", "wie", "wird", "zu", "zum", "zur",
+            "and", "are", "for", "from", "has", "have", "into", "the", "this", "that", "was", "were", "with",
+        )
+    }
+}
+
+private fun List<Double>.averageOrOne(): Double = if (isEmpty()) 1.0 else average()
