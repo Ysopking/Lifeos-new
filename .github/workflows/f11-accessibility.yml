@@ -47,3 +47,12 @@ jobs:
             adb shell am instrument -w -e class app.lifeos.next.LifeOsFrontendAccessibilityDeviceTest app.lifeos.next.test/app.lifeos.next.LifeOsTestRunner | tee f11-accessibility.txt
             adb logcat -d -t 400 > f11-instrumentation-logcat.txt
             grep -q 'OK (1 test)' f11-accessibility.txt || (cat f11-instrumentation-logcat.txt; exit 1)
+      - name: Upload F11 accessibility evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: LIFEOS-F11-accessibility-evidence
+          path: |
+            f11-*.txt
+          if-no-files-found: warn
+          retention-days: 30
