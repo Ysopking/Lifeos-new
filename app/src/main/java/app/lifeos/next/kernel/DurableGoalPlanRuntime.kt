@@ -126,12 +126,20 @@ class DurableGoalPlanRuntime(
         )
     }
 
+    /** Read-only durable Photon truth used by side-effect-free local planners. */
+    suspend fun loadPlanningPhotons(): List<Photon> = loadPersistedPhotons()
+
+    /**
+     * Binds one final persisted action result to the durable plan. Returns true only when a final
+     * outcome Photon exists, so callers never expose an unpersisted conversational result as done.
+     */
     suspend fun complete(
         permit: DurableGoalPlanPermit,
         result: GoalActionDispatchResult,
-    ) {
-        val outcome = persistedOutcome(result) ?: return
+    ): Boolean {
+        val outcome = persistedOutcome(result) ?: return false
         completeWithPersistedOutcome(permit, outcome)
+        return true
     }
 
     private suspend fun completeWithPersistedOutcome(
@@ -204,6 +212,7 @@ class DurableGoalPlanRuntime(
         IntentType.TRANSFORM_IMAGE -> "image" in photon.tags && "transformed" in photon.tags
         IntentType.SCHEDULE -> "reminder" in photon.tags && "scheduled" in photon.tags
         IntentType.COMMUNICATE -> "share-preparation" in photon.tags
+        IntentType.CONVERSATION -> "local-conversation-response" in photon.tags
         else -> false
     }
 
@@ -222,6 +231,8 @@ class DurableGoalPlanRuntime(
             val outcome = communicationPreparationOutcome(result.localCommunication.share)
             persistDerivedOutcome(outcome)?.photon
         }
+        result.localConversation is LocalConversationExecutionResult.Produced ->
+            persistDerivedOutcome(result.localConversation.photon)?.photon
         else -> null
     }
 
