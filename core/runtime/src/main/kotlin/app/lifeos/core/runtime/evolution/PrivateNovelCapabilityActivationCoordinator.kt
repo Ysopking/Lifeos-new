@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.evolution
 
+import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.buildstudio.BuildActorAction
 import app.lifeos.core.runtime.buildstudio.BuildActorEvidence
 import app.lifeos.core.runtime.buildstudio.BuildActorRole
@@ -16,6 +17,18 @@ import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.capability.GeneratedToolTrialInvocation
 import app.lifeos.core.runtime.capability.GeneratedToolTrialLedger
 import app.lifeos.core.runtime.capability.GeneratedToolTrialRunner
+import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
+import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import app.lifeos.core.runtime.resource.ResourceBudgetDemand
+import app.lifeos.core.runtime.resource.ResourceBudgetDomain
+import app.lifeos.core.runtime.resource.ResourceBudgetQuota
+import app.lifeos.core.runtime.resource.ResourceBudgetReservation
+import app.lifeos.core.runtime.resource.ResourceBudgetReservationResult
+import app.lifeos.core.runtime.resource.ResourceBudgetReservationState
+import app.lifeos.core.runtime.resource.ResourceBudgetUsage
+import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
+import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
+import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import java.time.Instant
 
 sealed interface PrivateNovelCapabilityActivationResult {
@@ -32,6 +45,27 @@ sealed interface PrivateNovelCapabilityActivationResult {
     ) : PrivateNovelCapabilityActivationResult
 }
 
+/** Process-owned bridge to the same durable V16 budget coordinator used by private ToolWorkshop. */
+object PrivateNovelCapabilityResourceRuntimeRegistry {
+    @Volatile
+    private var budgets: ResourceBudgetCoordinator? = null
+
+    fun install(value: ResourceBudgetCoordinator) {
+        budgets = value
+    }
+
+    fun currentOrNull(): ResourceBudgetCoordinator? = budgets
+
+    internal fun clearForTests() {
+        budgets = null
+    }
+}
+
+private sealed interface NovelCanaryResourcePreparation {
+    data class Ready(val reservation: ResourceBudgetReservation?) : NovelCanaryResourcePreparation
+    data class Blocked(val reason: String) : NovelCanaryResourcePreparation
+}
+
 /**
  * Explicit private-owner workflow for one already-TRIAL bounded generated tool.
  *
@@ -39,6 +73,12 @@ sealed interface PrivateNovelCapabilityActivationResult {
  * expectation-bearing and side-effect-free Novel Canary trials, evaluates readiness, durably seals
  * the exact canary state, records a distinct deterministic reviewer identity and private-owner
  * activation identity, then delegates to the guarded bounded promotion bridge.
+ *
+ * V16 resource intelligence is applied only to a canary invocation that has no durable trial result
+ * yet. A World Formula EVOLUTION allocation is checked before the durable resource reservation and
+ * before the bounded trial executes. The reservation is committed only after the canary has returned
+ * an authoritative persisted outcome. Retries with an existing trial never execute or charge work a
+ * second time; they only settle an already-open reservation when one exists.
  */
 class PrivateNovelCapabilityActivationCoordinator(
     private val capabilities: CapabilityRegistry,
@@ -51,6 +91,10 @@ class PrivateNovelCapabilityActivationCoordinator(
     private val promotionStore: NovelCapabilityPromotionStore,
     private val promotion: BoundedNovelPromotionCoordinator,
     private val now: () -> Instant = Instant::now,
+    private val budgets: ResourceBudgetCoordinator? =
+        PrivateNovelCapabilityResourceRuntimeRegistry.currentOrNull(),
+    private val sharedBudgetsProvider: () -> SharedResourceBudgetGate? =
+        { SharedResourceBudgetRuntimeRegistry.current() },
 ) {
     private val gapDetector = CapabilityGapDetector(capabilities)
 
@@ -109,26 +153,48 @@ class PrivateNovelCapabilityActivationCoordinator(
         val admission = admissionGate.evaluate(subject)
         val executions = mutableListOf<NovelCapabilityCanaryExecutionResult>()
         for (case in cases) {
+            val invocation = GeneratedToolTrialInvocation(
+                toolId = toolId,
+                invocationId = "$toolId/private-novel-canary-v1/${case.id}",
+                input = case.input,
+                expectedOutput = case.expected,
+            )
+            val existingTrial = trialLedger.evidence(toolId).results
+                .firstOrNull { it.invocationId == invocation.invocationId }
+            val prepared = if (existingTrial == null) {
+                prepareResourceReservation(subject, invocation.invocationId)
+            } else {
+                NovelCanaryResourcePreparation.Ready(
+                    existingResourceReservation(subject, invocation.invocationId)
+                )
+            }
+            val resourceReservation = when (prepared) {
+                is NovelCanaryResourcePreparation.Blocked ->
+                    return blocked(toolId, prepared.reason)
+                is NovelCanaryResourcePreparation.Ready -> prepared.reservation
+            }
+
             val execution = canary.execute(
                 subject = subject,
                 admission = admission,
-                invocation = GeneratedToolTrialInvocation(
-                    toolId = toolId,
-                    invocationId = "$toolId/private-novel-canary-v1/${case.id}",
-                    input = case.input,
-                    expectedOutput = case.expected,
-                ),
+                invocation = invocation,
             )
             executions += execution
             when (execution) {
-                is NovelCapabilityCanaryExecutionResult.Executed -> Unit
-                is NovelCapabilityCanaryExecutionResult.Blocked ->
+                is NovelCapabilityCanaryExecutionResult.Executed -> {
+                    settleResourceReservation(subject, resourceReservation, execution.outcome)
+                }
+                is NovelCapabilityCanaryExecutionResult.Blocked -> {
+                    releaseResourceReservation(subject, resourceReservation)
                     return PrivateNovelCapabilityActivationResult.Blocked(
                         toolId,
                         execution.reasons.ifEmpty { listOf("private-novel-canary-blocked") },
                     )
-                is NovelCapabilityCanaryExecutionResult.Exhausted ->
+                }
+                is NovelCapabilityCanaryExecutionResult.Exhausted -> {
+                    releaseResourceReservation(subject, resourceReservation)
                     return blocked(toolId, "private-novel-canary-budget-exhausted:${execution.usedInvocations}")
+                }
             }
         }
 
@@ -180,6 +246,135 @@ class PrivateNovelCapabilityActivationCoordinator(
         return PrivateNovelCapabilityActivationResult.Activated(promoted, executions)
     }
 
+    private suspend fun prepareResourceReservation(
+        subject: NovelCapabilityAdmissionSubject,
+        invocationId: String,
+    ): NovelCanaryResourcePreparation {
+        val coordinator = budgets ?: return NovelCanaryResourcePreparation.Ready(null)
+        val shared = sharedBudgetsProvider()
+        if (shared != null) {
+            val demand = ResourceBudgetDemand(
+                domain = ResourceBudgetDomain.EVOLUTION,
+                requested = CANARY_RESERVATION,
+                goalRelevance = 0.85,
+                priority = 0.85,
+                expectedUtility = 0.80,
+                confidence = 1.0,
+            )
+            when (val decision = shared.allocate(CANARY_SHARED_HARD_QUOTA, listOf(demand))) {
+                is SharedResourceBudgetDecision.Blocked ->
+                    return NovelCanaryResourcePreparation.Blocked(
+                        "private-novel-canary-world-budget:${decision.reason}"
+                    )
+                is SharedResourceBudgetDecision.Ready -> {
+                    val allocation = decision.allocation.allocation(ResourceBudgetDomain.EVOLUTION)
+                        ?: return NovelCanaryResourcePreparation.Blocked(
+                            "private-novel-canary-world-budget-missing-allocation"
+                        )
+                    if (!CANARY_RESERVATION.isWithin(allocation.allocated)) {
+                        return NovelCanaryResourcePreparation.Blocked(
+                            "private-novel-canary-world-budget-insufficient"
+                        )
+                    }
+                }
+            }
+        }
+
+        val accountId = resourceAccountId(subject)
+        coordinator.createAccount(accountId, CANARY_ACCOUNT_QUOTA)
+        return when (
+            val reservation = coordinator.reserve(
+                accountId = accountId,
+                idempotencyKey = resourceIdempotencyKey(subject, invocationId),
+                usage = CANARY_RESERVATION,
+            )
+        ) {
+            is ResourceBudgetReservationResult.Denied ->
+                NovelCanaryResourcePreparation.Blocked(
+                    "private-novel-canary-resource:${reservation.reason}"
+                )
+            is ResourceBudgetReservationResult.Reserved ->
+                NovelCanaryResourcePreparation.Ready(reservation.reservation)
+            is ResourceBudgetReservationResult.Existing -> when (reservation.reservation.state) {
+                ResourceBudgetReservationState.RESERVED ->
+                    NovelCanaryResourcePreparation.Ready(reservation.reservation)
+                ResourceBudgetReservationState.COMMITTED ->
+                    NovelCanaryResourcePreparation.Blocked(
+                        "private-novel-canary-resource-already-committed-without-trial"
+                    )
+                ResourceBudgetReservationState.RELEASED ->
+                    NovelCanaryResourcePreparation.Blocked(
+                        "private-novel-canary-resource-reservation-released"
+                    )
+            }
+        }
+    }
+
+    private suspend fun existingResourceReservation(
+        subject: NovelCapabilityAdmissionSubject,
+        invocationId: String,
+    ): ResourceBudgetReservation? {
+        val coordinator = budgets ?: return null
+        val account = coordinator.currentOrNull(resourceAccountId(subject)) ?: return null
+        val reservation = account.reservations.firstOrNull {
+            it.idempotencyKey == resourceIdempotencyKey(subject, invocationId)
+        } ?: return null
+        require(reservation.reserved == CANARY_RESERVATION) {
+            "Private novel canary retry changed its V16 resource envelope"
+        }
+        require(reservation.state != ResourceBudgetReservationState.RELEASED) {
+            "Private novel canary durable trial has a released V16 reservation"
+        }
+        return reservation
+    }
+
+    private suspend fun settleResourceReservation(
+        subject: NovelCapabilityAdmissionSubject,
+        reservation: ResourceBudgetReservation?,
+        outcome: NovelCapabilityCanaryOutcome,
+    ) {
+        val coordinator = budgets ?: return
+        reservation ?: return
+        val actual = ResourceBudgetUsage(
+            elapsedMillis = outcome.latencyMs,
+            workUnits = 1,
+            candidates = 1,
+        )
+        require(actual.isWithin(reservation.reserved)) {
+            "Private novel canary measured usage exceeds its V16 reservation"
+        }
+        coordinator.commit(resourceAccountId(subject), reservation.id, actual)
+    }
+
+    private suspend fun releaseResourceReservation(
+        subject: NovelCapabilityAdmissionSubject,
+        reservation: ResourceBudgetReservation?,
+    ) {
+        val coordinator = budgets ?: return
+        reservation ?: return
+        when (reservation.state) {
+            ResourceBudgetReservationState.RESERVED ->
+                coordinator.release(resourceAccountId(subject), reservation.id)
+            ResourceBudgetReservationState.RELEASED -> Unit
+            ResourceBudgetReservationState.COMMITTED ->
+                error("Committed private novel canary reservation cannot be released")
+        }
+    }
+
+    private fun resourceAccountId(subject: NovelCapabilityAdmissionSubject): ResourceBudgetAccountId =
+        ResourceBudgetAccountId(
+            "private-novel-canary:" + StableFieldIds.fingerprint(
+                "private-novel-canary-resource-account/v1",
+                subject.id,
+                subject.toolId,
+            )
+        )
+
+    private fun resourceIdempotencyKey(
+        subject: NovelCapabilityAdmissionSubject,
+        invocationId: String,
+    ): String = "private-novel-canary:${subject.id}:$invocationId"
+
     private fun blocked(toolId: String, reason: String) =
         PrivateNovelCapabilityActivationResult.Blocked(toolId, listOf(reason))
 
@@ -220,5 +415,29 @@ class PrivateNovelCapabilityActivationCoordinator(
     private companion object {
         const val REQUIRED_CASES = 5
         const val REVIEWER_ACTOR_ID = "lifeos-private-novel-readiness-reviewer"
+        val CANARY_RESERVATION = ResourceBudgetUsage(
+            elapsedMillis = 30_000,
+            workUnits = 1,
+            memoryBytes = 16L * 1024L * 1024L,
+            ioBytes = 1L * 1024L * 1024L,
+            networkBytes = 0,
+            candidates = 1,
+        )
+        val CANARY_ACCOUNT_QUOTA = ResourceBudgetQuota(
+            elapsedMillis = 150_000,
+            workUnits = 5,
+            memoryBytes = 80L * 1024L * 1024L,
+            ioBytes = 5L * 1024L * 1024L,
+            networkBytes = 0,
+            candidates = 5,
+        )
+        val CANARY_SHARED_HARD_QUOTA = ResourceBudgetQuota(
+            elapsedMillis = 60_000,
+            workUnits = 8,
+            memoryBytes = 128L * 1024L * 1024L,
+            ioBytes = 16L * 1024L * 1024L,
+            networkBytes = 0,
+            candidates = 8,
+        )
     }
 }
