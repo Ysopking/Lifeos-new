@@ -42,6 +42,34 @@ object LifeOsResponseComposer {
                 semanticTags = setOf("EVIDENCE", "SEARCH"),
             )
         }
+        when (val conversation = result.localConversation) {
+            is LocalConversationExecutionResult.Produced -> {
+                val hasEvidence = conversation.evidencePhotonIds.isNotEmpty()
+                return generated(
+                    result = result,
+                    act = if (hasEvidence) LanguageResponseAct.EVIDENCE else LanguageResponseAct.ASSERT,
+                    statement = conversation.photon.content,
+                    confidence = conversation.photon.confidence,
+                    semanticTags = if (hasEvidence) {
+                        setOf("CONVERSATION", "EVIDENCE")
+                    } else {
+                        setOf("CONVERSATION")
+                    },
+                )
+            }
+            is LocalConversationExecutionResult.Failed ->
+                return generated(
+                    result,
+                    LanguageResponseAct.REPORT_FAILURE,
+                    statement(
+                        result,
+                        "Die Gesprächsantwort konnte nicht dauerhaft abgeschlossen werden: ${conversation.message}",
+                        "The conversation response could not be durably completed: ${conversation.message}",
+                    ),
+                    semanticTags = setOf("CONVERSATION"),
+                )
+            null -> Unit
+        }
         when (val scheduled = result.localSchedule) {
             is LocalScheduleExecutionResult.Scheduled ->
                 return generated(
@@ -127,7 +155,8 @@ object LifeOsResponseComposer {
             is GoalResumeExecutionResult.Resumed ->
                 if (result.localKnowledge == null && result.localDeepSearch == null &&
                     result.localSchedule == null && result.localImageTransform == null &&
-                    result.localCommunication == null && result.imageGeneration == null
+                    result.localCommunication == null && result.localConversation == null &&
+                    result.imageGeneration == null
                 ) {
                     return generated(
                         result,
@@ -212,24 +241,16 @@ object LifeOsResponseComposer {
         }
         val goal = result.effectiveGoal
         if (goal?.intent == IntentType.CONVERSATION) {
-            val topic = goal.objective.substringAfter(": ", goal.objective).trim().take(320)
-            val fact = if (topic.isBlank()) {
-                statement(
-                    result,
-                    "Der Gesprächskontext ist aktiv. LIFEOS kann die nächste Antwort aus dem aktuellen semantischen Kontext und der verfügbaren lokalen Evidenz ableiten.",
-                    "The conversation context is active. LIFEOS can derive the next response from the current semantic context and available local evidence.",
-                )
-            } else {
-                statement(
-                    result,
-                    "Der Gesprächskontext ist aktiv und dein Anliegen wurde semantisch erfasst: $topic",
-                    "The conversation context is active and your request was captured semantically: $topic",
-                )
-            }
+            // Defensive fallback only. Normal productive conversation has already been planned,
+            // persisted and surfaced through LocalConversationExecutionResult above.
             return generated(
                 result,
                 LanguageResponseAct.ASSERT,
-                fact,
+                statement(
+                    result,
+                    "Der Gesprächsbeitrag wurde verstanden, aber es liegt kein abgeschlossenes Conversation-Outcome vor.",
+                    "The conversation input was understood, but no completed conversation outcome is available.",
+                ),
                 confidence = goal.confidence,
                 semanticTags = setOf("CONVERSATION"),
             )
