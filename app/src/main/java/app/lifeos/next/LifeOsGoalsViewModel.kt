@@ -3,6 +3,7 @@ package app.lifeos.next
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.goal.GoalPlanId
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.ui.goals.GoalPlanUiModel
@@ -86,15 +87,23 @@ class LifeOsGoalsViewModel(application: Application) : AndroidViewModel(applicat
         mutableState.update { it.copy(selectedPlanId = null) }
     }
 
-    /** Recomputes only time-derived UI fields such as deadline expiry and Today's projection. */
+    /** Recomputes only read-only time/context-derived UI fields. Never mutates the ledger. */
     fun refreshProjection() {
-        project(kernel.goalPlans.states.value, Instant.now())
+        project(
+            states = kernel.goalPlans.states.value,
+            photons = kernel.bootstrapState.value.photons,
+            at = Instant.now(),
+        )
     }
 
     private fun observeGoalPlans() {
         viewModelScope.launch {
             kernel.goalPlans.states.collect { states ->
-                project(states, Instant.now())
+                project(
+                    states = states,
+                    photons = kernel.bootstrapState.value.photons,
+                    at = Instant.now(),
+                )
             }
         }
     }
@@ -109,16 +118,27 @@ class LifeOsGoalsViewModel(application: Application) : AndroidViewModel(applicat
                         error = boot.failureMessage,
                     )
                 }
+                project(
+                    states = kernel.goalPlans.states.value,
+                    photons = boot.photons,
+                    at = Instant.now(),
+                )
             }
         }
     }
 
     private fun project(
         states: Map<GoalPlanId, app.lifeos.core.runtime.goal.GoalPlanRuntimeState>,
+        photons: List<Photon>,
         at: Instant,
     ) {
         val workspace = GoalWorkspaceProjector.project(states, at)
-        val today = TodayPlanProjector.project(workspace, at, ZoneId.systemDefault())
+        val today = TodayPlanProjector.project(
+            workspace = workspace,
+            at = at,
+            zoneId = ZoneId.systemDefault(),
+            photons = photons,
+        )
         mutableState.update { current ->
             current.copy(
                 workspace = workspace,
