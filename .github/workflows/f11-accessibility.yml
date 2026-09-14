@@ -21,7 +21,7 @@ jobs:
         with:
           gradle-version: "9.3.1"
       - name: Build accessibility test inputs
-        run: ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+        run: gradle :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Run accessibility device contract
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
