@@ -9,7 +9,7 @@ enum class LifeOsDestination(
     CHAT(key = "chat", label = "Chat", glyph = "◉", isDefault = true),
     MEMORY(key = "memory", label = "Gedächtnis", glyph = "◌"),
     ASSETS(key = "assets", label = "Assets", glyph = "▣"),
-    GOALS(key = "goals", label = "Ziele", glyph = "◎"),
+    GOALS(key = "goals", label = "Heute", glyph = "◎"),
     WHY(key = "why", label = "Warum", glyph = "?"),
     TOOLS(key = "tools", label = "Tools", glyph = "⚙"),
     SYSTEM(key = "system", label = "System", glyph = "◇"),
