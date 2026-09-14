@@ -24,7 +24,9 @@ class LifeOsResponseComposerTest {
 
     @Test
     fun englishConversationGeneratesEnglishSurface() {
-        val result = submission("Hello")
+        // "Thank you" is both deterministically classified as CONVERSATION and carries the English
+        // marker "you"; a bare "Hello" intentionally remains language-UNKNOWN in the normalizer.
+        val result = submission("Thank you")
 
         val response = LifeOsResponseComposer.compose(result)
 
