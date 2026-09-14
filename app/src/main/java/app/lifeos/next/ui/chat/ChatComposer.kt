@@ -13,6 +13,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import app.lifeos.next.kernel.KernelBootstrapStatus
@@ -77,6 +79,9 @@ fun ChatComposer(
                     Text("Stopp")
                 }
                 ChatVoicePhase.PROCESSING -> OutlinedButton(
+                    modifier = Modifier.semantics {
+                        contentDescription = "Sprache wird lokal verarbeitet"
+                    },
                     onClick = {},
                     enabled = false,
                 ) {
@@ -90,6 +95,13 @@ fun ChatComposer(
             Spacer(Modifier.weight(1f))
 
             Button(
+                modifier = Modifier.semantics {
+                    contentDescription = if (processing.inFlight) {
+                        "Nachricht wird verarbeitet"
+                    } else {
+                        "Senden"
+                    }
+                },
                 onClick = onSend,
                 enabled = canSend,
             ) {
