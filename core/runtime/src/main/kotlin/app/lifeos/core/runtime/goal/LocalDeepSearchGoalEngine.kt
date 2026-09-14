@@ -20,6 +20,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchMissionDefinition
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionProduct
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRuntimeRegistry
+import app.lifeos.core.runtime.deepsearch.DeepSearchPermissionState
 import app.lifeos.core.runtime.deepsearch.DeepSearchPlannerCheckpoint
 import app.lifeos.core.runtime.deepsearch.DeepSearchPlannerV2
 import app.lifeos.core.runtime.deepsearch.DeepSearchRequest
@@ -30,6 +31,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchSourceKind
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceSnapshot
 import app.lifeos.core.runtime.deepsearch.DeepSearchStatus
 import app.lifeos.core.runtime.deepsearch.RuntimeAwareDeepSearchCapabilityGate
+import app.lifeos.core.runtime.deepsearch.RuntimeDeepSearchPermissionGate
 import app.lifeos.core.runtime.resource.ResourceBudgetDemand
 import app.lifeos.core.runtime.resource.ResourceBudgetDomain
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
@@ -142,7 +144,12 @@ class LocalDeepSearchGoalEngine(
             .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
             .toList()
         val sources = searchSources(candidates)
-        val wantsExternal = sources.any { it.descriptor.kind == DeepSearchSourceKind.EXTERNAL }
+        val wantsExternal = sources
+            .asSequence()
+            .filter { it.descriptor.kind == DeepSearchSourceKind.EXTERNAL }
+            .any { source ->
+                RuntimeDeepSearchPermissionGate.permissionFor(source.descriptor) == DeepSearchPermissionState.GRANTED
+            }
         val freshRequest = DeepSearchRequest(
             query = query,
             contextTerms = goal.entities.map { it.normalizedValue }.filter { it.isNotBlank() }.toSet(),
@@ -209,7 +216,11 @@ class LocalDeepSearchGoalEngine(
     }
 
     private suspend fun effectiveBudget(goal: GoalFrame, wantsExternal: Boolean): DeepSearchBudget {
-        val broker = sharedBudgets ?: return DEFAULT_BUDGET
+        val broker = sharedBudgets
+        if (broker == null) {
+            require(!wantsExternal) { "deepsearch-web-resource-budget-unavailable" }
+            return DEFAULT_BUDGET
+        }
         val requestedUsage = if (wantsExternal) DEEP_SEARCH_WEB_REQUEST else DEEP_SEARCH_LOCAL_REQUEST
         val demand = ResourceBudgetDemand(
             domain = ResourceBudgetDomain.DEEP_SEARCH,
