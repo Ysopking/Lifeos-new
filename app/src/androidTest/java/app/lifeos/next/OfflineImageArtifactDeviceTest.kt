@@ -9,6 +9,7 @@ import app.lifeos.core.runtime.artifact.ArtifactKind
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewDecision
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapState
+import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.ui.chat.ChatImagePreviewLoader
 import app.lifeos.next.ui.chat.ChatImagePreviewState
@@ -222,8 +223,27 @@ class OfflineImageArtifactDeviceTest {
         assertArrayEquals(png, secondReload!!)
     }
 
-    private suspend fun awaitBoot(): KernelBootstrapState = withTimeout(BOOT_TIMEOUT_MS) {
-        app.kernel.bootstrapState.first { state -> state.ready || state.failureMessage != null }
+    private suspend fun awaitBoot(): KernelBootstrapState {
+        val processStartup = withTimeout(BOOT_TIMEOUT_MS) {
+            app.startupState.first { state ->
+                state.phase == LifeOsProcessStartupPhase.READY ||
+                    state.phase == LifeOsProcessStartupPhase.FAILED
+            }
+        }
+        if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
+            error("Process startup failed during image E2E: ${processStartup.failure ?: "unknown"}")
+        }
+        return withTimeout(BOOT_TIMEOUT_MS) {
+            app.kernel.bootstrapState.first { state ->
+                state.status == KernelBootstrapStatus.READY ||
+                    state.status == KernelBootstrapStatus.DEGRADED ||
+                    state.status == KernelBootstrapStatus.FAILED
+            }
+        }.also { state ->
+            if (state.status == KernelBootstrapStatus.FAILED) {
+                error("Kernel boot failed during image E2E: ${state.failureMessage ?: "unknown"}")
+            }
+        }
     }
 
     private fun sha256(bytes: ByteArray): String =

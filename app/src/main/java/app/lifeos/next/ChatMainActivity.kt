@@ -1,17 +1,28 @@
 package app.lifeos.next
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
 import app.lifeos.next.kernel.InitialCognitiveContextPhase
 import app.lifeos.next.kernel.InitialCognitiveContextRuntimeRegistry
 import app.lifeos.next.ui.LifeOsRoot
+import app.lifeos.next.ui.LifeOsStartupScreen
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -23,22 +34,42 @@ class ChatMainActivity : ComponentActivity() {
     private lateinit var decisionTraceModel: LifeOsDecisionTraceViewModel
     private lateinit var toolCenterModel: LifeOsToolCenterViewModel
 
+    private var modelsReady by mutableStateOf(false)
+
     @Volatile
     private var permissionRefreshBaseline: InitialDataBootstrapSnapshot? = null
 
     @Volatile
     private var awaitingPostPermissionRefresh: Boolean = false
 
-    private val initialDataPermissions = registerForActivityResult(
+    @Volatile
+    private var permissionSequenceStarted: Boolean = false
+
+    private val runtimePermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         val owner = application as? LifeOsApplication ?: return@registerForActivityResult
-        // A permission decision changes the source universe. Never expose the pre-dialog memory
-        // snapshot while the authorized sources are being read and the life-memory graph rebuilt.
-        permissionRefreshBaseline = owner.latestInitialDataBootstrap
-        awaitingPostPermissionRefresh = true
-        InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
-        owner.refreshInitialDataBootstrap()
+        owner.markAllRuntimePermissionsRequested()
+        beginPostPermissionRefresh(owner)
+        if (!requestBroadFileAccessIfNeeded(owner)) {
+            requestNotificationAccessIfNeeded()
+        }
+    }
+
+    private val broadFileAccess = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        val owner = application as? LifeOsApplication ?: return@registerForActivityResult
+        beginPostPermissionRefresh(owner)
+        requestNotificationAccessIfNeeded()
+    }
+
+    private val notificationAccess = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (InitialCognitiveContextRuntimeRegistry.current().phase == InitialCognitiveContextPhase.WAITING_FOR_PERMISSIONS) {
+            InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
+        }
     }
 
     private val microphonePermission = registerForActivityResult(
@@ -52,53 +83,112 @@ class ChatMainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val owner = application as LifeOsApplication
+
+        setContent {
+            val startup by owner.startupState.collectAsStateWithLifecycle()
+            if (startup.ready && modelsReady) {
+                LifeOsRoot(
+                    model = model,
+                    memoryModel = memoryModel,
+                    assetReviewModel = assetReviewModel,
+                    goalsModel = goalsModel,
+                    decisionTraceModel = decisionTraceModel,
+                    toolCenterModel = toolCenterModel,
+                    onRequestMicrophonePermission = {
+                        microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+                    },
+                )
+            } else {
+                LifeOsStartupScreen(startup)
+            }
+        }
+
+        lifecycleScope.launch {
+            owner.startupState.collect { startup ->
+                if (startup.ready && !modelsReady) {
+                    initializeRuntimeUi(owner)
+                }
+            }
+        }
+    }
+
+    private fun initializeRuntimeUi(owner: LifeOsApplication) {
+        if (modelsReady) return
         model = ViewModelProvider(this)[LifeOsChatViewModel::class.java]
         memoryModel = ViewModelProvider(this)[LifeOsMemoryViewModel::class.java]
         assetReviewModel = ViewModelProvider(this)[OwnerAssetReviewViewModel::class.java]
         goalsModel = ViewModelProvider(this)[LifeOsGoalsViewModel::class.java]
         decisionTraceModel = ViewModelProvider(this)[LifeOsDecisionTraceViewModel::class.java]
         toolCenterModel = ViewModelProvider(this)[LifeOsToolCenterViewModel::class.java]
-
         observeInitialCognitiveContext(owner)
+        modelsReady = true
+        startPermissionSequence(owner)
+    }
 
-        setContent {
-            LifeOsRoot(
-                model = model,
-                memoryModel = memoryModel,
-                assetReviewModel = assetReviewModel,
-                goalsModel = goalsModel,
-                decisionTraceModel = decisionTraceModel,
-                toolCenterModel = toolCenterModel,
-                onRequestMicrophonePermission = {
-                    microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
-                },
-            )
+    private fun startPermissionSequence(owner: LifeOsApplication) {
+        if (permissionSequenceStarted) return
+        permissionSequenceStarted = true
+
+        val missingRuntime = owner.allRuntimePermissionsToRequest()
+        if (missingRuntime.isNotEmpty() && owner.shouldRequestAllRuntimePermissions()) {
+            InitialCognitiveContextRuntimeRegistry.markWaitingForPermissions()
+            lifecycleScope.launch {
+                awaitInitialBootstrap(owner)
+                runtimePermissions.launch(missingRuntime.toTypedArray())
+            }
+            return
         }
 
-        if (savedInstanceState == null && owner.shouldRequestInitialDataPermissions()) {
-            val missing = owner.initialDataPermissionsToRequest()
-            if (missing.isNotEmpty()) {
-                InitialCognitiveContextRuntimeRegistry.markWaitingForPermissions()
-                lifecycleScope.launch {
-                    // Let the first crash-safe pass seal its pre-permission source state. This gives
-                    // us an exact baseline that the post-permission refresh must supersede, even when
-                    // the user denies every requested permission and the resulting content is equal.
-                    while (
-                        isActive &&
-                        owner.latestInitialDataBootstrap == null &&
-                        owner.initialDataBootstrapFailure == null
-                    ) {
-                        delay(50)
-                    }
-                    owner.markInitialDataPermissionsRequested()
-                    initialDataPermissions.launch(missing.toTypedArray())
-                }
-            } else {
-                InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
-            }
-        } else if (InitialCognitiveContextRuntimeRegistry.current().phase == InitialCognitiveContextPhase.PREPARING) {
+        if (requestBroadFileAccessIfNeeded(owner)) return
+        if (requestNotificationAccessIfNeeded()) return
+        if (InitialCognitiveContextRuntimeRegistry.current().phase == InitialCognitiveContextPhase.PREPARING) {
             InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
         }
+    }
+
+    private suspend fun awaitInitialBootstrap(owner: LifeOsApplication) {
+        while (
+            owner.latestInitialDataBootstrap == null &&
+            owner.initialDataBootstrapFailure == null
+        ) {
+            delay(50)
+        }
+    }
+
+    private fun requestBroadFileAccessIfNeeded(owner: LifeOsApplication): Boolean {
+        if (!owner.shouldRequestBroadFileAccess()) return false
+        owner.markBroadFileAccessRequested()
+        InitialCognitiveContextRuntimeRegistry.markWaitingForPermissions()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:$packageName"),
+            )
+            broadFileAccess.launch(intent)
+            return true
+        }
+        return false
+    }
+
+    private fun requestNotificationAccessIfNeeded(): Boolean {
+        if (NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)) {
+            return false
+        }
+        val preferences = getSharedPreferences(ASSISTANT_ACCESS_PREFS, MODE_PRIVATE)
+        if (preferences.getBoolean(NOTIFICATION_ACCESS_REQUESTED, false)) {
+            return false
+        }
+        preferences.edit().putBoolean(NOTIFICATION_ACCESS_REQUESTED, true).apply()
+        InitialCognitiveContextRuntimeRegistry.markWaitingForPermissions()
+        notificationAccess.launch(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        return true
+    }
+
+    private fun beginPostPermissionRefresh(owner: LifeOsApplication) {
+        permissionRefreshBaseline = owner.latestInitialDataBootstrap
+        awaitingPostPermissionRefresh = true
+        InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
+        owner.refreshInitialDataBootstrap()
     }
 
     private fun observeInitialCognitiveContext(owner: LifeOsApplication) {
@@ -127,5 +217,10 @@ class ChatMainActivity : ComponentActivity() {
                 delay(100)
             }
         }
+    }
+
+    private companion object {
+        const val ASSISTANT_ACCESS_PREFS = "lifeos-assistant-access"
+        const val NOTIFICATION_ACCESS_REQUESTED = "notification-access-requested"
     }
 }

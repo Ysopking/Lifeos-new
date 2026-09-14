@@ -9,18 +9,34 @@ manifest_path = Path("app/src/main/AndroidManifest.xml")
 root = ET.parse(manifest_path).getroot()
 android = "{http://schemas.android.com/apk/res/android}"
 
-permissions = {
-    node.attrib.get(android + "name", "")
+permission_nodes = {
+    node.attrib.get(android + "name", ""): node
     for node in root.findall("uses-permission")
 }
+permissions = set(permission_nodes)
+
 for forbidden in {
-    "android.permission.READ_EXTERNAL_STORAGE",
     "android.permission.WRITE_EXTERNAL_STORAGE",
-    "android.permission.MANAGE_EXTERNAL_STORAGE",
     "android.permission.QUERY_ALL_PACKAGES",
 }:
     if forbidden in permissions:
         raise SystemExit(f"forbidden-private-debug-permission:{forbidden}")
+
+legacy_storage = permission_nodes.get("android.permission.READ_EXTERNAL_STORAGE")
+if legacy_storage is not None:
+    if legacy_storage.attrib.get(android + "maxSdkVersion") != "32":
+        raise SystemExit("read-external-storage-must-be-max-sdk-32")
+
+broad_storage = "android.permission.MANAGE_EXTERNAL_STORAGE" in permissions
+if broad_storage:
+    required = [
+        Path("app/src/main/java/app/lifeos/next/AndroidSharedFilesInitialDataSource.kt"),
+        Path("app/src/main/java/app/lifeos/next/ChatMainActivity.kt"),
+        Path("app/src/main/java/app/lifeos/next/LifeOsApplication.kt"),
+    ]
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise SystemExit("broad-storage-without-owner-contract:" + ",".join(missing))
 
 application = root.find("application")
 if application is None:
@@ -66,6 +82,21 @@ PY
 if grep -Eq 'assembleRelease|bundleRelease|signingConfig' .github/scripts/ci-v17-gold.sh .github/workflows/v17-gold.yml; then
   echo "release-path-present-in-private-gold-gate" >&2
   exit 1
+fi
+
+if grep -Fq 'android.permission.MANAGE_EXTERNAL_STORAGE' app/src/main/AndroidManifest.xml; then
+  grep -Fq 'Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION' app/src/main/java/app/lifeos/next/ChatMainActivity.kt || {
+    echo "broad-storage-without-owner-system-confirmation" >&2
+    exit 1
+  }
+  grep -Fq 'Environment.isExternalStorageManager()' app/src/main/java/app/lifeos/next/AndroidSharedFilesInitialDataSource.kt || {
+    echo "broad-storage-without-runtime-authorization-check" >&2
+    exit 1
+  }
+  grep -Fq 'AndroidSharedFilesInitialDataSource(this)' app/src/main/java/app/lifeos/next/LifeOsApplication.kt || {
+    echo "broad-storage-without-productive-initial-data-source" >&2
+    exit 1
+  }
 fi
 
 if grep -Fq 'android.permission.INTERNET' app/src/main/AndroidManifest.xml; then

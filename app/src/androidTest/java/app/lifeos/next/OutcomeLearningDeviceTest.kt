@@ -64,12 +64,24 @@ class OutcomeLearningDeviceTest {
 
     @Test
     fun recoverOutcomeLearningAdaptationAfterColdStart() = runBlocking {
+        val processStartup = withTimeout(30_000) {
+            app.startupState.first { state ->
+                state.phase == LifeOsProcessStartupPhase.READY ||
+                    state.phase == LifeOsProcessStartupPhase.FAILED
+            }
+        }
+        if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
+            error("Process startup failed during V6 recovery: ${processStartup.failure ?: "unknown"}")
+        }
         val boot = withTimeout(30_000) {
             app.kernel.bootstrapState.first { state ->
                 state.status == KernelBootstrapStatus.READY ||
                     state.status == KernelBootstrapStatus.DEGRADED ||
                     state.status == KernelBootstrapStatus.FAILED
             }
+        }
+        if (boot.status == KernelBootstrapStatus.FAILED) {
+            error("Kernel boot failed during V6 recovery: ${boot.failureMessage ?: "unknown"}")
         }
         assertTrue("Kernel must boot with the persisted V6 learning ledger", boot.ready)
         assertTrue("V6 recovery marker must survive process restart", marker.isFile)
