@@ -35,7 +35,6 @@ class CausalCognitiveRuntime(
         mutableState.update { it.copy(status = RuntimeStatus.STARTING) }
         val next = scope.launch {
             try {
-                // Recovery is part of STARTING: no new photon may be processed before durable evidence is validated.
                 moduleEvidence.restore()
                 mutableState.update { it.copy(status = RuntimeStatus.RUNNING) }
                 for (photon in queue) processPhoton(photon)
@@ -79,8 +78,16 @@ class CausalCognitiveRuntime(
         val result = try { engine.process(photon, moduleRegistry.activeModules()) }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
-            mutableState.update { previous -> previous.copy(failed = previous.failed + 1, lastPhotonId = photon.id,
-                lastFailure = RuntimeFailure(RuntimeFailureCategory.UNKNOWN, "causal-cognition", error.message ?: error::class.simpleName ?: "Causal cognition failure", photon.id)) }
+            mutableState.update { previous -> previous.copy(
+                failed = previous.failed + 1,
+                lastPhotonId = photon.id,
+                lastFailure = RuntimeFailure(
+                    category = RuntimeFailureCategory.UNKNOWN,
+                    source = "causal-cognition",
+                    message = error.message ?: error::class.simpleName ?: "Causal cognition failure",
+                    photonId = photon.id,
+                ),
+            ) }
             return
         }
         result.ledgerEntry.processingRecords.forEach { moduleEvidence.recordProcessing(it) }
@@ -88,7 +95,14 @@ class CausalCognitiveRuntime(
         result.emittedPhotons.forEach { emitted ->
             try { photonSink.accept(emitted, result.traceId) }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { sinkFailures += RuntimeFailure(RuntimeFailureCategory.STORAGE, "causal-photon-sink", error.message ?: error::class.simpleName ?: "Causal photon sink failure", emitted.id) }
+            catch (error: Exception) {
+                sinkFailures += RuntimeFailure(
+                    category = RuntimeFailureCategory.STORAGE,
+                    source = "causal-photon-sink",
+                    message = error.message ?: error::class.simpleName ?: "Causal photon sink failure",
+                    photonId = emitted.id,
+                )
+            }
         }
         val failures = result.failures + sinkFailures
         mutableState.update { previous -> previous.copy(
