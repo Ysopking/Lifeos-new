@@ -34,6 +34,14 @@ data class ArtifactGenerationRequest(
         require(semanticInputRevisions.map { it.assetId }.distinct().size == semanticInputRevisions.size) {
             "Artifact generation cannot bind multiple revisions of one InformationAsset"
         }
+        val contributionParents = contributions.flatMap { it.provenance.parentIds }.toSet()
+        val unrepresentedSemanticInputs = semanticInputRevisions
+            .map { it.photonId }
+            .toSet() - contributionParents
+        require(unrepresentedSemanticInputs.isEmpty()) {
+            "Artifact generation semantic inputs must already be represented by contribution provenance: " +
+                unrepresentedSemanticInputs.map { it.value }.sorted().joinToString(",")
+        }
     }
 }
 
