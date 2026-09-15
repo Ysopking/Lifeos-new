@@ -16,9 +16,16 @@ import app.lifeos.core.runtime.buildstudio.BuildStudioCandidate
 import app.lifeos.core.runtime.buildstudio.BuildVerificationEvidence
 import app.lifeos.core.runtime.buildstudio.BuildVerificationPolicy
 import app.lifeos.core.runtime.buildstudio.CandidateArtifact
+import app.lifeos.core.runtime.buildstudio.CandidateArtifactDigestProvider
+import app.lifeos.core.runtime.buildstudio.CandidateRuntimeSeal
+import app.lifeos.core.runtime.buildstudio.CandidateSealVerifier
+import app.lifeos.core.runtime.buildstudio.RuntimeCandidatePolicy
+import app.lifeos.core.runtime.buildstudio.RuntimeCandidateVerificationResult
+import app.lifeos.core.runtime.buildstudio.RuntimeCandidateVerifier
 import app.lifeos.core.runtime.buildstudio.SourcePatchOperation
 import app.lifeos.core.runtime.buildstudio.SourcePatchOperationType
 import app.lifeos.core.runtime.buildstudio.SourcePatchPlan
+import app.lifeos.core.runtime.buildstudio.VerifiedRuntimeCandidate
 import app.lifeos.core.runtime.resource.ResourceBudgetAccount
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
@@ -32,6 +39,7 @@ import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class HotSwapRoutingRecoveryTest {
@@ -170,13 +178,13 @@ class HotSwapRoutingRecoveryTest {
         tools.register(verifiedRecord(OLD_TOOL, "source-old"))
         lifecycle.admitToTrial(OLD_TOOL)
         recordCleanTrials(lifecycle, OLD_TOOL)
-        val oldEvidence = lifecycle.preparePromotionEvidence(OLD_TOOL, candidateArtifact())
+        val oldEvidence = lifecycle.preparePromotionEvidence(OLD_TOOL, verifiedRuntimeCandidate(candidateArtifact()))
         lifecycle.promote(OLD_TOOL, oldEvidence)
 
         tools.register(verifiedRecord(NEW_TOOL, "source-new"))
         lifecycle.admitToTrial(NEW_TOOL)
         recordCleanTrials(lifecycle, NEW_TOOL)
-        val newEvidence = lifecycle.preparePromotionEvidence(NEW_TOOL, candidateArtifact())
+        val newEvidence = lifecycle.preparePromotionEvidence(NEW_TOOL, verifiedRuntimeCandidate(candidateArtifact()))
         lifecycle.promote(NEW_TOOL, newEvidence, registerCapability = false)
 
         assertTrue(capabilities.providersFor(CAPABILITY, includeUnavailable = true).none { it.providerId == NEW_TOOL })
@@ -212,6 +220,34 @@ class HotSwapRoutingRecoveryTest {
         state = GeneratedToolState.VERIFIED,
         verificationConfidence = 0.95,
     )
+
+    private suspend fun verifiedRuntimeCandidate(artifact: CandidateArtifact): VerifiedRuntimeCandidate {
+        val seal = CandidateRuntimeSeal(
+            candidateArtifactId = artifact.id,
+            candidateId = artifact.candidate.id,
+            sourceCommit = artifact.sourceCommit,
+            branchHeadCommit = artifact.branchHeadCommit,
+            verificationId = artifact.verification.id,
+            provenanceId = artifact.provenance.id,
+            debugApkSha256 = artifact.debugApkSha256.lowercase(),
+            signerId = "buildstudio-host:v10-test",
+            signature = "trusted-signature",
+        )
+        val result = RuntimeCandidateVerifier(
+            sealVerifier = CandidateSealVerifier { it.signature == "trusted-signature" },
+            digestProvider = CandidateArtifactDigestProvider { ref ->
+                artifact.debugApkSha256.takeIf { ref == artifact.debugApkRef }
+            },
+        ).verify(
+            artifact = artifact,
+            seal = seal,
+            policy = RuntimeCandidatePolicy(
+                allowedCapabilities = artifact.provenance.capabilityChanges.map { it.capabilityId }.toSet(),
+                allowedAddedPermissions = artifact.provenance.permissionDelta.added,
+            ),
+        )
+        return assertIs<RuntimeCandidateVerificationResult.Verified>(result).candidate
+    }
 
     private fun candidateArtifact(): CandidateArtifact {
         val requirement = CapabilityRequirement(

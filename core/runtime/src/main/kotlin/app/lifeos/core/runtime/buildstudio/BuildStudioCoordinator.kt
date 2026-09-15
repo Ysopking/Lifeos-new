@@ -65,7 +65,6 @@ data class BuildStudioCandidate(
         verificationId,
     )
 
-    /** J01 creates a candidate only. Promotion/activation belongs to later gated blocks. */
     val activationAllowed: Boolean = false
 }
 
@@ -73,6 +72,8 @@ sealed interface BuildStudioResult {
     data class CandidateReady(
         val candidate: BuildStudioCandidate,
         val verification: BuildVerification,
+        val design: BuildDesignSpec,
+        val patch: SourcePatchPlan,
     ) : BuildStudioResult {
         init {
             require(verification.status == BuildVerificationStatus.VERIFIED)
@@ -80,6 +81,9 @@ sealed interface BuildStudioResult {
             require(candidate.branchName == verification.evidence.branchName)
             require(candidate.branchHeadCommit.equals(verification.evidence.branchHeadCommit, ignoreCase = true))
             require(candidate.patchPlanId == verification.evidence.patchPlanId)
+            require(candidate.designSpecId == design.id)
+            require(candidate.patchPlanId == patch.id)
+            require(patch.designSpecId == design.id)
             require(!candidate.activationAllowed)
         }
     }
@@ -103,11 +107,6 @@ sealed interface BuildStudioResult {
     }
 }
 
-/**
- * J01 candidate pipeline. The coordinator owns ordering and validation but has no GitHub, filesystem
- * or shell implementation. Every mutation is mediated by an isolated workspace created from the
- * exact source commit, and successful output is non-activating candidate evidence only.
- */
 class BuildStudioCoordinator(
     private val designer: BuildDesignPlanner,
     private val patchPlanner: SourcePatchPlanner,
@@ -147,11 +146,7 @@ class BuildStudioCoordinator(
                 }
             }
             val allCommandsSuccessful = results.all { it.success }
-            val artifact = if (allCommandsSuccessful) {
-                artifactCollector.collectDebugApk(applied.branch)
-            } else {
-                null
-            }
+            val artifact = if (allCommandsSuccessful) artifactCollector.collectDebugApk(applied.branch) else null
             val evidence = BuildVerificationEvidence(
                 branchName = applied.branch.name,
                 branchHeadCommit = applied.branch.headCommit,
@@ -178,6 +173,8 @@ class BuildStudioCoordinator(
                     verificationId = verification.id,
                 ),
                 verification = verification,
+                design = design,
+                patch = patch,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -219,15 +216,11 @@ class BuildStudioCoordinator(
     ): List<String>? {
         val failures = mutableListOf<String>()
         if (applied.branch.name != initial.name) failures += "patch-moved-to-different-branch"
-        if (applied.branch.baseCommit.lowercase() != initial.baseCommit.lowercase()) {
-            failures += "patch-changed-base-commit"
-        }
+        if (applied.branch.baseCommit.lowercase() != initial.baseCommit.lowercase()) failures += "patch-changed-base-commit"
         if (applied.patchPlanId != patch.id) failures += "workspace-changed-patch-plan-id"
         val expectedPaths = patch.operations.mapTo(sortedSetOf()) { it.path }
         if (applied.appliedPaths != expectedPaths) failures += "workspace-applied-path-set-mismatch"
-        if (applied.branch.headCommit.lowercase() == initial.headCommit.lowercase()) {
-            failures += "patch-did-not-create-new-head"
-        }
+        if (applied.branch.headCommit.lowercase() == initial.headCommit.lowercase()) failures += "patch-did-not-create-new-head"
         return failures.distinct().sorted().takeIf { it.isNotEmpty() }
     }
 
