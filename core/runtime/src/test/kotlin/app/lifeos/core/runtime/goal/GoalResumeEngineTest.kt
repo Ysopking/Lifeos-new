@@ -8,6 +8,9 @@ import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.language.ReferenceExpression
 import app.lifeos.core.language.ReferenceKind
 import app.lifeos.core.language.ResolvedReference
+import app.lifeos.core.language.SemanticLinkType
+import app.lifeos.core.language.SemanticModality
+import app.lifeos.core.language.SemanticPolarity
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
@@ -54,12 +57,79 @@ class GoalResumeEngineTest {
             originalUnderstanding.goal.entities.map { it.type to it.normalizedValue }.toSet(),
             result.frame.entities.map { it.type to it.normalizedValue }.toSet(),
         )
+        assertEquals(
+            originalUnderstanding.goal.semanticGraph.fingerprint,
+            result.frame.semanticGraph.fingerprint,
+        )
         assertEquals(target.content, result.resumedPhoton.content)
         assertEquals(setOf(target.id, requestGoalId, requestSource.id), result.resumedPhoton.provenance.parentIds)
         assertTrue("goal-resumed" in result.resumedPhoton.tags)
         assertTrue(result.resumedPhoton.relations.any {
             it.target == target.id && it.type == RelationType.DERIVED_FROM
         })
+    }
+
+    @Test
+    fun `structured v3 semantics survive resume without reinterpreting source`() {
+        val source = source(
+            "source-structured",
+            "Suche die Datei, wenn sie größer als 10 MB ist, weil der Speicher voll ist.",
+        )
+        val originalUnderstanding = LanguageUnderstandingEngine().understand(source.content)
+        val target = GoalPhotonFactory().create(
+            result = originalUnderstanding,
+            sourcePhotonId = source.id,
+            createdAt = source.provenance.createdAt,
+        ).photon
+        val requestSource = source("continue-structured", "Weiter", now)
+
+        val result = assertIs<GoalResumeResult.Resumed>(
+            engine.resume(
+                request = continueGoal(target.id),
+                requestSource = requestSource,
+                requestGoalPhotonId = PhotonId("continue-goal-structured"),
+                photons = listOf(source, target, requestSource),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(originalUnderstanding.goal.semanticGraph.fingerprint, result.frame.semanticGraph.fingerprint)
+        assertTrue(result.frame.semanticGraph.links.any { it.type == SemanticLinkType.CONDITION })
+        assertTrue(result.frame.semanticGraph.links.any { it.type == SemanticLinkType.CAUSE })
+        assertTrue(
+            result.frame.semanticGraph.clauses
+                .flatMap { it.quantities }
+                .any { it.value == "10" && it.unit == "mb" }
+        )
+    }
+
+    @Test
+    fun `legacy v2 goal remains resumable after v3 rollout`() {
+        val source = source("source-legacy", "Was weißt du über Balkonbank?")
+        val current = goalPhoton(source)
+        val legacy = current.copy(
+            id = PhotonId("goal-legacy-v2"),
+            content = current.content
+                .lines()
+                .filterNot { it.startsWith("semantic.") }
+                .joinToString("\n")
+                .replaceFirst("goal/v3", "goal/v2"),
+        )
+        val requestSource = source("continue-legacy", "Weiter", now)
+
+        val result = assertIs<GoalResumeResult.Resumed>(
+            engine.resume(
+                request = continueGoal(legacy.id),
+                requestSource = requestSource,
+                requestGoalPhotonId = PhotonId("continue-goal-legacy"),
+                photons = listOf(source, legacy, requestSource),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(legacy.id, result.targetGoal.id)
+        assertTrue(result.frame.semanticGraph.clauses.isEmpty())
+        assertEquals(LanguageCode.DE, result.frame.semanticGraph.language)
     }
 
     @Test
