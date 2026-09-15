@@ -139,7 +139,12 @@ class LanguageUnderstandingEngineTest {
         val relation = assertNotNull(goalPhoton.photon.relations.singleOrNull())
         assertEquals(source, relation.target)
         assertEquals(RelationType.DERIVED_FROM, relation.type)
-        assertTrue(goalPhoton.photon.content.startsWith("goal/v2\nintent=SEARCH"))
+        assertTrue(goalPhoton.photon.content.startsWith("goal/v3\nintent=SEARCH"))
+        assertTrue(
+            goalPhoton.photon.content.contains(
+                "semantic.fingerprint=${result.goal.semanticGraph.fingerprint}"
+            )
+        )
         assertTrue(goalPhoton.photon.content.contains("field.iterations="))
     }
 

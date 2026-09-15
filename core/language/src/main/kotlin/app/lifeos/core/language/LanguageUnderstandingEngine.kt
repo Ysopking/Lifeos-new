@@ -19,6 +19,7 @@ class LanguageUnderstandingEngine(
     private val referenceResolver: ReferenceResolver = ReferenceResolver(),
     private val linguisticFieldEngine: LinguisticFieldEngine = LinguisticFieldEngine(),
     private val fieldAdapter: FieldLanguageAdapter = FieldLanguageAdapter(),
+    private val semanticGraphExtractor: LanguageSemanticGraphExtractor = LanguageSemanticGraphExtractor(),
 ) {
     fun understand(text: String): LanguageUnderstandingResult =
         understand(text, LanguageContext(), retainContext = false)
@@ -38,6 +39,7 @@ class LanguageUnderstandingEngine(
         val topIntent = evidence.first().intent
         val ruleEntities = entityExtractor.extract(utterance)
         val entities = fieldAdapter.mergeEntities(ruleEntities, fieldAdapter.entities(utterance, linguisticField))
+        val semanticGraph = semanticGraphExtractor.extract(utterance, entities)
         val references = referenceExtractor.extract(utterance, topIntent).map { referenceResolver.resolve(it, context) }
         val ambiguities = buildAmbiguities(evidence, references, topIntent, linguisticField)
         val constraints = buildConstraints(utterance, entities, references, linguisticField)
@@ -51,6 +53,7 @@ class LanguageUnderstandingEngine(
             ambiguities = ambiguities,
             confidence = confidence,
             language = utterance.language,
+            semanticGraph = semanticGraph,
         )
         return LanguageUnderstandingResult(
             utterance = utterance,
@@ -207,11 +210,31 @@ class GoalPhotonFactory {
     }
 
     private fun serialize(frame: GoalFrame, field: LinguisticFieldResult?): String = buildString {
-        append("goal/v2\n")
+        append("goal/v3\n")
         append("intent=").append(frame.intent.name).append('\n')
         append("language=").append(frame.language.name).append('\n')
         append("confidence=").append(frame.confidence).append('\n')
         append("objective=").append(escape(frame.objective)).append('\n')
+        append("semantic.fingerprint=").append(frame.semanticGraph.fingerprint).append('\n')
+        frame.semanticGraph.clauses.forEach { clause ->
+            append("semantic.clause.").append(clause.id).append('=')
+                .append(clause.polarity.name).append('|')
+                .append(clause.modality.name).append('|')
+                .append(escape(clause.normalized)).append('\n')
+            clause.quantities.forEachIndexed { index, quantity ->
+                append("semantic.quantity.").append(clause.id).append('.').append(index).append('=')
+                    .append(escape(quantity.comparator.orEmpty())).append('|')
+                    .append(escape(quantity.value)).append('|')
+                    .append(escape(quantity.unit.orEmpty())).append('\n')
+            }
+        }
+        frame.semanticGraph.links.forEachIndexed { index, link ->
+            append("semantic.link.").append(index).append('=')
+                .append(link.fromClauseId).append('|')
+                .append(link.toClauseId).append('|')
+                .append(link.type.name).append('|')
+                .append(escape(link.cue)).append('\n')
+        }
         field?.let {
             append("field.converged=").append(it.converged).append('\n')
             append("field.iterations=").append(it.iterations).append('\n')

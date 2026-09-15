@@ -6,10 +6,17 @@ import app.lifeos.core.language.GoalConstraint
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.LanguageSemanticGraph
 import app.lifeos.core.language.ReferenceExpression
 import app.lifeos.core.language.ReferenceKind
 import app.lifeos.core.language.ResolvedReference
+import app.lifeos.core.language.SemanticClause
 import app.lifeos.core.language.SemanticEntity
+import app.lifeos.core.language.SemanticLink
+import app.lifeos.core.language.SemanticLinkType
+import app.lifeos.core.language.SemanticModality
+import app.lifeos.core.language.SemanticPolarity
+import app.lifeos.core.language.SemanticQuantity
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
@@ -49,8 +56,9 @@ sealed interface GoalResumeResult {
 /**
  * J14 persistent goal continuation. The engine never re-interprets the old user utterance against
  * today's context. Instead it follows the already resolved CONTINUE reference, validates the exact
- * stored goal, decodes the immutable goal/v2 representation and emits a new provenance-bound goal
- * photon. Capability routing and concrete action execution remain outside this class.
+ * stored goal, decodes the immutable persisted goal representation and emits a new provenance-bound
+ * goal photon. Both legacy goal/v2 and structured goal/v3 are accepted; unknown versions fail closed.
+ * Capability routing and concrete action execution remain outside this class.
  */
 class GoalResumeEngine {
     fun resume(
@@ -187,11 +195,12 @@ class GoalResumeEngine {
     }
 }
 
-/** Strict decoder for the persisted goal/v2 contract emitted by GoalPhotonFactory. */
+/** Strict decoder for the persisted goal/v2 and goal/v3 contracts emitted by GoalPhotonFactory. */
 private object PersistedGoalFrameDecoder {
     fun decode(photon: Photon): GoalFrame? = runCatching {
         val lines = photon.content.lines()
-        require(lines.firstOrNull() == "goal/v2")
+        val version = lines.firstOrNull()
+        require(version == GOAL_V2 || version == GOAL_V3) { "Unsupported persisted goal version" }
         val intent = IntentType.valueOf(required(lines, "intent"))
         val language = LanguageCode.valueOf(required(lines, "language"))
         val confidence = required(lines, "confidence").toDouble().also { require(it in 0.0..1.0) }
@@ -205,7 +214,7 @@ private object PersistedGoalFrameDecoder {
                 GoalConstraint(
                     key = unescape(assignment.first),
                     value = unescape(payload.first),
-                    confidence = payload.second.toDouble(),
+                    confidence = payload.second.toDouble().also { require(it in 0.0..1.0) },
                     source = "persisted-goal:${photon.id.value}",
                 )
             }
@@ -259,6 +268,12 @@ private object PersistedGoalFrameDecoder {
                 )
             }
 
+        val semanticGraph = if (version == GOAL_V3) {
+            decodeSemanticGraph(lines, language)
+        } else {
+            LanguageSemanticGraph.empty(language)
+        }
+
         GoalFrame(
             intent = intent,
             objective = objective,
@@ -268,8 +283,124 @@ private object PersistedGoalFrameDecoder {
             ambiguities = ambiguities,
             confidence = confidence,
             language = language,
+            semanticGraph = semanticGraph,
         )
     }.getOrNull()
+
+    private fun decodeSemanticGraph(
+        lines: List<String>,
+        language: LanguageCode,
+    ): LanguageSemanticGraph {
+        val fingerprint = unescape(required(lines, "semantic.fingerprint")).also { require(it.isNotBlank()) }
+        val rawClauses = lines
+            .filter { it.startsWith("semantic.clause.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("semantic.clause."), '='))
+                val id = assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 3) { "Malformed semantic clause" }
+                PersistedClause(
+                    id = id,
+                    polarity = SemanticPolarity.valueOf(unescape(fields[0])),
+                    modality = SemanticModality.valueOf(unescape(fields[1])),
+                    normalized = unescape(fields[2]).also { require(it.isNotBlank()) },
+                )
+            }
+            .sortedBy { it.id }
+        require(rawClauses.isNotEmpty()) { "Structured goal requires semantic clauses" }
+        require(rawClauses.map { it.id }.distinct().size == rawClauses.size) {
+            "Duplicate semantic clause id"
+        }
+
+        var tokenCursor = 0
+        val baseClauses = rawClauses.map { persisted ->
+            val tokenCount = persisted.normalized
+                .split(Regex("\\s+"))
+                .count { it.isNotBlank() }
+                .coerceAtLeast(1)
+            val start = tokenCursor
+            tokenCursor += tokenCount
+            SemanticClause(
+                id = persisted.id,
+                text = persisted.normalized,
+                normalized = persisted.normalized,
+                tokenStart = start,
+                tokenEndExclusive = tokenCursor,
+                polarity = persisted.polarity,
+                modality = persisted.modality,
+                entities = emptyList(),
+                quantities = emptyList(),
+                confidence = 1.0,
+            )
+        }
+        val clausesById = baseClauses.associateBy { it.id }
+
+        val quantitiesByClause = lines
+            .filter { it.startsWith("semantic.quantity.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("semantic.quantity."), '='))
+                val keyParts = assignment.first.split('.')
+                require(keyParts.size == 2)
+                val clauseId = keyParts[0].toInt()
+                keyParts[1].toInt().also { require(it >= 0) }
+                val clause = requireNotNull(clausesById[clauseId]) { "Quantity references unknown clause" }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 3) { "Malformed semantic quantity" }
+                val comparator = unescape(fields[0]).ifBlank { null }
+                val value = unescape(fields[1]).also { require(it.isNotBlank()) }
+                val unit = unescape(fields[2]).ifBlank { null }
+                val localTokens = clause.normalized.split(Regex("\\s+"))
+                val localIndex = localTokens.indexOfFirst { normalizeForMatch(it) == normalizeForMatch(value) }
+                    .takeIf { it >= 0 }
+                    ?: 0
+                val tokenStart = clause.tokenStart + localIndex
+                val tokenEnd = tokenStart + if (unit == null) 1 else 2
+                clauseId to SemanticQuantity(
+                    value = value,
+                    unit = unit,
+                    comparator = comparator,
+                    tokenStart = tokenStart,
+                    tokenEndExclusive = tokenEnd,
+                    confidence = if (unit == null) 0.92 else 0.97,
+                )
+            }
+            .groupBy({ it.first }, { it.second })
+
+        val clauses = baseClauses.map { clause ->
+            clause.copy(quantities = quantitiesByClause[clause.id].orEmpty())
+        }
+
+        val links = lines
+            .filter { it.startsWith("semantic.link.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("semantic.link."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 4) { "Malformed semantic link" }
+                val from = unescape(fields[0]).toInt()
+                val to = unescape(fields[1]).toInt()
+                require(from in clausesById && to in clausesById)
+                val type = SemanticLinkType.valueOf(unescape(fields[2]))
+                val cue = unescape(fields[3]).also { require(it.isNotBlank()) }
+                SemanticLink(
+                    fromClauseId = from,
+                    toClauseId = to,
+                    type = type,
+                    cue = cue,
+                    confidence = if (type == SemanticLinkType.CONDITION) 0.94 else 0.92,
+                )
+            }
+        require(links.distinctBy { Triple(it.fromClauseId, it.toClauseId, it.type) }.size == links.size) {
+            "Duplicate semantic links"
+        }
+
+        return LanguageSemanticGraph(
+            language = language,
+            clauses = clauses,
+            links = links,
+            fingerprint = fingerprint,
+        )
+    }
 
     private fun required(lines: List<String>, key: String): String {
         val matches = lines.filter { it.startsWith("$key=") }
@@ -291,6 +422,24 @@ private object PersistedGoalFrameDecoder {
         return null
     }
 
+    private fun splitAllUnescaped(value: String, delimiter: Char): List<String> {
+        val result = mutableListOf<String>()
+        var escaped = false
+        var start = 0
+        value.forEachIndexed { index, char ->
+            if (escaped) {
+                escaped = false
+            } else if (char == '\\') {
+                escaped = true
+            } else if (char == delimiter) {
+                result += value.substring(start, index)
+                start = index + 1
+            }
+        }
+        result += value.substring(start)
+        return result
+    }
+
     private fun unescape(value: String): String = buildString(value.length) {
         var index = 0
         while (index < value.length) {
@@ -305,4 +454,19 @@ private object PersistedGoalFrameDecoder {
             index += 2
         }
     }
+
+    private fun normalizeForMatch(value: String): String = value
+        .lowercase()
+        .replace("ß", "ss")
+        .trim()
+
+    private data class PersistedClause(
+        val id: Int,
+        val polarity: SemanticPolarity,
+        val modality: SemanticModality,
+        val normalized: String,
+    )
+
+    private const val GOAL_V2 = "goal/v2"
+    private const val GOAL_V3 = "goal/v3"
 }
