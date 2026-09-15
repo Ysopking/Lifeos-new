@@ -2,9 +2,7 @@ package app.lifeos.core.model
 
 /**
  * Canonical, deterministic coupling contract between cognition-producing modules.
- *
- * A coupling never invents a second module identity. Both endpoints are the
- * canonical [ModuleIdentity] instances already used by processing records.
+ * A coupling is evidence/identity; mutable world-state strength belongs elsewhere.
  */
 data class ModuleCoupling(
     val source: ModuleIdentity,
@@ -25,6 +23,9 @@ data class ModuleCoupling(
             "Target module must declare the coupled capability"
         }
     }
+
+    val canonicalInputKey: String
+        get() = "${inputPhotonId.value}:$inputRevision"
 
     val stableFingerprint: String
         get() = StableCognitiveIds.fingerprint(
@@ -52,4 +53,14 @@ data class ModuleCouplingRecord(
         require(processing.inputPhotonId == coupling.inputPhotonId) { "Processing input must match coupling input" }
         require(processing.inputRevision == coupling.inputRevision) { "Processing revision must match coupling revision" }
     }
+}
+
+/** Reserved vocabulary for typed coupling evolution; not yet part of persisted coupling fingerprints. */
+enum class ModuleCouplingKind {
+    SEMANTIC,
+    CAUSAL,
+    TEMPORAL,
+    DEPENDENCY,
+    GOAL,
+    RESOURCE,
 }
