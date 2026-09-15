@@ -4,6 +4,14 @@ enum class CognitiveDependencyKind { DERIVED_FROM, DEPENDS_ON, SUPERSEDES, INVAL
 enum class ProjectionValidity { VALID, STALE, RECOMPUTING, INVALID }
 enum class GraphActivityClass { HOT, WARM, COLD }
 
+data class PhotonRevisionRef(
+    val photonId: PhotonId,
+    val revision: Long,
+) {
+    init { require(revision > 0) }
+    val stableKey: String get() = "${photonId.value}@$revision"
+}
+
 data class TemporalValidity(
     val validFromRevision: Long,
     val validUntilRevision: Long? = null,
@@ -24,12 +32,32 @@ data class CognitiveDependency(
     val targetRevision: Long,
     val kind: CognitiveDependencyKind,
     val traceId: CausalTraceId,
+    val couplingMicros: Long = 1_000_000L,
+    val polarityMicros: Long = 1_000_000L,
+    val decayMicros: Long = 1_000_000L,
 ) {
-    init { require(sourceRevision > 0 && targetRevision > 0) }
+    init {
+        require(sourceRevision > 0 && targetRevision > 0)
+        require(couplingMicros in 0L..1_000_000L)
+        require(polarityMicros in -1_000_000L..1_000_000L)
+        require(decayMicros in 0L..1_000_000L)
+    }
+    val sourceRef: PhotonRevisionRef get() = PhotonRevisionRef(sourcePhotonId, sourceRevision)
+    val targetRef: PhotonRevisionRef get() = PhotonRevisionRef(targetPhotonId, targetRevision)
     val stableFingerprint: String get() = StableCognitiveIds.fingerprint(
         sourcePhotonId.value, sourceRevision.toString(), targetPhotonId.value,
         targetRevision.toString(), kind.name, traceId.value,
+        couplingMicros.toString(), polarityMicros.toString(), decayMicros.toString(),
     )
+}
+
+data class PropagatedCognitiveDelta(
+    val target: PhotonRevisionRef,
+    val magnitudeMicros: Long,
+    val reason: CognitiveDependencyKind,
+    val traceId: CausalTraceId,
+) {
+    init { require(magnitudeMicros >= 0L) }
 }
 
 data class ConflictClaim(
@@ -42,6 +70,7 @@ data class ConflictClaim(
         require(revision > 0)
         require(evidencePhotonIds.distinct().size == evidencePhotonIds.size)
     }
+    val revisionRef: PhotonRevisionRef get() = PhotonRevisionRef(photonId, revision)
 }
 
 data class ConflictSet(
