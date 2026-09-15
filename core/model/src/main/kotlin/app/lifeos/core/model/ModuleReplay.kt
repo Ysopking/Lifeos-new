@@ -27,4 +27,8 @@ data class ModuleReplayEnvelope(
             replayed.context == processing.context &&
             replayed.outputPhotonIds == expectedOutputPhotonIds &&
             replayed.outputStateHash == expectedOutputStateHash
+
+    fun requireMatches(replayed: ModuleProcessingRecord) {
+        require(matches(replayed)) { "Module replay diverged from recorded processing" }
+    }
 }

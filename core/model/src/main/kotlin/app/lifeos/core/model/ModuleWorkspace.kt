@@ -17,6 +17,17 @@ data class ModuleWorkspaceEntry(
             "Latest processing and trace must be present together"
         }
     }
+
+    val stableFingerprint: String
+        get() = StableCognitiveIds.fingerprint(
+            module.stableFingerprint,
+            latestProcessingId?.value.orEmpty(),
+            latestTraceId?.value.orEmpty(),
+            utility.observations.toString(),
+            utility.acceptedObservations.toString(),
+            utility.utilityMicrosTotal.toString(),
+            *outputPhotonIds.map { it.value }.sorted().toTypedArray(),
+        )
 }
 
 data class ModuleWorkspaceSnapshot(
@@ -30,4 +41,10 @@ data class ModuleWorkspaceSnapshot(
 
     val orderedEntries: List<ModuleWorkspaceEntry>
         get() = entries.sortedBy { it.module.stableFingerprint }
+
+    fun entryFor(module: ModuleIdentity): ModuleWorkspaceEntry? =
+        entries.firstOrNull { it.module.stableFingerprint == module.stableFingerprint }
+
+    val stableFingerprint: String
+        get() = StableCognitiveIds.fingerprint(*orderedEntries.map { it.stableFingerprint }.toTypedArray())
 }
