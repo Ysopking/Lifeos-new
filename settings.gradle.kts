@@ -15,6 +15,8 @@ include(
     ":core:image",
     ":core:image-native",
     ":core:language",
+    ":core:life",
+    ":core:creative",
     ":core:scene",
     ":host:buildstudio",
 )

@@ -14,6 +14,11 @@ enum class CognitiveEventKind {
     RECOVERY,
     WORLD_DELTA,
     TRANSACTION,
+    SOURCE_DELTA,
+    LIFE_STATE_CHANGE,
+    ATTENTION_CHANGE,
+    PLAN_CHANGE,
+    CAPABILITY_CHANGE,
 }
 
 /** Immutable event envelope. Payload remains canonical bytes/text owned by the event-specific codec. */
