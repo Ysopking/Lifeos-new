@@ -41,4 +41,13 @@ class InformationAssetVaultCodecTest {
             InformationAssetVaultCodec.decrypt(encrypted, otherKey)
         }
     }
+
+    @Test
+    fun `oversized plaintext is rejected before encryption`() {
+        val oversized = ByteArray(InformationAssetVaultCodec.MAX_PLAINTEXT_BYTES + 1)
+
+        assertFailsWith<IllegalArgumentException> {
+            InformationAssetVaultCodec.encrypt(oversized, key)
+        }
+    }
 }
