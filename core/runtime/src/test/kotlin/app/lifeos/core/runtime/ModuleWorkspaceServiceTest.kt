@@ -23,7 +23,7 @@ class ModuleWorkspaceServiceTest {
         val module = ModuleIdentity("workspace-module", "1", "impl", setOf("workspace"))
         val trace = CausalTraceId("workspace-trace")
         val branch = PhotonBranchId("workspace-branch")
-        val state = CognitiveStateHash("workspace-state")
+        val state = StableCognitiveIds.stateHash("workspace-state")
         return ModuleProcessingRecord(
             ModuleProcessingId("workspace-processing"), trace, branch, module, PhotonId("workspace-input"), 1,
             DeterminismContext(trace, LogicalTick(1), state, state, "runtime", "policy", 1, state),
