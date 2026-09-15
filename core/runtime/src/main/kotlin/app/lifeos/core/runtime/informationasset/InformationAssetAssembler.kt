@@ -33,7 +33,7 @@ class InformationAssetAssembler {
         validate(input)
 
         val sourceReferences = input.sourcePhotons
-            .map(PhotonRevisionReference::from)
+            .map { PhotonRevisionReference.from(it) }
             .sortedWith(compareBy<PhotonRevisionReference> { it.photonId.value }.thenBy { it.revision })
         val evidence = input.evidenceBindings.sortedBy { it.id.value }
         val claims = input.claims.sortedBy { it.id.value }
@@ -93,9 +93,9 @@ class InformationAssetAssembler {
     }
 
     private fun validate(input: InformationAssetAssemblyRequest) {
-        val exactSources = input.sourcePhotons.map(PhotonRevisionReference::from)
-        require(exactSources.distinct().size == exactSources.size) {
-            "Information asset source Photon revisions must be unique"
+        val exactSources = input.sourcePhotons.map { PhotonRevisionReference.from(it) }
+        require(exactSources.map { it.photonId to it.revision }.distinct().size == exactSources.size) {
+            "Information asset cannot contain two states for the same Photon id and revision"
         }
         val exactSourceFingerprints = exactSources.associateBy { it.fingerprint() }
         input.evidenceBindings.forEach { binding ->
