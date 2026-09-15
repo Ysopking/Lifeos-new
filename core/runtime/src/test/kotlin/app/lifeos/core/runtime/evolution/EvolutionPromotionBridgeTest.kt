@@ -16,9 +16,16 @@ import app.lifeos.core.runtime.buildstudio.BuildStudioCandidate
 import app.lifeos.core.runtime.buildstudio.BuildVerificationEvidence
 import app.lifeos.core.runtime.buildstudio.BuildVerificationPolicy
 import app.lifeos.core.runtime.buildstudio.CandidateArtifact
+import app.lifeos.core.runtime.buildstudio.CandidateArtifactDigestProvider
+import app.lifeos.core.runtime.buildstudio.CandidateRuntimeSeal
+import app.lifeos.core.runtime.buildstudio.CandidateSealVerifier
+import app.lifeos.core.runtime.buildstudio.RuntimeCandidatePolicy
+import app.lifeos.core.runtime.buildstudio.RuntimeCandidateVerificationResult
+import app.lifeos.core.runtime.buildstudio.RuntimeCandidateVerifier
 import app.lifeos.core.runtime.buildstudio.SourcePatchOperation
 import app.lifeos.core.runtime.buildstudio.SourcePatchOperationType
 import app.lifeos.core.runtime.buildstudio.SourcePatchPlan
+import app.lifeos.core.runtime.buildstudio.VerifiedRuntimeCandidate
 import app.lifeos.core.runtime.capability.CapabilityContract
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
 import app.lifeos.core.runtime.capability.CapabilityGap
@@ -58,7 +65,7 @@ class EvolutionPromotionBridgeTest {
         assertEquals(EvolutionCanaryReadinessDecision.READY_FOR_PROMOTION_REVIEW, readiness.decision)
 
         val request = fixture.reviewRequest()
-        val review = fixture.bridge.prepareReview(fixture.bundle, fixture.artifact, request)
+        val review = fixture.bridge.prepareReview(fixture.bundle, fixture.runtimeCandidate, request)
 
         assertFalse(review.activationAllowed)
         assertEquals(readiness.id, review.readinessEvidenceId)
@@ -80,7 +87,7 @@ class EvolutionPromotionBridgeTest {
 
         val result = fixture.bridge.promote(
             evidence = fixture.bundle,
-            artifact = fixture.artifact,
+            candidate = fixture.runtimeCandidate,
             request = request,
             review = review,
         )
@@ -115,7 +122,7 @@ class EvolutionPromotionBridgeTest {
         assertTrue(readiness.reasons.any { it.startsWith("pending-outcomes:") })
 
         assertFailsWith<IllegalArgumentException> {
-            fixture.bridge.prepareReview(fixture.bundle, fixture.artifact, fixture.reviewRequest())
+            fixture.bridge.prepareReview(fixture.bundle, fixture.runtimeCandidate, fixture.reviewRequest())
         }
         assertNull(fixture.runtimeStore.promotionSeal(fixture.bundle.adoptionEvidence.id))
         assertEquals(GeneratedToolState.TRIAL, fixture.tools.get(TOOL_ID)?.state)
@@ -146,7 +153,7 @@ class EvolutionPromotionBridgeTest {
         assertEquals(GeneratedToolState.QUARANTINED, fixture.tools.get(TOOL_ID)?.state)
         assertNotNull(fixture.runtimeStore.killSwitch(fixture.bundle.adoptionEvidence.id))
         assertFailsWith<IllegalArgumentException> {
-            fixture.bridge.prepareReview(fixture.bundle, fixture.artifact, fixture.reviewRequest())
+            fixture.bridge.prepareReview(fixture.bundle, fixture.runtimeCandidate, fixture.reviewRequest())
         }
         assertNull(fixture.runtimeStore.promotionSeal(fixture.bundle.adoptionEvidence.id))
 
@@ -170,7 +177,7 @@ class EvolutionPromotionBridgeTest {
         assertFailsWith<IllegalArgumentException> {
             fixture.bridge.prepareReview(
                 fixture.bundle,
-                fixture.artifact,
+                fixture.runtimeCandidate,
                 fixture.reviewRequest(actorId = ADOPTION_ACTOR),
             )
         }
@@ -179,7 +186,7 @@ class EvolutionPromotionBridgeTest {
         assertFailsWith<IllegalArgumentException> {
             fixture.bridge.prepareReview(
                 fixture.bundle,
-                fixture.artifact,
+                fixture.runtimeCandidate,
                 fixture.reviewRequest(actorId = "promotion:unknown"),
             )
         }
@@ -191,7 +198,7 @@ class EvolutionPromotionBridgeTest {
         val fixture = fixture()
         fixture.recordCleanOutcomes(5)
         val request = fixture.reviewRequest()
-        val review = fixture.bridge.prepareReview(fixture.bundle, fixture.artifact, request)
+        val review = fixture.bridge.prepareReview(fixture.bundle, fixture.runtimeCandidate, request)
         assertNotNull(fixture.runtimeStore.promotionSeal(fixture.bundle.adoptionEvidence.id))
 
         fixture.lifecycle.recordTrial(
@@ -206,7 +213,7 @@ class EvolutionPromotionBridgeTest {
         )
 
         assertFailsWith<IllegalArgumentException> {
-            fixture.bridge.promote(fixture.bundle, fixture.artifact, request, review)
+            fixture.bridge.promote(fixture.bundle, fixture.runtimeCandidate, request, review)
         }
         assertEquals(GeneratedToolState.TRIAL, fixture.tools.get(TOOL_ID)?.state)
         assertTrue(fixture.capabilities.providersFor(CAPABILITY_ID).none { it.providerId == TOOL_ID })
@@ -268,6 +275,7 @@ class EvolutionPromotionBridgeTest {
         val capabilities: CapabilityRegistry,
         val lifecycle: GeneratedToolLifecycleCoordinator,
         val artifact: CandidateArtifact,
+        val runtimeCandidate: VerifiedRuntimeCandidate,
         val bundle: EvolutionCanaryEvidenceBundle,
         val runtimeStore: InMemoryEvolutionCanaryBudgetStore,
         val outcomeStore: InMemoryEvolutionCanaryOutcomeStore,
@@ -320,6 +328,7 @@ class EvolutionPromotionBridgeTest {
         val tools = GeneratedToolRegistry()
         val capabilities = CapabilityRegistry(initialProviders = listOf(baseline()))
         val artifact = candidateArtifact()
+        val runtimeCandidate = verifiedRuntimeCandidate(artifact)
         tools.register(verifiedRecord())
         val lifecycle = GeneratedToolLifecycleCoordinator(
             tools = tools,
@@ -416,6 +425,7 @@ class EvolutionPromotionBridgeTest {
             capabilities = capabilities,
             lifecycle = lifecycle,
             artifact = artifact,
+            runtimeCandidate = runtimeCandidate,
             bundle = bundle,
             runtimeStore = InMemoryEvolutionCanaryBudgetStore(),
             outcomeStore = InMemoryEvolutionCanaryOutcomeStore(),
@@ -449,6 +459,34 @@ class EvolutionPromotionBridgeTest {
         state = GeneratedToolState.VERIFIED,
         verificationConfidence = 0.96,
     )
+
+    private suspend fun verifiedRuntimeCandidate(artifact: CandidateArtifact): VerifiedRuntimeCandidate {
+        val seal = CandidateRuntimeSeal(
+            candidateArtifactId = artifact.id,
+            candidateId = artifact.candidate.id,
+            sourceCommit = artifact.sourceCommit,
+            branchHeadCommit = artifact.branchHeadCommit,
+            verificationId = artifact.verification.id,
+            provenanceId = artifact.provenance.id,
+            debugApkSha256 = artifact.debugApkSha256.lowercase(),
+            signerId = "buildstudio-host:j08-test",
+            signature = "trusted-signature",
+        )
+        val result = RuntimeCandidateVerifier(
+            sealVerifier = CandidateSealVerifier { it.signature == "trusted-signature" },
+            digestProvider = CandidateArtifactDigestProvider { ref ->
+                artifact.debugApkSha256.takeIf { ref == artifact.debugApkRef }
+            },
+        ).verify(
+            artifact = artifact,
+            seal = seal,
+            policy = RuntimeCandidatePolicy(
+                allowedCapabilities = artifact.provenance.capabilityChanges.map { it.capabilityId }.toSet(),
+                allowedAddedPermissions = artifact.provenance.permissionDelta.added,
+            ),
+        )
+        return assertIs<RuntimeCandidateVerificationResult.Verified>(result).candidate
+    }
 
     private fun candidateArtifact(): CandidateArtifact {
         val requirement = CapabilityRequirement(

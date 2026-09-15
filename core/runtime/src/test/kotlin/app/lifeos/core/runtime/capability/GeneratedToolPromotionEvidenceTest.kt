@@ -17,15 +17,23 @@ import app.lifeos.core.runtime.buildstudio.BuildStudioCandidate
 import app.lifeos.core.runtime.buildstudio.BuildVerificationEvidence
 import app.lifeos.core.runtime.buildstudio.BuildVerificationPolicy
 import app.lifeos.core.runtime.buildstudio.CandidateArtifact
+import app.lifeos.core.runtime.buildstudio.CandidateArtifactDigestProvider
+import app.lifeos.core.runtime.buildstudio.CandidateRuntimeSeal
+import app.lifeos.core.runtime.buildstudio.CandidateSealVerifier
+import app.lifeos.core.runtime.buildstudio.RuntimeCandidatePolicy
+import app.lifeos.core.runtime.buildstudio.RuntimeCandidateVerificationResult
+import app.lifeos.core.runtime.buildstudio.RuntimeCandidateVerifier
 import app.lifeos.core.runtime.buildstudio.SourcePatchOperation
 import app.lifeos.core.runtime.buildstudio.SourcePatchOperationType
 import app.lifeos.core.runtime.buildstudio.SourcePatchPlan
+import app.lifeos.core.runtime.buildstudio.VerifiedRuntimeCandidate
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -37,6 +45,7 @@ class GeneratedToolPromotionEvidenceTest {
         val tools = GeneratedToolRegistry()
         val capabilities = CapabilityRegistry()
         val artifact = candidateArtifact()
+        val runtimeCandidate = verifiedRuntimeCandidate(artifact)
         tools.register(verifiedRecord())
         val lifecycle = GeneratedToolLifecycleCoordinator(
             tools = tools,
@@ -45,8 +54,8 @@ class GeneratedToolPromotionEvidenceTest {
         lifecycle.admitToTrial(TOOL_ID)
         recordCleanTrials(lifecycle)
 
-        val firstEvidence = lifecycle.preparePromotionEvidence(TOOL_ID, artifact)
-        val secondEvidence = lifecycle.preparePromotionEvidence(TOOL_ID, artifact)
+        val firstEvidence = lifecycle.preparePromotionEvidence(TOOL_ID, runtimeCandidate)
+        val secondEvidence = lifecycle.preparePromotionEvidence(TOOL_ID, runtimeCandidate)
 
         assertFalse(firstEvidence.activationAllowed)
         assertEquals(firstEvidence.id, secondEvidence.id)
@@ -93,8 +102,9 @@ class GeneratedToolPromotionEvidenceTest {
             val lifecycle = GeneratedToolLifecycleCoordinator(tools)
             lifecycle.admitToTrial(record.manifest.toolId)
             recordCleanTrials(lifecycle, record.manifest.toolId)
+            val runtimeCandidate = verifiedRuntimeCandidate(artifact)
             assertFailsWith<IllegalArgumentException> {
-                lifecycle.preparePromotionEvidence(record.manifest.toolId, artifact)
+                lifecycle.preparePromotionEvidence(record.manifest.toolId, runtimeCandidate)
             }
             assertEquals(GeneratedToolState.TRIAL, tools.get(record.manifest.toolId)?.state)
         }
@@ -121,8 +131,9 @@ class GeneratedToolPromotionEvidenceTest {
             val lifecycle = GeneratedToolLifecycleCoordinator(tools)
             lifecycle.admitToTrial(TOOL_ID)
             recordCleanTrials(lifecycle)
+            val runtimeCandidate = verifiedRuntimeCandidate(candidateArtifact(actors = actors))
             assertFailsWith<IllegalArgumentException> {
-                lifecycle.preparePromotionEvidence(TOOL_ID, candidateArtifact(actors = actors))
+                lifecycle.preparePromotionEvidence(TOOL_ID, runtimeCandidate)
             }
         }
 
@@ -166,7 +177,7 @@ class GeneratedToolPromotionEvidenceTest {
         val lifecycle = GeneratedToolLifecycleCoordinator(tools)
         lifecycle.admitToTrial(TOOL_ID)
         recordCleanTrials(lifecycle)
-        val evidence = lifecycle.preparePromotionEvidence(TOOL_ID, candidateArtifact())
+        val evidence = lifecycle.preparePromotionEvidence(TOOL_ID, verifiedRuntimeCandidate(candidateArtifact()))
 
         lifecycle.recordTrial(
             TOOL_ID,
@@ -204,7 +215,7 @@ class GeneratedToolPromotionEvidenceTest {
         tools.register(verifiedRecord())
         lifecycle.admitToTrial(TOOL_ID)
         recordCleanTrials(lifecycle)
-        val promotion = lifecycle.preparePromotionEvidence(TOOL_ID, candidateArtifact())
+        val promotion = lifecycle.preparePromotionEvidence(TOOL_ID, verifiedRuntimeCandidate(candidateArtifact()))
         lifecycle.promote(TOOL_ID, promotion)
         assertEquals(1, capabilities.providersFor(CAPABILITY_ID).size)
 
@@ -243,7 +254,7 @@ class GeneratedToolPromotionEvidenceTest {
         tools.register(verifiedRecord())
         lifecycle.admitToTrial(TOOL_ID)
         recordCleanTrials(lifecycle)
-        val promotion = lifecycle.preparePromotionEvidence(TOOL_ID, candidateArtifact())
+        val promotion = lifecycle.preparePromotionEvidence(TOOL_ID, verifiedRuntimeCandidate(candidateArtifact()))
         lifecycle.promote(TOOL_ID, promotion)
 
         val stale = GeneratedToolRollbackRequest(
@@ -360,6 +371,34 @@ class GeneratedToolPromotionEvidenceTest {
         state = GeneratedToolState.VERIFIED,
         verificationConfidence = 0.95,
     )
+
+    private suspend fun verifiedRuntimeCandidate(artifact: CandidateArtifact): VerifiedRuntimeCandidate {
+        val seal = CandidateRuntimeSeal(
+            candidateArtifactId = artifact.id,
+            candidateId = artifact.candidate.id,
+            sourceCommit = artifact.sourceCommit,
+            branchHeadCommit = artifact.branchHeadCommit,
+            verificationId = artifact.verification.id,
+            provenanceId = artifact.provenance.id,
+            debugApkSha256 = artifact.debugApkSha256.lowercase(),
+            signerId = "buildstudio-host:j03-test",
+            signature = "trusted-signature",
+        )
+        val result = RuntimeCandidateVerifier(
+            sealVerifier = CandidateSealVerifier { it.signature == "trusted-signature" },
+            digestProvider = CandidateArtifactDigestProvider { debugApkRef ->
+                artifact.debugApkSha256.takeIf { debugApkRef == artifact.debugApkRef }
+            },
+        ).verify(
+            artifact = artifact,
+            seal = seal,
+            policy = RuntimeCandidatePolicy(
+                allowedCapabilities = artifact.provenance.capabilityChanges.map { it.capabilityId }.toSet(),
+                allowedAddedPermissions = artifact.provenance.permissionDelta.added,
+            ),
+        )
+        return assertIs<RuntimeCandidateVerificationResult.Verified>(result).candidate
+    }
 
     private fun candidateArtifact(
         capabilityId: CapabilityId = CAPABILITY_ID,

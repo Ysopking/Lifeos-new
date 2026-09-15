@@ -3,7 +3,7 @@ package app.lifeos.core.runtime.evolution
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.buildstudio.BuildActorAction
 import app.lifeos.core.runtime.buildstudio.BuildActorRole
-import app.lifeos.core.runtime.buildstudio.CandidateArtifact
+import app.lifeos.core.runtime.buildstudio.VerifiedRuntimeCandidate
 import app.lifeos.core.runtime.capability.GeneratedToolLifecycleCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolPromotionEvidence
 import app.lifeos.core.runtime.capability.GeneratedToolRecord
@@ -65,7 +65,7 @@ data class EvolutionPromotionReviewRequest(
 
 /**
  * Immutable J08 evidence binding the exact J07 readiness snapshot, frozen canary seal and exact J03
- * CandidateArtifact-backed promotion evidence to one explicit final promotion actor.
+ * runtime-verified CandidateArtifact-backed promotion evidence to one explicit final promotion actor.
  */
 class EvolutionPromotionReviewEvidence private constructor(
     val subjectId: String,
@@ -120,7 +120,7 @@ class EvolutionPromotionReviewEvidence private constructor(
             subject: EvolutionSubject,
             readiness: EvolutionCanaryReadinessEvidence,
             seal: EvolutionCanaryPromotionSealEvidence,
-            artifact: CandidateArtifact,
+            candidate: VerifiedRuntimeCandidate,
             j03: GeneratedToolPromotionEvidence,
             request: EvolutionPromotionReviewRequest,
         ): EvolutionPromotionReviewEvidence = EvolutionPromotionReviewEvidence(
@@ -131,7 +131,7 @@ class EvolutionPromotionReviewEvidence private constructor(
             candidateToolId = subject.candidateToolId,
             candidateRecordFingerprint = subject.candidateRecordFingerprint,
             baselineDescriptorFingerprint = subject.baselineDescriptorFingerprint,
-            candidateArtifactId = artifact.id,
+            candidateArtifactId = candidate.artifact.id,
             j03PromotionEvidenceId = j03.id,
             j03TrialEvidenceId = j03.trialEvidenceId,
             reviewRequestId = request.id,
@@ -155,9 +155,10 @@ data class EvolutionPromotionResult(
 }
 
 /**
- * J08 is the public activation bridge for evolved generated tools. It seals routing, replays J07
- * readiness from the live stores, rebuilds J03 evidence from the live trial ledger, and only then
- * invokes the internal lifecycle activation primitive.
+ * J08 is the public activation bridge for evolved generated tools. It accepts only a candidate that
+ * already passed the BuildStudio runtime trust gate, seals routing, replays J07 readiness from the
+ * live stores, rebuilds J03 evidence from the live trial ledger, and only then invokes the internal
+ * lifecycle activation primitive.
  */
 class EvolutionPromotionBridge(
     private val runtimeStore: EvolutionPromotionRuntimeStore,
@@ -169,10 +170,10 @@ class EvolutionPromotionBridge(
 
     suspend fun prepareReview(
         evidence: EvolutionCanaryEvidenceBundle,
-        artifact: CandidateArtifact,
+        candidate: VerifiedRuntimeCandidate,
         request: EvolutionPromotionReviewRequest,
     ): EvolutionPromotionReviewEvidence = mutex.withLock {
-        val beforeSeal = prepareSnapshot(evidence, artifact, request)
+        val beforeSeal = prepareSnapshot(evidence, candidate, request)
 
         val seal = runtimeStore.sealForPromotion(
             adoptionEvidenceId = evidence.adoptionEvidence.id,
@@ -184,7 +185,7 @@ class EvolutionPromotionBridge(
         require(!seal.activationAllowed)
 
         // Replay after the atomic seal so a reservation racing the first readiness read cannot pass.
-        val afterSeal = prepareSnapshot(evidence, artifact, request)
+        val afterSeal = prepareSnapshot(evidence, candidate, request)
         require(afterSeal.readiness.id == beforeSeal.readiness.id) {
             "Canary readiness changed while promotion review was being sealed"
         }
@@ -196,7 +197,7 @@ class EvolutionPromotionBridge(
             subject = evidence.subject,
             readiness = afterSeal.readiness,
             seal = seal,
-            artifact = artifact,
+            candidate = candidate,
             j03 = afterSeal.j03,
             request = request,
         )
@@ -204,7 +205,7 @@ class EvolutionPromotionBridge(
 
     suspend fun promote(
         evidence: EvolutionCanaryEvidenceBundle,
-        artifact: CandidateArtifact,
+        candidate: VerifiedRuntimeCandidate,
         request: EvolutionPromotionReviewRequest,
         review: EvolutionPromotionReviewEvidence,
     ): EvolutionPromotionResult = mutex.withLock {
@@ -218,7 +219,7 @@ class EvolutionPromotionBridge(
             "Stopped canary cannot be promoted"
         }
 
-        val fresh = prepareSnapshot(evidence, artifact, request)
+        val fresh = prepareSnapshot(evidence, candidate, request)
         require(fresh.readiness.id == seal.readinessEvidenceId) {
             "Canary readiness changed after promotion seal"
         }
@@ -230,7 +231,7 @@ class EvolutionPromotionBridge(
             subject = evidence.subject,
             readiness = fresh.readiness,
             seal = seal,
-            artifact = artifact,
+            candidate = candidate,
             j03 = fresh.j03,
             request = request,
         )
@@ -260,11 +261,12 @@ class EvolutionPromotionBridge(
 
     private suspend fun prepareSnapshot(
         evidence: EvolutionCanaryEvidenceBundle,
-        artifact: CandidateArtifact,
+        candidate: VerifiedRuntimeCandidate,
         request: EvolutionPromotionReviewRequest,
     ): PreparedSnapshot {
+        val artifact = candidate.artifact
         require(artifact.id == evidence.subject.candidateArtifactId) {
-            "J08 CandidateArtifact differs from independently evaluated candidate"
+            "J08 runtime-verified CandidateArtifact differs from independently evaluated candidate"
         }
         require(request.actorId != evidence.subject.candidateToolId) {
             "Generated candidate cannot approve its own promotion"
@@ -301,7 +303,7 @@ class EvolutionPromotionBridge(
         require(readiness.baselineDescriptorFingerprint == evidence.subject.baselineDescriptorFingerprint)
         require(readiness.killSwitchEvidenceId == null)
 
-        val j03 = lifecycle.preparePromotionEvidence(evidence.subject.candidateToolId, artifact)
+        val j03 = lifecycle.preparePromotionEvidence(evidence.subject.candidateToolId, candidate)
         require(j03.toolId == evidence.subject.candidateToolId)
         require(j03.candidateArtifactId == artifact.id)
         require(!j03.activationAllowed)
