@@ -1,6 +1,6 @@
 package app.lifeos.core.model
 
-/** Outcome evidence tied to canonical module-processing evidence. */
+/** Outcome tied to canonical module-processing evidence. */
 data class ModuleOutcome(
     val processing: ModuleProcessingRecord,
     val utilityMicros: Long,
@@ -22,6 +22,19 @@ data class ModuleOutcome(
         )
 }
 
+/** Observation metadata remains separate from the outcome value itself. */
+data class ModuleOutcomeEvidence(
+    val outcomeFingerprint: String,
+    val evidencePhotonIds: List<PhotonId>,
+    val observedAtRevision: Long,
+) {
+    init {
+        require(outcomeFingerprint.isNotBlank()) { "Outcome fingerprint must not be blank" }
+        require(observedAtRevision > 0) { "Observed revision must be positive" }
+        require(evidencePhotonIds.distinct().size == evidencePhotonIds.size) { "Outcome evidence ids must be unique" }
+    }
+}
+
 data class ModuleUtilitySnapshot(
     val module: ModuleIdentity,
     val observations: Long,
@@ -35,6 +48,11 @@ data class ModuleUtilitySnapshot(
 
     val meanUtilityMicros: Long
         get() = if (observations == 0L) 0L else utilityMicrosTotal / observations
+
+    /** Observed acceptance only; this is never module authority or policy priority. */
+    val acceptanceRateMicros: Long
+        get() = if (observations == 0L) 0L
+        else Math.multiplyExact(acceptedObservations, 1_000_000L) / observations
 
     fun observe(outcome: ModuleOutcome): ModuleUtilitySnapshot {
         require(outcome.processing.module.stableFingerprint == module.stableFingerprint) {
