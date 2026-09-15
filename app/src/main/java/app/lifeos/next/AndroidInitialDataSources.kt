@@ -40,6 +40,8 @@ internal class AndroidInitialDataSourceCatalog(
             add(Manifest.permission.READ_MEDIA_IMAGES)
             add(Manifest.permission.READ_MEDIA_VIDEO)
             add(Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            add(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
     }.distinct().sorted()
 
@@ -196,7 +198,7 @@ private class AndroidCalendarInitialDataSource(
                 while (cursor.moveToNext()) {
                     val rowId = cursor.long(CalendarContract.Events._ID)
                     val calendarId = cursor.long(CalendarContract.Events.CALENDAR_ID)
-                    val title = clean(cursor.string(CalendarContract.Events.TITLE))
+                    val title = clean(cursor.string(CalendarContract.Contacts.DISPLAY_NAME_PRIMARY))
                     val description = clean(cursor.string(CalendarContract.Events.DESCRIPTION))
                     val location = clean(cursor.string(CalendarContract.Events.EVENT_LOCATION))
                     val start = cursor.longOrNull(CalendarContract.Events.DTSTART) ?: 0L
@@ -335,7 +337,7 @@ private class AndroidMediaInitialDataSource(
     }
 }
 
-private fun mediaPermission(kind: AndroidMediaKind): String? =
+private fun mediaPermission(kind: AndroidMediaKind): String =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         when (kind) {
             AndroidMediaKind.IMAGE -> Manifest.permission.READ_MEDIA_IMAGES
@@ -343,7 +345,7 @@ private fun mediaPermission(kind: AndroidMediaKind): String? =
             AndroidMediaKind.AUDIO -> Manifest.permission.READ_MEDIA_AUDIO
         }
     } else {
-        null
+        Manifest.permission.READ_EXTERNAL_STORAGE
     }
 
 private fun collectionUri(kind: AndroidMediaKind): Uri = when (kind) {
