@@ -1,7 +1,7 @@
 package app.lifeos.core.runtime.capability
 
 import app.lifeos.core.field.StableFieldIds
-import app.lifeos.core.runtime.buildstudio.CandidateArtifact
+import app.lifeos.core.runtime.buildstudio.VerifiedRuntimeCandidate
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -221,7 +221,10 @@ class GeneratedToolLifecycleCoordinator(
         else GeneratedToolPromotionEvaluation.NotReady(stats, reasons)
     }
 
-    suspend fun preparePromotionEvidence(toolId: String, artifact: CandidateArtifact): GeneratedToolPromotionEvidence {
+    suspend fun preparePromotionEvidence(
+        toolId: String,
+        candidate: VerifiedRuntimeCandidate,
+    ): GeneratedToolPromotionEvidence {
         val evaluation = evaluatePromotion(toolId)
         require(evaluation is GeneratedToolPromotionEvaluation.Eligible) {
             "Generated tool is not eligible for promotion evidence: $evaluation"
@@ -229,7 +232,7 @@ class GeneratedToolLifecycleCoordinator(
         val record = requireNotNull(tools.get(toolId)) { "Unknown generated tool $toolId" }
         val trialEvidence = trialLedger.evidence(toolId)
         require(trialEvidence.stats == evaluation.stats) { "Trial evidence changed while promotion was being prepared" }
-        return GeneratedToolPromotionEvidence.create(artifact, record, trialEvidence, promotionPolicy)
+        return GeneratedToolPromotionEvidence.create(candidate, record, trialEvidence, promotionPolicy)
     }
 
     @Deprecated("J08 requires readiness-bound EvolutionPromotionBridge activation")
