@@ -69,6 +69,7 @@ data class DeepSearchPlannerCheckpoint(
         java.lang.Double.toHexString(branch.score.total),
     )
 
+    /** Legacy semantic fingerprint retained so codec v1 checkpoints remain verifiable. */
     private fun evidenceFingerprint(value: DeepSearchEvidence): String = StableFieldIds.fingerprint(
         "deep-search-checkpoint-evidence/v1",
         value.id.value,
@@ -111,7 +112,7 @@ object DeepSearchPlannerCheckpointCodec {
         DataOutputStream(bytes).use { out ->
             out.writeInt(MAGIC)
             out.writeInt(VERSION)
-            write(out, checkpoint.fingerprint())
+            write(out, persistedFingerprint(checkpoint))
             writeRequest(out, checkpoint.request)
             writeFrontier(out, checkpoint.frontier)
             writeListSize(out, checkpoint.evidence.size)
@@ -154,9 +155,30 @@ object DeepSearchPlannerCheckpointCodec {
             rootExpanded = input.readBoolean(),
         )
         require(input.available() == 0) { "Trailing DeepSearch checkpoint bytes" }
-        require(fingerprint == checkpoint.fingerprint()) { "DeepSearch checkpoint fingerprint mismatch" }
+        val expectedFingerprint = if (version == LEGACY_VERSION) {
+            checkpoint.fingerprint()
+        } else {
+            persistedFingerprint(checkpoint)
+        }
+        require(fingerprint == expectedFingerprint) { "DeepSearch checkpoint fingerprint mismatch" }
         return checkpoint
     }
+
+    private fun persistedFingerprint(checkpoint: DeepSearchPlannerCheckpoint): String =
+        StableFieldIds.fingerprint(
+            "deep-search-checkpoint-codec/v2",
+            checkpoint.fingerprint(),
+            *checkpoint.evidence
+                .sortedBy { it.id.value }
+                .map { evidence ->
+                    listOf(
+                        evidence.id.value,
+                        evidence.sourcePhotonId?.value.orEmpty(),
+                        evidence.sourcePhotonRevision?.toString().orEmpty(),
+                    ).joinToString(":")
+                }
+                .toTypedArray(),
+        )
 
     private fun writeRequest(out: DataOutputStream, request: DeepSearchRequest) {
         write(out, request.query)
