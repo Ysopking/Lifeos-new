@@ -51,24 +51,20 @@ class InformationAssetAssembler {
                 InformationAssetResolutionState.UNRESOLVED
             else -> InformationAssetResolutionState.CONVERGED
         }
-        val stateHash = InformationAssetFingerprints.stateHash(
-            *stateParts(
-                request = input.request,
-                sources = sourceReferences,
-                evidence = evidence,
-                claims = claims,
-                conflicts = conflicts,
-                domains = domains,
-                participatingModules = input.participatingModules,
-                resolution = resolution,
-            ).toTypedArray()
+        val stateHash = InformationAssetRevisionIntegrity.stateHash(
+            request = input.request,
+            sources = sourceReferences,
+            evidenceBindings = evidence,
+            claims = claims,
+            conflicts = conflicts,
+            domainIds = domains,
+            participatingModules = input.participatingModules,
+            resolution = resolution,
         )
-        val revisionId = InformationAssetFingerprints.revision(
-            input.request.id.value,
-            stateHash.value,
-            input.parent?.assetId?.value.orEmpty(),
-            input.parent?.revisionId?.value.orEmpty(),
-            input.parent?.photonId?.value.orEmpty(),
+        val revisionId = InformationAssetRevisionIntegrity.revisionId(
+            request = input.request,
+            stateHash = stateHash,
+            parent = input.parent,
         )
         val manifest = InformationAssetRevisionManifest(
             id = revisionId,
@@ -86,6 +82,7 @@ class InformationAssetAssembler {
             conflicts = conflicts,
             manifest = manifest,
         )
+        InformationAssetRevisionIntegrity.requireValid(revision)
         return InformationAssetAssemblyResult(
             asset = InformationAsset(input.request.id, revision),
             revision = revision,
@@ -150,30 +147,5 @@ class InformationAssetAssembler {
                 "Information asset parent revision belongs to a different logical asset"
             }
         }
-    }
-
-    private fun stateParts(
-        request: InformationAssetRequest,
-        sources: List<PhotonRevisionReference>,
-        evidence: List<InformationEvidenceBinding>,
-        claims: List<InformationClaim>,
-        conflicts: List<InformationConflict>,
-        domains: Set<FieldDomainId>,
-        participatingModules: Set<String>,
-        resolution: InformationAssetResolutionState,
-    ): List<String> = buildList {
-        add("information-asset-state/v1")
-        add(request.id.value)
-        add(request.kind.name)
-        add(request.title)
-        add(request.primaryDomainId.value)
-        request.requiredSemanticKeys.sorted().forEach { add("required:$it") }
-        sources.forEach { add("source:${it.fingerprint()}") }
-        evidence.forEach { add("evidence:${it.fingerprint()}") }
-        claims.forEach { add("claim:${it.fingerprint()}") }
-        conflicts.forEach { add("conflict:${it.fingerprint()}") }
-        domains.map { it.value }.sorted().forEach { add("domain:$it") }
-        participatingModules.sorted().forEach { add("module:$it") }
-        add("resolution:${resolution.name}")
     }
 }
