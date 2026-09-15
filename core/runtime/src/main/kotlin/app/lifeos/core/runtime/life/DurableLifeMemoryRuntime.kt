@@ -196,6 +196,7 @@ class PhotonBackedMemoryAccessLedgerStore(
             mimeType = "application/vnd.lifeos.memory-access-event+text",
             semanticMass = 0.0,
             energy = 0.0,
+            confidence = 1.0,
             provenance = Provenance(
                 source = "life-memory-access",
                 actor = "lifeos",
@@ -426,7 +427,8 @@ class DurableLifeMemoryRuntime(
 
     suspend fun rebuild(now: Instant): DurableLifeMemorySnapshot {
         val all = photons.loadAll()
-        val authoritative = all.filterNot(::isLifeMemoryManagementPhoton)
+        val storedAuthoritative = all.filterNot(::isLifeMemoryManagementPhoton)
+        val authoritative = ActiveLifeSourceProjection.filter(storedAuthoritative, all)
         val graphEvidence = authoritative.filterNot { "causal-ledger" in it.tags }
         val memoryEvidence = graphEvidence.filterNot { "life-source-gap" in it.tags }
         val durableAccess = accessStore.snapshot()
@@ -443,7 +445,7 @@ class DurableLifeMemoryRuntime(
             accessLedger = effectiveAccess,
             authoritativePhotonCount = authoritative.size,
             fingerprint = StableCognitiveIds.fingerprint(
-                "durable-life-memory-snapshot/v2",
+                "durable-life-memory-snapshot/v3",
                 graph.fingerprint,
                 memory.fingerprint,
                 *effectiveAccess.profiles.entries.sortedBy { it.key.value }.flatMap { (id, profile) ->
