@@ -5,10 +5,10 @@ import app.lifeos.core.runtime.buildstudio.BuildActorAction
 import app.lifeos.core.runtime.buildstudio.BuildActorRole
 import app.lifeos.core.runtime.buildstudio.BuildCapabilityChange
 import app.lifeos.core.runtime.buildstudio.BuildCapabilityChangeType
-import app.lifeos.core.runtime.buildstudio.CandidateArtifact
+import app.lifeos.core.runtime.buildstudio.VerifiedRuntimeCandidate
 
 /**
- * Immutable J03 evidence that binds an eligible generated-tool trial to the exact verified
+ * Immutable J03 evidence that binds an eligible generated-tool trial to the exact runtime-verified
  * BuildStudio candidate that is being promoted. Creating this evidence does not activate anything.
  */
 class GeneratedToolPromotionEvidence private constructor(
@@ -79,7 +79,7 @@ class GeneratedToolPromotionEvidence private constructor(
 
     companion object {
         internal fun create(
-            artifact: CandidateArtifact,
+            candidate: VerifiedRuntimeCandidate,
             record: GeneratedToolRecord,
             trialEvidence: GeneratedToolTrialEvidence,
             policy: GeneratedToolPromotionPolicy,
@@ -90,8 +90,19 @@ class GeneratedToolPromotionEvidence private constructor(
             require(trialEvidence.toolId == record.manifest.toolId) {
                 "Trial evidence belongs to another generated tool"
             }
+            require(!candidate.activationAllowed) {
+                "Runtime-verified candidate must remain non-activating evidence"
+            }
+            require(!candidate.seal.activationAllowed) {
+                "Runtime candidate seal must remain non-activating evidence"
+            }
+
+            val artifact = candidate.artifact
             require(!artifact.activationAllowed) {
                 "CandidateArtifact must remain non-activating evidence"
+            }
+            require(candidate.debugApkSha256.equals(artifact.debugApkSha256, ignoreCase = true)) {
+                "Runtime-verified APK digest no longer matches CandidateArtifact"
             }
 
             val provenance = artifact.provenance
@@ -119,8 +130,8 @@ class GeneratedToolPromotionEvidence private constructor(
             require(buildHash.matches(Regex("[0-9a-fA-F]{64}"))) {
                 "Generated tool build hash must be SHA-256 for BuildStudio promotion"
             }
-            require(buildHash.equals(artifact.debugApkSha256, ignoreCase = true)) {
-                "Generated tool build hash does not match verified CandidateArtifact APK"
+            require(buildHash.equals(candidate.debugApkSha256, ignoreCase = true)) {
+                "Generated tool build hash does not match runtime-verified CandidateArtifact APK"
             }
 
             val reviewerApprovals = provenance.actors.filter {
@@ -168,7 +179,7 @@ class GeneratedToolPromotionEvidence private constructor(
                 recordFingerprint = record.promotionRecordFingerprint(),
                 trialEvidenceId = trialEvidence.id,
                 promotionPolicyFingerprint = policy.fingerprint(),
-                apkSha256 = artifact.debugApkSha256.lowercase(),
+                apkSha256 = candidate.debugApkSha256.lowercase(),
                 capabilityChangeFingerprint = capabilityChange.fingerprint(),
                 permissionDeltaFingerprint = provenance.permissionDelta.fingerprint(),
                 reviewerEvidenceFingerprints = reviewerApprovals.map { it.fingerprint() }.sorted(),
