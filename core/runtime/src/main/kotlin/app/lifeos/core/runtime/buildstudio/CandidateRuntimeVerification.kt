@@ -100,10 +100,10 @@ sealed interface RuntimeCandidateVerificationResult {
 }
 
 /**
- * Runtime-only proof object. Its constructor is internal and this is deliberately not a data class,
- * so callers cannot use copy() to manufacture a different verified candidate.
+ * Runtime proof object that can only be constructed by its nested verifier. The private constructor
+ * prevents other code in :core:runtime from manufacturing a proof directly or by copy().
  */
-class VerifiedRuntimeCandidate internal constructor(
+class VerifiedRuntimeCandidate private constructor(
     val artifact: CandidateArtifact,
     val seal: CandidateRuntimeSeal,
     val observedApkSha256: String,
@@ -120,106 +120,109 @@ class VerifiedRuntimeCandidate internal constructor(
     val branchHeadCommit: String get() = artifact.branchHeadCommit
     val debugApkRef: String get() = artifact.debugApkRef
     val debugApkSha256: String get() = observedApkSha256
-}
 
-/**
- * Fail-closed runtime verifier. It authenticates the host seal, rebinds every identity carried by
- * the immutable CandidateArtifact, rechecks mandatory build gates, recomputes the APK digest from
- * the actual artifact, and applies explicit capability/permission policy before producing the only
- * candidate type accepted by the Hot-Swap coordinator.
- */
-class RuntimeCandidateVerifier(
-    private val sealVerifier: CandidateSealVerifier,
-    private val digestProvider: CandidateArtifactDigestProvider,
-) {
-    suspend fun verify(
-        artifact: CandidateArtifact,
-        seal: CandidateRuntimeSeal,
-        policy: RuntimeCandidatePolicy,
-    ): RuntimeCandidateVerificationResult {
-        val reasons = linkedSetOf<RuntimeCandidateRejectionReason>()
-        val details = mutableListOf<String>()
+    /**
+     * Fail-closed runtime verifier. It authenticates the host seal, rebinds every identity carried
+     * by the immutable CandidateArtifact, rechecks mandatory build gates, recomputes the APK digest
+     * from the actual artifact, and applies explicit capability/permission policy before producing
+     * a proof accepted by promotion/evolution activation paths.
+     */
+    class Verifier(
+        private val sealVerifier: CandidateSealVerifier,
+        private val digestProvider: CandidateArtifactDigestProvider,
+    ) {
+        suspend fun verify(
+            artifact: CandidateArtifact,
+            seal: CandidateRuntimeSeal,
+            policy: RuntimeCandidatePolicy,
+        ): RuntimeCandidateVerificationResult {
+            val reasons = linkedSetOf<RuntimeCandidateRejectionReason>()
+            val details = mutableListOf<String>()
 
-        val trustedSeal = try {
-            sealVerifier.verify(seal)
-        } catch (_: Exception) {
-            false
-        }
-        if (!trustedSeal) reasons += RuntimeCandidateRejectionReason.INVALID_OR_UNTRUSTED_SEAL
-        if (seal.activationAllowed) reasons += RuntimeCandidateRejectionReason.INVALID_OR_UNTRUSTED_SEAL
-
-        if (seal.candidateArtifactId != artifact.id) {
-            reasons += RuntimeCandidateRejectionReason.CANDIDATE_ARTIFACT_ID_MISMATCH
-        }
-        if (seal.candidateId != artifact.candidate.id) {
-            reasons += RuntimeCandidateRejectionReason.CANDIDATE_ID_MISMATCH
-        }
-        if (!seal.sourceCommit.equals(artifact.sourceCommit, ignoreCase = true)) {
-            reasons += RuntimeCandidateRejectionReason.SOURCE_COMMIT_MISMATCH
-        }
-        if (!seal.branchHeadCommit.equals(artifact.branchHeadCommit, ignoreCase = true)) {
-            reasons += RuntimeCandidateRejectionReason.BRANCH_HEAD_COMMIT_MISMATCH
-        }
-        if (seal.verificationId != artifact.verification.id) {
-            reasons += RuntimeCandidateRejectionReason.VERIFICATION_ID_MISMATCH
-        }
-        if (seal.provenanceId != artifact.provenance.id) {
-            reasons += RuntimeCandidateRejectionReason.PROVENANCE_ID_MISMATCH
-        }
-        if (seal.debugApkSha256 != artifact.debugApkSha256) {
-            reasons += RuntimeCandidateRejectionReason.APK_DIGEST_BINDING_MISMATCH
-        }
-
-        if (artifact.verification.status != BuildVerificationStatus.VERIFIED) {
-            reasons += RuntimeCandidateRejectionReason.BUILD_VERIFICATION_NOT_VERIFIED
-        }
-        val results = artifact.verification.evidence.commandResults.associateBy { it.command }
-        if (BuildGateCommand.entries.any { command -> results[command]?.success != true }) {
-            reasons += RuntimeCandidateRejectionReason.REQUIRED_BUILD_GATE_MISSING_OR_FAILED
-        }
-
-        artifact.provenance.capabilityChanges
-            .filter { it.capabilityId !in policy.allowedCapabilities }
-            .sortedBy { it.capabilityId.value }
-            .forEach { change ->
-                reasons += RuntimeCandidateRejectionReason.CAPABILITY_NOT_ALLOWED
-                details += "capability-not-allowed:${change.capabilityId.value}:${change.type.name}"
+            val trustedSeal = try {
+                sealVerifier.verify(seal)
+            } catch (_: Exception) {
+                false
             }
-        artifact.provenance.permissionDelta.added
-            .filter { it !in policy.allowedAddedPermissions }
-            .sortedBy { it.name }
-            .forEach { permission ->
-                reasons += RuntimeCandidateRejectionReason.ADDED_PERMISSION_NOT_ALLOWED
-                details += "permission-not-allowed:${permission.name}"
+            if (!trustedSeal) reasons += RuntimeCandidateRejectionReason.INVALID_OR_UNTRUSTED_SEAL
+            if (seal.activationAllowed) reasons += RuntimeCandidateRejectionReason.INVALID_OR_UNTRUSTED_SEAL
+
+            if (seal.candidateArtifactId != artifact.id) {
+                reasons += RuntimeCandidateRejectionReason.CANDIDATE_ARTIFACT_ID_MISMATCH
+            }
+            if (seal.candidateId != artifact.candidate.id) {
+                reasons += RuntimeCandidateRejectionReason.CANDIDATE_ID_MISMATCH
+            }
+            if (!seal.sourceCommit.equals(artifact.sourceCommit, ignoreCase = true)) {
+                reasons += RuntimeCandidateRejectionReason.SOURCE_COMMIT_MISMATCH
+            }
+            if (!seal.branchHeadCommit.equals(artifact.branchHeadCommit, ignoreCase = true)) {
+                reasons += RuntimeCandidateRejectionReason.BRANCH_HEAD_COMMIT_MISMATCH
+            }
+            if (seal.verificationId != artifact.verification.id) {
+                reasons += RuntimeCandidateRejectionReason.VERIFICATION_ID_MISMATCH
+            }
+            if (seal.provenanceId != artifact.provenance.id) {
+                reasons += RuntimeCandidateRejectionReason.PROVENANCE_ID_MISMATCH
+            }
+            if (seal.debugApkSha256 != artifact.debugApkSha256) {
+                reasons += RuntimeCandidateRejectionReason.APK_DIGEST_BINDING_MISMATCH
             }
 
-        val observedDigest = try {
-            digestProvider.sha256(artifact.debugApkRef)
-        } catch (_: Exception) {
-            null
-        }
-        when {
-            observedDigest == null -> reasons += RuntimeCandidateRejectionReason.APK_UNAVAILABLE
-            !observedDigest.matches(Regex("[0-9a-f]{64}")) -> {
-                reasons += RuntimeCandidateRejectionReason.APK_DIGEST_INVALID
+            if (artifact.verification.status != BuildVerificationStatus.VERIFIED) {
+                reasons += RuntimeCandidateRejectionReason.BUILD_VERIFICATION_NOT_VERIFIED
             }
-            observedDigest != artifact.debugApkSha256 || observedDigest != seal.debugApkSha256 -> {
-                reasons += RuntimeCandidateRejectionReason.APK_DIGEST_MISMATCH
+            val results = artifact.verification.evidence.commandResults.associateBy { it.command }
+            if (BuildGateCommand.entries.any { command -> results[command]?.success != true }) {
+                reasons += RuntimeCandidateRejectionReason.REQUIRED_BUILD_GATE_MISSING_OR_FAILED
             }
-        }
 
-        if (reasons.isNotEmpty()) {
-            return RuntimeCandidateVerificationResult.Rejected(
-                reasons = reasons.sortedBy { it.name },
-                details = details.distinct().sorted(),
+            artifact.provenance.capabilityChanges
+                .filter { it.capabilityId !in policy.allowedCapabilities }
+                .sortedBy { it.capabilityId.value }
+                .forEach { change ->
+                    reasons += RuntimeCandidateRejectionReason.CAPABILITY_NOT_ALLOWED
+                    details += "capability-not-allowed:${change.capabilityId.value}:${change.type.name}"
+                }
+            artifact.provenance.permissionDelta.added
+                .filter { it !in policy.allowedAddedPermissions }
+                .sortedBy { it.name }
+                .forEach { permission ->
+                    reasons += RuntimeCandidateRejectionReason.ADDED_PERMISSION_NOT_ALLOWED
+                    details += "permission-not-allowed:${permission.name}"
+                }
+
+            val observedDigest = try {
+                digestProvider.sha256(artifact.debugApkRef)
+            } catch (_: Exception) {
+                null
+            }
+            when {
+                observedDigest == null -> reasons += RuntimeCandidateRejectionReason.APK_UNAVAILABLE
+                !observedDigest.matches(Regex("[0-9a-f]{64}")) -> {
+                    reasons += RuntimeCandidateRejectionReason.APK_DIGEST_INVALID
+                }
+                observedDigest != artifact.debugApkSha256 || observedDigest != seal.debugApkSha256 -> {
+                    reasons += RuntimeCandidateRejectionReason.APK_DIGEST_MISMATCH
+                }
+            }
+
+            if (reasons.isNotEmpty()) {
+                return RuntimeCandidateVerificationResult.Rejected(
+                    reasons = reasons.sortedBy { it.name },
+                    details = details.distinct().sorted(),
+                )
+            }
+            return RuntimeCandidateVerificationResult.Verified(
+                VerifiedRuntimeCandidate(
+                    artifact = artifact,
+                    seal = seal,
+                    observedApkSha256 = requireNotNull(observedDigest),
+                )
             )
         }
-        return RuntimeCandidateVerificationResult.Verified(
-            VerifiedRuntimeCandidate(
-                artifact = artifact,
-                seal = seal,
-                observedApkSha256 = requireNotNull(observedDigest),
-            )
-        )
     }
 }
+
+/** Constructor-compatible public name while the proof constructor itself remains private. */
+typealias RuntimeCandidateVerifier = VerifiedRuntimeCandidate.Verifier
