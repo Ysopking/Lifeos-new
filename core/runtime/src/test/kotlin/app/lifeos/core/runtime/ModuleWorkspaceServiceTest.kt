@@ -20,7 +20,7 @@ class ModuleWorkspaceServiceTest {
     }
 
     private fun fixtureRecord(): ModuleProcessingRecord {
-        val module = ModuleIdentity("workspace-module", "1", setOf("workspace"), "impl")
+        val module = ModuleIdentity("workspace-module", "1", "impl", setOf("workspace"))
         val trace = CausalTraceId("workspace-trace")
         val branch = PhotonBranchId("workspace-branch")
         val state = CognitiveStateHash("workspace-state")
