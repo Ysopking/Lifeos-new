@@ -1,5 +1,7 @@
 package app.lifeos.core.life
 
+import app.lifeos.core.model.PhotonRevisionRef
+
 enum class LifeMatterState {
     OPEN,
     ACTION_REQUIRED,
@@ -14,15 +16,17 @@ data class LifeMatter(
     val title: String,
     val state: LifeMatterState,
     val revision: Long,
-    val photonRevisionKeys: Set<String>,
+    val photonRevisions: Set<PhotonRevisionRef>,
     val relationMatterIds: Set<String> = emptySet(),
 ) {
     init {
         require(matterId.isNotBlank())
         require(title.isNotBlank())
         require(revision > 0)
-        require(photonRevisionKeys.none { it.isBlank() })
         require(relationMatterIds.none { it.isBlank() })
         require(matterId !in relationMatterIds)
     }
+
+    /** Stable compatibility view for indexes that still persist string keys. */
+    val photonRevisionKeys: Set<String> get() = photonRevisions.mapTo(linkedSetOf()) { it.stableKey }
 }
