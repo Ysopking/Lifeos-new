@@ -1,6 +1,7 @@
 package app.lifeos.core.runtime
 
 import app.lifeos.core.model.CausalTraceId
+import app.lifeos.core.model.ModuleWorkspaceSnapshot
 import app.lifeos.core.model.Photon
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -21,15 +22,16 @@ fun interface CausalPhotonSink {
 }
 
 /**
- * LifeOsRuntime implementation for deterministic module fan-out/fan-in cognition.
- * It is additive beside the legacy ForceField runtime so migration can happen subsystem by
- * subsystem without invalidating persisted tasks or boot state.
+ * Primary deterministic module fan-out/fan-in runtime.
+ * Canonical processing evidence is mirrored into ModuleEvidenceRuntime so workspace,
+ * outcome learning and replay all consume the same records persisted by the causal engine.
  */
 class CausalCognitiveRuntime(
     private val scope: CoroutineScope,
     private val moduleRegistry: CognitiveModuleRegistry,
     private val engine: CausalCognitionEngine,
     private val photonSink: CausalPhotonSink = CausalPhotonSink.NO_OP,
+    private val moduleEvidence: ModuleEvidenceRuntime = ModuleEvidenceRuntime(),
 ) : LifeOsRuntime {
     private val queue = Channel<Photon>(Channel.BUFFERED)
     private var worker: Job? = null
@@ -41,9 +43,7 @@ class CausalCognitiveRuntime(
         mutableState.update { it.copy(status = RuntimeStatus.STARTING) }
         val next = scope.launch {
             mutableState.update { it.copy(status = RuntimeStatus.RUNNING) }
-            for (photon in queue) {
-                processPhoton(photon)
-            }
+            for (photon in queue) processPhoton(photon)
         }
         worker = next
         next.invokeOnCompletion { cause ->
@@ -71,6 +71,17 @@ class CausalCognitiveRuntime(
         queue.send(photon)
     }
 
+    suspend fun moduleWorkspace(): ModuleWorkspaceSnapshot = moduleEvidence.workspace(
+        moduleRegistry.activeModules().map { it.descriptor.identity },
+    )
+
+    suspend fun verifyRecordedReplay(): Boolean {
+        val envelopes = moduleEvidence.replayEnvelopes()
+        return moduleEvidence.verifyReplay(envelopes.map { it.processing })
+    }
+
+    fun evidenceRuntime(): ModuleEvidenceRuntime = moduleEvidence
+
     private suspend fun processPhoton(photon: Photon) {
         val result = try {
             engine.process(photon, moduleRegistry.activeModules())
@@ -91,6 +102,8 @@ class CausalCognitiveRuntime(
             }
             return
         }
+
+        result.ledgerEntry.processingRecords.forEach { moduleEvidence.recordProcessing(it) }
 
         val sinkFailures = mutableListOf<RuntimeFailure>()
         result.emittedPhotons.forEach { emitted ->
