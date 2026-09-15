@@ -100,7 +100,8 @@ fun interface DeepSearchCheckpointSink {
 
 object DeepSearchPlannerCheckpointCodec {
     private const val MAGIC = 0x44534332 // DSC2
-    private const val VERSION = 1
+    private const val VERSION = 2
+    private const val LEGACY_VERSION = 1
     private const val MAX_STRING_BYTES = 256 * 1024
     private const val MAX_ITEMS = 16_384
     const val MAX_PAYLOAD_BYTES = 32 * 1024 * 1024
@@ -130,12 +131,15 @@ object DeepSearchPlannerCheckpointCodec {
         require(bytes.isNotEmpty() && bytes.size <= MAX_PAYLOAD_BYTES)
         val input = DataInputStream(ByteArrayInputStream(bytes))
         require(input.readInt() == MAGIC) { "Invalid DeepSearch checkpoint magic" }
-        require(input.readInt() == VERSION) { "Unsupported DeepSearch checkpoint version" }
+        val version = input.readInt()
+        require(version == LEGACY_VERSION || version == VERSION) {
+            "Unsupported DeepSearch checkpoint version"
+        }
         val fingerprint = read(input)
         val request = readRequest(input)
         val frontier = readFrontier(input, request)
         val evidenceCount = readListSize(input)
-        val evidence = List(evidenceCount) { readEvidence(input, request.id) }
+        val evidence = List(evidenceCount) { readEvidence(input, request.id, version) }
         val traceCount = readListSize(input)
         val trace = List(traceCount) { readTrace(input) }
         val checkpoint = DeepSearchPlannerCheckpoint(
@@ -264,21 +268,38 @@ object DeepSearchPlannerCheckpointCodec {
         write(out, value.statement)
         out.writeDouble(value.confidence)
         writeNullable(out, value.sourcePhotonId?.value)
+        writeNullableLong(out, value.sourcePhotonRevision)
         writeNullable(out, value.fieldEvidenceId?.value)
         out.writeBoolean(value.contradiction)
     }
 
-    private fun readEvidence(input: DataInputStream, requestId: DeepSearchRequestId) = DeepSearchEvidence(
-        id = DeepSearchEvidenceId(read(input)),
-        requestId = requestId,
-        branchId = DeepSearchBranchId(read(input)),
-        sourceId = read(input),
-        statement = read(input),
-        confidence = input.readDouble(),
-        sourcePhotonId = readNullable(input)?.let(::PhotonId),
-        fieldEvidenceId = readNullable(input)?.let(::EvidenceId),
-        contradiction = input.readBoolean(),
-    )
+    private fun readEvidence(
+        input: DataInputStream,
+        requestId: DeepSearchRequestId,
+        version: Int,
+    ): DeepSearchEvidence {
+        val id = DeepSearchEvidenceId(read(input))
+        val branchId = DeepSearchBranchId(read(input))
+        val sourceId = read(input)
+        val statement = read(input)
+        val confidence = input.readDouble()
+        val sourcePhotonId = readNullable(input)?.let(::PhotonId)
+        val sourcePhotonRevision = if (version >= VERSION) readNullableLong(input) else null
+        val fieldEvidenceId = readNullable(input)?.let(::EvidenceId)
+        val contradiction = input.readBoolean()
+        return DeepSearchEvidence(
+            id = id,
+            requestId = requestId,
+            branchId = branchId,
+            sourceId = sourceId,
+            statement = statement,
+            confidence = confidence,
+            sourcePhotonId = sourcePhotonId,
+            fieldEvidenceId = fieldEvidenceId,
+            contradiction = contradiction,
+            sourcePhotonRevision = sourcePhotonRevision,
+        )
+    }
 
     private fun writeTrace(out: DataOutputStream, value: DeepSearchTraceEvent) {
         out.writeInt(value.sequence)
@@ -321,6 +342,14 @@ object DeepSearchPlannerCheckpointCodec {
     }
 
     private fun readNullable(input: DataInputStream): String? = if (input.readBoolean()) read(input) else null
+
+    private fun writeNullableLong(out: DataOutputStream, value: Long?) {
+        out.writeBoolean(value != null)
+        if (value != null) out.writeLong(value)
+    }
+
+    private fun readNullableLong(input: DataInputStream): Long? =
+        if (input.readBoolean()) input.readLong().also { require(it > 0L) } else null
 
     private fun writeListSize(out: DataOutputStream, size: Int) {
         require(size in 0..MAX_ITEMS)
