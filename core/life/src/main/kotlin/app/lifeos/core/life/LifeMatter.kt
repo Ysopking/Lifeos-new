@@ -1,0 +1,28 @@
+package app.lifeos.core.life
+
+enum class LifeMatterState {
+    OPEN,
+    ACTION_REQUIRED,
+    WAITING,
+    RESOLVED,
+    ARCHIVED,
+}
+
+data class LifeMatter(
+    val matterId: String,
+    val domainId: LifeDomainId,
+    val title: String,
+    val state: LifeMatterState,
+    val revision: Long,
+    val photonRevisionKeys: Set<String>,
+    val relationMatterIds: Set<String> = emptySet(),
+) {
+    init {
+        require(matterId.isNotBlank())
+        require(title.isNotBlank())
+        require(revision > 0)
+        require(photonRevisionKeys.none { it.isBlank() })
+        require(relationMatterIds.none { it.isBlank() })
+        require(matterId !in relationMatterIds)
+    }
+}
