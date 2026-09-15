@@ -66,7 +66,7 @@ class CodingAssistantCoordinatorTest {
         val result = coordinator.prepareImplementation(audit, proposal, spec, design, planner)
         val prepared = assertIs<CodingImplementationPreparation.Prepared>(result)
         assertFalse(prepared.activationAllowed)
-        assertEquals(setOf(sourcePath, testPath), prepared.patchPlan.operations.mapTo(setOf()) { it.path })
+        assertEquals(setOf(sourcePath, testPath), prepared.patchPlan.operations.map { it.path }.toSet())
     }
 
     @Test
