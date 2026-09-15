@@ -37,7 +37,7 @@ class ModuleEvidenceRuntimeTest {
         val trace = CausalTraceId("trace")
         val branch = PhotonBranchId("branch")
         val input = PhotonId("input")
-        val state = CognitiveStateHash("state")
+        val state = StableCognitiveIds.stateHash("test-state")
         return ModuleProcessingRecord(
             processingId = ModuleProcessingId("processing"), traceId = trace, branchId = branch,
             module = module, inputPhotonId = input, inputRevision = 1,
