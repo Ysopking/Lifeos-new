@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.informationasset
 import app.lifeos.core.field.EvidenceId
 import app.lifeos.core.field.EvidenceReliability
 import app.lifeos.core.field.FieldDomainId
+import app.lifeos.core.field.FieldEvidence
 import app.lifeos.core.field.SourceAuthority
 import app.lifeos.core.field.TemporalValidity
 import app.lifeos.core.model.CanonicalPhotonState
@@ -46,7 +47,10 @@ data class PhotonRevisionReference(
     val inputStateHash: CognitiveStateHash,
     val semanticStateHash: CognitiveStateHash,
 ) {
-    init { require(revision > 0) { "Photon revision reference must be positive" } }
+    init {
+        require(photonId.value.isNotBlank()) { "Photon revision reference id must not be blank" }
+        require(revision > 0) { "Photon revision reference must be positive" }
+    }
 
     fun fingerprint(): String = InformationAssetFingerprints.fingerprint(
         "photon-revision-reference/v1",
@@ -138,6 +142,29 @@ data class InformationEvidenceBinding(
                 validity = validity,
                 observedAt = observedAt,
                 payloadFingerprint = payloadFingerprint,
+            )
+        }
+
+        fun fromFieldEvidence(
+            sourcePhoton: Photon,
+            evidence: FieldEvidence,
+        ): InformationEvidenceBinding {
+            require(evidence.sourcePhotonId == sourcePhoton.id) {
+                "Field evidence source Photon id does not match supplied Photon"
+            }
+            require(evidence.sourceRevision == sourcePhoton.revision) {
+                "Field evidence source revision does not match supplied Photon"
+            }
+            return create(
+                source = PhotonRevisionReference.from(sourcePhoton),
+                fieldEvidenceId = evidence.id,
+                domainId = evidence.domainId,
+                authority = evidence.authority,
+                confidence = evidence.confidence,
+                reliability = evidence.reliability,
+                validity = evidence.validity,
+                observedAt = evidence.observedAt,
+                payloadFingerprint = evidence.payload.stableFingerprint(),
             )
         }
     }
@@ -298,7 +325,9 @@ data class InformationAssetRevisionRef(
     val assetId: InformationAssetId,
     val revisionId: InformationAssetRevisionId,
     val photonId: PhotonId,
-)
+) {
+    init { require(photonId.value.isNotBlank()) { "Information asset revision Photon id must not be blank" } }
+}
 
 data class InformationAssetRevisionManifest(
     val id: InformationAssetRevisionId,
@@ -310,8 +339,8 @@ data class InformationAssetRevisionManifest(
     val resolution: InformationAssetResolutionState,
 ) {
     init {
-        require(sourcePhotons.distinct().size == sourcePhotons.size) {
-            "Information asset source Photon revisions must be unique"
+        require(sourcePhotons.map { it.photonId to it.revision }.distinct().size == sourcePhotons.size) {
+            "Information asset cannot contain two states for the same Photon id and revision"
         }
         require(domainIds.isNotEmpty()) { "Information asset requires at least one domain" }
         require(participatingModules.isNotEmpty()) { "Information asset requires participating modules" }
@@ -340,7 +369,31 @@ data class InformationAssetRevision(
         require(request.primaryDomainId in manifest.domainIds) {
             "Information asset manifest must retain the primary domain"
         }
+        require(parentMatchesRequest()) { "Information asset parent belongs to a different logical asset" }
+        val bindingIds = evidenceBindings.mapTo(mutableSetOf()) { it.id }
+        require(claims.all { claim -> claim.evidenceBindingIds.all(bindingIds::contains) }) {
+            "Information asset revision contains a claim with unknown evidence"
+        }
+        val claimIds = claims.mapTo(mutableSetOf()) { it.id }
+        require(claims.all { claim -> claim.derivedFromClaimIds.all(claimIds::contains) }) {
+            "Information asset revision contains a claim with unknown parent claim"
+        }
+        require(conflicts.all { conflict -> conflict.claimIds.all(claimIds::contains) }) {
+            "Information asset revision contains a conflict with unknown claim"
+        }
+        val representedDomains = buildSet {
+            add(request.primaryDomainId)
+            evidenceBindings.forEach { add(it.domainId) }
+            claims.forEach { add(it.domainId) }
+            conflicts.forEach { add(it.domainId) }
+        }
+        require(manifest.domainIds.containsAll(representedDomains)) {
+            "Information asset manifest dropped a represented domain"
+        }
     }
+
+    private fun parentMatchesRequest(): Boolean =
+        manifest.parent == null || manifest.parent.assetId == request.id
 }
 
 data class InformationAsset(
