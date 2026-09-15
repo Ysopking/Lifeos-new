@@ -11,7 +11,6 @@ data class EpistemicProfile(
         require(domain.isNotBlank())
         listOf(expertiseMicros, calibrationMicros, coverageMicros, reliabilityMicros).forEach { require(it in 0..1_000_000) }
     }
-
     val fitMicros: Long get() = (expertiseMicros + calibrationMicros + coverageMicros + reliabilityMicros) / 4L
 }
 
@@ -37,19 +36,21 @@ class EpistemicCoalitionSelector {
     fun select(candidates: Collection<ModuleRouteCandidate>, budget: CognitiveResourceBudget): ModuleCoalition {
         var cost = 0L
         val covered = linkedSetOf<String>()
-        val selected = candidates.sortedWith(
+        val selected = mutableListOf<ModuleRouteCandidate>()
+        candidates.sortedWith(
             compareByDescending<ModuleRouteCandidate> { it.profile.fitMicros }
                 .thenBy { it.estimatedCostMicros }
                 .thenBy { it.module.stableFingerprint }
-        ).filter { candidate ->
+        ).forEach { candidate ->
+            if (selected.size >= budget.maxModules) return@forEach
             val addsDiversity = candidate.complementaryTags.isEmpty() || candidate.complementaryTags.any { it !in covered }
             val fits = cost + candidate.estimatedCostMicros <= budget.maxCostMicros
-            if (addsDiversity && fits && covered.size < budget.maxModules) {
+            if (addsDiversity && fits) {
+                selected += candidate
                 cost += candidate.estimatedCostMicros
                 covered += candidate.complementaryTags
-                true
-            } else false
-        }.take(budget.maxModules)
+            }
+        }
         return ModuleCoalition(selected.map { it.module }, cost)
     }
 }
