@@ -22,6 +22,7 @@ object InformationAssetCodec {
     const val MAX_PAYLOAD_BYTES = 32 * 1024 * 1024
 
     fun encode(revision: InformationAssetRevision): ByteArray {
+        InformationAssetRevisionIntegrity.requireValid(revision)
         val bytes = ByteArrayOutputStream()
         DataOutputStream(bytes).use { out ->
             out.writeInt(MAGIC)
@@ -66,7 +67,7 @@ object InformationAssetCodec {
             claims = claims.sortedBy { it.id.value },
             conflicts = conflicts.sortedBy { it.id.value },
             manifest = manifest,
-        )
+        ).also(InformationAssetRevisionIntegrity::requireValid)
     }
 
     fun canonicalFingerprint(revision: InformationAssetRevision): String =
