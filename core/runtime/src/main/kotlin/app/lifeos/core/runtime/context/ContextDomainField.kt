@@ -232,6 +232,7 @@ class ContextDomainField(
         FieldContextScope.CURRENT_PROJECT -> 0.85
         FieldContextScope.PERSON_CONTEXT -> 0.75
         FieldContextScope.DOCUMENT_CONTEXT -> 0.75
+        FieldContextScope.ORGANIZATION_CONTEXT,
         FieldContextScope.FINANCIAL_CONTEXT,
         FieldContextScope.LEGAL_CONTEXT,
         FieldContextScope.SCIENTIFIC_CONTEXT -> 0.80
