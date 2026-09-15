@@ -121,10 +121,17 @@ data class DeepSearchEvidenceDraft(
     val sourcePhotonId: PhotonId? = null,
     val fieldEvidenceId: EvidenceId? = null,
     val contradiction: Boolean = false,
+    val sourcePhotonRevision: Long? = null,
 ) {
     init {
         require(statement.isNotBlank()) { "DeepSearch evidence statement must not be blank" }
         require(confidence.isFinite() && confidence in 0.0..1.0)
+        require(sourcePhotonRevision == null || sourcePhotonId != null) {
+            "DeepSearch source Photon revision requires a source Photon id"
+        }
+        require(sourcePhotonRevision == null || sourcePhotonRevision > 0L) {
+            "DeepSearch source Photon revision must be positive"
+        }
     }
 }
 
@@ -153,11 +160,18 @@ data class DeepSearchEvidence(
     val sourcePhotonId: PhotonId?,
     val fieldEvidenceId: EvidenceId?,
     val contradiction: Boolean,
+    val sourcePhotonRevision: Long? = null,
 ) {
     init {
         require(sourceId.isNotBlank())
         require(statement.isNotBlank())
         require(confidence.isFinite() && confidence in 0.0..1.0)
+        require(sourcePhotonRevision == null || sourcePhotonId != null) {
+            "DeepSearch source Photon revision requires a source Photon id"
+        }
+        require(sourcePhotonRevision == null || sourcePhotonRevision > 0L) {
+            "DeepSearch source Photon revision must be positive"
+        }
     }
 }
 
