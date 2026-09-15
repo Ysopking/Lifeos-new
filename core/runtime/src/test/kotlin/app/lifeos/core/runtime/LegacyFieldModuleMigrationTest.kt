@@ -9,13 +9,13 @@ import kotlin.test.assertFailsWith
 
 class LegacyFieldModuleMigrationTest {
     @Test fun migrationPreservesCanonicalIdentity() {
-        val identity = ModuleIdentity("legacy", "1", setOf("legacy-capability"), "implementation")
+        val identity = ModuleIdentity("legacy", "1", "implementation", setOf("legacy-capability"))
         val module = LegacyFieldModuleMigration.migrate(LegacyFieldModuleSpec(identity, NoOpField))
         assertEquals(identity, module.descriptor.identity)
     }
 
     @Test fun duplicateImplementationsAreRejected() {
-        val identity = ModuleIdentity("legacy", "1", setOf("legacy-capability"), "implementation")
+        val identity = ModuleIdentity("legacy", "1", "implementation", setOf("legacy-capability"))
         assertFailsWith<IllegalArgumentException> {
             LegacyFieldModuleMigration.migrateAll(listOf(
                 LegacyFieldModuleSpec(identity, NoOpField),
