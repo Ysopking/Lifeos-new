@@ -33,7 +33,7 @@ class ModuleEvidenceRuntimeTest {
     }
 
     private fun fixtureRecord(): ModuleProcessingRecord {
-        val module = ModuleIdentity("test-module", "1", setOf("test"), "impl")
+        val module = ModuleIdentity("test-module", "1", "impl", setOf("test"))
         val trace = CausalTraceId("trace")
         val branch = PhotonBranchId("branch")
         val input = PhotonId("input")
