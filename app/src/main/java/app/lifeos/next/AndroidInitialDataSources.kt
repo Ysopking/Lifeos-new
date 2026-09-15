@@ -198,7 +198,7 @@ private class AndroidCalendarInitialDataSource(
                 while (cursor.moveToNext()) {
                     val rowId = cursor.long(CalendarContract.Events._ID)
                     val calendarId = cursor.long(CalendarContract.Events.CALENDAR_ID)
-                    val title = clean(cursor.string(CalendarContract.Contacts.DISPLAY_NAME_PRIMARY))
+                    val title = clean(cursor.string(CalendarContract.Events.TITLE))
                     val description = clean(cursor.string(CalendarContract.Events.DESCRIPTION))
                     val location = clean(cursor.string(CalendarContract.Events.EVENT_LOCATION))
                     val start = cursor.longOrNull(CalendarContract.Events.DTSTART) ?: 0L
