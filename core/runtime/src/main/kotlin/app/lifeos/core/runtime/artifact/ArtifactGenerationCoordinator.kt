@@ -7,6 +7,7 @@ import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
+import app.lifeos.core.runtime.informationasset.InformationAssetRevisionRef
 import java.time.Instant
 
 object ArtifactGenerationContract {
@@ -23,11 +24,23 @@ data class ArtifactGenerationRequest(
     val finalizedAt: Instant,
     val materializedAsset: AssetRef,
     val parentRevision: ArtifactRevisionRef? = null,
+    val semanticInputRevisions: List<InformationAssetRevisionRef> = emptyList(),
 ) {
     init {
         profile.requireCompatible(request.kind)
         require(materializedAsset.mediaType == request.targetMimeType) {
             "Materialized asset MIME type ${materializedAsset.mediaType} does not match requested ${request.targetMimeType}"
+        }
+        require(semanticInputRevisions.map { it.assetId }.distinct().size == semanticInputRevisions.size) {
+            "Artifact generation cannot bind multiple revisions of one InformationAsset"
+        }
+        val contributionParents = contributions.flatMap { it.provenance.parentIds }.toSet()
+        val unrepresentedSemanticInputs = semanticInputRevisions
+            .map { it.photonId }
+            .toSet() - contributionParents
+        require(unrepresentedSemanticInputs.isEmpty()) {
+            "Artifact generation semantic inputs must already be represented by contribution provenance: " +
+                unrepresentedSemanticInputs.map { it.value }.sorted().joinToString(",")
         }
     }
 }
@@ -61,6 +74,13 @@ class ArtifactGenerationCoordinator(
         val revision = requireNotNull(artifact.revision) {
             "Generated artifacts require an immutable revision manifest"
         }
+        val missingSemanticInputs = generation.semanticInputRevisions
+            .map { it.photonId }
+            .toSet() - revision.inputPhotonIds
+        require(missingSemanticInputs.isEmpty()) {
+            "Artifact generation semantic inputs are not retained by Artifact revision: " +
+                missingSemanticInputs.map { it.value }.sorted().joinToString(",")
+        }
         val generationPhoton = createGenerationPhoton(
             generation = generation,
             artifactPhoton = artifact.photon,
@@ -81,13 +101,21 @@ class ArtifactGenerationCoordinator(
         revision: ArtifactRevisionManifest,
         effectiveFinalizedAt: Instant,
     ): Photon {
+        val semanticParts = generation.semanticInputRevisions
+            .sortedWith(
+                compareBy<InformationAssetRevisionRef> { it.assetId.value }
+                    .thenBy { it.revisionId.value }
+                    .thenBy { it.photonId.value }
+            )
+            .flatMap { ref -> listOf(ref.assetId.value, ref.revisionId.value, ref.photonId.value) }
+        val fingerprintParts = generation.profile.fingerprintParts() + semanticParts
         val fingerprint = ArtifactFingerprints.fingerprint(
             "artifact-generation-photon/v1",
             generation.request.id.value,
             revision.id.value,
             artifactPhoton.id.value,
             generation.materializedAsset.sha256,
-            *generation.profile.fingerprintParts().toTypedArray(),
+            *fingerprintParts.toTypedArray(),
         )
         val photonId = PhotonId("artifact_generation_$fingerprint")
         val inputPhotonIds = revision.inputPhotonIds.toSortedSet(compareBy { it.value })
@@ -123,6 +151,14 @@ class ArtifactGenerationCoordinator(
                 add("artifact-revision:${revision.id.value}")
                 add("artifact-generation-profile:${generation.profile.type}")
                 add("artifact-output-sha256:${generation.materializedAsset.sha256}")
+                generation.semanticInputRevisions
+                    .sortedWith(
+                        compareBy<InformationAssetRevisionRef> { it.assetId.value }
+                            .thenBy { it.revisionId.value }
+                    )
+                    .forEach { ref ->
+                        add("information-asset-input:${ref.assetId.value}:${ref.revisionId.value}:${ref.photonId.value}")
+                    }
                 when (val profile = generation.profile) {
                     is DocumentArtifactProfile -> add("artifact-document-format:${profile.format}")
                     is CodeArtifactProfile -> add("artifact-code-language:${profile.language}")
@@ -166,6 +202,24 @@ class ArtifactGenerationCoordinator(
         }
         append("],\"profile\":")
         appendProfile(generation.profile)
+        if (generation.semanticInputRevisions.isNotEmpty()) {
+            append(",\"informationAssetInputs\":[")
+            generation.semanticInputRevisions
+                .sortedWith(
+                    compareBy<InformationAssetRevisionRef> { it.assetId.value }
+                        .thenBy { it.revisionId.value }
+                        .thenBy { it.photonId.value }
+                )
+                .forEachIndexed { index, ref ->
+                    if (index > 0) append(',')
+                    append('{')
+                    append("\"assetId\":"); appendJson(ref.assetId.value); append(',')
+                    append("\"revisionId\":"); appendJson(ref.revisionId.value); append(',')
+                    append("\"photonId\":"); appendJson(ref.photonId.value)
+                    append('}')
+                }
+            append(']')
+        }
         append('}')
     }
 
