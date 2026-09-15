@@ -29,6 +29,7 @@ enum class WorldNodeKind {
     THOUGHT,
     CAPABILITY,
     HEALTH,
+    MODULE,
 }
 
 /**
@@ -49,6 +50,12 @@ enum class WorldSignalDimension {
     CAPABILITY_READINESS,
     HEALTH_STABILITY,
     COGNITIVE_PRIORITY,
+    KNOWLEDGE_STRENGTH,
+    EXPERTISE,
+    CALIBRATION,
+    EXPERIENCE_DEPTH,
+    MODULE_CONFIDENCE,
+    HARDWARE_FIT,
 }
 
 data class WorldTargetRef(
