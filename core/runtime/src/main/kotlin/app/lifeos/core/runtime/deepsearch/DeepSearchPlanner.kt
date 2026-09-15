@@ -427,7 +427,7 @@ class DeepSearchPlanner(
                 DeepSearchEvidence(
                     id = DeepSearchEvidenceId(
                         StableFieldIds.fingerprint(
-                            "deep-search-evidence/v1",
+                            "deep-search-evidence/v2",
                             candidateSeed,
                             index.toString(),
                             evidenceDraftKey(evidenceDraft),
@@ -441,6 +441,7 @@ class DeepSearchPlanner(
                     sourcePhotonId = evidenceDraft.sourcePhotonId,
                     fieldEvidenceId = evidenceDraft.fieldEvidenceId,
                     contradiction = evidenceDraft.contradiction,
+                    sourcePhotonRevision = evidenceDraft.sourcePhotonRevision,
                 )
             }
         val hypothesis = DeepSearchHypothesis(
@@ -539,10 +540,11 @@ class DeepSearchPlanner(
             .thenBy { it.contradiction }
             .thenByDescending { it.confidence }
             .thenBy { it.sourcePhotonId?.value.orEmpty() }
+            .thenBy { it.sourcePhotonRevision ?: Long.MIN_VALUE }
             .thenBy { it.fieldEvidenceId?.value.orEmpty() }
 
     private fun draftKey(draft: DeepSearchFindingDraft): String = StableFieldIds.fingerprint(
-        "deep-search-finding-draft/v1",
+        "deep-search-finding-draft/v2",
         normalizeSearchText(draft.statement),
         java.lang.Double.toHexString(draft.confidence),
         draft.fieldHypothesisId?.value.orEmpty(),
@@ -551,10 +553,11 @@ class DeepSearchPlanner(
     )
 
     private fun evidenceDraftKey(draft: DeepSearchEvidenceDraft): String = StableFieldIds.fingerprint(
-        "deep-search-evidence-draft/v1",
+        "deep-search-evidence-draft/v2",
         normalizeSearchText(draft.statement),
         java.lang.Double.toHexString(draft.confidence),
         draft.sourcePhotonId?.value.orEmpty(),
+        draft.sourcePhotonRevision?.toString().orEmpty(),
         draft.fieldEvidenceId?.value.orEmpty(),
         draft.contradiction.toString(),
     )

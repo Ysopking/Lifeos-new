@@ -225,6 +225,7 @@ internal class AndroidWebDeepSearchSource(
                         statement = statement,
                         confidence = hit.confidence,
                         sourcePhotonId = evidencePhoton.id,
+                        sourcePhotonRevision = evidencePhoton.revision,
                     )
                 ),
             )

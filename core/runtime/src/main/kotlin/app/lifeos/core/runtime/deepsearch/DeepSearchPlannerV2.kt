@@ -232,7 +232,6 @@ class DeepSearchPlannerV2(
                         hypothesisId = current.hypothesis.id,
                         detail = "reserved-work:$cost:total:$workUnits",
                     )
-                    // Durably charge work before invoking a source. Resume reuses this reservation.
                     persistCheckpoint()
                 }
 
@@ -251,7 +250,6 @@ class DeepSearchPlannerV2(
                     persistCheckpoint()
                     break@searchLoop
                 } catch (cancelled: CancellationException) {
-                    // Reservation was already persisted. Cancellation can safely retry without recharge.
                     throw cancelled
                 } catch (error: Exception) {
                     failed += sourceId
@@ -319,7 +317,6 @@ class DeepSearchPlannerV2(
                         }
                     }
                 }
-                // Persist the materialized evidence/frontier and expansion completion as one checkpoint.
                 persistCheckpoint()
             }
 
@@ -429,7 +426,6 @@ class DeepSearchPlannerV2(
         for (source in sources) {
             val sourceId = source.descriptor.sourceId
             if (initialDecisionBySource[sourceId] != DeepSearchTraceType.SOURCE_AUTHORIZED) {
-                // Initial blocks remain closed for this mission; privilege cannot appear mid-search.
                 continue
             }
             if (timeExceeded()) break
@@ -603,7 +599,7 @@ class DeepSearchPlannerV2(
                 DeepSearchEvidence(
                     id = DeepSearchEvidenceId(
                         StableFieldIds.fingerprint(
-                            "deep-search-evidence/v1",
+                            "deep-search-evidence/v2",
                             candidateSeed,
                             index.toString(),
                             evidenceDraftKey(evidenceDraft),
@@ -617,6 +613,7 @@ class DeepSearchPlannerV2(
                     sourcePhotonId = evidenceDraft.sourcePhotonId,
                     fieldEvidenceId = evidenceDraft.fieldEvidenceId,
                     contradiction = evidenceDraft.contradiction,
+                    sourcePhotonRevision = evidenceDraft.sourcePhotonRevision,
                 )
             }
         val hypothesis = DeepSearchHypothesis(
@@ -702,10 +699,11 @@ class DeepSearchPlannerV2(
             .thenBy { it.contradiction }
             .thenByDescending { it.confidence }
             .thenBy { it.sourcePhotonId?.value.orEmpty() }
+            .thenBy { it.sourcePhotonRevision ?: Long.MIN_VALUE }
             .thenBy { it.fieldEvidenceId?.value.orEmpty() }
 
     private fun draftKey(draft: DeepSearchFindingDraft): String = StableFieldIds.fingerprint(
-        "deep-search-finding-draft/v1",
+        "deep-search-finding-draft/v2",
         normalizeSearchText(draft.statement),
         java.lang.Double.toHexString(draft.confidence),
         draft.fieldHypothesisId?.value.orEmpty(),
@@ -714,10 +712,11 @@ class DeepSearchPlannerV2(
     )
 
     private fun evidenceDraftKey(draft: DeepSearchEvidenceDraft): String = StableFieldIds.fingerprint(
-        "deep-search-evidence-draft/v1",
+        "deep-search-evidence-draft/v2",
         normalizeSearchText(draft.statement),
         java.lang.Double.toHexString(draft.confidence),
         draft.sourcePhotonId?.value.orEmpty(),
+        draft.sourcePhotonRevision?.toString().orEmpty(),
         draft.fieldEvidenceId?.value.orEmpty(),
         draft.contradiction.toString(),
     )
