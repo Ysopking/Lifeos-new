@@ -26,10 +26,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Atomic encrypted append-only event ledger backed by bounded immutable-ish segments.
- *
- * Only the active segment is rewritten on append, which bounds write amplification independently of the
- * total event history. Existing v1 single-ledger installs are migrated once under the same store authority.
+ * Atomic encrypted append-only event ledger backed by bounded segments.
+ * Only the active segment is rewritten on append, so write amplification is independent of total history.
+ * Existing v1 single-ledger installs migrate once under this same store authority.
  */
 class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
     private val legacyFile = AtomicFile(context.filesDir.resolve(LEGACY_FILE_NAME))
@@ -37,7 +36,6 @@ class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
     private val migrationMarker = AtomicFile(segmentDirectory.resolve(MIGRATION_MARKER_NAME))
     private val key: SecretKey by lazy { loadOrCreateKey() }
     private val mutex = Mutex()
-
     private val knownEventIds = LinkedHashSet<CognitiveEventId>()
     private var initialized = false
     private var lastSequence = 0L
@@ -47,23 +45,20 @@ class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
             ensureInitialized()
             require(lastSequence < MAX_EVENTS.toLong()) { "Cognitive event ledger event limit reached" }
             require(event.eventId !in knownEventIds) { "Duplicate cognitive event id" }
-            val expected = lastSequence + 1L
-            require(event.sequence == expected) { "Non-monotonic cognitive event sequence" }
+            require(event.sequence == lastSequence + 1L) { "Non-monotonic cognitive event sequence" }
 
-            val segments = segmentFiles()
-            val activeFile = segments.lastOrNull()
+            val activeFile = segmentFiles().lastOrNull()
             if (activeFile == null) {
                 writeSegment(segmentFile(event.sequence), listOf(event))
             } else {
-                val activeEvents = readSegment(activeFile)
-                if (activeEvents.size >= SEGMENT_EVENT_CAPACITY) {
+                val active = readSegment(activeFile)
+                if (active.size == SEGMENT_EVENT_CAPACITY) {
                     writeSegment(segmentFile(event.sequence), listOf(event))
                 } else {
-                    require(activeEvents.last().sequence == lastSequence) { "Active cognitive event segment is not the ledger tail" }
-                    writeSegment(activeFile, activeEvents + event)
+                    require(active.last().sequence == lastSequence) { "Active cognitive event segment is not the ledger tail" }
+                    writeSegment(activeFile, active + event)
                 }
             }
-
             knownEventIds += event.eventId
             lastSequence = event.sequence
         }
@@ -71,16 +66,11 @@ class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
 
     override suspend fun eventsAfter(sequenceExclusive: Long): List<CognitiveEvent> = withContext(Dispatchers.IO) {
         mutex.withLock {
-            require(sequenceExclusive >= 0)
+            require(sequenceExclusive >= 0L)
             ensureInitialized()
             if (sequenceExclusive >= lastSequence) return@withLock emptyList()
-
-            segmentFiles()
-                .asSequence()
-                .filter { file ->
-                    val start = segmentStart(file)
-                    start + SEGMENT_EVENT_CAPACITY - 1L > sequenceExclusive
-                }
+            segmentFiles().asSequence()
+                .filter { segmentStart(it) + SEGMENT_EVENT_CAPACITY - 1L > sequenceExclusive }
                 .flatMap { readSegment(it).asSequence() }
                 .filter { it.sequence > sequenceExclusive }
                 .toList()
@@ -90,28 +80,26 @@ class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
     private fun ensureInitialized() {
         if (initialized) return
         require(segmentDirectory.exists() || segmentDirectory.mkdirs()) { "Unable to create cognitive event segment directory" }
-
-        if (!atomicFileExists(migrationMarker)) {
-            if (atomicFileExists(legacyFile)) migrateLegacyLedger() else writeMigrationMarker()
+        if (atomicFileExists(migrationMarker)) {
+            validateMigrationMarker()
+        } else if (atomicFileExists(legacyFile)) {
+            migrateLegacyLedger()
+        } else {
+            writeMigrationMarker()
         }
-
         loadAndValidateSegmentState()
         initialized = true
     }
 
     private fun migrateLegacyLedger() {
-        // A missing marker means any v2 files are from an interrupted migration and are not authoritative.
-        segmentDirectory.listFiles()
-            ?.filter { it.name.startsWith(SEGMENT_PREFIX) }
-            ?.forEach { it.delete() }
-
+        // Without the marker, partially produced v2 files are never authoritative.
+        segmentDirectory.listFiles()?.filter { it.name.startsWith(SEGMENT_PREFIX) }?.forEach(File::delete)
         val legacyEvents = readLegacyInternal()
-        legacyEvents.chunked(SEGMENT_EVENT_CAPACITY).forEach { events ->
-            require(events.isNotEmpty())
-            writeSegment(segmentFile(events.first().sequence), events)
+        legacyEvents.chunked(SEGMENT_EVENT_CAPACITY).forEach { chunk ->
+            require(chunk.isNotEmpty())
+            writeSegment(segmentFile(chunk.first().sequence), chunk)
         }
-
-        // The marker is the commit point for the one-time migration. Keep v1 authoritative until it exists.
+        // Marker write is the migration commit point. v1 stays intact until this succeeds.
         writeMigrationMarker()
         legacyFile.delete()
     }
@@ -120,65 +108,50 @@ class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
         knownEventIds.clear()
         var expectedSequence = 1L
         val files = segmentFiles()
-
         files.forEachIndexed { index, file ->
             val events = readSegment(file)
-            require(events.isNotEmpty()) { "Empty cognitive event segment" }
-            require(events.size <= SEGMENT_EVENT_CAPACITY) { "Cognitive event segment too large" }
+            require(events.isNotEmpty() && events.size <= SEGMENT_EVENT_CAPACITY) { "Invalid cognitive event segment size" }
             require(segmentStart(file) == expectedSequence) { "Non-contiguous cognitive event segments" }
-            require(events.first().sequence == expectedSequence) { "Cognitive event segment start mismatch" }
-            if (index < files.lastIndex) {
-                require(events.size == SEGMENT_EVENT_CAPACITY) { "Non-terminal cognitive event segment is not sealed" }
-            }
-
+            if (index < files.lastIndex) require(events.size == SEGMENT_EVENT_CAPACITY) { "Non-terminal cognitive event segment is not sealed" }
             events.forEach { event ->
                 require(event.sequence == expectedSequence) { "Corrupt cognitive event sequence" }
                 require(knownEventIds.add(event.eventId)) { "Duplicate cognitive event id in ledger" }
-                expectedSequence += 1L
+                expectedSequence++
             }
         }
-
         lastSequence = expectedSequence - 1L
         require(lastSequence <= MAX_EVENTS.toLong()) { "Cognitive event ledger event limit exceeded" }
     }
 
     private fun segmentFiles(): List<File> {
         if (!segmentDirectory.exists()) return emptyList()
-        val normalizedNames = linkedSetOf<String>()
+        val names = linkedSetOf<String>()
         segmentDirectory.listFiles()?.forEach { file ->
             when {
-                file.name.startsWith(SEGMENT_PREFIX) && file.name.endsWith(SEGMENT_SUFFIX) -> normalizedNames += file.name
-                file.name.startsWith(SEGMENT_PREFIX) && file.name.endsWith("$SEGMENT_SUFFIX.bak") -> {
-                    normalizedNames += file.name.removeSuffix(".bak")
-                }
+                file.name.startsWith(SEGMENT_PREFIX) && file.name.endsWith(SEGMENT_SUFFIX) -> names += file.name
+                file.name.startsWith(SEGMENT_PREFIX) && file.name.endsWith("$SEGMENT_SUFFIX.bak") -> names += file.name.removeSuffix(".bak")
             }
         }
-        return normalizedNames
-            .map { segmentDirectory.resolve(it) }
-            .sortedBy(::segmentStart)
+        return names.map(segmentDirectory::resolve).sortedBy(::segmentStart)
     }
 
     private fun segmentFile(startSequence: Long): File =
         segmentDirectory.resolve("$SEGMENT_PREFIX${startSequence.toString().padStart(20, '0')}$SEGMENT_SUFFIX")
 
     private fun segmentStart(file: File): Long {
-        val name = file.name
-        require(name.startsWith(SEGMENT_PREFIX) && name.endsWith(SEGMENT_SUFFIX)) { "Invalid cognitive event segment name" }
-        return name.removePrefix(SEGMENT_PREFIX).removeSuffix(SEGMENT_SUFFIX).toLong().also {
-            require(it > 0L) { "Invalid cognitive event segment start" }
-        }
+        require(file.name.startsWith(SEGMENT_PREFIX) && file.name.endsWith(SEGMENT_SUFFIX)) { "Invalid cognitive event segment name" }
+        return file.name.removePrefix(SEGMENT_PREFIX).removeSuffix(SEGMENT_SUFFIX).toLong().also { require(it > 0L) }
     }
 
     private fun readSegment(file: File): List<CognitiveEvent> {
-        val plain = decryptContainer(AtomicFile(file), MAX_SEGMENT_BYTES)
-        val data = DataInputStream(ByteArrayInputStream(plain))
+        val data = DataInputStream(ByteArrayInputStream(decryptContainer(AtomicFile(file), MAX_SEGMENT_BYTES)))
         require(data.readInt() == SEGMENT_SCHEMA_VERSION) { "Unsupported cognitive event segment schema" }
-        val startSequence = data.readLong().also { require(it > 0L) }
+        val start = data.readLong().also { require(it > 0L) }
         val count = data.readInt().also { require(it in 1..SEGMENT_EVENT_CAPACITY) }
         val result = ArrayList<CognitiveEvent>(count)
         repeat(count) { offset ->
             val event = readEvent(data)
-            require(event.sequence == startSequence + offset) { "Corrupt cognitive event segment sequence" }
+            require(event.sequence == start + offset) { "Corrupt cognitive event segment sequence" }
             result += event
         }
         require(data.available() == 0) { "Trailing cognitive event segment data" }
@@ -187,17 +160,13 @@ class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
     }
 
     private fun writeSegment(file: File, events: List<CognitiveEvent>) {
-        require(events.isNotEmpty())
-        require(events.size <= SEGMENT_EVENT_CAPACITY)
-        val startSequence = events.first().sequence
-        events.forEachIndexed { index, event ->
-            require(event.sequence == startSequence + index) { "Non-contiguous cognitive event segment write" }
-        }
-
+        require(events.isNotEmpty() && events.size <= SEGMENT_EVENT_CAPACITY)
+        val start = events.first().sequence
+        events.forEachIndexed { index, event -> require(event.sequence == start + index) { "Non-contiguous cognitive event segment write" } }
         val plain = ByteArrayOutputStream()
         DataOutputStream(plain).use { data ->
             data.writeInt(SEGMENT_SCHEMA_VERSION)
-            data.writeLong(startSequence)
+            data.writeLong(start)
             data.writeInt(events.size)
             events.forEach { writeEvent(data, it) }
         }
@@ -205,8 +174,7 @@ class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
     }
 
     private fun readLegacyInternal(): List<CognitiveEvent> {
-        val plain = decryptContainer(legacyFile, MAX_LEDGER_BYTES)
-        val data = DataInputStream(ByteArrayInputStream(plain))
+        val data = DataInputStream(ByteArrayInputStream(decryptContainer(legacyFile, MAX_LEDGER_BYTES)))
         require(data.readInt() == LEGACY_LEDGER_SCHEMA_VERSION) { "Unsupported cognitive event ledger schema" }
         val count = data.readInt().also { require(it in 0..MAX_EVENTS) }
         val result = ArrayList<CognitiveEvent>(count)
@@ -251,9 +219,7 @@ class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
         input.readFully(iv)
         val encrypted = input.readBytes()
         require(encrypted.isNotEmpty()) { "Missing cognitive event ciphertext" }
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply {
-            init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
-        }
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv)) }
         return cipher.doFinal(encrypted)
     }
 
@@ -278,13 +244,22 @@ class EncryptedCognitiveEventStore(context: Context) : CognitiveEventStore {
         }
     }
 
+    private fun validateMigrationMarker() {
+        val data = DataInputStream(migrationMarker.openRead())
+        data.use {
+            require(it.readInt() == MIGRATION_MARKER_VERSION) { "Unsupported cognitive event migration marker" }
+            require(it.readUTF() == SEGMENT_DIRECTORY_NAME) { "Invalid cognitive event migration marker" }
+            require(it.available() == 0) { "Trailing cognitive event migration marker data" }
+        }
+    }
+
     private fun writeMigrationMarker() {
         val stream = migrationMarker.startWrite()
         try {
-            DataOutputStream(stream).use { out ->
-                out.writeInt(MIGRATION_MARKER_VERSION)
-                out.writeUTF(SEGMENT_DIRECTORY_NAME)
-            }
+            val out = DataOutputStream(stream)
+            out.writeInt(MIGRATION_MARKER_VERSION)
+            out.writeUTF(SEGMENT_DIRECTORY_NAME)
+            out.flush()
             migrationMarker.finishWrite(stream)
         } catch (error: Exception) {
             migrationMarker.failWrite(stream)
