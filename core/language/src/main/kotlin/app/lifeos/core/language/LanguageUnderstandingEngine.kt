@@ -355,7 +355,10 @@ class GoalPhotonFactory {
                     .append(escape(value.normalized)).append('|')
                     .append(value.entityType?.name.orEmpty()).append('|')
                     .append(value.resolved).append('|')
-                    .append(value.confidence).append('\n')
+                    .append(value.confidence).append('|')
+                    .append(escape(value.referencePhoton?.photonId?.value.orEmpty())).append('|')
+                    .append(value.referencePhoton?.revision ?: 0L)
+                    .append('\n')
             }
         }
         frame.semanticActionGraph.edges.forEachIndexed { index, edge ->
