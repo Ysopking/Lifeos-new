@@ -52,7 +52,10 @@ class FieldConvergenceEngineTest {
         val result = engine.converge(request)
 
         assertEquals(ConvergenceStatus.CONVERGED, result.status)
-        assertEquals("strong", assertNotNull(result.winner).semanticKey)
+        val winner = assertNotNull(result.winner)
+        assertEquals("strong", winner.semanticKey)
+        assertTrue(winner.score.temporal > 0.0)
+        assertEquals(SourceAuthority.AUTHORITATIVE.defaultWeight, winner.score.authority)
         assertTrue(result.iterations <= 12)
         assertTrue(result.hypotheses.first().score.total > result.hypotheses.last().score.total)
     }
