@@ -213,13 +213,14 @@ class PredicateFrameParser {
         }
 
         val resolvedReference = references
-            .filter { it.targetPhotonId != null }
+            .filter { it.targetPhotonRef != null }
             .maxByOrNull { it.score }
         if (resolvedReference != null && predicate in REFERENCE_OBJECT_PREDICATES) {
-            val id = requireNotNull(resolvedReference.targetPhotonId)
+            val ref = requireNotNull(resolvedReference.targetPhotonRef)
             roles[SemanticRole.OBJECT] = SemanticValue(
                 rawText = resolvedReference.expression.rawText,
-                normalized = id.value,
+                normalized = ref.photonId.value,
+                referencePhoton = ref,
                 resolved = true,
                 confidence = resolvedReference.score,
             )
