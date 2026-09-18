@@ -470,6 +470,8 @@ class LifeOsKernelFactory(
         val taskScheduler = PooledTaskScheduler(
             tasks = taskRepository,
             workers = workerPool,
+            scope = scope,
+            workerAvailableSignal = schedulerSignal,
             leaseDuration = TASK_LEASE_DURATION,
         )
         val schedulerLoop = TaskSchedulerLoop(
