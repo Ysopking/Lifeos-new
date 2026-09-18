@@ -550,6 +550,7 @@ class DurableLifeMemoryRuntime(
         val graph = graphProjector.project(graphEvidence)
         val raw = memoryEngine.projectDelta(
             current = current.memory,
+            allCurrentPhotons = authoritativeById.values,
             changed = changed.filter { it.id in authoritativeById },
             accessChanges = effectiveAccess,
             now = at,
