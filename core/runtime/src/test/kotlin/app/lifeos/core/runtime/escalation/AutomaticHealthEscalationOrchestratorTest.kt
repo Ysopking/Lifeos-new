@@ -36,6 +36,59 @@ class AutomaticHealthEscalationOrchestratorTest {
     }
 
     @Test
+    fun failedL2RecoveryEscalatesThroughCentralPolicyToL3() = runTest {
+        val selected = mutableListOf<EscalationLevel>()
+        val graph = HealthGraph()
+        val ledger = EscalationLedger(MemoryEscalationRepository()) { NOW }
+        val executors = EscalationExecutorRegistry(
+            EscalationLevel.entries.associateWith { level ->
+                EscalationLevelExecutor {
+                    selected += level
+                    if (level == EscalationLevel.L2_RECOVER_COMPONENT) {
+                        EscalationExecutionResult.Failed("repair-exhausted")
+                    } else {
+                        EscalationExecutionResult.Succeeded("executed:" + level.name)
+                    }
+                }
+            }
+        )
+        AutomaticHealthEscalationOrchestrator(
+            scope = backgroundScope,
+            graph = graph,
+            recoveryPlanner = object : HealthEscalationRecoveryPlanner {
+                override fun observeHealthy(nodeId: HealthNodeId) = Unit
+                override suspend fun recoveryAvailable(
+                    node: HealthNode,
+                    observation: HealthObservation,
+                ): Boolean = true
+            },
+            coordinator = EscalationCoordinator(
+                policy = EscalationPolicy(),
+                ledger = ledger,
+                executors = executors,
+            ),
+        ).start()
+        runCurrent()
+
+        recordFailure(
+            graph = graph,
+            nodeId = HealthNodeId("worker:l2-to-l3"),
+            scope = HealthScope.WORKER,
+            category = HealthFailureCategory.WORKER,
+            recoverable = true,
+        )
+        runCurrent()
+
+        assertEquals(
+            listOf(
+                EscalationLevel.L2_RECOVER_COMPONENT,
+                EscalationLevel.L3_QUARANTINE,
+            ),
+            selected,
+        )
+    }
+
+    @Test
     fun recoverableFailureWithoutSafePlanRoutesDirectlyToL3() = runTest {
         val selected = mutableListOf<EscalationLevel>()
         val graph = HealthGraph()
