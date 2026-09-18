@@ -126,18 +126,22 @@ data class WorldFieldGraph(
     }
 
     private val nodeById = nodes.associateBy { it.id }
+    private val stableNodesCache = nodes.sortedBy { it.id.value }
+    private val stableEdgesCache = edges.sortedBy { it.id.value }
+    private val incomingByNode = stableEdgesCache.groupBy { it.targetNodeId }
+    private val outgoingByNode = stableEdgesCache.groupBy { it.sourceNodeId }
 
     fun node(id: WorldFieldNodeId): WorldFieldNode? = nodeById[id]
 
-    fun stableNodes(): List<WorldFieldNode> = nodes.sortedBy { it.id.value }
+    fun stableNodes(): List<WorldFieldNode> = stableNodesCache
 
-    fun stableEdges(): List<WorldFieldEdge> = edges.sortedBy { it.id.value }
+    fun stableEdges(): List<WorldFieldEdge> = stableEdgesCache
 
-    fun incoming(nodeId: WorldFieldNodeId): List<WorldFieldEdge> = stableEdges()
-        .filter { it.targetNodeId == nodeId }
+    fun incoming(nodeId: WorldFieldNodeId): List<WorldFieldEdge> =
+        incomingByNode[nodeId].orEmpty()
 
-    fun outgoing(nodeId: WorldFieldNodeId): List<WorldFieldEdge> = stableEdges()
-        .filter { it.sourceNodeId == nodeId }
+    fun outgoing(nodeId: WorldFieldNodeId): List<WorldFieldEdge> =
+        outgoingByNode[nodeId].orEmpty()
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
         "world-field-graph/v1",
