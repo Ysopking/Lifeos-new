@@ -19,6 +19,8 @@ import app.lifeos.core.data.thought.EncryptedFieldThoughtGraphProjectionOutboxRe
 import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
 import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
+import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
+import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.LanguageUnderstandingEngine
@@ -39,6 +41,7 @@ import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.StaticFieldRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootSnapshotSource
 import app.lifeos.core.runtime.boot.TaskRepositoryBootSource
 import app.lifeos.core.runtime.boot.PhotonRepositoryBootSource
@@ -129,6 +132,11 @@ import app.lifeos.core.runtime.tasks.CognitiveWorkerPool
 import app.lifeos.core.runtime.tasks.CognitiveWorkerLane
 import app.lifeos.core.runtime.tasks.TaskSchedulerLoop
 import app.lifeos.core.runtime.thought.DurableThoughtGraph
+import app.lifeos.core.runtime.world.CognitiveCycleId
+import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
+import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
+import app.lifeos.core.runtime.world.ProductiveWorldHeadCommitter
+import app.lifeos.core.runtime.world.WorldFormulaCoordinator
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
 import app.lifeos.core.runtime.workers.CognitiveWorkerFactory
 import app.lifeos.core.runtime.workers.ReportingCognitiveTaskDispatcher
@@ -361,6 +369,26 @@ class LifeOsKernelFactory(
             graph = thoughtGraph,
         )
         val worldFormulaSnapshotRepository = EncryptedWorldFormulaSnapshotRepository(appContext)
+        val productiveWorldHeadRepository = EncryptedProductiveWorldHeadRepository(appContext)
+        val bootEngineCycleRepository = EncryptedBootEngineCycleRepository(appContext)
+        val cognitiveWorldEquationProfile = CognitiveWorldEquationProfile()
+        val worldFormulaCoordinator = WorldFormulaCoordinator(
+            equations = InMemoryWorldEquationRegistry(listOf(cognitiveWorldEquationProfile.spec)),
+            snapshots = worldFormulaSnapshotRepository,
+        )
+        val productiveWorldHeadCommitter = ProductiveWorldHeadCommitter(
+            snapshots = worldFormulaSnapshotRepository,
+            heads = productiveWorldHeadRepository,
+        )
+        val bootEngineRuntime = BootEngineRuntime(
+            cycles = bootEngineCycleRepository,
+            worldHeads = productiveWorldHeadRepository,
+            worldCoordinator = worldFormulaCoordinator,
+            worldCommitter = productiveWorldHeadCommitter,
+            newCycleId = {
+                CognitiveCycleId("cycle:${java.util.UUID.randomUUID()}")
+            },
+        )
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
             snapshotRepository = fieldSnapshotRepository,
             requestEnricher = DurableContextFieldEnricher(store),
@@ -707,6 +735,36 @@ class LifeOsKernelFactory(
                         }
                     },
                     object : StoreProbe {
+                        override val storeId: String = "productive-world-head-store"
+                        override suspend fun probe(): StoreStatus {
+                            val report = bootReadSession.readOnce("productive-world-head-store") {
+                                productiveWorldHeadRepository.loadReport()
+                            }
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.corrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
+                                message = report.message,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "bootengine-cycle-store"
+                        override suspend fun probe(): StoreStatus {
+                            val report = bootReadSession.readOnce("bootengine-cycle-store") {
+                                bootEngineCycleRepository.loadReport()
+                            }
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.corrupted) {
+                                    StoreState.PARTIALLY_RECOVERABLE
+                                } else {
+                                    StoreState.HEALTHY
+                                },
+                                message = report.message,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
                         override val storeId: String = "evolution-store"
                         override suspend fun probe(): StoreStatus {
                             bootReadSession.readOnce("evolution-store") {
@@ -789,6 +847,7 @@ class LifeOsKernelFactory(
             supervisor = supervisor,
             scope = scope,
             bootCoordinator = bootCoordinator,
+            bootEngineRuntime = bootEngineRuntime,
             continuousCognition = continuousCognition,
             photonTransactions = photonTransactions,
             cognitiveOutcomes = cognitiveOutcomes,
