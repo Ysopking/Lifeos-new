@@ -328,6 +328,41 @@ data class RollbackProof(
     )
 }
 
+data class ProtectedRootProof(
+    override val proofId: String,
+    val targetPath: String,
+    val targetType: String,
+    val classifiedComponent: ProtectedRootComponent,
+    val mutationBlocked: Boolean,
+) : Level7InvariantProof {
+    init {
+        require(proofId.isNotBlank())
+        require(targetPath.isNotBlank())
+        require(targetType.isNotBlank())
+        require(mutationBlocked) {
+            "Protected-root GOLD proof requires a blocked mutation"
+        }
+        val classified = ProtectedRootRegistry().classify(
+            MutationTarget(path = targetPath, type = targetType)
+        )
+        require(classified == classifiedComponent) {
+            "Protected-root GOLD proof classification does not match the central registry"
+        }
+    }
+
+    override val invariantIds: Set<String> =
+        setOf("NO_META_ADAPTATION_OF_PROTECTED_ROOT")
+
+    override fun fingerprint(): String = StableFieldIds.fingerprint(
+        "level7-proof/protected-root/v1",
+        proofId,
+        targetPath,
+        targetType,
+        classifiedComponent.name,
+        mutationBlocked.toString(),
+    )
+}
+
 data class NovelDomainProof(
     override val proofId: String,
     val domainId: String,
