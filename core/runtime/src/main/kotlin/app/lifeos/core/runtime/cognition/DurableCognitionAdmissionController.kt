@@ -37,10 +37,11 @@ class DurableCognitionAdmissionController(
 
     init {
         require(maxActiveTasks > 0) { "Durable cognition capacity must be positive" }
-        require(foregroundReserve in 1 until maxActiveTasks) {
-            "Foreground cognition reserve must be within durable capacity"
-        }
+        require(foregroundReserve >= 0) { "Foreground cognition reserve must not be negative" }
     }
+
+    private val effectiveForegroundReserve: Int
+        get() = foregroundReserve.coerceAtMost((maxActiveTasks - 1).coerceAtLeast(0))
 
     suspend fun submit(draft: TaskDraft): LifeTask? = mutex.withLock {
         require(draft.type.isCognitionTask()) { "Admission controller accepts cognition tasks only" }
@@ -62,7 +63,7 @@ class DurableCognitionAdmissionController(
             task.type.isCognitionTask() && !task.state.isTerminal()
         }
         val foreground = draft.priority == TaskPriority.INTERACTIVE || draft.priority == TaskPriority.CRITICAL
-        val backgroundCeiling = maxActiveTasks - foregroundReserve
+        val backgroundCeiling = maxActiveTasks - effectiveForegroundReserve
 
         if (!foreground && active >= backgroundCeiling) {
             return@withLock null
