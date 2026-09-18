@@ -50,6 +50,77 @@ class PhotonBackedRuntimeEventJournal(
         reservation.sequence
     }
 
+    override suspend fun appendBatch(events: List<CognitiveEvent>): List<Long> = lock.withLock {
+        if (events.isEmpty()) return@withLock emptyList()
+        require(events.map { it.eventId }.distinct().size == events.size) {
+            "Runtime event batch contains duplicate ids"
+        }
+
+        val existingById = linkedMapOf<String, RuntimeEventEnvelope>()
+        val missing = mutableListOf<CognitiveEvent>()
+        events.forEach { event ->
+            val id = CognitionJournalIdentity.photonId(CognitionJournalKind.EVENT.tag, event.eventId)
+            val existing = store.load(id)
+            if (existing == null) {
+                missing += event
+            } else {
+                val decoded = decode(existing)
+                check(decoded.event == event) { "Runtime event id conflict" }
+                existingById[event.eventId] = decoded
+            }
+        }
+
+        if (journalIndex == null) {
+            var next = (events().maxOfOrNull { it.offset } ?: 0L) + 1L
+            val created = mutableMapOf<String, Long>()
+            missing.forEach { event ->
+                require(next > 0L) { "Runtime event offset overflow" }
+                store.save(
+                    cognitionJournalPhoton(
+                        CognitionJournalKind.EVENT,
+                        event.eventId,
+                        event.recordedAt,
+                        RuntimeEventJournalCodec.encode(RuntimeEventEnvelope(next, event)),
+                    )
+                )
+                created[event.eventId] = next
+                next = Math.addExact(next, 1L)
+            }
+            return@withLock events.map { event ->
+                existingById[event.eventId]?.offset
+                    ?: checkNotNull(created[event.eventId])
+            }
+        }
+
+        val reservations = journalIndex.reserveBatch(
+            CognitionJournalKind.EVENT,
+            missing.map { it.eventId },
+        )
+        val photons = reservations.zip(missing).map { (reservation, event) ->
+            cognitionJournalPhoton(
+                CognitionJournalKind.EVENT,
+                event.eventId,
+                event.recordedAt,
+                RuntimeEventJournalCodec.encode(RuntimeEventEnvelope(reservation.sequence, event)),
+            )
+        }
+        photons.forEach { store.save(it) }
+        journalIndex.commitBatch(
+            reservations.indices.map { index ->
+                Triple(
+                    reservations[index],
+                    PhotonRevisionRef(photons[index].id, photons[index].revision),
+                    missing[index].recordedAt,
+                )
+            }
+        )
+        val created = reservations.associate { it.stableId to it.sequence }
+        events.map { event ->
+            existingById[event.eventId]?.offset
+                ?: checkNotNull(created[event.eventId])
+        }
+    }
+
     override suspend fun readFrom(
         offsetExclusive: Long,
         limit: Int,
