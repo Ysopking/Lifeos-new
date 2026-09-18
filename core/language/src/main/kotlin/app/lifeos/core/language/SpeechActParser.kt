@@ -21,6 +21,7 @@ class SpeechActParser {
     ): SpeechAct {
         val tokens = utterance.tokens.subList(clause.tokenStart, clause.tokenEndExclusive)
         val words = tokens.filter { it.kind == TokenKind.WORD }.map { it.normalized }
+        val semanticWords = words.dropWhile { it in CLAUSE_LEADING_CUES }
         val text = utterance.original.substring(span.start, span.endExclusive).trim()
         val quoted = quoteRanges.any { it.contains(span) || it.overlaps(span) && quoteCoverage(it, span) >= 0.80 }
         if (quoted) return act(
@@ -33,8 +34,8 @@ class SpeechActParser {
 
         val lower = text.lowercase()
         val question = text.endsWith("?") ||
-            words.firstOrNull() in QUESTION_WORDS ||
-            words.take(3).any { it in QUESTION_AUXILIARIES }
+            semanticWords.firstOrNull() in QUESTION_WORDS ||
+            semanticWords.take(3).any { it in QUESTION_AUXILIARIES }
         if (question) return act(
             SpeechActType.QUESTION,
             if (text.endsWith("?")) 0.99 else 0.92,
@@ -53,7 +54,7 @@ class SpeechActParser {
             return act(SpeechActType.CORRECTION, 0.90, span, "correction-cue", "contrast/correction cue")
         }
 
-        val request = hasRequestForm(words)
+        val request = hasRequestForm(semanticWords)
         if (request) return act(
             SpeechActType.REQUEST,
             0.94,
@@ -62,8 +63,8 @@ class SpeechActParser {
             "polite or modal request syntax",
         )
 
-        if (words.firstOrNull() in HYPOTHETICAL_MARKERS ||
-            words.any { it in HYPOTHETICAL_MARKERS } && words.none { it in DIRECT_COMMAND_VERBS }
+        if (semanticWords.firstOrNull() in HYPOTHETICAL_MARKERS ||
+            semanticWords.any { it in HYPOTHETICAL_MARKERS } && semanticWords.none { it in DIRECT_COMMAND_VERBS }
         ) {
             return act(
                 SpeechActType.HYPOTHETICAL,
@@ -74,10 +75,10 @@ class SpeechActParser {
             )
         }
 
-        val firstContent = words.firstOrNull()
+        val firstContent = semanticWords.firstOrNull()
         val imperative = firstContent in DIRECT_COMMAND_VERBS ||
-            words.take(2).any { it in DIRECT_COMMAND_VERBS } &&
-                words.firstOrNull() in POLITENESS_MARKERS
+            semanticWords.take(2).any { it in DIRECT_COMMAND_VERBS } &&
+                semanticWords.firstOrNull() in POLITENESS_MARKERS
         if (imperative) return act(
             SpeechActType.COMMAND,
             0.96,
@@ -188,6 +189,10 @@ class SpeechActParser {
         private val ACKNOWLEDGEMENTS = setOf("ok", "okay", "verstanden", "danke", "thanks", "merci")
         private val GREETING_PHRASES = setOf("guten morgen", "guten tag", "guten abend", "good morning", "good evening")
         private val ACKNOWLEDGEMENT_PHRASES = setOf("alles klar", "vielen dank", "thank you")
+        private val CLAUSE_LEADING_CUES = setOf(
+            "und", "oder", "aber", "danach", "anschließend", "anschliessend",
+            "and", "or", "but", "then",
+        )
         private val QUOTE_MARKERS = setOf(""", "„", "“", "”", "«", "»")
     }
 }
