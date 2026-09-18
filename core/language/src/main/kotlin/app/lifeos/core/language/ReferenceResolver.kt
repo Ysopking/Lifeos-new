@@ -169,28 +169,69 @@ class ReferenceExpressionExtractor {
 class ReferenceResolver {
     fun resolve(expression: ReferenceExpression, context: LanguageContext): ResolvedReference {
         val revisionCandidates = rankRevisionRefs(expression, context)
-        val best = revisionCandidates.firstOrNull()
-        val compatibility = revisionCandidates
-            .groupBy { it.first.photonId }
-            .map { (id, scored) -> id to scored.maxOf { it.second } }
-            .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+        if (revisionCandidates.isNotEmpty()) {
+            val best = revisionCandidates.first()
+            val compatibility = revisionCandidates
+                .groupBy { it.first.photonId }
+                .map { (id, scored) -> id to scored.maxOf { it.second } }
+                .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+            return ResolvedReference(
+                expression = expression,
+                targetPhotonId = best.first.photonId,
+                score = best.second,
+                alternatives = compatibility
+                    .filterNot { it.first == best.first.photonId }
+                    .take(3),
+                targetPhotonRef = best.first,
+                revisionAlternatives = revisionCandidates.drop(1).take(3),
+            )
+        }
+
+        // Compatibility-only path for legacy/in-memory contexts that predate revision binding.
+        // Never invent a revision: execution remains blocked because targetPhotonRef stays null.
+        val legacy = rankLegacyIds(expression, context)
+        val best = legacy.firstOrNull()
         return ResolvedReference(
             expression = expression,
-            targetPhotonId = best?.first?.photonId,
+            targetPhotonId = best?.first,
             score = best?.second ?: 0.0,
-            alternatives = compatibility
-                .filterNot { it.first == best?.first?.photonId }
-                .take(3),
-            targetPhotonRef = best?.first,
-            revisionAlternatives = revisionCandidates.drop(1).take(3),
+            alternatives = legacy.drop(1).take(3),
+            targetPhotonRef = null,
+            revisionAlternatives = emptyList(),
         )
     }
 
-    fun rank(expression: ReferenceExpression, context: LanguageContext): List<Pair<PhotonId, Double>> =
-        rankRevisionRefs(expression, context)
-            .groupBy { it.first.photonId }
+    fun rank(expression: ReferenceExpression, context: LanguageContext): List<Pair<PhotonId, Double>> {
+        val revisionRank = rankRevisionRefs(expression, context)
+        if (revisionRank.isNotEmpty()) {
+            return revisionRank
+                .groupBy { it.first.photonId }
+                .map { (id, scored) -> id to scored.maxOf { it.second } }
+                .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+        }
+        return rankLegacyIds(expression, context)
+    }
+
+    private fun rankLegacyIds(
+        expression: ReferenceExpression,
+        context: LanguageContext,
+    ): List<Pair<PhotonId, Double>> {
+        if (context.items.isEmpty()) return emptyList()
+        val candidates = context.items.filterNot { item ->
+            expression.kind == ReferenceKind.PREVIOUS &&
+                "goal" in expression.preferredKinds &&
+                ("intent:continue" in item.tags || "goal-resumed" in item.tags)
+        }
+        return candidates
+            .map { item -> item.photonId to score(item, expression, context) }
+            .filter { it.second > 0.0 }
+            .groupBy { it.first }
             .map { (id, scored) -> id to scored.maxOf { it.second } }
-            .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+            .sortedWith(
+                compareByDescending<Pair<PhotonId, Double>> { it.second }
+                    .thenBy { it.first.value }
+            )
+    }
 
     fun rankRevisionRefs(
         expression: ReferenceExpression,
@@ -256,7 +297,7 @@ class ReferenceResolver {
         if (expression.kind == ReferenceKind.OTHER) {
             score += if (item.active) -0.18 else 0.20
         } else if (item.active) {
-            score += 0.16
+            score += 0.08
         }
         if (
             item.photonId == context.activeGoalId &&
