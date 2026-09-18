@@ -251,8 +251,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                         planning = futurePlanning,
                     )
                     runBlocking {
-                        lifePhotonRepository.reconcilePersisted()
-                        lifeMemoryRuntime.rebuild(Instant.now())
+                        lifePhotonRepository.withCognitionDeferred {
+                            lifeMemoryRuntime.rebuild(Instant.now())
+                        }
                         futurePlanning.reconsiderAll().forEach { planned ->
                             photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
                         }
