@@ -3,6 +3,7 @@ package app.lifeos.next.kernel
 import android.content.Context
 import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
+import app.lifeos.core.data.cognition.EncryptedCognitionJournalIndexRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.evolution.EncryptedEvolutionStore
@@ -62,6 +63,7 @@ import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.capability.TrustLevel
+import app.lifeos.core.runtime.cognition.CognitionJournalIndex
 import app.lifeos.core.runtime.cognition.CognitiveScheduler
 import app.lifeos.core.runtime.cognition.CompositeDurableTaskExecutionObserver
 import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
@@ -129,6 +131,10 @@ class LifeOsKernelFactory(
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val appContext = context.applicationContext
         val store = EncryptedPhotonStore(appContext)
+        val cognitionJournalIndex = CognitionJournalIndex(
+            repository = EncryptedCognitionJournalIndexRepository(appContext),
+            photons = store,
+        )
         val learningAdaptationRepository = EncryptedLearningAdaptationRepository(appContext)
         val learningAdaptations = DurableLearningAdaptationLedger(learningAdaptationRepository)
         val goalPlanRepository = EncryptedGoalPlanRepository(appContext)
@@ -331,7 +337,10 @@ class LifeOsKernelFactory(
         val schedulerSignal = ConflatedTaskSchedulerSignal()
         val taskEngine = DurableTaskEngine(taskRepository, schedulerSignal)
 
-        val cognitiveEventJournal = PhotonBackedRuntimeEventJournal(store)
+        val cognitiveEventJournal = PhotonBackedRuntimeEventJournal(
+            store = store,
+            journalIndex = cognitionJournalIndex,
+        )
         val cognitiveScheduler = CognitiveScheduler()
         val cognitionAdmission = DurableCognitionAdmissionController(
             tasks = taskRepository,
@@ -351,10 +360,19 @@ class LifeOsKernelFactory(
             cognition = continuousCognition,
             taskEngine = taskEngine,
         )
-        val photonTransactions = PhotonBackedPhotonTransactionJournal(store)
-        val cognitiveOutcomes = PhotonBackedCognitiveOutcomeJournal(store)
+        val photonTransactions = PhotonBackedPhotonTransactionJournal(
+            store = store,
+            journalIndex = cognitionJournalIndex,
+        )
+        val cognitiveOutcomes = PhotonBackedCognitiveOutcomeJournal(
+            store = store,
+            journalIndex = cognitionJournalIndex,
+        )
         val cognitiveTriggers = DurableCognitiveTriggerSink(
-            journal = PhotonBackedCognitiveTriggerSink(store),
+            journal = PhotonBackedCognitiveTriggerSink(
+                store = store,
+                journalIndex = cognitionJournalIndex,
+            ),
             photons = store,
             taskEngine = taskEngine,
         )
@@ -455,6 +473,9 @@ class LifeOsKernelFactory(
                 },
                 RuntimeStateRehydrationStep {
                     fieldThoughtGraphProjection.reconcile()
+                },
+                RuntimeStateRehydrationStep {
+                    cognitionJournalIndex.reconcile()
                 },
                 RuntimeStateRehydrationStep {
                     cognitionReconciler.reconcile()
@@ -609,7 +630,10 @@ class LifeOsKernelFactory(
                 )
             ),
             stateRehydrator = stateRehydrator,
-            photonRehydrator = PhotonRehydrator(store),
+            photonRehydrator = PhotonRehydrator(
+                repository = store,
+                journalIndex = cognitionJournalIndex,
+            ),
             moduleRehydrator = object : ModuleRehydrator {
                 override suspend fun rehydrate(): ModuleRestoreSummary {
                     matrix.rehydrate()

@@ -2,10 +2,14 @@ package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.PhotonRevisionRef
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : CognitiveEventJournal {
+class PhotonBackedRuntimeEventJournal(
+    private val store: PhotonRepository,
+    private val journalIndex: CognitionJournalIndex? = null,
+) : CognitiveEventJournal {
     private val lock = Mutex()
 
     override suspend fun append(event: CognitiveEvent): Long = lock.withLock {
@@ -15,24 +19,63 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
             check(old.event == event) { "Runtime event id conflict" }
             return@withLock old.offset
         }
-        val offset = (events().maxOfOrNull { it.offset } ?: 0L) + 1L
-        require(offset > 0L) { "Runtime event offset overflow" }
-        store.save(cognitionJournalPhoton(
+
+        if (journalIndex == null) {
+            val offset = (events().maxOfOrNull { it.offset } ?: 0L) + 1L
+            require(offset > 0L) { "Runtime event offset overflow" }
+            store.save(
+                cognitionJournalPhoton(
+                    CognitionJournalKind.EVENT,
+                    event.eventId,
+                    event.recordedAt,
+                    RuntimeEventJournalCodec.encode(RuntimeEventEnvelope(offset, event)),
+                )
+            )
+            return@withLock offset
+        }
+
+        val reservation = journalIndex.reserveNext(CognitionJournalKind.EVENT, event.eventId)
+        val photon = cognitionJournalPhoton(
             CognitionJournalKind.EVENT,
             event.eventId,
             event.recordedAt,
-            RuntimeEventJournalCodec.encode(RuntimeEventEnvelope(offset, event)),
-        ))
-        offset
+            RuntimeEventJournalCodec.encode(RuntimeEventEnvelope(reservation.sequence, event)),
+        )
+        store.save(photon)
+        journalIndex.commit(
+            reservation = reservation,
+            photonRef = PhotonRevisionRef(photon.id, photon.revision),
+            recordedAt = event.recordedAt,
+        )
+        reservation.sequence
     }
 
-    override suspend fun readFrom(offsetExclusive: Long, limit: Int): List<JournalEntry> = lock.withLock {
+    override suspend fun readFrom(
+        offsetExclusive: Long,
+        limit: Int,
+    ): List<JournalEntry> = lock.withLock {
         require(offsetExclusive >= 0L && limit > 0)
-        events().filter { it.offset > offsetExclusive }.sortedBy { it.offset }.take(limit)
+        if (journalIndex == null) {
+            return@withLock events()
+                .filter { it.offset > offsetExclusive }
+                .sortedBy { it.offset }
+                .take(limit)
+                .map { JournalEntry(it.offset, it.event) }
+        }
+
+        val entries = journalIndex.entries(CognitionJournalKind.EVENT)
+            .asSequence()
+            .filter { it.sequence > offsetExclusive }
+            .take(limit)
+            .toList()
+        loadCognitionJournalPhotons(store, entries.map { it.photonRef })
+            .map(::decode)
             .map { JournalEntry(it.offset, it.event) }
     }
 
-    override suspend fun size(): Long = lock.withLock { events().size.toLong() }
+    override suspend fun size(): Long = lock.withLock {
+        journalIndex?.size(CognitionJournalKind.EVENT) ?: events().size.toLong()
+    }
 
     private suspend fun events(): List<RuntimeEventEnvelope> =
         loadCognitionJournalPhotons(store, CognitionJournalKind.EVENT).map(::decode)
@@ -41,6 +84,9 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
         require(photon.mimeType == COGNITION_JOURNAL_MIME)
         RuntimeEventJournalCodec.decode(photon.content)
     } catch (error: Exception) {
-        throw CognitionJournalCorruptionException("Unreadable runtime event journal ${photon.id.value}", error)
+        throw CognitionJournalCorruptionException(
+            "Unreadable runtime event journal ${photon.id.value}",
+            error,
+        )
     }
 }
