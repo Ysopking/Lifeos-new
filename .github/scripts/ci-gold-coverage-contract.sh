@@ -25,6 +25,12 @@ required_jvm_tests=(
   "core/language/src/test/kotlin/app/lifeos/core/language/LanguageContextRetrieverTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/ConversationFastPathSafetyTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/goal/GoalResumeEngineTest.kt"
+  "core/runtime/src/test/kotlin/app/lifeos/core/runtime/agency/ExternalEffectExecutorTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/DomainSemanticPackGoldTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/SemanticInterpretationQualityTest.kt"
+  "app/src/test/java/app/lifeos/next/kernel/SemanticActionGraphRouterTest.kt"
+  "app/src/test/java/app/lifeos/next/kernel/ExternalSemanticEffectSafetyTest.kt"
+  "app/src/test/java/app/lifeos/next/kernel/DurableGoalPlanRecoveryTest.kt"
 )
 
 required_device_tests=(
@@ -35,6 +41,8 @@ required_device_tests=(
   "app/src/androidTest/java/app/lifeos/next/DeepSearchEncryptedRepositoryCorruptionDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/OfflineImageArtifactDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/FieldSnapshotAtomicRecoveryDeviceTest.kt"
+  "app/src/androidTest/java/app/lifeos/next/ProductGoldenChatDeviceTest.kt"
+  "app/src/androidTest/java/app/lifeos/next/SemanticActionRecoveryDeviceTest.kt"
 )
 
 for path in "${required_jvm_tests[@]}" "${required_device_tests[@]}"; do
@@ -62,7 +70,9 @@ for suite in \
   'ConvergenceDecisionDeviceTest' \
   'DeepSearchEncryptedRepositoryCorruptionDeviceTest' \
   'OfflineImageArtifactDeviceTest' \
-  'FieldSnapshotAtomicRecoveryDeviceTest'; do
+  'FieldSnapshotAtomicRecoveryDeviceTest' \
+  'ProductGoldenChatDeviceTest' \
+  'SemanticActionRecoveryDeviceTest'; do
   grep -Fq "$suite" "$emulator_gate" || { echo "missing-emulator-gold-suite:$suite" >&2; exit 1; }
 done
 
