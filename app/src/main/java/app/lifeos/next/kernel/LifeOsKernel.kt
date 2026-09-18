@@ -299,7 +299,9 @@ class LifeOsKernel internal constructor(
                 limit = 8,
             )
         )
-        val recent = refs.mapNotNull(revisionedPhotonStore::load)
+        val recent = refs.mapNotNull { ref: app.lifeos.core.model.PhotonRevisionRef ->
+            revisionedPhotonStore.load(ref)
+        }
         return FastConversationContext(
             conversationId = conversationTag.substringAfter(':', "default"),
             recentTurnCount = recent.size,
