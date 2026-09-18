@@ -12,6 +12,7 @@ import app.lifeos.core.model.StableCognitiveIds
 import app.lifeos.core.runtime.CognitiveMemoryEntry
 import app.lifeos.core.runtime.CognitiveMemoryFabric
 import app.lifeos.core.runtime.CognitiveMemoryLayout
+import app.lifeos.core.runtime.PhotonResidencyController
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.Base64
@@ -513,6 +514,11 @@ class DurableLifeMemoryRuntime(
             ),
             memoryLayout = memoryLayout,
         )
+        (photons as? PhotonResidencyController)?.retainResident(
+            memoryLayout.l0.mapTo(linkedSetOf()) { it.photonId } +
+                memoryLayout.l1.mapTo(linkedSetOf()) { it.photonId }
+        )
+
         latest = snapshot
         return snapshot
     }
