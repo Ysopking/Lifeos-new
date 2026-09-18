@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.next.LifeOsToolCenterUiState
 import app.lifeos.next.LifeOsToolCenterViewModel
+import app.lifeos.next.ui.components.LifeOsScreenHeader
 
 @Composable
 fun LifeOsToolCenterScreen(
@@ -66,26 +67,19 @@ private fun ToolCenterOverview(
         modifier = modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text("Tool Center", style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    "Owner-Oberfläche für fehlende Fähigkeiten, isolierte TRIALs und dauerhaft belegte Tool-Zustände.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            OutlinedButton(onClick = onRefresh, enabled = !state.loading && !state.actionInFlight) {
-                Text("Aktualisieren")
-            }
-        }
+        LifeOsScreenHeader(
+            title = "Tool Center",
+            subtitle = "Fehlende Fähigkeiten, isolierte TRIALs und dauerhaft belegte Tool-Zustände.",
+            eyebrow = "Capability Runtime",
+            trailing = {
+                OutlinedButton(
+                    onClick = onRefresh,
+                    enabled = !state.loading && !state.actionInFlight,
+                ) {
+                    Text("Aktualisieren")
+                }
+            },
+        )
 
         if (state.actionInFlight) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
