@@ -21,6 +21,7 @@ data class LanguageSubmissionResult(
     val localSchedule: LocalScheduleExecutionResult? = null,
     val localCommunication: LocalCommunicationExecutionResult? = null,
     val externalEffect: EffectReceipt? = null,
+    val actionGraphExecution: SemanticActionGraphExecutionResult? = null,
     val languageFailure: String? = null,
 ) {
     init {
@@ -48,7 +49,8 @@ data class LanguageSubmissionResult(
             ((localDeepSearch as? LocalDeepSearchExecutionResult.Produced)?.output?.processingQueued != false) &&
             ((localImageTransform as? LocalImageTransformExecutionResult.Transformed)?.output?.processingQueued != false) &&
             ((localSchedule as? LocalScheduleExecutionResult.Scheduled)?.output?.processingQueued != false)
-    val actionReady: Boolean get() = effectiveRouting?.ready == true
+    val actionReady: Boolean get() =
+        actionGraphExecution?.completed == true || effectiveRouting?.ready == true
     val generatedImage: GeneratedImageResult? get() =
         (imageGeneration as? ImageGenerationResult.Generated)?.value
 }
