@@ -207,6 +207,15 @@ class WorldFormulaBoundConvergenceService(
             "NO_CONVERGENCE_WITHOUT_MATCHING_WORLD_SNAPSHOT: persisted snapshot differs"
         }
         require(evaluation.candidate.request.cycle == cycle.context)
+        require(snapshot.id == evaluation.candidate.snapshotRef.snapshotId) {
+            "NO_CONVERGENCE_WITHOUT_MATCHING_WORLD_SNAPSHOT: snapshot ref/id mismatch"
+        }
+        require(
+            snapshot.contentFingerprint() ==
+                evaluation.candidate.snapshot.contentFingerprint()
+        ) {
+            "NO_CONVERGENCE_WITHOUT_MATCHING_WORLD_SNAPSHOT: snapshot fingerprint mismatch"
+        }
         require(snapshot.equationVersion == cycle.context.equationVersion)
         require(snapshot.requestId == evaluation.candidate.request.request.id)
 
