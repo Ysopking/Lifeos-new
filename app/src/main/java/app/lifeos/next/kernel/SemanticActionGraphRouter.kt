@@ -131,10 +131,21 @@ class SemanticActionGraphRouter(
                 continue
             }
 
-            val resultDependency = graph.edges
+            val resultEdge = graph.edges
                 .firstOrNull { it.to == node.id && it.type == SemanticActionEdgeType.USES_RESULT_OF }
-                ?.from
-                ?.let(outputs::get)
+            val resultDependency = resultEdge?.from?.let(outputs::get)
+            if (resultEdge != null && resultDependency == null) {
+                executions += SemanticNodeExecution(
+                    nodeId = node.id,
+                    intent = intentFor(node) ?: IntentType.UNKNOWN,
+                    state = SemanticNodeExecutionState.BLOCKED,
+                    routing = null,
+                    dispatch = null,
+                    outputRef = null,
+                    reason = "dependency-output-missing:" + resultEdge.from.value,
+                )
+                continue
+            }
 
             val nodeGoal = nodeGoal(
                 base = goal,
@@ -304,7 +315,9 @@ class SemanticActionGraphRouter(
         }
         val incoming = ids.associateWith { id -> edges.count { it.to == id } }.toMutableMap()
         val ready = java.util.PriorityQueue<app.lifeos.core.language.SemanticNodeId>(
-            compareBy { id -> byId.getValue(id).frame.clauseId }
+            compareBy<app.lifeos.core.language.SemanticNodeId> {
+                byId.getValue(it).frame.clauseId
+            }.thenBy { it.value }
         )
         incoming.filterValues { it == 0 }.keys.forEach(ready::add)
         val ordered = mutableListOf<SemanticActionNode>()
