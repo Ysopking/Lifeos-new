@@ -26,12 +26,14 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
     override suspend fun loadReport(): DeepSearchMissionRepositoryLoadReport = withContext(Dispatchers.IO) {
         processMutex.withLock {
             ensureMigrated()
-            readHeadOrRecover()
             val unreadable = mutableListOf<String>()
             val events = eventFiles().mapNotNull { file ->
-                runCatching { readEvent(file) }
+                runCatching { readValidatedEvent(file) }
                     .onFailure { unreadable += file.relativeTo(directory).path }
                     .getOrNull()
+            }
+            if (unreadable.isEmpty()) {
+                readHeadOrRecover()
             }
             DeepSearchMissionRepositoryLoadReport(events.sortedBy { it.revision }, unreadable.sorted())
         }
@@ -52,7 +54,7 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
             }
             val target = eventFile(event)
             if (exists(target)) {
-                require(readEvent(target) == event) { "DeepSearch mission event collision" }
+                require(readValidatedEvent(target) == event) { "DeepSearch mission event collision" }
             } else {
                 writeEvent(target, event)
             }
@@ -87,8 +89,26 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
         return event
     }
 
+    private fun readValidatedEvent(file: File): DeepSearchMissionEvent {
+        val event = readEvent(file)
+        val fileRevision = segmentRevision(file)
+        require(event.revision == fileRevision) {
+            "DeepSearch event payload revision does not match segment path"
+        }
+        val missionDirectory = requireNotNull(file.parentFile) {
+            "DeepSearch event segment has no mission directory"
+        }
+        require(missionDirectory.parentFile == missionsDirectory) {
+            "DeepSearch event segment is not stored under the mission directory"
+        }
+        require(missionDirectory.name == sha256(event.missionId.value)) {
+            "DeepSearch event mission does not match segment path"
+        }
+        return event
+    }
+
     private fun requireReadableEventHistory() {
-        eventFiles().forEach { file -> readEvent(file) }
+        eventFiles().forEach { file -> readValidatedEvent(file) }
     }
 
     private fun writeEvent(file: File, event: DeepSearchMissionEvent) {
@@ -114,11 +134,7 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
 
     private fun readHeadOrRecover(): Long {
         val files = eventFiles()
-        val byRevision = files.groupBy { file ->
-            requireNotNull(
-                file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
-            ) { "Invalid DeepSearch event segment name: ${file.name}" }
-        }
+        val byRevision = files.groupBy(::segmentRevision)
         require(byRevision.values.all { it.size == 1 }) {
             "DeepSearch contains duplicate global event revisions"
         }
@@ -135,6 +151,11 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
         if (storedHead != recovered) writeHead(recovered)
         return recovered
     }
+
+    private fun segmentRevision(file: File): Long =
+        requireNotNull(
+            file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
+        ) { "Invalid DeepSearch event segment name: ${file.name}" }
 
     private fun readHead(): Long {
         val bytes = decrypt(headFile, 64)

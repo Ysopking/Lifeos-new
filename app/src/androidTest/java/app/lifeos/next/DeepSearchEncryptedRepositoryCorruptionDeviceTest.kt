@@ -77,6 +77,97 @@ class DeepSearchEncryptedRepositoryCorruptionDeviceTest {
     }
 
     @Test
+    fun missionLedgerRejectsValidCiphertextAtWrongRevisionPath() = runBlocking {
+        withIsolatedFiles("mission-revision-path") { context, root ->
+            val repository = EncryptedDeepSearchMissionRepository(context)
+            val definition = definition()
+            val planned = DeepSearchMissionEvent(
+                revision = 1L,
+                missionId = definition.id,
+                type = DeepSearchMissionEventType.PLANNED,
+                recordedAt = now,
+                definition = definition,
+            )
+            val blocked = DeepSearchMissionEvent(
+                revision = 2L,
+                missionId = definition.id,
+                type = DeepSearchMissionEventType.BLOCKED,
+                recordedAt = now.plusSeconds(1),
+                detail = "path-binding-probe",
+            )
+            assertTrue(repository.append(0L, planned))
+            assertTrue(repository.append(1L, blocked))
+
+            val missionRoot = root.resolve("deep-search-v2")
+            val segments = missionSegments(missionRoot)
+            assertEquals(2, segments.size)
+            val first = segments.first()
+            val second = segments.last()
+            second.writeBytes(first.readBytes())
+
+            val report = repository.loadReport()
+            assertEquals(listOf(planned), report.events)
+            assertEquals(listOf(second.relativeTo(missionRoot).path), report.unreadableEntries)
+
+            val appendAfterMismatch = runCatching {
+                repository.append(
+                    expectedRevision = 2L,
+                    event = DeepSearchMissionEvent(
+                        revision = 3L,
+                        missionId = definition.id,
+                        type = DeepSearchMissionEventType.BLOCKED,
+                        recordedAt = now.plusSeconds(2),
+                        detail = "must-not-append",
+                    ),
+                )
+            }
+            assertTrue("Revision/path mismatch must block append", appendAfterMismatch.isFailure)
+        }
+    }
+
+    @Test
+    fun missionLedgerRejectsValidCiphertextInWrongMissionDirectory() = runBlocking {
+        withIsolatedFiles("mission-id-path") { context, root ->
+            val repository = EncryptedDeepSearchMissionRepository(context)
+            val definition = definition()
+            val planned = DeepSearchMissionEvent(
+                revision = 1L,
+                missionId = definition.id,
+                type = DeepSearchMissionEventType.PLANNED,
+                recordedAt = now,
+                definition = definition,
+            )
+            assertTrue(repository.append(0L, planned))
+
+            val missionRoot = root.resolve("deep-search-v2")
+            val original = missionSegments(missionRoot).single()
+            val wrongDirectory = missionRoot.resolve("missions").resolve("0".repeat(64))
+            assertTrue(wrongDirectory.mkdirs())
+            val relocated = wrongDirectory.resolve(original.name)
+            original.copyTo(relocated)
+            assertTrue(original.delete())
+
+            val report = repository.loadReport()
+            assertTrue(report.events.isEmpty())
+            assertEquals(listOf(relocated.relativeTo(missionRoot).path), report.unreadableEntries)
+
+            val appendAfterMismatch = runCatching {
+                repository.append(
+                    expectedRevision = 1L,
+                    event = DeepSearchMissionEvent(
+                        revision = 2L,
+                        missionId = definition.id,
+                        type = DeepSearchMissionEventType.BLOCKED,
+                        recordedAt = now.plusSeconds(1),
+                        detail = "must-not-append",
+                    ),
+                )
+            }
+            assertTrue("Mission/path mismatch must block append", appendAfterMismatch.isFailure)
+        }
+    }
+
+    @Test
     fun checkpointStoreReportsCorruptionAndRefusesCompareAndSet() = runBlocking {
         withIsolatedFiles("checkpoint") { context, root ->
             val definition = definition()
@@ -130,6 +221,13 @@ class DeepSearchEncryptedRepositoryCorruptionDeviceTest {
             root.deleteRecursively()
         }
     }
+
+    private fun missionSegments(missionRoot: File): List<File> =
+        missionRoot.resolve("missions")
+            .walkTopDown()
+            .filter { it.isFile && it.name.startsWith("event-") && it.name.endsWith(".dsmission") }
+            .sortedBy { it.path }
+            .toList()
 
     private fun corruptAtomicFile(target: File) {
         File("${target.path}.bak").delete()
