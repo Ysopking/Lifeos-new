@@ -5,6 +5,7 @@ import app.lifeos.core.image.MmsiTile
 import app.lifeos.core.image.ProceduralMmsiProfile
 import app.lifeos.core.image.Rgba8Image
 import app.lifeos.core.image.nativebackend.HardwareBufferMmsiInterop
+import app.lifeos.core.image.nativebackend.MmsiHardwareHealthGuard
 import app.lifeos.core.image.nativebackend.MmsiProceduralSpectralHardwarePipeline
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.image.nativebackend.VulkanMmsiRenderer
@@ -45,6 +46,7 @@ class ProceduralImageGenerationEngine(
     private val baseProfile: ProceduralMmsiProfile = ProceduralMmsiProfile(),
     private val sceneLightingResolver: SceneLightingResolver = SceneLightingResolver(),
     private val outputSize: SceneRasterSize = SceneRasterSize(512, 288),
+    private val hardwareHealth: MmsiHardwareHealthGuard = MmsiHardwareHealthGuard(),
 ) {
     private val appContext = context.applicationContext
 
@@ -92,8 +94,13 @@ class ProceduralImageGenerationEngine(
         profile: ProceduralMmsiProfile,
     ): Rgba8Image? {
         if (!runtimeProbe.snapshot().capabilities.spectralAhbSyncFd) return null
-        return runCatching {
-            val pipeline = MmsiProceduralSpectralHardwarePipeline.create(appContext) ?: return@runCatching null
+        if (!hardwareHealth.canAttemptHardware()) return null
+        return try {
+            val pipeline = MmsiProceduralSpectralHardwarePipeline.create(appContext)
+            if (pipeline == null) {
+                hardwareHealth.recordRejected()
+                return null
+            }
             pipeline.use { renderer ->
                 val interop = HardwareBufferMmsiInterop()
                 interop.allocateSpectralForTile(MmsiTile(0, 0, buffers.size.width, buffers.size.height)).use { storage ->
@@ -116,10 +123,20 @@ class ProceduralImageGenerationEngine(
                         ),
                         rgbProjection = profile.rgbProjection,
                     )
-                    if (result.accepted) result.image else null
+                    if (result.accepted && result.image != null) {
+                        hardwareHealth.recordSuccess()
+                        result.image
+                    } else {
+                        hardwareHealth.recordRejected()
+                        null
+                    }
                 }
             }
-        }.getOrNull()
+        } catch (error: Throwable) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            hardwareHealth.recordFailure(error)
+            null
+        }
     }
 
     companion object {
