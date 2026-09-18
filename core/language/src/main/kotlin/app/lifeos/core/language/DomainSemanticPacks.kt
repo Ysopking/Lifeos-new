@@ -91,9 +91,12 @@ data class DomainSemanticGraph(
     }
 }
 
-class DomainSemanticInterpreter {
+class DomainSemanticInterpreter(
+    private val contextBuilder: DomainClauseContextBuilder = DomainClauseContextBuilder(),
+) {
     fun interpret(
         utterance: NormalizedUtterance,
+        semanticGraph: LanguageSemanticGraph = LanguageSemanticGraph.empty(utterance.language),
         entities: List<SemanticEntityV2>,
         quantityTemporal: QuantityTemporalResult,
         actionGraph: SemanticActionGraph,
@@ -107,6 +110,7 @@ class DomainSemanticInterpreter {
             value: String,
             confidence: Double,
             sourceType: SemanticEntityTypeId? = null,
+            sourceAnchor: String = "",
         ): DomainSemanticNode {
             val node = DomainSemanticNode(
                 id = DomainSemanticNodeId.create(
@@ -114,6 +118,7 @@ class DomainSemanticInterpreter {
                     type,
                     value,
                     sourceType?.value.orEmpty(),
+                    sourceAnchor,
                 ),
                 pack = pack,
                 type = type,
@@ -133,10 +138,11 @@ class DomainSemanticInterpreter {
                 value = entity.normalizedValue,
                 confidence = entity.confidence,
                 sourceType = entity.typeId,
+                sourceAnchor = "entity:" + entity.tokenStart + ":" + entity.tokenEndExclusive,
             )
         }
 
-        val quantityNodes = quantityTemporal.quantities.mapIndexed { index, quantity ->
+        val quantityNodes = quantityTemporal.quantities.associateWith { quantity ->
             addNode(
                 pack = if (quantity.currency != null) DomainSemanticPackId.FINANCE else DomainSemanticPackId.DOCUMENTS,
                 type = if (quantity.currency != null) "finance.amount" else "quantity.value",
@@ -148,10 +154,11 @@ class DomainSemanticInterpreter {
                     quantity.currency?.currencyCode ?: quantity.unit.orEmpty(),
                 ).joinToString(":"),
                 confidence = quantity.confidence,
+                sourceAnchor = "quantity:" + quantity.span.start + ":" + quantity.span.endExclusive,
             )
         }
 
-        val temporalNodes = quantityTemporal.temporals.map { temporal ->
+        val temporalNodes = quantityTemporal.temporals.associateWith { temporal ->
             addNode(
                 pack = DomainSemanticPackId.APPOINTMENT,
                 type = "temporal." + temporal.relation.name.lowercase(),
@@ -160,174 +167,189 @@ class DomainSemanticInterpreter {
                     temporal.endInclusive?.toString().orEmpty(),
                 ).joinToString(":"),
                 confidence = temporal.confidence,
+                sourceAnchor = "temporal:" + temporal.span.start + ":" + temporal.span.endExclusive,
             )
         }
 
-        val authority = entityNodes.entries
-            .firstOrNull { it.key.typeId == EntityTypeRegistry.AUTHORITY.id }
-            ?.value
-        val notice = entityNodes.entries
-            .firstOrNull { it.key.typeId == EntityTypeRegistry.NOTICE.id }
-            ?.value
-        val claimOrDebt = entityNodes.entries
-            .firstOrNull {
-                it.key.typeId in setOf(EntityTypeRegistry.CLAIM.id, EntityTypeRegistry.DEBT.id)
-            }
-            ?.value
-        val deadline = entityNodes.entries
-            .firstOrNull { it.key.typeId == EntityTypeRegistry.DEADLINE.id }
-            ?.value ?: temporalNodes.firstOrNull()
+        val contexts = contextBuilder.build(
+            utterance = utterance,
+            semanticGraph = semanticGraph,
+            entities = entities,
+            quantityTemporal = quantityTemporal,
+            actionGraph = actionGraph,
+        )
 
-        if (authority != null && notice != null) {
-            relations += relation(authority, notice, DomainSemanticRelationType.ISSUED)
-        }
-        if (notice != null && claimOrDebt != null) {
-            relations += relation(notice, claimOrDebt, DomainSemanticRelationType.CONTAINS)
-        }
-        val amountTarget = claimOrDebt ?: notice
-        if (amountTarget != null) {
-            quantityNodes.filter { it.pack == DomainSemanticPackId.FINANCE }.forEach { amount ->
-                relations += relation(amountTarget, amount, DomainSemanticRelationType.HAS_AMOUNT)
-            }
-        }
-        if (notice != null && deadline != null && notice.id != deadline.id) {
-            relations += relation(notice, deadline, DomainSemanticRelationType.HAS_DEADLINE)
-        }
-        if (deadline != null && temporalNodes.isNotEmpty()) {
-            temporalNodes.forEach { temporal ->
-                if (deadline.id != temporal.id) {
-                    relations += relation(deadline, temporal, DomainSemanticRelationType.RELATES_TO)
-                }
-            }
-        }
+        fun tokenCharStart(entity: SemanticEntityV2): Int =
+            utterance.tokens.getOrNull(entity.tokenStart)?.start ?: Int.MAX_VALUE
 
-        val appointment = entityNodes.entries
-            .firstOrNull { it.key.typeId == EntityTypeRegistry.APPOINTMENT.id }
-            ?.value
-        if (appointment != null) {
-            temporalNodes.forEach { temporal ->
-                if (appointment.id != temporal.id) {
-                    relations += relation(appointment, temporal, DomainSemanticRelationType.RELATES_TO)
-                }
-            }
-        }
+        contexts.forEach { context ->
+            val localEntities = context.entities.associateWith { entityNodes.getValue(it) }
+            val localQuantities = context.quantities.mapNotNull(quantityNodes::get)
+            val localTemporals = context.temporals.mapNotNull(temporalNodes::get)
 
-        val contract = entityNodes.entries
-            .firstOrNull { it.key.typeId == EntityTypeRegistry.CONTRACT.id }
-            ?.value
-        if (contract != null) {
-            entityNodes.entries
-                .filter { it.key.typeId == EntityTypeRegistry.DURATION.id }
-                .map { it.value }
-                .forEach { duration ->
-                    relations += relation(contract, duration, DomainSemanticRelationType.HAS_DURATION)
-                }
-            val contractDeadline = entityNodes.entries
-                .firstOrNull { it.key.typeId == EntityTypeRegistry.DEADLINE.id }
-                ?.value
-            if (contractDeadline != null && contractDeadline.id != contract.id) {
-                relations += relation(contract, contractDeadline, DomainSemanticRelationType.HAS_DEADLINE)
-            }
-        }
+            fun entitiesOf(vararg types: SemanticEntityTypeId): List<Pair<SemanticEntityV2, DomainSemanticNode>> =
+                localEntities.entries
+                    .filter { it.key.typeId in types.toSet() }
+                    .sortedBy { it.key.tokenStart }
+                    .map { it.key to it.value }
 
-        val medication = entityNodes.entries
-            .firstOrNull { it.key.typeId == EntityTypeRegistry.MEDICATION.id }
-            ?.value
-        if (medication != null) {
-            val dosageNodes = entityNodes.entries
-                .filter { it.key.typeId == EntityTypeRegistry.DOSAGE.id }
-                .map { it.value }
-                .ifEmpty {
-                    quantityNodes.filter { quantity ->
-                        quantity.type == "quantity.value"
-                    }
-                }
-            dosageNodes.forEach { dosage ->
-                if (dosage.id != medication.id) {
-                    relations += relation(medication, dosage, DomainSemanticRelationType.HAS_DOSAGE)
-                }
-            }
-        }
+            fun nearestBefore(
+                target: SemanticEntityV2,
+                candidates: List<Pair<SemanticEntityV2, DomainSemanticNode>>,
+            ): DomainSemanticNode? =
+                candidates
+                    .filter { it.first.tokenStart <= target.tokenStart }
+                    .maxByOrNull { it.first.tokenStart }
+                    ?.second
+                    ?: candidates.minByOrNull { kotlin.math.abs(it.first.tokenStart - target.tokenStart) }?.second
 
-        val documentNodes = entityNodes.entries
-            .filter {
-                it.key.typeId in setOf(
-                    EntityTypeRegistry.DOCUMENT.id,
-                    EntityTypeRegistry.NOTICE.id,
-                    EntityTypeRegistry.INVOICE.id,
-                    EntityTypeRegistry.APPLICATION.id,
-                    EntityTypeRegistry.CONTRACT.id,
-                )
-            }
-            .map { it.value }
-        val claimNodes = entityNodes.entries
-            .filter {
-                it.key.typeId in setOf(
-                    EntityTypeRegistry.CLAIM.id,
-                    EntityTypeRegistry.DEBT.id,
-                )
-            }
-            .map { it.value }
-        documentNodes.forEach { document ->
-            claimNodes.forEach { claim ->
-                if (document.id != claim.id) {
-                    relations += relation(document, claim, DomainSemanticRelationType.CONTAINS)
-                }
-            }
-        }
+            val authorities = entitiesOf(EntityTypeRegistry.AUTHORITY.id)
+            val notices = entitiesOf(
+                EntityTypeRegistry.NOTICE.id,
+                EntityTypeRegistry.INVOICE.id,
+                EntityTypeRegistry.APPLICATION.id,
+                EntityTypeRegistry.CONTRACT.id,
+                EntityTypeRegistry.DOCUMENT.id,
+            )
+            val claims = entitiesOf(EntityTypeRegistry.CLAIM.id, EntityTypeRegistry.DEBT.id)
+            val deadlines = entitiesOf(EntityTypeRegistry.DEADLINE.id)
 
-        actionGraph.nodes.forEach { action ->
-            when (action.frame.predicate) {
-                PredicateConcept.OWE -> {
-                    val debtor = action.frame.roles[SemanticRole.DEBTOR]?.let {
-                        addNode(DomainSemanticPackId.DEBT, "debt.debtor", it.normalized, it.confidence)
+            notices.forEach { (noticeEntity, noticeNode) ->
+                nearestBefore(noticeEntity, authorities)?.let { authority ->
+                    relations += relation(authority, noticeNode, DomainSemanticRelationType.ISSUED)
+                }
+            }
+
+            claims.forEach { (claimEntity, claimNode) ->
+                nearestBefore(claimEntity, notices)?.let { document ->
+                    relations += relation(document, claimNode, DomainSemanticRelationType.CONTAINS)
+                }
+
+                val claimCharStart = tokenCharStart(claimEntity)
+                localQuantities
+                    .filter { it.pack == DomainSemanticPackId.FINANCE }
+                    .minByOrNull { amount ->
+                        val source = context.quantities.firstOrNull { quantityNodes[it]?.id == amount.id }
+                        kotlin.math.abs((source?.span?.start ?: claimCharStart) - claimCharStart)
                     }
-                    val creditor = action.frame.roles[SemanticRole.CREDITOR]?.let {
-                        addNode(DomainSemanticPackId.DEBT, "debt.creditor", it.normalized, it.confidence)
+                    ?.let { amount ->
+                        relations += relation(claimNode, amount, DomainSemanticRelationType.HAS_AMOUNT)
                     }
-                    if (debtor != null && creditor != null) {
-                        relations += relation(debtor, creditor, DomainSemanticRelationType.OWES_TO)
-                    }
-                    val amount = quantityNodes.firstOrNull()
-                    if (debtor != null && amount != null) {
-                        relations += relation(debtor, amount, DomainSemanticRelationType.HAS_AMOUNT)
+            }
+
+            deadlines.forEach { (deadlineEntity, deadlineNode) ->
+                nearestBefore(deadlineEntity, notices)?.let { document ->
+                    relations += relation(document, deadlineNode, DomainSemanticRelationType.HAS_DEADLINE)
+                }
+                localTemporals.forEach { temporal ->
+                    if (deadlineNode.id != temporal.id) {
+                        relations += relation(deadlineNode, temporal, DomainSemanticRelationType.RELATES_TO)
                     }
                 }
-                PredicateConcept.PAY -> {
-                    val amount = quantityNodes.firstOrNull()
-                    val recipient = action.frame.roles[SemanticRole.RECIPIENT]?.let {
-                        addNode(DomainSemanticPackId.FINANCE, "finance.recipient", it.normalized, it.confidence)
-                    }
-                    if (amount != null && recipient != null) {
-                        relations += relation(amount, recipient, DomainSemanticRelationType.PAYS_TO)
-                    }
-                }
-                PredicateConcept.COMMUNICATE -> {
-                    val recipient = action.frame.roles[SemanticRole.RECIPIENT]?.let {
-                        addNode(
-                            DomainSemanticPackId.COMMUNICATION,
-                            "communication.recipient",
-                            it.normalized,
-                            it.confidence,
-                        )
-                    }
-                    val objectNode = action.frame.roles[SemanticRole.OBJECT]?.let {
-                        addNode(
-                            DomainSemanticPackId.COMMUNICATION,
-                            "communication.object",
-                            it.normalized,
-                            it.confidence,
-                        )
-                    }
-                    if (objectNode != null && recipient != null) {
-                        relations += relation(
-                            objectNode,
-                            recipient,
-                            DomainSemanticRelationType.HAS_RECIPIENT,
-                        )
+            }
+
+            entitiesOf(EntityTypeRegistry.APPOINTMENT.id).forEach { (_, appointment) ->
+                localTemporals.forEach { temporal ->
+                    if (appointment.id != temporal.id) {
+                        relations += relation(appointment, temporal, DomainSemanticRelationType.RELATES_TO)
                     }
                 }
-                else -> Unit
+            }
+
+            entitiesOf(EntityTypeRegistry.CONTRACT.id).forEach { (_, contractNode) ->
+                entitiesOf(EntityTypeRegistry.DURATION.id).forEach { (_, duration) ->
+                    relations += relation(contractNode, duration, DomainSemanticRelationType.HAS_DURATION)
+                }
+                deadlines.firstOrNull()?.second?.let { deadline ->
+                    if (contractNode.id != deadline.id) {
+                        relations += relation(contractNode, deadline, DomainSemanticRelationType.HAS_DEADLINE)
+                    }
+                }
+            }
+
+            entitiesOf(EntityTypeRegistry.MEDICATION.id).forEach { (_, medication) ->
+                val dosageNodes = entitiesOf(EntityTypeRegistry.DOSAGE.id).map { it.second }
+                    .ifEmpty { localQuantities.filter { it.type == "quantity.value" } }
+                dosageNodes.forEach { dosage ->
+                    if (dosage.id != medication.id) {
+                        relations += relation(medication, dosage, DomainSemanticRelationType.HAS_DOSAGE)
+                    }
+                }
+            }
+
+            context.frames.forEach { frame ->
+                when (frame.predicate) {
+                    PredicateConcept.OWE -> {
+                        val debtor = frame.roles[SemanticRole.DEBTOR]?.let {
+                            addNode(
+                                DomainSemanticPackId.DEBT,
+                                "debt.debtor",
+                                it.normalized,
+                                it.confidence,
+                                sourceAnchor = "frame:" + frame.nodeId.value + ":debtor",
+                            )
+                        }
+                        val creditor = frame.roles[SemanticRole.CREDITOR]?.let {
+                            addNode(
+                                DomainSemanticPackId.DEBT,
+                                "debt.creditor",
+                                it.normalized,
+                                it.confidence,
+                                sourceAnchor = "frame:" + frame.nodeId.value + ":creditor",
+                            )
+                        }
+                        if (debtor != null && creditor != null) {
+                            relations += relation(debtor, creditor, DomainSemanticRelationType.OWES_TO)
+                        }
+                        val amount = localQuantities.firstOrNull()
+                        if (debtor != null && amount != null) {
+                            relations += relation(debtor, amount, DomainSemanticRelationType.HAS_AMOUNT)
+                        }
+                    }
+                    PredicateConcept.PAY -> {
+                        val amount = localQuantities.firstOrNull()
+                        val recipient = frame.roles[SemanticRole.RECIPIENT]?.let {
+                            addNode(
+                                DomainSemanticPackId.FINANCE,
+                                "finance.recipient",
+                                it.normalized,
+                                it.confidence,
+                                sourceAnchor = "frame:" + frame.nodeId.value + ":recipient",
+                            )
+                        }
+                        if (amount != null && recipient != null) {
+                            relations += relation(amount, recipient, DomainSemanticRelationType.PAYS_TO)
+                        }
+                    }
+                    PredicateConcept.COMMUNICATE -> {
+                        val recipient = frame.roles[SemanticRole.RECIPIENT]?.let {
+                            addNode(
+                                DomainSemanticPackId.COMMUNICATION,
+                                "communication.recipient",
+                                it.normalized,
+                                it.confidence,
+                                sourceAnchor = "frame:" + frame.nodeId.value + ":recipient",
+                            )
+                        }
+                        val objectNode = frame.roles[SemanticRole.OBJECT]?.let {
+                            addNode(
+                                DomainSemanticPackId.COMMUNICATION,
+                                "communication.object",
+                                it.normalized,
+                                it.confidence,
+                                sourceAnchor = "frame:" + frame.nodeId.value + ":object",
+                            )
+                        }
+                        if (objectNode != null && recipient != null) {
+                            relations += relation(
+                                objectNode,
+                                recipient,
+                                DomainSemanticRelationType.HAS_RECIPIENT,
+                            )
+                        }
+                    }
+                    else -> Unit
+                }
             }
         }
 
