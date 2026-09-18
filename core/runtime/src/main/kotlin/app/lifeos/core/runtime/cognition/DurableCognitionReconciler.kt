@@ -111,6 +111,11 @@ class DurableCognitionReconciler(
             }
         )
         val taskIds = batch.results.mapNotNull { it.durableTaskId }
+        val newlyCoveredRefs = candidates.zip(batch.results)
+            .mapNotNull { (photon, result) ->
+                result.durableTaskId?.let { PhotonRevisionRef(photon.id, photon.revision) }
+            }
+        coverage.markCovered(newlyCoveredRefs)
 
         return DurableCognitionReconciliationResult(
             scannedPhotons = actualRefs.size,
