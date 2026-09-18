@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -93,7 +96,11 @@ private fun MediumScaffold(
     onSelect: (LifeOsDestination) -> Unit,
     content: @Composable (Modifier) -> Unit,
 ) {
-    Row(modifier = Modifier.fillMaxSize()) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
         Surface(
             modifier = Modifier.fillMaxHeight(),
             color = MaterialTheme.colorScheme.surface,
@@ -134,7 +141,11 @@ private fun ExpandedScaffold(
     onSelect: (LifeOsDestination) -> Unit,
     content: @Composable (Modifier) -> Unit,
 ) {
-    Row(modifier = Modifier.fillMaxSize()) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
         Surface(
             modifier = Modifier
                 .width(LifeOsTokens.Layout.expandedNavigationWidth)
