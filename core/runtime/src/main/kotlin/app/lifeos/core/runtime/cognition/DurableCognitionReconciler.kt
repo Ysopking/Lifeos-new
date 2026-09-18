@@ -23,8 +23,9 @@ data class DurableCognitionReconciliationResult(
  * PROCESS_PHOTON task is durably created. Existing task records, including terminal records, are
  * the cross-process coverage ledger. Reconciliation therefore never creates a second queue/vault.
  *
- * Internal cognition-journal Photons are persistence metadata, not cognitive evidence. They are
- * deliberately excluded so durable journaling cannot recursively schedule itself after restart.
+ * Internal persistence Photons are metadata, not cognitive evidence. They are deliberately
+ * excluded so journals, indices, checkpoints and future internal projections cannot recursively
+ * schedule themselves after restart.
  *
  * Each pass is deliberately bounded. Durable admission may stop a pass earlier when TaskStore
  * capacity is exhausted; uncovered photons remain in the photon vault and are therefore the
@@ -80,7 +81,7 @@ class DurableCognitionReconciler(
 
         val orderedPhotons = photonReport.photons
             .asSequence()
-            .filterNot { COGNITION_JOURNAL_ROOT_TAG in it.tags }
+            .filterNot { "internal" in it.tags || COGNITION_JOURNAL_ROOT_TAG in it.tags }
             .sortedWith(compareBy<Photon> { it.id.value }.thenBy { it.revision })
             .toList()
         val uncovered = orderedPhotons.filter { photon ->
