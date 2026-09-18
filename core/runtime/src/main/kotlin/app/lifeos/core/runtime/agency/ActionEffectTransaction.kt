@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.agency
 
+import app.lifeos.core.runtime.LifeOsGoldLoopProjectionRuntimeRegistry
 import app.lifeos.core.runtime.policy.OwnerEffectPreparationResult
 import app.lifeos.core.runtime.policy.OwnerEffectRequest
 import app.lifeos.core.runtime.policy.OwnerPolicyAssessment
@@ -237,6 +238,7 @@ class ActionEffectTransactionCoordinator(
             recordedAt = now(),
         )
         traceRecorder?.recordActionEffect(contract, receipt)
+        LifeOsGoldLoopProjectionRuntimeRegistry.currentOrNull()?.observeAction(contract, receipt)
         return ActionEffectResult(receipt = receipt, output = output)
     }
 }
