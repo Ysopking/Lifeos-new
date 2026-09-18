@@ -58,10 +58,6 @@ class SemanticInterpretationQualityEvaluator {
         val ambiguityCount = ambiguities.count { it.severity >= 0.50 }
         val executionReadiness = actionGraph.executableNodes
             .maxOfOrNull { it.executionReadiness }
-            ?: actionGraph.nodes
-                .filter { it.type == SemanticActionNodeType.QUERY }
-                .maxOfOrNull { it.frame.confidence }
-                ?.times(0.25)
             ?: 0.0
 
         return SemanticInterpretationQuality(
