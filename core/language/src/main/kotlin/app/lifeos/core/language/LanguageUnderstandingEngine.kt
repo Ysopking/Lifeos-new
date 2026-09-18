@@ -396,7 +396,7 @@ class GoalPhotonFactory {
                 .append(escape(link.cue)).append('\n')
         }
         append("action.fingerprint=").append(frame.semanticActionGraph.fingerprint).append('\n')
-        frame.semanticActionGraph.nodes.sortedBy { it.id.value }.forEachIndexed { index, node ->
+        frame.semanticActionGraph.nodes.forEachIndexed { index, node ->
             append("action.node.").append(index).append('=')
                 .append(escape(node.id.value)).append('|')
                 .append(node.type.name).append('|')
@@ -422,7 +422,31 @@ class GoalPhotonFactory {
                     .append(value.resolved).append('|')
                     .append(value.confidence).append('|')
                     .append(escape(value.referencePhoton?.photonId?.value.orEmpty())).append('|')
-                    .append(value.referencePhoton?.revision ?: 0L)
+                    .append(value.referencePhoton?.revision ?: 0L).append('|')
+                    .append(escape(value.quantity?.value.orEmpty())).append('|')
+                    .append(escape(value.quantity?.unit.orEmpty())).append('|')
+                    .append(escape(value.quantity?.comparator.orEmpty())).append('|')
+                    .append(value.quantity?.tokenStart ?: -1).append('|')
+                    .append(value.quantity?.tokenEndExclusive ?: -1).append('|')
+                    .append(value.quantity?.confidence ?: -1.0)
+                    .append('\n')
+            }
+            node.frame.speechAct.evidence.forEachIndexed { evidenceIndex, evidence ->
+                append("action.speech.evidence.").append(index).append('.').append(evidenceIndex).append('=')
+                    .append(escape(evidence.source)).append('|')
+                    .append(escape(evidence.detail)).append('|')
+                    .append(evidence.strength).append('|')
+                    .append(evidence.span?.start ?: -1).append('|')
+                    .append(evidence.span?.endExclusive ?: -1)
+                    .append('\n')
+            }
+            node.frame.evidence.forEachIndexed { evidenceIndex, evidence ->
+                append("action.frame.evidence.").append(index).append('.').append(evidenceIndex).append('=')
+                    .append(escape(evidence.source)).append('|')
+                    .append(escape(evidence.detail)).append('|')
+                    .append(evidence.strength).append('|')
+                    .append(evidence.span?.start ?: -1).append('|')
+                    .append(evidence.span?.endExclusive ?: -1)
                     .append('\n')
             }
         }
