@@ -7,6 +7,7 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.next.kernel.KernelBootstrapState
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.LocalCommunicationExecutionResult
+import app.lifeos.next.kernel.LocalKnowledgeExecutionResult
 import app.lifeos.next.kernel.SemanticNodeExecutionState
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -43,7 +44,11 @@ class SemanticActionRecoveryDeviceTest {
         val submission = app.kernel.persistUserUtterance(user)
         val execution = requireNotNull(submission.actionGraphExecution)
         val executionDiagnostic = execution.executions.joinToString(";") { node ->
-            node.intent.name + ":" + node.state.name + ":" + node.reason.orEmpty()
+            val knowledgeFailure = (node.dispatch?.localKnowledge as? LocalKnowledgeExecutionResult.Failed)
+                ?.message
+                .orEmpty()
+            node.intent.name + ":" + node.state.name + ":" + node.reason.orEmpty() +
+                if (knowledgeFailure.isBlank()) "" else ":knowledge=$knowledgeFailure"
         }
         assertTrue(
             "Semantic action graph must complete; blocked=${execution.blockedReason}; " +
