@@ -135,7 +135,9 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
 
         // INDEX is a projection only. Remove every partial/corrupt index artifact before rebuilding
         // so a crash during the very first append or legacy migration cannot poison offset 1.
-        loadCognitionJournalPhotons(store, CognitionJournalKind.INDEX)
+        store.loadAll()
+            .asSequence()
+            .filter { INDEX_ROOT_TAG in it.tags }
             .forEach { store.delete(it.id) }
 
         if (authoritative.isEmpty()) {
@@ -153,11 +155,25 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
 
     private suspend fun writeIndexLocked(offset: Long, eventId: String) {
         require(offset > 0L && eventId.isNotBlank())
-        val photon = cognitionJournalPhoton(
-            kind = CognitionJournalKind.INDEX,
-            stableId = offsetStableId(offset),
-            at = Instant.EPOCH,
+        val photon = Photon(
+            id = indexPhotonId(offset),
+            revision = 1L,
             content = "$INDEX_SCHEMA\noffset=$offset\nevent=$eventId",
+            mimeType = COGNITION_JOURNAL_MIME,
+            phase = PhotonPhase.ARCHIVED,
+            semanticMass = 0.0,
+            energy = 0.0,
+            provenance = Provenance(
+                source = "cognition-journal-index",
+                actor = "lifeos-runtime",
+                createdAt = Instant.EPOCH,
+            ),
+            tags = setOf(
+                "internal",
+                INDEX_ROOT_TAG,
+                "cognition-journal-index:offset",
+                "cognition-journal-schema:1",
+            ),
         )
         val existing = store.load(photon.id)
         if (existing == null) {
@@ -176,8 +192,8 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
         )
 
     private fun decodeIndex(photon: Photon, expectedOffset: Long): String {
-        require(COGNITION_JOURNAL_ROOT_TAG in photon.tags)
-        require("cognition-journal-kind:${CognitionJournalKind.INDEX.tag}" in photon.tags)
+        require(INDEX_ROOT_TAG in photon.tags)
+        require("cognition-journal-index:offset" in photon.tags)
         val lines = photon.content.lineSequence().toList()
         require(lines.size == 3 && lines[0] == INDEX_SCHEMA) { "Invalid runtime event index schema" }
         val offset = lines[1].removePrefix("offset=").toLong()
@@ -188,8 +204,8 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
 
     private suspend fun readTailLocked(): Long? {
         val photon = store.load(tailPhotonId()) ?: return null
-        require(COGNITION_JOURNAL_ROOT_TAG in photon.tags)
-        require("cognition-journal-kind:${CognitionJournalKind.INDEX.tag}" in photon.tags)
+        require(INDEX_ROOT_TAG in photon.tags)
+        require("cognition-journal-index:tail" in photon.tags)
         val lines = photon.content.lineSequence().toList()
         require(lines.size == 2 && lines[0] == TAIL_SCHEMA) { "Invalid runtime event tail schema" }
         return lines[1].removePrefix("offset=").toLong().also { offset ->
@@ -212,8 +228,7 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
             provenance = Provenance("cognition-journal", "lifeos-runtime", at),
             tags = setOf(
                 "internal",
-                COGNITION_JOURNAL_ROOT_TAG,
-                "cognition-journal-kind:${CognitionJournalKind.INDEX.tag}",
+                INDEX_ROOT_TAG,
                 "cognition-journal-schema:1",
                 "cognition-journal-index:tail",
             ),
@@ -246,6 +261,7 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
     }
 
     private companion object {
+        const val INDEX_ROOT_TAG = "cognition-journal-index"
         const val INDEX_SCHEMA = "runtime-event-index/v1"
         const val TAIL_SCHEMA = "runtime-event-tail/v1"
         const val TAIL_STABLE_ID = "event-tail"
