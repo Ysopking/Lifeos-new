@@ -285,11 +285,60 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
             null
         }
         if (loaded != null) {
-            cachedIndex = loaded
-            return loaded
+            val reconciled = reconcileIndexTailLocked(loaded)
+            cachedIndex = reconciled
+            return reconciled
         }
 
         return rebuildIndexLocked().also { cachedIndex = it }
+    }
+
+    /**
+     * Recovers the only incomplete write shapes possible with the V2 order:
+     * revision payload -> index publish and tombstone payload -> index publish.
+     *
+     * Because advances are strictly +1, checking head+1 for every indexed Photon is sufficient and
+     * does not require decrypting/scanning the full revision history.
+     */
+    private fun reconcileIndexTailLocked(index: IndexState): IndexState {
+        var changed = false
+        val entries = index.entries.toMutableMap()
+
+        index.entries.values
+            .asSequence()
+            .filter { it.latest }
+            .sortedBy { it.ref.photonId.value }
+            .forEach { indexedHead ->
+                var head = entries[indexedHead.ref] ?: indexedHead
+                var nextRevision = head.ref.revision + 1L
+                while (nextRevision > 0L) {
+                    val nextRef = PhotonRevisionRef(head.ref.photonId, nextRevision)
+                    if (!exists(revisionFile(nextRef))) break
+                    val nextPhoton = readRevisionInternal(nextRef)
+                    entries[head.ref] = head.copy(latest = false, tombstoned = false)
+                    head = indexEntry(nextPhoton, latest = true, tombstoned = false)
+                    entries[nextRef] = head
+                    changed = true
+                    if (nextRevision == Long.MAX_VALUE) break
+                    nextRevision += 1L
+                }
+
+                val tombstonedRevision = readTombstoneLocked(head.ref.photonId)
+                if (tombstonedRevision == head.ref.revision && !head.tombstoned) {
+                    head = head.copy(tombstoned = true)
+                    entries[head.ref] = head
+                    changed = true
+                } else if (tombstonedRevision != null && tombstonedRevision != head.ref.revision) {
+                    // Stale tombstone after a successfully advanced head cannot delete the new head.
+                    AtomicFile(tombstoneFile(head.ref.photonId)).delete()
+                    changed = true
+                }
+            }
+
+        if (!changed) return index
+        val reconciled = IndexState(entries = entries, unreadableRevisionFiles = emptyList())
+        writeIndexLocked(reconciled)
+        return reconciled
     }
 
     /**
@@ -434,7 +483,7 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
                     data.text(entry.phase.name)
                     data.text(entry.mimeType)
                     data.writeInt(entry.tags.size)
-                    entry.tags.sorted().forEach(data::text)
+                    entry.tags.sorted().forEach { tag -> data.text(tag) }
                     data.writeDouble(entry.semanticMass)
                     data.writeDouble(entry.confidence)
                     data.text(entry.contentFingerprint)
@@ -442,7 +491,7 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
                     data.writeBoolean(entry.tombstoned)
                 }
                 data.writeInt(index.unreadableRevisionFiles.size)
-                index.unreadableRevisionFiles.sorted().forEach(data::text)
+                index.unreadableRevisionFiles.sorted().forEach { failure -> data.text(failure) }
             }
             output.toByteArray()
         }
