@@ -4,6 +4,7 @@ import app.lifeos.core.model.StableCognitiveIds
 
 class SemanticActionGraphBuilder(
     private val contracts: PredicateContractRegistry = PredicateContractRegistry(),
+    private val scopeEngine: TargetBoundScopeEngine = TargetBoundScopeEngine(),
 ) {
     fun build(
         utterance: NormalizedUtterance,
@@ -154,17 +155,16 @@ class SemanticActionGraphBuilder(
             }
         }
 
-        val scopes = nodes.flatMap { node ->
-            node.frame.scopeTypes.map { type ->
-                SemanticScope(
-                    type = type,
-                    targetNodeIds = setOf(node.id),
-                    span = clauseSpan(utterance, semanticGraph, node.frame.clauseId),
-                    cue = scopeCue(type, utterance, semanticGraph, node.frame.clauseId),
-                    confidence = node.frame.confidence,
+        val scopes = nodes
+            .flatMap { node ->
+                scopeEngine.bind(
+                    utterance = utterance,
+                    graph = semanticGraph,
+                    node = node,
+                    edges = edges,
                 )
             }
-        }.sortedWith(compareBy<SemanticScope> { it.span.start }.thenBy { it.type.name })
+            .sortedWith(compareBy<SemanticScope> { it.span.start }.thenBy { it.type.name })
 
         val fingerprint = StableCognitiveIds.fingerprint(
             "semantic-action-graph/v1",
@@ -197,7 +197,22 @@ class SemanticActionGraphBuilder(
                     add("edge:" + edge.from.value + ":" + edge.to.value + ":" + edge.type.name)
                 }
                 scopes.forEach { scope ->
-                    add("scope:" + scope.type.name + ":" + scope.targetNodeIds.single().value + ":" + scope.cue)
+                    scope.targets
+                        .sortedWith(
+                            compareBy<SemanticScopeTarget> { it.kind.name }
+                                .thenBy { it.nodeId?.value.orEmpty() }
+                                .thenBy { it.role?.name.orEmpty() }
+                                .thenBy { it.edgeId?.value.orEmpty() }
+                        )
+                        .forEach { target ->
+                            add(
+                                "scope:" + scope.type.name + ":" + target.kind.name + ":" +
+                                    target.nodeId?.value.orEmpty() + ":" +
+                                    target.role?.name.orEmpty() + ":" +
+                                    target.edgeId?.value.orEmpty() + ":" +
+                                    scope.cue
+                            )
+                        }
                 }
             }.toTypedArray(),
         )
