@@ -150,6 +150,18 @@ class DeterministicEntityPipelineV2(
             if (token.kind != TokenKind.WORD) return@forEachIndexed
             val word = token.normalized
 
+            domainCompoundTypes(token.original).forEach { definition ->
+                result += SemanticEntityV2(
+                    typeId = definition.id,
+                    rawText = token.original,
+                    normalizedValue = canonicalLexicalValue(definition, word),
+                    tokenStart = index,
+                    tokenEndExclusive = index + 1,
+                    confidence = 0.94,
+                    source = "entity-v2-domain-compound",
+                )
+            }
+
             lexicalType(word)?.let { definition ->
                 result += SemanticEntityV2(
                     typeId = definition.id,
@@ -258,6 +270,22 @@ class DeterministicEntityPipelineV2(
         if (token.normalized in AUTHORITY_TERMS) return false
         if (DOCUMENT_TERMS.containsKey(token.normalized)) return false
         return true
+    }
+
+    private fun domainCompoundTypes(raw: String): Set<SemanticEntityTypeDefinition> {
+        val token = normalizeFieldText(raw)
+        return buildSet {
+            if ("jobcenter" in token || "arbeitsagentur" in token || "finanzamt" in token) {
+                add(EntityTypeRegistry.AUTHORITY)
+            }
+            if (token.endsWith("bescheid")) add(EntityTypeRegistry.NOTICE)
+            if ("widerspruch" in token) add(EntityTypeRegistry.CLAIM)
+            if (token.endsWith("frist")) add(EntityTypeRegistry.DEADLINE)
+            if ("ratenzahlung" in token) add(EntityTypeRegistry.INSTALLMENT)
+            if (token.endsWith("vereinbarung")) add(EntityTypeRegistry.CONTRACT)
+            if ("rechnung" in token) add(EntityTypeRegistry.INVOICE)
+            if ("forderung" in token || "schuld" in token) add(EntityTypeRegistry.DEBT)
+        }
     }
 
     private fun lexicalType(word: String): SemanticEntityTypeDefinition? = when (word) {
