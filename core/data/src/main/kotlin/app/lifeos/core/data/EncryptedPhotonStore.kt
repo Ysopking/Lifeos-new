@@ -133,10 +133,21 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
                             .thenByDescending { it.createdAt }
                             .thenBy { it.ref.photonId.value }
                 }
-                ensureIndexLocked().entries.values
+                val ordered = ensureIndexLocked().entries.values
                     .asSequence()
                     .filter { it.matches(query) }
                     .sortedWith(ordering)
+                    .toList()
+                val startIndex = query.after?.let { cursor ->
+                    val cursorIndex = ordered.indexOfFirst { it.ref == cursor.lastRef }
+                    require(cursorIndex >= 0) {
+                        "Photon index cursor is not present in the filtered result set"
+                    }
+                    cursorIndex + 1
+                } ?: 0
+                ordered
+                    .asSequence()
+                    .drop(startIndex)
                     .take(query.limit)
                     .map { it.ref }
                     .toList()
