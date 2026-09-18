@@ -210,7 +210,7 @@ class EscalationSubsystemExecutorsTest {
         val provider = CapabilityDescriptor(
             capabilityId = CapabilityId("render"),
             providerId = providerId,
-            providerType = ProviderType.LOCAL,
+            providerType = ProviderType.INTERNAL_TOOL,
             contract = CapabilityContract(outputs = setOf("image")),
             state = ProviderState.ACTIVE,
             trustLevel = TrustLevel.HIGH,
@@ -220,15 +220,15 @@ class EscalationSubsystemExecutorsTest {
         return CapabilityProviderScore(
             provider = provider,
             profile = CapabilityProviderProfile(),
-            terms = listOf(
+            terms = CapabilityScoreComponent.entries.map { component ->
                 CapabilityScoreTerm(
-                    component = CapabilityScoreComponent.TRUST,
+                    component = component,
                     rawScore = 1.0,
                     weight = 1.0,
-                    contribution = 1.0,
+                    contribution = 0.2,
                 )
-            ),
-            score = 1.0,
+            },
+            totalScore = 1.0,
         )
     }
 
