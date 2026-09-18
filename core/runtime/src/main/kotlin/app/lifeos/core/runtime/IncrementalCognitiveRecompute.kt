@@ -2,6 +2,7 @@ package app.lifeos.core.runtime
 
 import app.lifeos.core.model.CognitiveDependency
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.ProjectionValidity
 
 /** A semantic/revision delta entering the incremental cognitive graph. */
@@ -36,26 +37,38 @@ class IncrementalCognitiveRecomputePlanner(
         require(globalThresholdMicros in regionalThresholdMicros..1_000_000L)
     }
 
-    fun plan(delta: CognitiveRecomputeDelta, dependencies: Collection<CognitiveDependency>): CognitiveRecomputePlan {
-        val affected = linkedSetOf<PhotonId>()
-        val queue = ArrayDeque<PhotonId>()
-        queue.add(delta.sourcePhotonId)
+    fun plan(
+        delta: CognitiveRecomputeDelta,
+        dependencies: Collection<CognitiveDependency>,
+    ): CognitiveRecomputePlan = plan(delta, CognitiveDependencyIndex(dependencies))
 
-        while (queue.isNotEmpty()) {
-            val current = queue.removeFirst()
-            dependencies.asSequence()
-                .filter { it.sourcePhotonId == current }
-                .sortedBy { it.stableFingerprint }
-                .forEach { dependency ->
-                    if (affected.add(dependency.targetPhotonId)) queue.add(dependency.targetPhotonId)
-                }
+    fun plan(
+        delta: CognitiveRecomputeDelta,
+        dependencyIndex: CognitiveDependencyIndex,
+    ): CognitiveRecomputePlan {
+        val propagated = dependencyIndex.propagate(
+            source = PhotonRevisionRef(delta.sourcePhotonId, delta.sourceRevision),
+            magnitudeMicros = delta.magnitudeMicros,
+        )
+        val affected = propagated.mapTo(linkedSetOf()) { it.target.photonId }
+        val states = linkedMapOf<String, ProjectionValidity>()
+        propagated.forEach { value ->
+            val validity = dependencyIndex.validity(value.reason)
+            val key = value.target.photonId.value
+            val previous = states[key]
+            states[key] = when {
+                previous == ProjectionValidity.INVALID -> previous
+                validity == ProjectionValidity.INVALID -> validity
+                else -> ProjectionValidity.STALE
+            }
         }
+        val maxMagnitude = propagated.maxOfOrNull { it.magnitudeMicros } ?: 0L
 
         return CognitiveRecomputePlan(
             affectedPhotonIds = affected,
-            projectionStates = affected.associate { it.value to ProjectionValidity.STALE },
-            escalateRegional = delta.magnitudeMicros >= regionalThresholdMicros,
-            escalateGlobal = delta.magnitudeMicros >= globalThresholdMicros,
+            projectionStates = states,
+            escalateRegional = maxMagnitude >= regionalThresholdMicros,
+            escalateGlobal = maxMagnitude >= globalThresholdMicros,
         )
     }
 }
