@@ -29,6 +29,20 @@ data class CognitiveModuleSnapshot private constructor(
     private fun expectedId(): String = "cognitive-modules:${fingerprint()}"
 
     companion object {
+        fun restore(
+            id: String,
+            revision: Long,
+            extensionSnapshotId: String,
+            moduleFingerprints: List<String>,
+            predecessorSnapshotId: String?,
+        ): CognitiveModuleSnapshot = CognitiveModuleSnapshot(
+            id = id,
+            revision = revision,
+            extensionSnapshotId = extensionSnapshotId,
+            moduleFingerprints = moduleFingerprints,
+            predecessorSnapshotId = predecessorSnapshotId,
+        )
+
         fun create(
             revision: Long,
             extensionSnapshotId: String,
@@ -92,7 +106,10 @@ class VersionedCognitiveModuleRegistry(
     private val promotedModules = linkedMapOf<String, CognitiveModule>()
 
     override fun activeModules(): List<CognitiveModule> =
-        builtInModules.values.sortedWith(
+        synchronized(lock) {
+            (builtInModules.values + promotedModules.values)
+                .distinctBy { it.descriptor.identity.stableFingerprint }
+        }.sortedWith(
             compareBy<CognitiveModule> { it.descriptor.identity.moduleId }
                 .thenBy { it.descriptor.identity.version }
                 .thenBy { it.descriptor.identity.stableFingerprint }
