@@ -370,8 +370,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     )
                 },
                 startKernel = {
-                    kernel.start()
-                    Unit
+                    kernel.start().join()
+                },
+                requireCognitiveStateReady = {
+                    kernel.requireCognitiveReady()
                 },
                 stageObserver = { evidence ->
                     LifeOsRuntimeWiring.onStageReady(evidence)
