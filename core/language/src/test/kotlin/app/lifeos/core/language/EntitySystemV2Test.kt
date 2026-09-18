@@ -16,7 +16,7 @@ class EntitySystemV2Test {
             )
         )
 
-        val types = result.entities.mapTo(setOf()) { it.typeId }
+        val types = result.entities.mapTo(linkedSetOf()) { it.typeId }
         assertTrue(EntityTypeRegistry.AUTHORITY.id in types)
         assertTrue(EntityTypeRegistry.NOTICE.id in types)
         assertTrue(EntityTypeRegistry.CLAIM.id in types)
