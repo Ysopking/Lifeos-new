@@ -17,10 +17,33 @@ object OwnerPolicyEventLogCodec {
     const val MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 
     fun encode(events: List<OwnerPolicyEvent>): ByteArray {
-        require(events.size <= MAX_EVENTS) { "Owner policy event log too large" }
         require(events.map { it.revision } == (1L..events.size.toLong()).toList()) {
             "Owner policy event revisions must be contiguous"
         }
+        return encodePayload(events)
+    }
+
+    /**
+     * Encodes one immutable segmented-ledger event without pretending its global revision starts at
+     * one. The full-log codec above remains strict so legacy/migration payloads cannot hide gaps.
+     */
+    fun encodeSegment(event: OwnerPolicyEvent): ByteArray = encodePayload(listOf(event))
+
+    fun decode(bytes: ByteArray): List<OwnerPolicyEvent> =
+        decodePayload(bytes).also { events ->
+            require(events.map { it.revision } == (1L..events.size.toLong()).toList()) {
+                "Owner policy event revisions must be contiguous"
+            }
+        }
+
+    /** Decodes exactly one segmented-ledger event while preserving its global revision. */
+    fun decodeSegment(bytes: ByteArray): OwnerPolicyEvent =
+        decodePayload(bytes).also { events ->
+            require(events.size == 1) { "Owner policy segment must contain exactly one event" }
+        }.single()
+
+    private fun encodePayload(events: List<OwnerPolicyEvent>): ByteArray {
+        require(events.size <= MAX_EVENTS) { "Owner policy event log too large" }
         return ByteArrayOutputStream().let { output ->
             DataOutputStream(output).use { stream ->
                 stream.writeInt(MAGIC)
@@ -32,18 +55,14 @@ object OwnerPolicyEventLogCodec {
         }.also { require(it.size <= MAX_PAYLOAD_BYTES) { "Owner policy payload too large" } }
     }
 
-    fun decode(bytes: ByteArray): List<OwnerPolicyEvent> {
+    private fun decodePayload(bytes: ByteArray): List<OwnerPolicyEvent> {
         require(bytes.isNotEmpty() && bytes.size <= MAX_PAYLOAD_BYTES) { "Invalid owner policy payload size" }
         val input = DataInputStream(ByteArrayInputStream(bytes))
         require(input.readInt() == MAGIC) { "Invalid owner policy payload magic" }
         require(input.readInt() == VERSION) { "Unsupported owner policy payload version" }
         val count = input.readInt()
         require(count in 0..MAX_EVENTS) { "Invalid owner policy event count" }
-        val events = List(count) { index ->
-            readEvent(input).also { event ->
-                require(event.revision == index + 1L) { "Owner policy event revisions must be contiguous" }
-            }
-        }
+        val events = List(count) { readEvent(input) }
         require(input.available() == 0) { "Trailing owner policy payload bytes" }
         return events
     }
