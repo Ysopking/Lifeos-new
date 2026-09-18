@@ -337,7 +337,9 @@ class SemanticActionGraphRouter(
     private fun isSuccessful(
         result: GoalActionDispatchResult,
         intent: IntentType,
-    ): Boolean = when (intent) {
+    ): Boolean {
+        if (result.recoveredOutcome != null) return true
+        return when (intent) {
         IntentType.QUERY,
         IntentType.STORE_OR_REMEMBER ->
             result.localKnowledge is LocalKnowledgeExecutionResult.Produced
@@ -354,9 +356,11 @@ class SemanticActionGraphRouter(
             result.localCommunication is LocalCommunicationExecutionResult.Prepared ||
                 result.externalEffect?.state == ExternalEffectState.CONFIRMED
         else -> false
+        }
     }
 
     private fun outputPhoton(result: GoalActionDispatchResult): Photon? = when {
+        result.recoveredOutcome != null -> result.recoveredOutcome
         result.localKnowledge is LocalKnowledgeExecutionResult.Produced ->
             result.localKnowledge.output.photon
         result.localDeepSearch is LocalDeepSearchExecutionResult.Produced ->
