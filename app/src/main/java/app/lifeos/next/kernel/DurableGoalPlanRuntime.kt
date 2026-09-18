@@ -11,6 +11,7 @@ import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionState
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.goal.ProductiveConvergenceNotReadyException
 import app.lifeos.core.runtime.goal.GoalPlanBlueprint
 import app.lifeos.core.runtime.goal.GoalPlanBuildResult
 import app.lifeos.core.runtime.goal.GoalPlanBuilder
@@ -103,13 +104,20 @@ class DurableGoalPlanRuntime(
             return normalizePreparation(blueprint, coordinator.prepareNext(blueprint, emptyMap(), now()))
         }
 
-        val checkpoint = convergence.decide(
-            goal = context.goal,
-            routing = context.routing,
-            sourcePhoton = context.sourcePhoton,
-            goalPhotonId = context.goalPhotonId,
-            at = now(),
-        )
+        val checkpoint = try {
+            convergence.decide(
+                goal = context.goal,
+                routing = context.routing,
+                sourcePhoton = context.sourcePhoton,
+                goalPhotonId = context.goalPhotonId,
+                goalPhotonRevision = context.goalPhotonRevision,
+                at = now(),
+            )
+        } catch (blocked: ProductiveConvergenceNotReadyException) {
+            return DurableGoalPlanAdmission.Blocked(
+                "productive-convergence:${blocked.reason}"
+            )
+        }
         traces?.recordConvergence(blueprint.definition, checkpoint)
         val decision = checkpoint.decision
         if (actionState in CONVERGENCE_MUTABLE_STATES) {
