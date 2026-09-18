@@ -12,6 +12,7 @@ import app.lifeos.core.runtime.agency.PolicyGatedExternalEffectExecutor
 import app.lifeos.core.runtime.agency.ExternalTransportRuntimeRegistry
 import app.lifeos.core.runtime.agency.ExternalEffectRuntimeRegistry
 import app.lifeos.core.data.agency.EncryptedExternalEffectReceiptRepository
+import app.lifeos.core.data.agency.EncryptedExternalPayloadRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
@@ -174,6 +175,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                         PolicyGatedExternalEffectExecutor(
                             policyGate = OwnerPolicyEffectGate(ownerPolicy),
                             receipts = EncryptedExternalEffectReceiptRepository(this),
+                            payloads = EncryptedExternalPayloadRepository(this),
                             transport = ExternalTransportRuntimeRegistry.transport(),
                             observationReconciler = ExternalTransportRuntimeRegistry.reconciler(),
                         )
