@@ -116,14 +116,19 @@ class SemanticActionGraphBuilder {
                 )
             }
             if (node.id !in incomingConditions) {
+                val computed = readiness(
+                    frame = node.frame,
+                    required = node.requiredRoles,
+                    unresolved = node.unresolvedRoles,
+                    unresolvedReference = node.unresolvedReference,
+                    unresolvedCondition = false,
+                )
                 node.copy(
-                    executionReadiness = readiness(
-                        frame = node.frame,
-                        required = node.requiredRoles,
-                        unresolved = node.unresolvedRoles,
-                        unresolvedReference = node.unresolvedReference,
-                        unresolvedCondition = false,
-                    ),
+                    executionReadiness = if (referenceResolvedByResult) {
+                        maxOf(computed, RESULT_DEPENDENCY_READINESS)
+                    } else {
+                        computed
+                    },
                 )
             } else {
                 node.copy(
@@ -323,6 +328,7 @@ class SemanticActionGraphBuilder {
     }
 
     private companion object {
+        const val RESULT_DEPENDENCY_READINESS = 0.94
         val REFERENCE_WORDS = setOf(
             "das", "dies", "diese", "diesen", "dieses", "jenes", "andere", "anderen",
             "ihn", "sie", "es", "ihm", "ihr",
