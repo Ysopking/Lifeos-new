@@ -3,6 +3,7 @@ package app.lifeos.next.kernel
 import android.content.Context
 import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
+import app.lifeos.core.data.cognition.EncryptedCognitionCoverageRepository
 import app.lifeos.core.data.cognition.EncryptedCognitionJournalIndexRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
@@ -63,6 +64,7 @@ import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.capability.TrustLevel
+import app.lifeos.core.runtime.cognition.CognitionCoverageIndex
 import app.lifeos.core.runtime.cognition.CognitionJournalIndex
 import app.lifeos.core.runtime.cognition.CognitiveScheduler
 import app.lifeos.core.runtime.cognition.CompositeDurableTaskExecutionObserver
@@ -134,6 +136,9 @@ class LifeOsKernelFactory(
         val cognitionJournalIndex = CognitionJournalIndex(
             repository = EncryptedCognitionJournalIndexRepository(appContext),
             photons = store,
+        )
+        val cognitionCoverageIndex = CognitionCoverageIndex(
+            repository = EncryptedCognitionCoverageRepository(appContext),
         )
         val learningAdaptationRepository = EncryptedLearningAdaptationRepository(appContext)
         val learningAdaptations = DurableLearningAdaptationLedger(learningAdaptationRepository)
@@ -352,6 +357,7 @@ class LifeOsKernelFactory(
             durableDispatcher = DurableCognitionDispatcher(
                 taskEngine = taskEngine,
                 admissionController = cognitionAdmission,
+                coverageIndex = cognitionCoverageIndex,
             ),
         )
         val cognitionReconciler = DurableCognitionReconciler(
@@ -359,6 +365,7 @@ class LifeOsKernelFactory(
             tasks = taskRepository,
             cognition = continuousCognition,
             taskEngine = taskEngine,
+            coverage = cognitionCoverageIndex,
         )
         val photonTransactions = PhotonBackedPhotonTransactionJournal(
             store = store,
