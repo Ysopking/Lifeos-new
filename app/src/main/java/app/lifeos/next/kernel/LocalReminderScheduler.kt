@@ -160,13 +160,35 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
         val appContext = context.applicationContext
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                PrivateOwnerEffectAuthority.expose(
+                val result = PrivateOwnerEffectAuthority.transact(
                     context = appContext,
+                    traceId = DecisionTraceId.create("reminder-photon", reminderId),
+                    intentId = "deliver-reminder:$reminderId",
                     request = PrivateOwnerEffectAuthority.reminderRequest(
                         PrivateOwnerEffectAuthority.REMINDER_DELIVERY_RESOURCE
                     ),
-                ) {
-                    deliverNotification(appContext, reminderId, message)
+                    expectedEffectFingerprint = StableCognitiveIds.fingerprint(
+                        "android-reminder-delivery/v1",
+                        reminderId,
+                        message,
+                    ),
+                    effect = {
+                        deliverNotification(appContext, reminderId, message)
+                        reminderId
+                    },
+                    verify = { deliveredId ->
+                        val manager = appContext.getSystemService(NotificationManager::class.java)
+                        val notificationId = deliveredId.hashCode()
+                        val visible = manager.activeNotifications.any { it.id == notificationId }
+                        ActionEffectVerification(
+                            confirmed = visible,
+                            observedEffectId = if (visible) "notification:$deliveredId" else null,
+                            detail = if (visible) "notification-active" else "notification-unverified",
+                        )
+                    },
+                )
+                if (result.receipt.status == ActionEffectStatus.DENIED) {
+                    return@launch
                 }
             } finally {
                 pending.finish()
