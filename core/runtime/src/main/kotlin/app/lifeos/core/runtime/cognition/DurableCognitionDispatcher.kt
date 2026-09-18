@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.cognition
 
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskDraft
 import app.lifeos.core.model.task.TaskPriority
@@ -24,6 +25,7 @@ class DurableCognitionDispatcher(
     private val taskEngine: DurableTaskEngine,
     private val ledger: CognitiveProcessingLedger = CognitiveProcessingLedger(),
     private val admissionController: DurableCognitionAdmissionController? = null,
+    private val coverageIndex: CognitionCoverageIndex? = null,
 ) {
     suspend fun dispatch(item: CognitiveWorkItem): DurableCognitiveDispatchResult {
         val photonId = item.photonId
@@ -77,6 +79,7 @@ class DurableCognitionDispatcher(
                 )
             } else {
                 check(ledger.commit(key)) { "Cognitive durable ledger lost processing state" }
+                coverageIndex?.markCovered(PhotonRevisionRef(photonId, revision))
                 DurableCognitiveDispatchResult(workId = item.id, task = task)
             }
         } catch (cancelled: CancellationException) {
@@ -162,6 +165,9 @@ class DurableCognitionDispatcher(
                                 "Cognitive durable ledger lost batch processing state"
                             }
                         }
+                        val photonId = requireNotNull(value.item.photonId)
+                        val revision = requireNotNull(value.item.photonRevision)
+                        coverageIndex?.markCovered(PhotonRevisionRef(photonId, revision))
                         fixed[value.index] = DurableCognitiveDispatchResult(
                             workId = value.item.id,
                             task = task,
