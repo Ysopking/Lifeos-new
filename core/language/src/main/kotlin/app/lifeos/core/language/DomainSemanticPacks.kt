@@ -355,6 +355,38 @@ class DomainSemanticInterpreter(
             }
         }
 
+        val contextsByClause = contexts.associateBy { it.clauseId }
+        semanticGraph.links
+            .asSequence()
+            .filter { it.type in DOMAIN_CARRY_LINKS }
+            .sortedWith(
+                compareBy<SemanticLink> { it.fromClauseId }
+                    .thenBy { it.toClauseId }
+                    .thenBy { it.type.name }
+            )
+            .forEach { link ->
+                val source = contextsByClause[link.fromClauseId] ?: return@forEach
+                val target = contextsByClause[link.toClauseId] ?: return@forEach
+                val sourceDocument = source.entities
+                    .filter { it.typeId in DOCUMENT_ENTITY_TYPES }
+                    .maxByOrNull { it.tokenStart }
+                    ?.let(entityNodes::get)
+                    ?: return@forEach
+                target.entities
+                    .filter { it.typeId == EntityTypeRegistry.DEADLINE.id }
+                    .sortedBy { it.tokenStart }
+                    .mapNotNull(entityNodes::get)
+                    .forEach { deadline ->
+                        if (sourceDocument.id != deadline.id) {
+                            relations += relation(
+                                sourceDocument,
+                                deadline,
+                                DomainSemanticRelationType.HAS_DEADLINE,
+                            )
+                        }
+                    }
+            }
+
         val canonicalNodes = nodes
             .distinctBy { it.id }
             .sortedBy { it.id.value }
@@ -398,6 +430,20 @@ class DomainSemanticInterpreter(
         type = type,
         confidence = minOf(from.confidence, to.confidence),
     )
+
+    private companion object {
+        val DOMAIN_CARRY_LINKS = setOf(
+            SemanticLinkType.CONJUNCTION,
+            SemanticLinkType.SEQUENCE,
+        )
+        val DOCUMENT_ENTITY_TYPES = setOf(
+            EntityTypeRegistry.NOTICE.id,
+            EntityTypeRegistry.INVOICE.id,
+            EntityTypeRegistry.APPLICATION.id,
+            EntityTypeRegistry.CONTRACT.id,
+            EntityTypeRegistry.DOCUMENT.id,
+        )
+    }
 
     private fun packFor(type: SemanticEntityTypeId): DomainSemanticPackId = when {
         type.value.startsWith("authority.") -> DomainSemanticPackId.AUTHORITY
