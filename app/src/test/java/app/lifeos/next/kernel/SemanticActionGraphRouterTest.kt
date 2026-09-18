@@ -101,6 +101,89 @@ class SemanticActionGraphRouterTest {
     }
 
     @Test
+    fun memoryThenSendResolvesPronounToExactProducedRevision() = runTest {
+        val understanding = language.understand(
+            "Merke dir die Semantic-Recovery-Notiz und sende sie mir anschließend."
+        )
+        val graph = understanding.goal.semanticActionGraph
+        val memory = graph.nodes.single { it.frame.predicate.name == "STORE_MEMORY" }
+        val send = graph.nodes.single { it.frame.predicate.name == "COMMUNICATE" }
+        assertTrue(
+            graph.edges.any {
+                it.from == memory.id &&
+                    it.to == send.id &&
+                    it.type == SemanticActionEdgeType.USES_RESULT_OF
+            }
+        )
+        assertTrue(
+            understanding.goal.ambiguities.any { it.code == "unresolved_reference" },
+            "The whole utterance should expose the unresolved pronoun before result binding",
+        )
+
+        val produced = photon(
+            id = "stored-memory-result",
+            revision = 5,
+            content = "Semantic-Recovery-Notiz",
+        )
+        var communicationReference: PhotonRevisionRef? = null
+        val dispatcher = GoalActionDispatcher(
+            executeKnowledge = {
+                LocalKnowledgeExecutionResult.Produced(
+                    kind = LocalKnowledgeGoalKind.MEMORY_STORED,
+                    output = PhotonSubmissionResult(produced, processingQueued = true),
+                    evidencePhotonIds = emptyList(),
+                )
+            },
+            executeDeepSearch = { LocalDeepSearchExecutionResult.Failed("unused") },
+            executeImageGeneration = { ImageGenerationResult.Failed("unused") },
+            executeImageTransform = { LocalImageTransformExecutionResult.Failed("unused") },
+            executeSchedule = { LocalScheduleExecutionResult.Failed("unused") },
+            prepareCommunication = { context ->
+                val node = context.goal.semanticActionGraph.nodes.single()
+                communicationReference = node.frame.roles[SemanticRole.OBJECT]?.referencePhoton
+                val ref = assertNotNull(communicationReference)
+                assertEquals(PhotonRevisionRef(produced.id, produced.revision), ref)
+                assertFalse(context.goal.ambiguities.any { it.code == "unresolved_reference" })
+                assertEquals(
+                    listOf(ref),
+                    context.goal.references.mapNotNull { it.targetPhotonRef },
+                )
+                LocalCommunicationExecutionResult.Prepared(
+                    LocalSharePreparation(
+                        requestSourceId = context.sourcePhoton.id,
+                        requestGoalId = context.goalPhotonId,
+                        target = produced,
+                        kind = LocalShareKind.TEXT,
+                    )
+                )
+            },
+            executionGuard = PassThroughGoalActionExecutionGuard,
+            externalEffectExecutor = null,
+            durableRuntimeProvider = { null },
+            expandCapabilities = { "unused" },
+        )
+        val router = SemanticActionGraphRouter(
+            capabilities = capabilities,
+            dispatcher = dispatcher,
+        )
+
+        val result = router.execute(
+            goal = understanding.goal,
+            sourcePhoton = photon(
+                id = "source-memory-send",
+                content = "Merke dir die Semantic-Recovery-Notiz und sende sie mir anschließend.",
+            ),
+            goalPhotonId = PhotonId("goal-memory-send"),
+            goalPhotonRevision = 3,
+        )
+
+        assertTrue(result.completed)
+        assertEquals(2, result.executions.size)
+        assertTrue(result.executions.all { it.state == SemanticNodeExecutionState.EXECUTED })
+        assertEquals(PhotonRevisionRef(produced.id, 5), communicationReference)
+    }
+
+    @Test
     fun failedFirstNodePreventsDownstreamExecution() = runTest {
         val understanding = language.understand(
             "Suche den Bescheid und sende ihn anschließend an Peter."
