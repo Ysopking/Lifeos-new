@@ -350,7 +350,7 @@ class QuantityTemporalEngine {
             ',' in raw -> raw.replace(',', '.')
             else -> raw
         }
-        normalized.toBigDecimal().stripTrailingZeros()
+        normalized.toBigDecimal()
     }.getOrNull()
 
     private fun number(raw: String): Int? =
