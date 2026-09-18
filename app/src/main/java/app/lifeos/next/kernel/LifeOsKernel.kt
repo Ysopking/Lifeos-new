@@ -24,6 +24,10 @@ import app.lifeos.core.runtime.ConversationSignalClassifier
 import app.lifeos.core.runtime.ConversationPath
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RuntimeSupervisor
+import app.lifeos.core.runtime.CognitiveModule
+import app.lifeos.core.runtime.CognitiveModuleRegistry
+import app.lifeos.core.runtime.CognitiveModuleSnapshotRepository
+import app.lifeos.core.runtime.VersionedCognitiveModuleRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootContext
 import app.lifeos.core.runtime.boot.BootCoordinator
@@ -107,6 +111,8 @@ class LifeOsKernel internal constructor(
     private val bootCoordinator: BootCoordinator,
     private val bootEngineRuntime: BootEngineRuntime,
     private val continuousCognition: ContinuousCognitionEngine,
+    private val cognitiveModuleSnapshotRepository: CognitiveModuleSnapshotRepository? = null,
+    private val activeExtensionSnapshotId: suspend () -> String? = { null },
     private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
     private val localDeepSearchGoalEngine: LocalDeepSearchGoalEngine = LocalDeepSearchGoalEngine(),
@@ -131,6 +137,23 @@ class LifeOsKernel internal constructor(
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
     val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
+
+    suspend fun freezeCognitiveModulesForCurrentCycle(
+        builtIns: Collection<CognitiveModule>,
+    ): CognitiveModuleRegistry {
+        require(builtIns.isNotEmpty()) {
+            "At least one built-in cognitive module is required"
+        }
+        val repository = requireNotNull(cognitiveModuleSnapshotRepository) {
+            "Versioned cognitive module repository is not installed"
+        }
+        val extensionSnapshotId =
+            activeExtensionSnapshotId() ?: BUILTIN_EXTENSION_SNAPSHOT_ID
+        return VersionedCognitiveModuleRegistry(
+            builtIns = builtIns,
+            snapshots = repository,
+        ).freezeForCycle(extensionSnapshotId)
+    }
 
     private val generatedToolUserActions = GeneratedToolUserActionCoordinator(
         requests = privateGeneratedToolRuntime.requests,
@@ -920,6 +943,8 @@ class LifeOsKernel internal constructor(
     }
 
     private companion object {
+        const val BUILTIN_EXTENSION_SNAPSHOT_ID = "extension-registry:builtin-baseline"
+
         const val PRIVATE_OWNER_ACTOR_ID = "private-owner"
         const val OWNER_ASSET_REVIEW_PENDING = "awaiting-owner-review"
         val FAST_CHAT_BACKGROUND_BUDGET = CognitiveWorkBudget(
