@@ -47,8 +47,14 @@ class SemanticActionRecoveryDeviceTest {
             val knowledgeFailure = (node.dispatch?.localKnowledge as? LocalKnowledgeExecutionResult.Failed)
                 ?.message
                 .orEmpty()
+            val communicationFailure = when (val communication = node.dispatch?.localCommunication) {
+                is LocalCommunicationExecutionResult.Blocked -> communication.reason
+                is LocalCommunicationExecutionResult.Failed -> communication.message
+                else -> ""
+            }
             node.intent.name + ":" + node.state.name + ":" + node.reason.orEmpty() +
-                if (knowledgeFailure.isBlank()) "" else ":knowledge=$knowledgeFailure"
+                if (knowledgeFailure.isBlank()) "" else ":knowledge=$knowledgeFailure" +
+                if (communicationFailure.isBlank()) "" else ":communication=$communicationFailure"
         }
         assertTrue(
             "Semantic action graph must complete; blocked=${execution.blockedReason}; " +
