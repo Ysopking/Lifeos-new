@@ -17,8 +17,10 @@ data class TaskScheduleResult(
 )
 
 fun interface TaskSchedulingEngine {
-    suspend fun scheduleOnce(limit: Int = 16): TaskScheduleResult
+    suspend fun scheduleOnce(limit: Int): TaskScheduleResult
 }
+
+suspend fun TaskSchedulingEngine.scheduleOnce(): TaskScheduleResult = scheduleOnce(limit = 16)
 
 class TaskScheduler(
     private val tasks: TaskRepository,
