@@ -6,7 +6,7 @@ import app.lifeos.core.runtime.health.HealthScope
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 
@@ -35,9 +35,9 @@ class EscalationLedgerTest {
     fun unreadableRepositoryFailsClosed() = runBlocking {
         val repository = MemoryRepository(unreadable = listOf("records/bad"))
         val ledger = EscalationLedger(repository)
-        assertFailsWith<IllegalStateException> {
-            ledger.open(trigger())
-        }
+        assertIs<IllegalStateException>(
+            runCatching { ledger.open(trigger()) }.exceptionOrNull()
+        )
     }
 
     @Test
