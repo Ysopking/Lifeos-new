@@ -5,9 +5,12 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import app.lifeos.core.image.ImagePhotonFactory
+import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.agency.ActionEffectStatus
+import app.lifeos.core.runtime.agency.ActionEffectVerification
 import app.lifeos.core.runtime.goal.LocalShareKind
 import app.lifeos.core.runtime.goal.LocalSharePreparation
-import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
+import app.lifeos.core.runtime.trace.DecisionTraceId
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
@@ -40,22 +43,46 @@ class LocalShareIntentFactory(
         }
         val bytes = kernel.loadImageAsset(share.target)
             ?: throw IllegalStateException("Shared image asset is unavailable")
-        val exposure = PrivateOwnerEffectAuthority.expose(
+        val expectedSha256 = sha256(bytes)
+        val result = PrivateOwnerEffectAuthority.transact(
             context = appContext,
+            traceId = DecisionTraceId.create("goal-photon", share.requestGoalId.value),
+            intentId = "share-cache:${share.target.id.value}",
             request = PrivateOwnerEffectAuthority.shareCacheWriteRequest(),
-        ) {
-            withContext(Dispatchers.IO) {
-                ensureShareDirectory()
-                removeExpiredFiles()
-                File(shareDirectory, "${stableName(share.target.id.value)}.png").also { file ->
-                    file.writeBytes(bytes)
+            expectedEffectFingerprint = StableCognitiveIds.fingerprint(
+                "share-cache-effect/v1",
+                share.target.id.value,
+                share.target.revision.toString(),
+                expectedSha256,
+            ),
+            effect = {
+                withContext(Dispatchers.IO) {
+                    ensureShareDirectory()
+                    removeExpiredFiles()
+                    File(shareDirectory, "${stableName(share.target.id.value)}.png").also { file ->
+                        file.writeBytes(bytes)
+                    }
                 }
-            }
-        }
-        val target = when (exposure) {
-            is OwnerEffectExposureResult.Exposed -> exposure.value
-            is OwnerEffectExposureResult.Blocked -> throw SecurityException(
-                "owner-policy:${exposure.assessment.reasonCodes.joinToString(",") { it.name }}"
+            },
+            verify = { file ->
+                val verified = withContext(Dispatchers.IO) {
+                    file.isFile && file.length() == bytes.size.toLong() &&
+                        sha256(file.readBytes()) == expectedSha256
+                }
+                ActionEffectVerification(
+                    confirmed = verified,
+                    observedEffectId = if (verified) "share-cache:${stableName(share.target.id.value)}" else null,
+                    detail = if (verified) "share-cache-sha256-verified" else "share-cache-unverified",
+                )
+            },
+        )
+        val target = when (result.receipt.status) {
+            ActionEffectStatus.SUCCEEDED -> requireNotNull(result.output)
+            ActionEffectStatus.DENIED -> throw SecurityException(
+                "owner-policy:${result.receipt.policyAssessment.reasonCodes.joinToString(",") { it.name }}"
+            )
+            ActionEffectStatus.UNKNOWN_OUTCOME -> error(
+                "share-cache-outcome-unknown:${result.receipt.contractId.value}"
             )
         }
         val uri = FileProvider.getUriForFile(
@@ -84,10 +111,12 @@ class LocalShareIntentFactory(
     }
 
     private fun stableName(value: String): String =
+        sha256(value.toByteArray(Charsets.UTF_8)).take(32)
+
+    private fun sha256(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256")
-            .digest(value.toByteArray(Charsets.UTF_8))
+            .digest(bytes)
             .joinToString("") { "%02x".format(it) }
-            .take(32)
 
     private companion object {
         const val SHARE_DIRECTORY = "lifeos-share"
