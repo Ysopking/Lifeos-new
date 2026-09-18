@@ -367,6 +367,7 @@ class SemanticActionGraphRouter(
         val NODE_RESOLVED_AMBIGUITIES = setOf(
             "intent_competition",
             "multi_goal_competition",
+            "command_vs_question",
         )
     }
 }
