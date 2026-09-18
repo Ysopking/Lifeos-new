@@ -31,6 +31,7 @@ data class PhotonRehydrationResult(
     val cold: List<PhotonId>,
     val assessments: List<PhotonIntegrityAssessment>,
     val unreadableFiles: List<String>,
+    val allPhotons: List<Photon> = hot + warm,
 ) {
     val restoredCount: Long = (hot.size + warm.size + cold.size).toLong()
     val quarantined: Set<PhotonId> = assessments
@@ -127,6 +128,7 @@ class PhotonRehydrator(
             cold = cold,
             assessments = assessments,
             unreadableFiles = unreadable,
+            allPhotons = photons,
         )
     }
 }
