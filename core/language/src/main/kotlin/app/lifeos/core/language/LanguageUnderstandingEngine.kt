@@ -27,6 +27,9 @@ class LanguageUnderstandingEngine(
     private val predicateFrameParser: PredicateFrameParser = PredicateFrameParser(),
     private val semanticActionGraphBuilder: SemanticActionGraphBuilder = SemanticActionGraphBuilder(),
     private val quantityTemporalEngine: QuantityTemporalEngine = QuantityTemporalEngine(),
+    private val domainSemanticInterpreter: DomainSemanticInterpreter = DomainSemanticInterpreter(),
+    private val qualityEvaluator: SemanticInterpretationQualityEvaluator =
+        SemanticInterpretationQualityEvaluator(),
 ) {
     fun understand(text: String): LanguageUnderstandingResult =
         understand(text, LanguageContext(), retainContext = false)
@@ -77,6 +80,17 @@ class LanguageUnderstandingEngine(
             linguisticField = linguisticField,
             actionGraph = semanticActionGraph,
         )
+        val domainSemanticGraph = domainSemanticInterpreter.interpret(
+            utterance = utterance,
+            entities = entityV2.entities,
+            quantityTemporal = quantityTemporal,
+            actionGraph = semanticActionGraph,
+        )
+        val quality = qualityEvaluator.evaluate(
+            intentEvidence = evidence,
+            actionGraph = semanticActionGraph,
+            ambiguities = ambiguities,
+        )
         val constraints = buildConstraints(
             utterance,
             entities,
@@ -98,6 +112,8 @@ class LanguageUnderstandingEngine(
             semanticActionGraph = semanticActionGraph,
             semanticEntitiesV2 = entityV2.entities,
             quantityTemporal = quantityTemporal,
+            domainSemanticGraph = domainSemanticGraph,
+            interpretationQuality = quality,
         )
         return LanguageUnderstandingResult(
             utterance = utterance,
