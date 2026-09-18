@@ -133,6 +133,42 @@ class GoalActionExecutionGuardTest {
     }
 
     @Test
+    fun localCommunicationPreparationFitsTwoCoreUnknownThermalEnvelope() = runTest {
+        val ownerRepository = MemoryOwnerPolicyRepository()
+        val budgetRepository = MemoryResourceBudgetRepository()
+        val lowHeadroomGuard = PrivateGoalActionExecutionGuard(
+            ownerPolicy = OwnerPolicyLedger(ownerRepository),
+            budgets = ResourceBudgetCoordinator(budgetRepository),
+            hardware = HardwareExecutionBudgetGate { hardQuota, requested, priority ->
+                val hardware = HardwareStateSnapshot(
+                    observedAt = Instant.parse("2026-09-11T10:00:00Z"),
+                    availableProcessors = 2,
+                    batteryFraction = 1.0,
+                    charging = true,
+                    thermalState = HardwareThermalState.UNKNOWN,
+                )
+                HardwareExecutionBudgetDecision.Ready(
+                    HardwareAdaptiveResourceOptimizer().plan(
+                        hardQuota = hardQuota,
+                        requested = requested,
+                        hardware = hardware,
+                        priority = priority,
+                    )
+                )
+            },
+        )
+
+        val permit = assertIs<GoalActionExecutionPermit.Reserved>(
+            lowHeadroomGuard.prepare(context(IntentType.COMMUNICATE, "goal-communication-low-headroom"))
+        )
+
+        assertEquals(1L, permit.reservation.reserved.workUnits)
+        assertEquals(1L, permit.reservation.reserved.candidates)
+        assertTrue(permit.reservation.reserved.memoryBytes <= 4L * MIB)
+        assertTrue(permit.reservation.reserved.ioBytes <= 1L * MIB)
+    }
+
+    @Test
     fun revokedOwnerGrantRemainsRevokedAfterGuardReconstruction() = runTest {
         val ownerRepository = MemoryOwnerPolicyRepository()
         val budgetRepository = MemoryResourceBudgetRepository()
@@ -267,6 +303,7 @@ class GoalActionExecutionGuardTest {
         val text = when (intent) {
             IntentType.QUERY -> "What is LIFEOS?"
             IntentType.STORE_OR_REMEMBER -> "Merke dir die Semantic-Recovery-Notiz."
+            IntentType.COMMUNICATE -> "Sende diese Mail."
             IntentType.SCHEDULE -> "Schedule image."
             else -> error("Unsupported test intent: " + intent)
         }
