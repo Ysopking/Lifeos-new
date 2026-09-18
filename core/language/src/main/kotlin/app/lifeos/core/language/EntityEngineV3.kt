@@ -123,8 +123,8 @@ class ContactAddressEntityExtractorV3 : SemanticEntityExtractorV3 {
         val URL_REGEX = Regex("""\bhttps?://[^\s<>()]+""", RegexOption.IGNORE_CASE)
         val PHONE_REGEX = Regex("""(?<!\w)(?:\+?\d[\d /()-]{6,}\d)(?!\w)""")
         val ADDRESS_REGEX = Regex(
-            """(?iu)\b[\p{L}][\p{L}.'’-]*(?:\s+[\p{L}][\p{L}.'’-]*){0,3}\s+""" +
-                """(?:straße|strasse|str\.|weg|platz|allee|gasse)\s+\d+[a-z]?\b"""
+            """(?iu)\b(?:[\p{L}][\p{L}.'’-]*\s+){0,3}""" +
+                """[\p{L}][\p{L}.'’-]*(?:straße|strasse|weg|platz|allee|gasse)\s+\d+[a-z]?\b"""
         )
     }
 }
