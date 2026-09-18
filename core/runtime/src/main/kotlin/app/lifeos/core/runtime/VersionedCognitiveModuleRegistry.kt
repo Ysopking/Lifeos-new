@@ -76,20 +76,43 @@ interface CognitiveModuleSnapshotRepository {
     suspend fun compareAndSetHead(expectedRevision: Long?, next: CognitiveModuleHead): Boolean
 }
 
+fun interface CognitiveModuleResolver {
+    fun resolve(stableFingerprint: String): CognitiveModule?
+}
+
 class VersionedCognitiveModuleRegistry(
     builtIns: Collection<CognitiveModule>,
     private val snapshots: CognitiveModuleSnapshotRepository,
+    private val resolver: CognitiveModuleResolver = CognitiveModuleResolver { null },
 ) : CognitiveModuleRegistry {
-    private val modulesByFingerprint = builtIns.associateBy {
+    private val lock = Any()
+    private val builtInModules = builtIns.associateBy {
         it.descriptor.identity.stableFingerprint
     }.also { require(it.size == builtIns.size) }
+    private val promotedModules = linkedMapOf<String, CognitiveModule>()
 
     override fun activeModules(): List<CognitiveModule> =
-        modulesByFingerprint.values.sortedWith(
+        builtInModules.values.sortedWith(
             compareBy<CognitiveModule> { it.descriptor.identity.moduleId }
                 .thenBy { it.descriptor.identity.version }
                 .thenBy { it.descriptor.identity.stableFingerprint }
         )
+
+    suspend fun modulesForCycle(
+        extensionSnapshotId: String,
+    ): List<CognitiveModule> {
+        val snapshot = snapshotForCycle(extensionSnapshotId)
+        return snapshot.moduleFingerprints.map { fingerprint ->
+            synchronized(lock) {
+                promotedModules[fingerprint] ?: builtInModules[fingerprint]
+            } ?: resolver.resolve(fingerprint)
+            ?: error("Active cognitive module implementation is unavailable: $fingerprint")
+        }.sortedWith(
+            compareBy<CognitiveModule> { it.descriptor.identity.moduleId }
+                .thenBy { it.descriptor.identity.version }
+                .thenBy { it.descriptor.identity.stableFingerprint }
+        )
+    }
 
     suspend fun snapshotForCycle(
         extensionSnapshotId: String,
@@ -128,6 +151,8 @@ class VersionedCognitiveModuleRegistry(
         require(promotionEvidenceFingerprint.isNotBlank())
         val head = snapshots.loadHead()
         val previous = head?.let { snapshots.load(it.activeSnapshotId) }
+        require(modules.isNotEmpty())
+        require(modules.map { it.descriptor.identity.stableFingerprint }.distinct().size == modules.size)
         val candidate = CognitiveModuleSnapshot.create(
             revision = (head?.revision ?: 0L) + 1L,
             extensionSnapshotId = extensionSnapshotId,
@@ -145,6 +170,16 @@ class VersionedCognitiveModuleRegistry(
         )
         require(snapshots.compareAndSetHead(head?.revision, next)) {
             "Cognitive module head changed during promotion"
+        }
+        synchronized(lock) {
+            modules.forEach { module ->
+                promotedModules[module.descriptor.identity.stableFingerprint] = module
+            }
+        }
+        require(modulesForCycle(extensionSnapshotId).map {
+            it.descriptor.identity.stableFingerprint
+        } == candidate.moduleFingerprints) {
+            "Promoted cognitive module implementations do not match the persisted snapshot"
         }
         return candidate
     }
