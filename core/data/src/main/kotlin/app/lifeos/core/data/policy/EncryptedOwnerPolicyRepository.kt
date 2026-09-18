@@ -32,6 +32,7 @@ class EncryptedOwnerPolicyRepository(context: Context) : OwnerPolicyRepository {
     override suspend fun loadReport(): OwnerPolicyRepositoryLoadReport = withContext(Dispatchers.IO) {
         processMutex.withLock {
             ensureMigrated()
+            readHeadStrictOrRecover()
             val unreadable = mutableListOf<String>()
             val events = eventFiles().mapNotNull { file ->
                 try {
@@ -113,17 +114,21 @@ class EncryptedOwnerPolicyRepository(context: Context) : OwnerPolicyRepository {
     }
 
     private fun readHeadStrictOrRecover(): Long {
-        if (exists(headFile)) {
-            runCatching { return readHead() }
+        val revisions = eventFiles().map { file ->
+            requireNotNull(
+                file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
+            ) { "Invalid owner-policy event segment name: ${file.name}" }
+        }.sorted()
+        val recovered = revisions.lastOrNull() ?: 0L
+        require(revisions == if (recovered == 0L) emptyList() else (1L..recovered).toList()) {
+            "Owner policy event segments are not contiguous"
         }
-        val recovered = eventFiles()
-            .mapNotNull { it.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull() }
-            .maxOrNull() ?: 0L
-        if (recovered > 0L) {
-            val expected = (1L..recovered).map(::eventFile)
-            require(expected.all(::exists)) { "Owner policy event segments are not contiguous" }
+
+        val storedHead = if (exists(headFile)) runCatching(::readHead).getOrNull() else null
+        require(storedHead == null || storedHead <= recovered) {
+            "Owner policy head points past durable event tail"
         }
-        writeHead(recovered)
+        if (storedHead != recovered) writeHead(recovered)
         return recovered
     }
 
