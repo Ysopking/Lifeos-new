@@ -5,13 +5,15 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
 import app.lifeos.core.model.task.CreateTaskResult
+import app.lifeos.core.model.task.IndexedTaskSnapshotRepository
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskCodec
 import app.lifeos.core.model.task.TaskId
+import app.lifeos.core.model.task.TaskIndexReport
 import app.lifeos.core.model.task.TaskLoadReport
-import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskStateMachine
+import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.model.worker.WorkerId
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -36,10 +38,15 @@ import kotlinx.coroutines.withContext
  * execution transitions use explicit owner/lease CAS methods instead of the generic
  * transition path.
  */
-class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
+class EncryptedTaskRepository(context: Context) : IndexedTaskSnapshotRepository {
     private val directory = context.filesDir.resolve("task-vault")
+    private val indexFile = AtomicFile(directory.resolve(INDEX_FILE))
+    private val indexDirtyFile = AtomicFile(directory.resolve(INDEX_DIRTY_FILE))
     private val key: SecretKey by lazy { loadOrCreateKey() }
     private val mutex = Mutex()
+
+    @Volatile
+    private var cachedIndex: TaskIndexSnapshot? = null
 
     override suspend fun loadReport(): TaskLoadReport = ioLocked {
         val report = loadReportInternal()
@@ -51,15 +58,14 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
 
     override suspend fun create(task: LifeTask): CreateTaskResult = ioLocked {
         require(task.state == TaskState.CREATED) { "New repository task must be CREATED" }
-        val report = loadReportInternal()
-        requireReadableVault(report)
+        val index = ensureIndexInternal()
 
-        report.tasks.firstOrNull { it.idempotencyKey == task.idempotencyKey }?.let {
-            return@ioLocked CreateTaskResult.Existing(it)
+        index.byIdempotencyKey(task.idempotencyKey)?.let { existing ->
+            return@ioLocked CreateTaskResult.Existing(readIndexedTaskInternal(existing))
         }
 
-        check(report.tasks.none { it.id == task.id }) { "Task ID already exists: ${task.id.value}" }
-        writeTaskInternal(task)
+        check(!index.containsId(task.id)) { "Task ID already exists: ${task.id.value}" }
+        writeTaskAndIndexInternal(task, index)
         CreateTaskResult.Created(task)
     }
 
@@ -69,45 +75,39 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
 
     override suspend fun findByIdempotencyKey(key: String): LifeTask? = ioLocked {
         require(key.isNotBlank()) { "Idempotency key must not be blank" }
+        val entry = ensureIndexInternal().byIdempotencyKey(key) ?: return@ioLocked null
+        readIndexedTaskInternal(entry)
+    }
+
+    override suspend fun activeCount(types: Set<TaskType>): Int = ioLocked {
+        if (types.isEmpty()) return@ioLocked 0
+        ensureIndexInternal().activeCount(types)
+    }
+
+    override suspend fun rebuildIndex(): TaskIndexReport = ioLocked {
         val report = loadReportInternal()
-        requireReadableVault(report)
-        report.tasks.firstOrNull { it.idempotencyKey == key }
+        val snapshot = TaskIndexSnapshot.from(report.tasks)
+        if (report.unreadableFiles.isNotEmpty()) {
+            cachedIndex = null
+            return@ioLocked snapshot.report(report.unreadableFiles)
+        }
+        writeIndexInternal(snapshot)
+        clearIndexDirtyInternal()
+        snapshot.report()
     }
 
     override suspend fun listRunnable(now: Instant, limit: Int): List<LifeTask> = ioLocked {
         require(limit > 0) { "Runnable task limit must be positive" }
-        val report = loadReportInternal()
-        requireReadableVault(report)
-
-        report.tasks
-            .asSequence()
-            .filter { task ->
-                val scheduledAt = task.scheduledAt
-                task.state == TaskState.QUEUED ||
-                    (task.state == TaskState.RETRY_WAIT &&
-                        (scheduledAt == null || !scheduledAt.isAfter(now)))
-            }
-            .sortedWith(
-                compareByDescending<LifeTask> { it.priority.weight }
-                    .thenBy { it.createdAt }
-            )
-            .take(limit)
-            .toList()
+        ensureIndexInternal()
+            .runnable(now, limit)
+            .map(::readIndexedTaskInternal)
     }
 
     override suspend fun listExpiredLeases(now: Instant, limit: Int): List<LifeTask> = ioLocked {
         require(limit > 0) { "Expired lease limit must be positive" }
-        val report = loadReportInternal()
-        requireReadableVault(report)
-
-        report.tasks
-            .asSequence()
-            .filter { task ->
-                task.state in LEASED_STATES && task.leaseExpiresAt?.isAfter(now) == false
-            }
-            .sortedWith(compareBy<LifeTask> { it.leaseExpiresAt }.thenBy { it.createdAt })
-            .take(limit)
-            .toList()
+        ensureIndexInternal()
+            .expiredLeases(now, limit)
+            .map(::readIndexedTaskInternal)
     }
 
     override suspend fun transition(
@@ -130,7 +130,7 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
             claimedBy = null,
             leaseExpiresAt = null,
         )
-        writeTaskInternal(updated)
+        writeTaskAndIndexInternal(updated)
         updated
     }
 
@@ -151,7 +151,7 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
             claimedBy = workerId,
             leaseExpiresAt = leaseUntil,
         )
-        writeTaskInternal(claimed)
+        writeTaskAndIndexInternal(claimed)
         claimed
     }
 
@@ -176,7 +176,7 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
             attempt = current.attempt + 1,
             updatedAt = startedAt,
         )
-        writeTaskInternal(running)
+        writeTaskAndIndexInternal(running)
         running
     }
 
@@ -206,7 +206,7 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
             claimedBy = null,
             leaseExpiresAt = null,
         )
-        writeTaskInternal(finished)
+        writeTaskAndIndexInternal(finished)
         finished
     }
 
@@ -228,7 +228,7 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
             claimedBy = null,
             leaseExpiresAt = null,
         )
-        writeTaskInternal(interrupted)
+        writeTaskAndIndexInternal(interrupted)
         interrupted
     }
 
@@ -257,7 +257,7 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
             claimedBy = null,
             leaseExpiresAt = null,
         )
-        writeTaskInternal(retry)
+        writeTaskAndIndexInternal(retry)
         retry
     }
 
@@ -281,7 +281,7 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
             updatedAt = renewedAt,
             leaseExpiresAt = leaseUntil,
         )
-        writeTaskInternal(renewed)
+        writeTaskAndIndexInternal(renewed)
         renewed
     }
 
@@ -311,12 +311,119 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
             claimedBy = null,
             leaseExpiresAt = null,
         )
-        writeTaskInternal(interrupted)
+        writeTaskAndIndexInternal(interrupted)
         interrupted
     }
 
     private suspend fun <T> ioLocked(block: () -> T): T = withContext(Dispatchers.IO) {
         mutex.withLock { block() }
+    }
+
+    private fun ensureIndexInternal(): TaskIndexSnapshot {
+        ensureDirectory()
+        if (isIndexDirtyInternal()) {
+            return rebuildIndexStrictInternal()
+        }
+        cachedIndex?.let { return it }
+
+        val base = indexFile.baseFile
+        val backup = base.resolveSibling("${base.name}.bak")
+        if (!base.exists() && !backup.exists()) {
+            return rebuildIndexStrictInternal()
+        }
+
+        return try {
+            readIndexInternal().also { cachedIndex = it }
+        } catch (_: Exception) {
+            rebuildIndexStrictInternal()
+        }
+    }
+
+    private fun rebuildIndexStrictInternal(): TaskIndexSnapshot {
+        val report = loadReportInternal()
+        requireReadableVault(report)
+        val snapshot = TaskIndexSnapshot.from(report.tasks)
+        writeIndexInternal(snapshot)
+        clearIndexDirtyInternal()
+        return snapshot
+    }
+
+    private fun readIndexedTaskInternal(entry: TaskIndexEntry): LifeTask {
+        val task = readTaskIfPresentInternal(entry.id)
+            ?: error("Task index points to missing task: ${entry.id.value}")
+        check(TaskIndexEntry.from(task) == entry) {
+            "Task index/payload mismatch for ${entry.id.value}"
+        }
+        return task
+    }
+
+    private fun writeTaskAndIndexInternal(
+        task: LifeTask,
+        currentIndex: TaskIndexSnapshot = ensureIndexInternal(),
+    ) {
+        markIndexDirtyInternal()
+        try {
+            writeTaskInternal(task)
+            writeIndexInternal(currentIndex.upsert(task))
+            clearIndexDirtyInternal()
+        } catch (error: Exception) {
+            cachedIndex = null
+            throw error
+        }
+    }
+
+    private fun readIndexInternal(): TaskIndexSnapshot {
+        val container = indexFile.openRead().use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                require(output.size() + count <= TaskIndexVaultCodec.MAX_CONTAINER_BYTES) {
+                    "Task index file too large"
+                }
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+        return TaskIndexCodec.decode(TaskIndexVaultCodec.decrypt(container, key))
+    }
+
+    private fun writeIndexInternal(snapshot: TaskIndexSnapshot) {
+        ensureDirectory()
+        val encrypted = TaskIndexVaultCodec.encrypt(TaskIndexCodec.encode(snapshot), key)
+        val stream = indexFile.startWrite()
+        try {
+            stream.write(encrypted)
+            indexFile.finishWrite(stream)
+            cachedIndex = snapshot
+        } catch (error: Exception) {
+            indexFile.failWrite(stream)
+            cachedIndex = null
+            throw error
+        }
+    }
+
+    private fun markIndexDirtyInternal() {
+        ensureDirectory()
+        val stream = indexDirtyFile.startWrite()
+        try {
+            stream.write(INDEX_DIRTY_MARKER)
+            indexDirtyFile.finishWrite(stream)
+        } catch (error: Exception) {
+            indexDirtyFile.failWrite(stream)
+            throw error
+        }
+    }
+
+    private fun clearIndexDirtyInternal() {
+        indexDirtyFile.delete()
+    }
+
+    private fun isIndexDirtyInternal(): Boolean {
+        val base = indexDirtyFile.baseFile
+        val backup = base.resolveSibling("${base.name}.bak")
+        return base.exists() || backup.exists()
     }
 
     private fun readTaskIfPresentInternal(id: TaskId): LifeTask? {
@@ -464,6 +571,9 @@ class EncryptedTaskRepository(context: Context) : TaskSnapshotRepository {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val CONTAINER_VERSION = 1
         const val TASK_SUFFIX = ".task"
+        const val INDEX_FILE = "task-index.v1"
+        const val INDEX_DIRTY_FILE = "task-index.dirty"
+        val INDEX_DIRTY_MARKER = "task-index-dirty/v1".toByteArray(Charsets.UTF_8)
         const val MAX_FILE_BYTES = 1024 * 1024 + 256
     }
 }
