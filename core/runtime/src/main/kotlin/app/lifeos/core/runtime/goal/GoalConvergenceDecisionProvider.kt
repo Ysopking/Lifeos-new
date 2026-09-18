@@ -43,6 +43,7 @@ import java.time.Instant
 class GoalConvergenceDecisionProvider(
     private val decisions: DurableConvergenceDecisionCoordinator,
     private val convergence: ConvergenceCoordinator = ConvergenceCoordinator(),
+    private val workingSetFingerprintProvider: suspend (Instant) -> String? = { null },
 ) {
     suspend fun decide(
         goal: GoalFrame,
@@ -148,12 +149,13 @@ class GoalConvergenceDecisionProvider(
             domains = listOf(ConvergenceDomainInput(fieldRequest)),
         )
         val converged = convergence.coordinate(source)
+        val workingSetFingerprint = workingSetFingerprintProvider(at)
         return decisions.decide(
             ConvergenceDecisionRequest(
                 source = source,
                 convergence = converged,
                 capabilityGaps = routing.blockingGaps,
-                workingSetFingerprint = null,
+                workingSetFingerprint = workingSetFingerprint,
             )
         )
     }
