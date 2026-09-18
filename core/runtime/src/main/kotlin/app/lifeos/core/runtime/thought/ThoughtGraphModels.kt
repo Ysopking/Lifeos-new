@@ -25,6 +25,10 @@ enum class ThoughtGraphNodeKind {
     HYPOTHESIS,
     GOAL,
     CONFLICT,
+    ABSTRACTION,
+    WORLD_MODEL,
+    STRATEGY,
+    EXPERIMENT,
 }
 
 enum class ThoughtGraphEdgeKind {
@@ -39,6 +43,10 @@ enum class ThoughtGraphEdgeKind {
     CONFLICTS_WITH,
     TARGETS_GOAL,
     TEMPORALLY_SUPERSEDES,
+    CAUSES,
+    GENERALIZES_TO,
+    ANALOGOUS_TO,
+    PREDICTS,
 }
 
 enum class ThoughtGraphSourceKind {
@@ -47,6 +55,10 @@ enum class ThoughtGraphSourceKind {
     HYPOTHESIS,
     GOAL,
     SYSTEM,
+    ABSTRACTION,
+    WORLD_MODEL,
+    STRATEGY,
+    EXPERIMENT,
 }
 
 enum class ThoughtGraphConflictSubjectKind {
