@@ -6,6 +6,8 @@ import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.StableCognitiveIds
 import java.time.Instant
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class LiveSourceCursorState(
     val sourceId: LiveSourceId,
@@ -58,6 +60,7 @@ class LiveSourceDeltaRuntime(
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val adapters = adapters.associateBy { it.sourceId }
+    private val sourceMutexes = this.adapters.keys.associateWith { Mutex() }
     private val coalescer = SourceDeltaCoalescer(coalesceCapacity)
 
     init {
@@ -68,7 +71,8 @@ class LiveSourceDeltaRuntime(
     suspend fun syncAll(): List<LiveSourceSyncResult> =
         adapters.values.sortedBy { it.sourceId.value }.map { sync(it.sourceId) }
 
-    suspend fun sync(sourceId: LiveSourceId): LiveSourceSyncResult {
+    suspend fun sync(sourceId: LiveSourceId): LiveSourceSyncResult =
+        requireNotNull(sourceMutexes[sourceId]) { "Unknown LiveSource adapter ${sourceId.value}" }.withLock {
         val adapter = requireNotNull(adapters[sourceId]) { "Unknown LiveSource adapter ${sourceId.value}" }
         val existing = cursors.load(sourceId)
         if (existing == null) {
@@ -121,7 +125,7 @@ class LiveSourceDeltaRuntime(
         check(cursors.compareAndSet(existing.stateRevision, next)) {
             "LiveSource cursor CAS raced for ${sourceId.value}"
         }
-        return LiveSourceSyncResult(
+        LiveSourceSyncResult(
             sourceId = sourceId,
             initialized = false,
             ingestedDeltas = coalesced.size,
