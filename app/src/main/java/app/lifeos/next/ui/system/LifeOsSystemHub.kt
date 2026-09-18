@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -114,31 +115,61 @@ private fun SystemOverview(
                 subtitle = "Runtime-Gesundheit, Nachvollziehbarkeit und kontrollierte Erweiterungen.",
                 eyebrow = "Owner Console",
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
-            ) {
-                SystemEntryCard(
-                    title = "Warum",
-                    subtitle = "DecisionTrace & Evidenz",
-                    glyph = "?",
-                    onClick = onWhy,
-                    modifier = Modifier.weight(1f),
-                )
-                SystemEntryCard(
-                    title = "Tools",
-                    subtitle = "Fähigkeiten & Trials",
-                    glyph = "⚙",
-                    onClick = onTools,
-                    modifier = Modifier.weight(1f),
-                )
-                SystemEntryCard(
-                    title = "Assets",
-                    subtitle = "Artefakte & Reviews",
-                    glyph = "▣",
-                    onClick = onAssets,
-                    modifier = Modifier.weight(1f),
-                )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                if (maxWidth < 600.dp) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
+                    ) {
+                        SystemEntryCard(
+                            title = "Warum",
+                            subtitle = "DecisionTrace & Evidenz",
+                            glyph = "?",
+                            onClick = onWhy,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        SystemEntryCard(
+                            title = "Tools",
+                            subtitle = "Fähigkeiten & Trials",
+                            glyph = "⚙",
+                            onClick = onTools,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        SystemEntryCard(
+                            title = "Assets",
+                            subtitle = "Artefakte & Reviews",
+                            glyph = "▣",
+                            onClick = onAssets,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
+                    ) {
+                        SystemEntryCard(
+                            title = "Warum",
+                            subtitle = "DecisionTrace & Evidenz",
+                            glyph = "?",
+                            onClick = onWhy,
+                            modifier = Modifier.weight(1f),
+                        )
+                        SystemEntryCard(
+                            title = "Tools",
+                            subtitle = "Fähigkeiten & Trials",
+                            glyph = "⚙",
+                            onClick = onTools,
+                            modifier = Modifier.weight(1f),
+                        )
+                        SystemEntryCard(
+                            title = "Assets",
+                            subtitle = "Artefakte & Reviews",
+                            glyph = "▣",
+                            onClick = onAssets,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
             }
             SystemRuntimeHealthScreen(
                 model = model,

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -32,6 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.next.LifeOsToolCenterUiState
 import app.lifeos.next.LifeOsToolCenterViewModel
 import app.lifeos.next.ui.components.LifeOsScreenHeader
+import app.lifeos.next.ui.theme.LifeOsTokens
 
 @Composable
 fun LifeOsToolCenterScreen(
@@ -44,14 +46,21 @@ fun LifeOsToolCenterScreen(
         model.refresh()
     }
 
-    ToolCenterOverview(
-        state = state,
-        onRefresh = model::refresh,
-        onApproveGeneration = model::approveGeneration,
-        onReviewAndActivate = model::reviewAndActivate,
-        onDismissActionStatus = model::dismissActionStatus,
-        modifier = modifier,
-    )
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        ToolCenterOverview(
+            state = state,
+            onRefresh = model::refresh,
+            onApproveGeneration = model::approveGeneration,
+            onReviewAndActivate = model::reviewAndActivate,
+            onDismissActionStatus = model::dismissActionStatus,
+            modifier = Modifier
+                .fillMaxSize()
+                .widthIn(max = LifeOsTokens.Layout.contentMaxWidth),
+        )
+    }
 }
 
 @Composable

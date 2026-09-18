@@ -2,10 +2,12 @@ package app.lifeos.next.ui.assets
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
@@ -18,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -26,6 +29,7 @@ import app.lifeos.next.AssetReviewFilter
 import app.lifeos.next.OwnerAssetReviewUiState
 import app.lifeos.next.OwnerAssetReviewViewModel
 import app.lifeos.next.ui.components.LifeOsScreenHeader
+import app.lifeos.next.ui.theme.LifeOsTokens
 
 @Composable
 fun OwnerAssetReviewScreen(
@@ -42,26 +46,35 @@ fun OwnerAssetReviewScreen(
         selectedCandidateId = null
     }
 
-    if (selectedRecord == null) {
-        AssetReviewOverview(
-            state = state,
-            onSelectFilter = { model.selectFilter(it) },
-            onOpenRecord = { selectedCandidateId = it.candidate.id.value },
-            onDismissError = model::dismissError,
-            modifier = modifier,
-        )
-    } else {
-        AssetReviewDetail(
-            record = selectedRecord,
-            state = state,
-            onBack = { selectedCandidateId = null },
-            onFeedbackChange = { model.editFeedback(selectedRecord.candidate.id, it) },
-            onApprove = { model.approve(selectedRecord.candidate.id) },
-            onRequestChanges = { model.requestChanges(selectedRecord.candidate.id) },
-            onReject = { model.reject(selectedRecord.candidate.id) },
-            onDismissError = model::dismissError,
-            modifier = modifier,
-        )
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        val contentModifier = Modifier
+            .fillMaxSize()
+            .widthIn(max = LifeOsTokens.Layout.contentMaxWidth)
+
+        if (selectedRecord == null) {
+            AssetReviewOverview(
+                state = state,
+                onSelectFilter = { model.selectFilter(it) },
+                onOpenRecord = { selectedCandidateId = it.candidate.id.value },
+                onDismissError = model::dismissError,
+                modifier = contentModifier,
+            )
+        } else {
+            AssetReviewDetail(
+                record = selectedRecord,
+                state = state,
+                onBack = { selectedCandidateId = null },
+                onFeedbackChange = { model.editFeedback(selectedRecord.candidate.id, it) },
+                onApprove = { model.approve(selectedRecord.candidate.id) },
+                onRequestChanges = { model.requestChanges(selectedRecord.candidate.id) },
+                onReject = { model.reject(selectedRecord.candidate.id) },
+                onDismissError = model::dismissError,
+                modifier = contentModifier,
+            )
+        }
     }
 }
 
