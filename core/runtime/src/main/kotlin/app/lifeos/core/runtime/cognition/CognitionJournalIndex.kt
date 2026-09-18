@@ -81,6 +81,13 @@ data class CognitionJournalIndexSnapshot(
     fun head(kind: CognitionJournalKind): Long =
         entries.asSequence().filter { it.kind == kind }.maxOfOrNull { it.sequence } ?: 0L
 
+    fun reservedHead(kind: CognitionJournalKind): Long = maxOf(
+        head(kind),
+        pendingReservations.asSequence()
+            .filter { it.kind == kind }
+            .maxOfOrNull { it.sequence } ?: 0L,
+    )
+
     fun size(kind: CognitionJournalKind): Long =
         entries.count { it.kind == kind }.toLong()
 
@@ -336,19 +343,32 @@ class CognitionJournalIndex(
     ): CognitionJournalIndexSnapshot {
         val recovered = loadCognitionJournalPhotons(photons, refs).map(::recover)
         val entries = buildList {
-            recovered.filter { it.kind == CognitionJournalKind.EVENT }
-                .sortedBy { requireNotNull(it.sequence) }
-                .forEach { value ->
-                    add(
-                        CognitionJournalIndexEntry(
-                            kind = value.kind,
-                            sequence = requireNotNull(value.sequence),
-                            stableId = value.stableId,
-                            photonRef = value.ref,
-                            recordedAt = value.recordedAt,
-                        )
+            val recoveredEvents = recovered
+                .filter { it.kind == CognitionJournalKind.EVENT }
+                .sortedWith(
+                    compareBy<RecoveredEntry> { requireNotNull(it.sequence) }
+                        .thenBy { it.recordedAt }
+                        .thenBy { it.stableId }
+                        .thenBy { it.ref.photonId.value }
+                )
+            val payloadSequences = recoveredEvents.map { requireNotNull(it.sequence) }
+            val payloadSequenceIsCanonical =
+                payloadSequences == (1L..recoveredEvents.size.toLong()).toList()
+            recoveredEvents.forEachIndexed { index, value ->
+                add(
+                    CognitionJournalIndexEntry(
+                        kind = value.kind,
+                        sequence = if (payloadSequenceIsCanonical) {
+                            requireNotNull(value.sequence)
+                        } else {
+                            index.toLong() + 1L
+                        },
+                        stableId = value.stableId,
+                        photonRef = value.ref,
+                        recordedAt = value.recordedAt,
                     )
-                }
+                )
+            }
 
             CognitionJournalKind.values()
                 .filterNot { it == CognitionJournalKind.EVENT }
