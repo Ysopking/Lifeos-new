@@ -14,8 +14,17 @@ object HotSwapEventLogCodec {
     const val MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 
     fun encode(events: List<HotSwapEvent>): ByteArray {
+        require(events.map { it.revision } == (1L..events.size.toLong()).toList()) {
+            "HotSwapEvent full-log revisions must be contiguous"
+        }
+        return encodePayload(events)
+    }
+
+    /** Encodes one immutable segment while preserving its global ledger revision. */
+    fun encodeSegment(event: HotSwapEvent): ByteArray = encodePayload(listOf(event))
+
+    private fun encodePayload(events: List<HotSwapEvent>): ByteArray {
         require(events.size <= MAX_EVENTS)
-        require(events.map { it.revision } == (1L..events.size.toLong()).toList())
         return ByteArrayOutputStream().let { bytes ->
             DataOutputStream(bytes).use { out ->
                 out.writeInt(MAGIC)
@@ -40,14 +49,27 @@ object HotSwapEventLogCodec {
         }.also { require(it.size <= MAX_PAYLOAD_BYTES) }
     }
 
-    fun decode(bytes: ByteArray): List<HotSwapEvent> {
+    fun decode(bytes: ByteArray): List<HotSwapEvent> =
+        decodePayload(bytes).also { events ->
+            require(events.map { it.revision } == (1L..events.size.toLong()).toList()) {
+                "HotSwapEvent full-log revisions must be contiguous"
+            }
+        }
+
+    /** Decodes exactly one immutable segment without rebasing its global revision. */
+    fun decodeSegment(bytes: ByteArray): HotSwapEvent =
+        decodePayload(bytes).also { events ->
+            require(events.size == 1) { "Hot-swap segment must contain exactly one event" }
+        }.single()
+
+    private fun decodePayload(bytes: ByteArray): List<HotSwapEvent> {
         require(bytes.isNotEmpty() && bytes.size <= MAX_PAYLOAD_BYTES)
         val input = DataInputStream(ByteArrayInputStream(bytes))
         require(input.readInt() == MAGIC) { "Invalid hot-swap payload magic" }
         require(input.readInt() == VERSION) { "Unsupported hot-swap payload version" }
         val count = input.readInt()
         require(count in 0..MAX_EVENTS)
-        val events = List(count) { index ->
+        val events = List(count) {
             HotSwapEvent(
                 revision = input.readLong(),
                 transactionId = HotSwapTransactionId(read(input)),
@@ -61,7 +83,7 @@ object HotSwapEventLogCodec {
                 ownerPolicyRevision = readNullableLong(input),
                 worldSnapshotId = readNullable(input),
                 detail = readNullable(input),
-            ).also { require(it.revision == index + 1L) }
+            )
         }
         require(input.available() == 0) { "Trailing hot-swap payload bytes" }
         return events
