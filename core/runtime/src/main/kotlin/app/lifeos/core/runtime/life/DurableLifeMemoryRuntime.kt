@@ -429,11 +429,13 @@ class DurableLifeMemoryRuntime(
     private val graphProjector: LifeGraphProjector = LifeGraphProjector(),
     private val memoryEngine: LongTermMemoryEngine = LongTermMemoryEngine(),
     private val maxResidentPhotons: Int = DEFAULT_MAX_RESIDENT_PHOTONS,
+    private val residentBudgetProvider: (() -> Int)? = null,
 ) {
     private val memoryFabric = CognitiveMemoryFabric(photons)
 
     init {
         require(maxResidentPhotons > 0)
+        require(residentBudgetProvider?.invoke()?.let { it > 0 } ?: true)
     }
     @Volatile
     private var latest: DurableLifeMemorySnapshot? = null
@@ -488,7 +490,7 @@ class DurableLifeMemoryRuntime(
                 )
             },
             availablePhotons = memoryEvidence,
-            maxResidentPhotons = maxResidentPhotons,
+            maxResidentPhotons = effectiveResidentLimit(),
         )
 
         val snapshot = DurableLifeMemorySnapshot(
@@ -562,6 +564,10 @@ class DurableLifeMemoryRuntime(
         )
         return rebuild(at)
     }
+
+    private fun effectiveResidentLimit(): Int =
+        (residentBudgetProvider?.invoke() ?: maxResidentPhotons)
+            .coerceIn(1, MAX_RESIDENT_PHOTONS_HARD_LIMIT)
 
     private fun saturatingAccessRevision(
         photonRevision: Long,
@@ -740,6 +746,7 @@ private fun number(value: Double?): String = value?.let(java.lang.Double::toHexS
 private fun optionalNumber(value: String): Double? = value.takeIf { it != "~" }?.let(java.lang.Double::valueOf)
 
 private const val DEFAULT_MAX_RESIDENT_PHOTONS = 4_096
+private const val MAX_RESIDENT_PHOTONS_HARD_LIMIT = 32_768
 private const val DEFAULT_HOT_CONTEXT_LIMIT = 256
 private const val MAX_LINEAGE_DEPTH = 16
 private const val MAX_MANAGEMENT_CONTENT_CHARS = 64 * 1024
