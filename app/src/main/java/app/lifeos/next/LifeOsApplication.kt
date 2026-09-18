@@ -49,6 +49,7 @@ import app.lifeos.core.runtime.life.FuturePlanningCoordinator
 import app.lifeos.core.runtime.life.FuturePlanningPersistence
 import app.lifeos.core.runtime.life.InitialDataBootstrapRuntime
 import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
+import app.lifeos.core.runtime.life.InitialDataSourceStatus
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
@@ -81,6 +82,7 @@ import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -461,9 +463,26 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         if (!startupState.value.ready && !::initialDataBootstrap.isInitialized) return
         initialDataScope.launch {
             try {
-                latestInitialDataBootstrap = initialDataBootstrap.run()
-                refreshLiveSourceRuntime()
-                initialDataBootstrapFailure = null
+                while (true) {
+                    val snapshot = initialDataBootstrap.run()
+                    latestInitialDataBootstrap = snapshot
+                    refreshLiveSourceRuntime()
+                    initialDataBootstrapFailure = null
+
+                    val deferredAuthorizedWork = snapshot.sources.any { source ->
+                        source.status == InitialDataSourceStatus.AVAILABLE && !source.completed
+                    }
+                    if (!deferredAuthorizedWork) break
+
+                    val budget = hardwareResourceIntelligence.cognitiveBudget(CognitiveWorkload.INGEST)
+                    delay(
+                        if (budget.allowBackgroundEnrichment) {
+                            INITIAL_DATA_FAST_RESUME_MILLIS
+                        } else {
+                            INITIAL_DATA_CONSTRAINED_RESUME_MILLIS
+                        }
+                    )
+                }
             } catch (error: Exception) {
                 initialDataBootstrapFailure = error.message ?: error::class.simpleName ?: "initial-data-bootstrap-failed"
             }
@@ -522,5 +541,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"
         const val ALL_RUNTIME_PERMISSION_SCHEMA = "all-runtime-permission-schema"
         const val BROAD_FILE_ACCESS_REQUESTED = "broad-file-access-requested"
+        const val INITIAL_DATA_FAST_RESUME_MILLIS = 250L
+        const val INITIAL_DATA_CONSTRAINED_RESUME_MILLIS = 5_000L
     }
 }
