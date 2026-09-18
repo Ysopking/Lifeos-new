@@ -37,7 +37,6 @@ data class EffectReceipt(
                 challengeResolutionFingerprint.matches(Regex("[0-9a-f]{64}"))
         )
         if (state == ExternalEffectState.WAITING_FOR_USER ||
-            state == ExternalEffectState.USER_CHALLENGE_REQUIRED ||
             state == ExternalEffectState.RESUMED
         ) {
             require(!challengeId.isNullOrBlank()) {
