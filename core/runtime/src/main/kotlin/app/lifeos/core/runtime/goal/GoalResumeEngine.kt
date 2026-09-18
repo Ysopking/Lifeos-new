@@ -4,6 +4,18 @@ import app.lifeos.core.language.Ambiguity
 import app.lifeos.core.language.EntityType
 import app.lifeos.core.language.GoalConstraint
 import app.lifeos.core.language.GoalFrame
+import app.lifeos.core.language.TemporalRelation
+import app.lifeos.core.language.SemanticTemporalValue
+import app.lifeos.core.language.SemanticQuantityV2
+import app.lifeos.core.language.SemanticInterpretationQuality
+import app.lifeos.core.language.QuantityTemporalResult
+import app.lifeos.core.language.QuantityComparator
+import app.lifeos.core.language.DomainSemanticRelationType
+import app.lifeos.core.language.DomainSemanticRelation
+import app.lifeos.core.language.DomainSemanticPackId
+import app.lifeos.core.language.DomainSemanticNodeId
+import app.lifeos.core.language.DomainSemanticNode
+import app.lifeos.core.language.DomainSemanticGraph
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
 import app.lifeos.core.language.LanguageSemanticGraph
@@ -43,6 +55,7 @@ import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import java.time.Instant
+import java.util.Currency
 
 enum class GoalResumeBlockReason {
     NOT_CONTINUATION,
@@ -301,6 +314,99 @@ private object PersistedGoalFrameDecoder {
             emptyList()
         }
 
+        val quantityTemporal = if (version == GOAL_V4) {
+            val quantities = lines.filter { it.startsWith("canonical.quantity.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("canonical.quantity."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 9) { "Malformed canonical quantity" }
+                SemanticQuantityV2(
+                    comparator = QuantityComparator.valueOf(fields[0]),
+                    value = unescape(fields[1]).takeIf { it.isNotBlank() }?.toBigDecimal(),
+                    lowerBound = unescape(fields[2]).takeIf { it.isNotBlank() }?.toBigDecimal(),
+                    upperBound = unescape(fields[3]).takeIf { it.isNotBlank() }?.toBigDecimal(),
+                    unit = unescape(fields[4]).takeIf { it.isNotBlank() },
+                    currency = unescape(fields[5]).takeIf { it.isNotBlank() }?.let(Currency::getInstance),
+                    span = TextSpan(fields[6].toInt(), fields[7].toInt()),
+                    confidence = fields[8].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+            val temporals = lines.filter { it.startsWith("canonical.temporal.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("canonical.temporal."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 7) { "Malformed canonical temporal" }
+                SemanticTemporalValue(
+                    relation = TemporalRelation.valueOf(fields[0]),
+                    startInclusive = unescape(fields[1]).takeIf { it.isNotBlank() }?.let(Instant::parse),
+                    endInclusive = unescape(fields[2]).takeIf { it.isNotBlank() }?.let(Instant::parse),
+                    sourceText = unescape(fields[3]),
+                    span = TextSpan(fields[4].toInt(), fields[5].toInt()),
+                    confidence = fields[6].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+            QuantityTemporalResult(quantities, temporals)
+        } else {
+            QuantityTemporalResult(emptyList(), emptyList())
+        }
+
+        val domainSemanticGraph = if (version == GOAL_V4 && optional(lines, "domain.fingerprint") != null) {
+            val fingerprint = unescape(requireNotNull(optional(lines, "domain.fingerprint")))
+            val nodes = lines.filter { it.startsWith("domain.node.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("domain.node."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 6) { "Malformed domain semantic node" }
+                DomainSemanticNode(
+                    id = DomainSemanticNodeId(unescape(fields[0])),
+                    pack = DomainSemanticPackId.valueOf(fields[1]),
+                    type = unescape(fields[2]),
+                    value = unescape(fields[3]),
+                    confidence = fields[4].toDouble().also { require(it in 0.0..1.0) },
+                    sourceEntityType = unescape(fields[5])
+                        .takeIf { it.isNotBlank() }
+                        ?.let(::SemanticEntityTypeId),
+                )
+            }
+            val relations = lines.filter { it.startsWith("domain.relation.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("domain.relation."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 4) { "Malformed domain semantic relation" }
+                DomainSemanticRelation(
+                    from = DomainSemanticNodeId(unescape(fields[0])),
+                    to = DomainSemanticNodeId(unescape(fields[1])),
+                    type = DomainSemanticRelationType.valueOf(fields[2]),
+                    confidence = fields[3].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+            DomainSemanticGraph(
+                packs = nodes.mapTo(linkedSetOf()) { it.pack },
+                nodes = nodes,
+                relations = relations,
+                fingerprint = fingerprint,
+            )
+        } else {
+            DomainSemanticGraph.empty()
+        }
+
+        val interpretationQuality = if (version == GOAL_V4) {
+            optional(lines, "quality")?.let { encoded ->
+                val fields = splitAllUnescaped(encoded, '|')
+                require(fields.size == 6) { "Malformed semantic interpretation quality" }
+                SemanticInterpretationQuality(
+                    evidenceStrength = fields[0].toDouble(),
+                    interpretationMargin = fields[1].toDouble(),
+                    completeness = fields[2].toDouble(),
+                    contradictionCount = fields[3].toInt(),
+                    ambiguityCount = fields[4].toInt(),
+                    executionReadiness = fields[5].toDouble(),
+                )
+            } ?: SemanticInterpretationQuality.unknown()
+        } else {
+            SemanticInterpretationQuality.unknown()
+        }
+
         val ambiguities = lines
             .filter { it.startsWith("ambiguity.") }
             .map { line ->
@@ -338,6 +444,9 @@ private object PersistedGoalFrameDecoder {
             semanticGraph = semanticGraph,
             semanticActionGraph = semanticActionGraph,
             semanticEntitiesV2 = semanticEntitiesV2,
+            quantityTemporal = quantityTemporal,
+            domainSemanticGraph = domainSemanticGraph,
+            interpretationQuality = interpretationQuality,
         )
     }.getOrNull()
 
@@ -607,6 +716,12 @@ private object PersistedGoalFrameDecoder {
             links = links,
             fingerprint = fingerprint,
         )
+    }
+
+    private fun optional(lines: List<String>, key: String): String? {
+        val matches = lines.filter { it.startsWith("$key=") }
+        require(matches.size <= 1) { "Persisted goal must not duplicate $key field" }
+        return matches.singleOrNull()?.substringAfter('=')
     }
 
     private fun required(lines: List<String>, key: String): String {
