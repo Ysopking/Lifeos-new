@@ -21,6 +21,54 @@ import app.lifeos.core.runtime.world.WorldFormulaCoordinator
 import app.lifeos.core.runtime.world.WorldFormulaExecution
 import app.lifeos.core.runtime.world.WorldFormulaExecutionState
 import app.lifeos.core.runtime.world.WorldFormulaStatus
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Mutex
+import java.time.Instant
+import java.time.Duration
+import java.time.Clock
+
+data class HardwareEpoch(
+    val thermalBucket: String,
+    val memoryPressureBucket: Int,
+    val batteryBucket: Int,
+    val charging: Boolean?,
+    val availableCoreBucket: Int,
+) {
+    companion object {
+        fun from(snapshot: HardwareStateSnapshot): HardwareEpoch = HardwareEpoch(
+            thermalBucket = snapshot.thermalState.name,
+            memoryPressureBucket = when (snapshot.memoryHeadroom()) {
+                null -> -1
+                in 0.75..1.0 -> 3
+                in 0.40..<0.75 -> 2
+                in 0.20..<0.40 -> 1
+                else -> 0
+            },
+            batteryBucket = when (val battery = snapshot.batteryFraction) {
+                null -> -1
+                in 0.75..1.0 -> 4
+                in 0.50..<0.75 -> 3
+                in 0.25..<0.50 -> 2
+                in 0.10..<0.25 -> 1
+                else -> 0
+            },
+            charging = snapshot.charging,
+            availableCoreBucket = when (snapshot.availableProcessors) {
+                1 -> 1
+                in 2..3 -> 2
+                in 4..7 -> 4
+                else -> 8
+            },
+        )
+    }
+}
+
+data class CachedHardwareWorld(
+    val epoch: HardwareEpoch,
+    val hardware: HardwareStateSnapshot,
+    val world: WorldFormulaExecution,
+    val evaluatedAt: Instant,
+)
 
 sealed interface HardwareExecutionBudgetDecision {
     data class Ready(val plan: HardwareAdaptiveBudgetPlan) : HardwareExecutionBudgetDecision
@@ -49,6 +97,8 @@ class HardwareResourceIntelligenceRuntime internal constructor(
     private val optimizer: HardwareAdaptiveResourceOptimizer = HardwareAdaptiveResourceOptimizer(),
     private val profile: HardwareWorldEquationProfile = HardwareWorldEquationProfile(),
     private val allocationProfile: ResourceAllocationWorldEquationProfile = ResourceAllocationWorldEquationProfile(),
+    private val clock: Clock = Clock.systemUTC(),
+    private val hardwareEpochTtl: Duration = Duration.ofSeconds(15),
 ) : HardwareExecutionBudgetGate, SharedResourceBudgetGate {
     private val worldFormula = WorldFormulaCoordinator(
         equations = InMemoryWorldEquationRegistry(
@@ -57,14 +107,19 @@ class HardwareResourceIntelligenceRuntime internal constructor(
         snapshots = EncryptedWorldFormulaSnapshotRepository(context.applicationContext),
     )
     private val budgetBroker = WorldFormulaBudgetBroker(worldFormula, allocationProfile)
+    private val cacheMutex = Mutex()
+
+    @Volatile
+    private var cachedHardwareWorld: CachedHardwareWorld? = null
 
     suspend fun evaluate(
         hardQuota: ResourceBudgetQuota,
         requested: ResourceBudgetUsage,
         priority: HardwareWorkPriority = HardwareWorkPriority.NORMAL,
     ): HardwareResourceDecision {
-        val hardware = reader.read()
-        val world = worldFormula.evaluate(profile.request(hardware))
+        val cached = currentHardwareWorld()
+        val hardware = cached.hardware
+        val world = cached.world
         if (
             world.state != WorldFormulaExecutionState.COMPLETED ||
             world.status != WorldFormulaStatus.CONVERGED ||
@@ -104,8 +159,9 @@ class HardwareResourceIntelligenceRuntime internal constructor(
         hardQuota: ResourceBudgetQuota,
         demands: List<ResourceBudgetDemand>,
     ): SharedResourceBudgetDecision {
-        val hardware = reader.read()
-        val hardwareWorld = worldFormula.evaluate(profile.request(hardware))
+        val cached = currentHardwareWorld()
+        val hardware = cached.hardware
+        val hardwareWorld = cached.world
         if (
             hardwareWorld.state != WorldFormulaExecutionState.COMPLETED ||
             hardwareWorld.status != WorldFormulaStatus.CONVERGED ||
@@ -149,7 +205,32 @@ class HardwareResourceIntelligenceRuntime internal constructor(
     }
 
     /** Read-only diagnostics path; it does not reserve or spend a resource budget. */
-    fun currentHardwareSnapshot(): HardwareStateSnapshot = reader.read()
+    fun currentHardwareSnapshot(): HardwareStateSnapshot =
+        cachedHardwareWorld?.hardware ?: reader.read()
+
+    private suspend fun currentHardwareWorld(): CachedHardwareWorld {
+        val observed = reader.read()
+        val epoch = HardwareEpoch.from(observed)
+        val now = clock.instant()
+        cachedHardwareWorld?.let { cached ->
+            if (cached.epoch == epoch && Duration.between(cached.evaluatedAt, now) <= hardwareEpochTtl) {
+                return cached
+            }
+        }
+        return cacheMutex.withLock {
+            cachedHardwareWorld?.let { cached ->
+                if (cached.epoch == epoch && Duration.between(cached.evaluatedAt, now) <= hardwareEpochTtl) {
+                    return@withLock cached
+                }
+            }
+            CachedHardwareWorld(
+                epoch = epoch,
+                hardware = observed,
+                world = worldFormula.evaluate(profile.request(observed)),
+                evaluatedAt = now,
+            ).also { cachedHardwareWorld = it }
+        }
+    }
 
     private fun aggregatePriority(demands: List<ResourceBudgetDemand>): HardwareWorkPriority {
         val priority = demands.maxOfOrNull { it.priority } ?: 0.0
