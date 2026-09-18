@@ -213,9 +213,12 @@ data class SemanticActionNode(
     val unresolvedCondition: Boolean,
     val externalSideEffect: Boolean,
     val executionReadiness: Double,
+    val externalRequiredRoles: Set<SemanticRole> = requiredRoles,
+    val unresolvedExternalRoles: Set<SemanticRole> = unresolvedRoles,
 ) {
     init {
         require(unresolvedRoles.all { it in requiredRoles })
+        require(unresolvedExternalRoles.all { it in externalRequiredRoles })
         require(executionReadiness.isFinite() && executionReadiness in 0.0..1.0)
     }
 
@@ -229,6 +232,11 @@ data class SemanticActionNode(
             unresolvedRoles.isEmpty() &&
             !unresolvedReference &&
             executionReadiness >= MIN_EXECUTION_READINESS
+
+    val externalEffectExecutable: Boolean
+        get() = executable &&
+            externalSideEffect &&
+            unresolvedExternalRoles.isEmpty()
 
     companion object {
         const val MIN_EXECUTION_READINESS = 0.75
@@ -270,7 +278,7 @@ data class SemanticActionGraph(
     }
 
     fun hasExecutableExternalSideEffect(): Boolean =
-        executableNodes.any { it.externalSideEffect }
+        nodes.any { it.externalEffectExecutable }
 
     companion object {
         fun empty(): SemanticActionGraph = SemanticActionGraph(
