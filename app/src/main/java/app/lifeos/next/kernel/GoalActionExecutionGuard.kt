@@ -435,10 +435,16 @@ class PrivateGoalActionExecutionGuard(
             domain = ResourceBudgetDomain.GOAL_EXECUTION,
             expectedUtility = 0.90,
         )
-        IntentType.SCHEDULE,
-        IntentType.COMMUNICATE -> GoalActionResourceProfile(
+        IntentType.SCHEDULE -> GoalActionResourceProfile(
             hardQuota = quota(3_000, 8, 32, 4, 0, 2),
             requested = usage(1_500, 4, 16, 1, 0, 1),
+            priority = HardwareWorkPriority.HIGH,
+            domain = ResourceBudgetDomain.GOAL_EXECUTION,
+            expectedUtility = 0.95,
+        )
+        IntentType.COMMUNICATE -> GoalActionResourceProfile(
+            hardQuota = quota(3_000, 8, 32, 4, 0, 2),
+            requested = usage(1_000, 1, 4, 1, 0, 1),
             priority = HardwareWorkPriority.HIGH,
             domain = ResourceBudgetDomain.GOAL_EXECUTION,
             expectedUtility = 0.95,
