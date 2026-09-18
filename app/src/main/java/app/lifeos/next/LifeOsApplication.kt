@@ -311,7 +311,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
                                 override suspend fun findForMission(missionId: DeepSearchMissionId): Photon? {
                                     val tag = "deepsearch-mission:${missionId.value}"
-                                    val matches = kernel.photonStore.loadAll().filter { tag in it.tags }
+                                    val matches = kernel.productivePhotonQueries.tags(
+                                        allTags = setOf(tag),
+                                        limit = 2,
+                                    ).photons
                                     check(matches.size <= 1) {
                                         "DeepSearch mission resolved to multiple result Photons"
                                     }
@@ -364,7 +367,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                             persistDerivedOutcome = { photon ->
                                 photonIngress.ingestWithReceipt(photon, PhotonIngressMode.DERIVED)
                             },
-                            loadPersistedPhotons = kernel.photonStore::loadAll,
+                            outcomeLookup = kernel.productivePhotonQueries,
                             traces = goalDecisionTraceRecorder,
                         )
                     )
