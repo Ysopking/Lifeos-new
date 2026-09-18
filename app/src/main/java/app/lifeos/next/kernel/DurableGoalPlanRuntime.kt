@@ -10,7 +10,7 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionState
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
-import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.goal.GoalConvergenceDecisionSource
 import app.lifeos.core.runtime.goal.ProductiveConvergenceNotReadyException
 import app.lifeos.core.runtime.goal.GoalPlanBlueprint
 import app.lifeos.core.runtime.goal.GoalPlanBuildResult
@@ -51,7 +51,7 @@ data class DurableGoalPlanPermit(
  */
 class DurableGoalPlanRuntime(
     private val ledger: DurableGoalPlanLedger,
-    private val convergence: GoalConvergenceDecisionProvider,
+    private val convergence: GoalConvergenceDecisionSource,
     private val persistDerivedOutcome: suspend (Photon) -> PhotonSubmissionResult? = { null },
     private val outcomeLookup: GoalOutcomeLookup,
     private val builder: GoalPlanBuilder = GoalPlanBuilder(),
