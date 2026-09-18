@@ -364,7 +364,12 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     DurableGoalPlanRuntimeRegistry.install(
                         DurableGoalPlanRuntime(
                             ledger = kernel.goalPlans,
-                            convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
+                            convergence = GoalConvergenceDecisionProvider(
+                                decisions = durableV5Decisions,
+                                workingSetFingerprintProvider = { at ->
+                                    kernel.thoughtGraph.workingSet(at).fingerprint
+                                },
+                            ),
                             persistDerivedOutcome = { photon ->
                                 photonIngress.ingestWithReceipt(photon, PhotonIngressMode.DERIVED)
                             },
