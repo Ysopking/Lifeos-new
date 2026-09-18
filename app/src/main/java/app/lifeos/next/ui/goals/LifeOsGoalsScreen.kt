@@ -2,11 +2,13 @@ package app.lifeos.next.ui.goals
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
@@ -22,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -30,6 +33,8 @@ import app.lifeos.core.runtime.goal.GoalStepState
 import app.lifeos.next.GoalWorkspaceFilter
 import app.lifeos.next.LifeOsGoalsUiState
 import app.lifeos.next.LifeOsGoalsViewModel
+import app.lifeos.next.ui.components.LifeOsScreenHeader
+import app.lifeos.next.ui.theme.LifeOsTokens
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -54,25 +59,34 @@ fun LifeOsGoalsScreen(
         showAllGoals = false
     }
 
-    when {
-        selectedPlan != null -> GoalDetails(
-            plan = selectedPlan,
-            onBack = model::dismissDetails,
-            modifier = modifier,
-        )
-        showAllGoals -> GoalOverview(
-            state = state,
-            onSelectFilter = model::selectFilter,
-            onOpenPlan = { model.selectPlan(it.id) },
-            onShowToday = { showAllGoals = false },
-            modifier = modifier,
-        )
-        else -> TodayOverview(
-            state = state,
-            onOpenPlan = model::selectPlan,
-            onShowAllGoals = { showAllGoals = true },
-            modifier = modifier,
-        )
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        val contentModifier = Modifier
+            .fillMaxSize()
+            .widthIn(max = LifeOsTokens.Layout.contentMaxWidth)
+
+        when {
+            selectedPlan != null -> GoalDetails(
+                plan = selectedPlan,
+                onBack = model::dismissDetails,
+                modifier = contentModifier,
+            )
+            showAllGoals -> GoalOverview(
+                state = state,
+                onSelectFilter = model::selectFilter,
+                onOpenPlan = { model.selectPlan(it.id) },
+                onShowToday = { showAllGoals = false },
+                modifier = contentModifier,
+            )
+            else -> TodayOverview(
+                state = state,
+                onOpenPlan = model::selectPlan,
+                onShowAllGoals = { showAllGoals = true },
+                modifier = contentModifier,
+            )
+        }
     }
 }
 
@@ -88,22 +102,16 @@ private fun TodayOverview(
         modifier = modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Heute", style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    today?.date?.format(TODAY_DATE).orEmpty(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            TextButton(onClick = onShowAllGoals) {
-                Text("Alle Ziele")
-            }
-        }
+        LifeOsScreenHeader(
+            title = "Heute",
+            subtitle = today?.date?.format(TODAY_DATE).orEmpty(),
+            eyebrow = "Focus",
+            trailing = {
+                TextButton(onClick = onShowAllGoals) {
+                    Text("Alle Ziele")
+                }
+            },
+        )
 
         state.error?.let { error ->
             Text(
@@ -197,22 +205,16 @@ private fun GoalOverview(
         modifier = modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Ziele", style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    "Langfristige Pläne und ihr Fortschritt.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            TextButton(onClick = onShowToday) {
-                Text("Heute")
-            }
-        }
+        LifeOsScreenHeader(
+            title = "Ziele",
+            subtitle = "Langfristige Pläne, Abhängigkeiten und Fortschritt.",
+            eyebrow = "Goal Runtime",
+            trailing = {
+                TextButton(onClick = onShowToday) {
+                    Text("Heute")
+                }
+            },
+        )
 
         TabRow(selectedTabIndex = state.filter.ordinal) {
             GoalWorkspaceFilter.entries.forEach { filter ->
