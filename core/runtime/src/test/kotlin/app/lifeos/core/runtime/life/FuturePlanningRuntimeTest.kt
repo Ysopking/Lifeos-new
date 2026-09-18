@@ -275,12 +275,13 @@ class FuturePlanningRuntimeTest {
         }
 
         override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> {
+            val latestRefs = data.keys
+                .groupBy { it.photonId }
+                .mapValues { (_, refs) -> refs.maxBy { it.revision } }
             val latest = data.values
-                .groupBy { it.id }
-                .mapValues { (_, photons) -> photons.maxBy { it.revision } }
-                .values
                 .filter { photon ->
-                    (!query.latestOnly || latestRef(photon.id)?.revision == photon.revision) &&
+                    (!query.latestOnly ||
+                        latestRefs[photon.id]?.revision == photon.revision) &&
                         (query.ids.isEmpty() || photon.id in query.ids) &&
                         (query.phases.isEmpty() || photon.phase in query.phases) &&
                         (query.mimeTypes.isEmpty() || photon.mimeType in query.mimeTypes) &&
