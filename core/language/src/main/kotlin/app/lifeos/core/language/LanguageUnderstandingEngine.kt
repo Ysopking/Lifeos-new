@@ -20,6 +20,9 @@ class LanguageUnderstandingEngine(
     private val linguisticFieldEngine: LinguisticFieldEngine = LinguisticFieldEngine(),
     private val fieldAdapter: FieldLanguageAdapter = FieldLanguageAdapter(),
     private val semanticGraphExtractor: LanguageSemanticGraphExtractor = LanguageSemanticGraphExtractor(),
+    private val speechActParser: SpeechActParser = SpeechActParser(),
+    private val predicateFrameParser: PredicateFrameParser = PredicateFrameParser(),
+    private val semanticActionGraphBuilder: SemanticActionGraphBuilder = SemanticActionGraphBuilder(),
 ) {
     fun understand(text: String): LanguageUnderstandingResult =
         understand(text, LanguageContext(), retainContext = false)
@@ -41,7 +44,26 @@ class LanguageUnderstandingEngine(
         val entities = fieldAdapter.mergeEntities(ruleEntities, fieldAdapter.entities(utterance, linguisticField))
         val semanticGraph = semanticGraphExtractor.extract(utterance, entities)
         val references = referenceExtractor.extract(utterance, topIntent).map { referenceResolver.resolve(it, context) }
-        val ambiguities = buildAmbiguities(evidence, references, topIntent, linguisticField)
+        val speechActs = speechActParser.parse(utterance, semanticGraph)
+        val predicateFrames = predicateFrameParser.parse(
+            utterance = utterance,
+            graph = semanticGraph,
+            speechActs = speechActs,
+            references = references,
+        )
+        val semanticActionGraph = semanticActionGraphBuilder.build(
+            utterance = utterance,
+            semanticGraph = semanticGraph,
+            frames = predicateFrames,
+            references = references,
+        )
+        val ambiguities = buildAmbiguities(
+            evidence = evidence,
+            references = references,
+            topIntent = topIntent,
+            linguisticField = linguisticField,
+            actionGraph = semanticActionGraph,
+        )
         val constraints = buildConstraints(utterance, entities, references, linguisticField)
         val confidence = calculateConfidence(evidence.first().score, entities, references, ambiguities, linguisticField)
         val goal = GoalFrame(
@@ -54,6 +76,7 @@ class LanguageUnderstandingEngine(
             confidence = confidence,
             language = utterance.language,
             semanticGraph = semanticGraph,
+            semanticActionGraph = semanticActionGraph,
         )
         return LanguageUnderstandingResult(
             utterance = utterance,
@@ -109,6 +132,7 @@ class LanguageUnderstandingEngine(
         references: List<ResolvedReference>,
         topIntent: IntentType,
         linguisticField: LinguisticFieldResult,
+        actionGraph: SemanticActionGraph,
     ): List<Ambiguity> {
         val result = mutableListOf<Ambiguity>()
         if (evidence.size > 1 && evidence[0].score - evidence[1].score < 0.12) {
@@ -145,6 +169,43 @@ class LanguageUnderstandingEngine(
                         severity = 0.70,
                     )
                 }
+            }
+        }
+        val intentPredicate = topIntent.toPredicateConcept()
+        val matchingNodes = actionGraph.nodes.filter { it.frame.predicate == intentPredicate }
+        if (intentPredicate != PredicateConcept.UNKNOWN && matchingNodes.isNotEmpty()) {
+            val speechActs = matchingNodes.map { it.frame.speechAct.type }.toSet()
+            if (SpeechActType.QUESTION in speechActs && matchingNodes.none { it.executable }) {
+                result += Ambiguity(
+                    code = "command_vs_question",
+                    message = "Action topic was recognized inside a question, not an executable request",
+                    alternatives = listOf(topIntent.name, SpeechActType.QUESTION.name),
+                    severity = 0.95,
+                )
+            }
+            if (matchingNodes.any { it.frame.quoted }) {
+                result += Ambiguity(
+                    code = "quoted_action",
+                    message = "Action wording is quoted and cannot authorize execution",
+                    alternatives = listOf(topIntent.name),
+                    severity = 1.0,
+                )
+            }
+            if (matchingNodes.any { it.frame.negated }) {
+                result += Ambiguity(
+                    code = "negated_action",
+                    message = "Action predicate is explicitly negated",
+                    alternatives = listOf(topIntent.name),
+                    severity = 1.0,
+                )
+            }
+            if (matchingNodes.any { it.unresolvedCondition }) {
+                result += Ambiguity(
+                    code = "conditional_action",
+                    message = "Action depends on an unresolved condition",
+                    alternatives = listOf(topIntent.name),
+                    severity = 1.0,
+                )
             }
         }
         if (topIntent == IntentType.TRANSFORM_IMAGE && references.none { it.targetPhotonId != null }) {
