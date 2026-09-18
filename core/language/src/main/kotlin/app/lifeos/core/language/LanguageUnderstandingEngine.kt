@@ -128,6 +128,11 @@ class LanguageUnderstandingEngine(
         topicIntent: IntentType,
         actionGraph: SemanticActionGraph,
     ): IntentType {
+        // Intent is descriptive metadata, never execution authority. Preserve a confidently
+        // recognized topic even when arguments/references are unresolved; SemanticExecutionGate
+        // is the only boundary that may authorize a side effect.
+        if (topicIntent == IntentType.CONVERSATION) return IntentType.CONVERSATION
+
         val nodes = actionGraph.nodes
         if (nodes.any { it.type == SemanticActionNodeType.QUERY } &&
             nodes.none { it.executable }
@@ -140,15 +145,7 @@ class LanguageUnderstandingEngine(
             .distinct()
         if (executableIntents.size == 1) return executableIntents.single()
 
-        if (topicIntent.toPredicateConcept() != PredicateConcept.UNKNOWN &&
-            actionGraph.executableNodeFor(topicIntent) != null
-        ) {
-            return topicIntent
-        }
-        return when {
-            topicIntent == IntentType.CONVERSATION -> IntentType.CONVERSATION
-            else -> IntentType.UNKNOWN
-        }
+        return topicIntent.takeUnless { it == IntentType.UNKNOWN } ?: IntentType.UNKNOWN
     }
 
     private fun canonicalObjective(utterance: NormalizedUtterance, intent: IntentType): String =
