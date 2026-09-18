@@ -1,5 +1,9 @@
 package app.lifeos.core.runtime
 
+import app.lifeos.core.runtime.cognition.CognitiveEventJournal
+import app.lifeos.core.runtime.world.WorldFormulaSnapshot
+import app.lifeos.core.runtime.world.WorldFormulaSnapshotCodec
+import app.lifeos.core.runtime.world.WorldFormulaSnapshotRepository
 import java.security.MessageDigest
 
 data class CognitiveSnapshot(
@@ -54,10 +58,22 @@ class SnapshotVerifier {
             snapshot.worldRoot == manifest.worldRoot &&
             snapshot.dependencyIndexFingerprint == manifest.dependencyIndexFingerprint &&
             snapshot.memoryIndexFingerprint == manifest.memoryIndexFingerprint &&
-            sha256(snapshot.payload) == manifest.payloadSha256
+            sha256(snapshot.payload) == manifest.payloadSha256 &&
+            worldPayloadMatchesRoot(snapshot)
+
+    private fun worldPayloadMatchesRoot(snapshot: CognitiveSnapshot): Boolean {
+        if (snapshot.schemaVersion < WORLD_PAYLOAD_SCHEMA_VERSION) return true
+        return runCatching {
+            WorldFormulaSnapshotCodec.decode(snapshot.payload).id == snapshot.worldRoot
+        }.getOrDefault(false)
+    }
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
         .digest(bytes).joinToString("") { "%02x".format(it) }
+
+    private companion object {
+        const val WORLD_PAYLOAD_SCHEMA_VERSION = 2
+    }
 }
 
 /** Rehydration starts from the latest verified snapshot and replays only its event tail. */
@@ -143,4 +159,68 @@ class CognitiveSnapshotManager(
     }
 
     fun cachedReplay(): CognitiveSnapshotReplay? = lastReplay
+}
+
+data class CognitiveSnapshotDependencyState(
+    val revision: Long,
+    val fingerprint: String,
+) {
+    init {
+        require(revision >= 0L)
+        require(fingerprint.isNotBlank())
+    }
+}
+
+/**
+ * Materializes a reconstructible cognitive checkpoint from already-authoritative durable stores.
+ * WorldFormulaSnapshot remains the world payload authority; this snapshot only binds it atomically
+ * to the journal head plus dependency/memory fingerprints.
+ */
+class CognitiveSnapshotProducer(
+    private val manager: CognitiveSnapshotManager,
+    private val journal: CognitiveEventJournal,
+    private val worlds: WorldFormulaSnapshotRepository,
+    private val dependencyState: suspend () -> CognitiveSnapshotDependencyState,
+    private val memoryFingerprint: () -> String?,
+) {
+    suspend fun captureLatest(): CognitiveSnapshot? =
+        worlds.loadLatest()?.let { capture(it) }
+
+    suspend fun capture(world: WorldFormulaSnapshot): CognitiveSnapshot? {
+        val memory = memoryFingerprint()?.takeIf { it.isNotBlank() } ?: return null
+        val dependency = dependencyState()
+        val snapshot = CognitiveSnapshot(
+            schemaVersion = WORLD_PAYLOAD_SCHEMA_VERSION,
+            projectionVersion = WORLD_PAYLOAD_PROJECTION_VERSION,
+            worldRevision = dependency.revision,
+            eventSequence = journal.size(),
+            worldRoot = world.id,
+            payload = WorldFormulaSnapshotCodec.encode(world),
+            dependencyIndexFingerprint = dependency.fingerprint,
+            memoryIndexFingerprint = memory,
+        )
+        manager.persist(snapshot)
+        return snapshot
+    }
+
+    private companion object {
+        const val WORLD_PAYLOAD_SCHEMA_VERSION = 2
+        const val WORLD_PAYLOAD_PROJECTION_VERSION = 2
+    }
+}
+
+/** Process seam for persisted WorldFormula snapshots and explicit boot-time capture. */
+object CognitiveSnapshotRuntimeRegistry {
+    @Volatile
+    private var installed: CognitiveSnapshotProducer? = null
+
+    fun install(producer: CognitiveSnapshotProducer) {
+        installed = producer
+    }
+
+    suspend fun capturePersistedWorld(world: WorldFormulaSnapshot): CognitiveSnapshot? =
+        installed?.capture(world)
+
+    suspend fun captureLatest(): CognitiveSnapshot? =
+        installed?.captureLatest()
 }
