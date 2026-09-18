@@ -194,12 +194,17 @@ data class CrossDomainConvergenceResult(
     val bridgeTrace: List<CrossDomainBridgeTrace>,
     val conflicts: List<PreservedDomainConflict>,
     val failures: List<String> = emptyList(),
+    val effectiveDomainRequests: List<FieldConvergenceRequest> = emptyList(),
 ) {
     init {
         require(requestId.isNotBlank())
         require(domainResults.map { it.state.domainId }.distinct().size == domainResults.size)
         require(bridgeTrace.map { it.bridgeId }.distinct().size == bridgeTrace.size)
         require(failures.none { it.isBlank() })
+        require(
+            effectiveDomainRequests.map { it.domainId }.distinct().size ==
+                effectiveDomainRequests.size
+        ) { "Effective convergence requests must be unique by domain" }
         if (status == CrossDomainConvergenceStatus.CONVERGED) {
             require(domainResults.isNotEmpty())
             require(domainResults.all { it.status == ConvergenceStatus.CONVERGED })
@@ -249,6 +254,7 @@ class ConvergenceCoordinator(
         )
 
         val completed = linkedMapOf<FieldDomainId, FieldConvergenceResult>()
+        val effectiveRequests = linkedMapOf<FieldDomainId, FieldConvergenceRequest>()
         val traces = mutableListOf<CrossDomainBridgeTrace>()
         val preserved = mutableListOf<PreservedDomainConflict>()
 
@@ -271,6 +277,7 @@ class ConvergenceCoordinator(
                 effective = projection.request
             }
 
+            effectiveRequests[domainId] = effective
             val result = try {
                 runner.converge(effective)
             } catch (error: Exception) {
@@ -283,6 +290,7 @@ class ConvergenceCoordinator(
                     failures = listOf(
                         "domain:${domainId.value}:${error::class.simpleName ?: "Exception"}:${error.message.orEmpty().take(160)}"
                     ),
+                    effectiveDomainRequests = order.mapNotNull(effectiveRequests::get),
                 )
             }
             completed[domainId] = result
@@ -303,6 +311,7 @@ class ConvergenceCoordinator(
             domainResults = order.mapNotNull(completed::get),
             bridgeTrace = traces.toList(),
             conflicts = preserved.sortedConflictOrder(),
+            effectiveDomainRequests = order.mapNotNull(effectiveRequests::get),
         )
     }
 
