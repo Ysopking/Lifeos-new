@@ -60,6 +60,7 @@ import app.lifeos.core.runtime.boot.CapabilityWarmup
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
 import app.lifeos.core.runtime.boot.ChainedStateRehydrator
 import app.lifeos.core.runtime.boot.CompositeBootDeltaDetector
+import app.lifeos.core.runtime.boot.CognitiveHeadConsistencyDeltaSource
 import app.lifeos.core.runtime.boot.CompositeStoreVerifier
 import app.lifeos.core.runtime.boot.DefaultBootValidator
 import app.lifeos.core.runtime.boot.ModuleRehydrator
@@ -855,7 +856,16 @@ class LifeOsKernelFactory(
                     )
                 }
             },
-            deltaDetector = CompositeBootDeltaDetector(emptyList()),
+            deltaDetector = CompositeBootDeltaDetector(
+                listOf(
+                    CognitiveHeadConsistencyDeltaSource(
+                        worldHeads = productiveWorldHeadRepository,
+                        activeCycleFingerprint = {
+                            bootEngineCycleRepository.loadActive()?.fingerprint
+                        },
+                    )
+                )
+            ),
             validator = DefaultBootValidator(),
         )
 
