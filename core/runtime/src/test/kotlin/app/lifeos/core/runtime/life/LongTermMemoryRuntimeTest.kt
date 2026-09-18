@@ -115,6 +115,88 @@ class LongTermMemoryRuntimeTest {
     }
 
     @Test
+    fun deltaProjectionMatchesFullProjectionWhenRevisionMovesEpisode() {
+        val first = photon(
+            id = "move-a",
+            createdAt = now.minus(Duration.ofDays(400)),
+            content = "Old project note.",
+            tags = setOf("completed", "project:alpha"),
+            semanticMass = 0.1,
+            confidence = 0.4,
+        )
+        val sibling = photon(
+            id = "move-b",
+            createdAt = first.provenance.createdAt.plusSeconds(60),
+            content = "Sibling project note.",
+            tags = setOf("completed", "project:alpha"),
+            semanticMass = 0.1,
+            confidence = 0.4,
+        )
+        val engine = LongTermMemoryEngine()
+        val initial = engine.project(listOf(first, sibling), now = now)
+        val revised = first.copy(
+            revision = 2L,
+            content = "Reclassified legal note.",
+            provenance = first.provenance.copy(
+                createdAt = first.provenance.createdAt.plus(Duration.ofDays(3)),
+            ),
+            tags = setOf("completed", "legal:claim"),
+        )
+        val current = listOf(revised, sibling)
+
+        val delta = engine.projectDelta(
+            current = initial,
+            allCurrentPhotons = current,
+            changed = listOf(revised),
+            accessChanges = MemoryAccessLedger(),
+            now = now,
+        )
+        val full = engine.project(current, now = now)
+
+        assertEquals(full.decisions, delta.decisions)
+        assertEquals(full.episodes, delta.episodes)
+        assertEquals(full.atoms, delta.atoms)
+        assertEquals(full.crystals, delta.crystals)
+        assertEquals(full.derivedPhotons, delta.derivedPhotons)
+        assertEquals(full.fingerprint, delta.fingerprint)
+    }
+
+    @Test
+    fun accessDeltaProjectionMatchesFullProjection() {
+        val source = photon(
+            id = "access-delta",
+            createdAt = now.minus(Duration.ofDays(500)),
+            content = "Future-relevant project note.",
+            tags = setOf("project:beta"),
+            semanticMass = 0.1,
+            confidence = 0.4,
+        )
+        val engine = LongTermMemoryEngine()
+        val initial = engine.project(listOf(source), now = now)
+        val access = MemoryAccessLedger().recordAccess(
+            photonId = source.id,
+            at = now,
+            futureRelevance = 0.95,
+        )
+
+        val delta = engine.projectDelta(
+            current = initial,
+            allCurrentPhotons = listOf(source),
+            changed = listOf(source),
+            accessChanges = access,
+            now = now,
+        )
+        val full = engine.project(listOf(source), access, now)
+
+        assertEquals(full.decisions, delta.decisions)
+        assertEquals(full.episodes, delta.episodes)
+        assertEquals(full.atoms, delta.atoms)
+        assertEquals(full.crystals, delta.crystals)
+        assertEquals(full.derivedPhotons, delta.derivedPhotons)
+        assertEquals(full.fingerprint, delta.fingerprint)
+    }
+
+    @Test
     fun originalPhotonIsNeverMutatedByCompactionProjection() {
         val original = photon(
             id = "immutable",
