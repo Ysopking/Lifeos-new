@@ -1,7 +1,9 @@
 package app.lifeos.core.language
 
 /** Deterministic utterance/clause speech-act classification. Intent evidence is deliberately absent. */
-class SpeechActParser {
+class SpeechActParser(
+    private val syntaxAnalyzer: ClauseSyntaxAnalyzer = ClauseSyntaxAnalyzer(),
+) {
     fun parse(
         utterance: NormalizedUtterance,
         graph: LanguageSemanticGraph,
@@ -19,9 +21,9 @@ class SpeechActParser {
         span: TextSpan,
         quoteRanges: List<TextSpan>,
     ): SpeechAct {
-        val tokens = utterance.tokens.subList(clause.tokenStart, clause.tokenEndExclusive)
-        val words = tokens.filter { it.kind == TokenKind.WORD }.map { it.normalized }
-        val semanticWords = words.dropWhile { it in CLAUSE_LEADING_CUES }
+        val syntax = syntaxAnalyzer.analyze(utterance, clause)
+        val words = syntax.words
+        val semanticWords = syntax.semanticWords
         val text = utterance.original.substring(span.start, span.endExclusive).trim()
         val quoted = quoteRanges.any { it.contains(span) || it.overlaps(span) && quoteCoverage(it, span) >= 0.80 }
         if (quoted) return act(
@@ -33,17 +35,6 @@ class SpeechActParser {
         )
 
         val lower = text.lowercase()
-        val question = text.endsWith("?") ||
-            semanticWords.firstOrNull() in QUESTION_WORDS ||
-            semanticWords.take(3).any { it in QUESTION_AUXILIARIES }
-        if (question) return act(
-            SpeechActType.QUESTION,
-            if (text.endsWith("?")) 0.99 else 0.92,
-            span,
-            "question-form",
-            "question punctuation/interrogative syntax",
-        )
-
         if (words.firstOrNull() in GREETINGS || lower in GREETING_PHRASES) {
             return act(SpeechActType.GREETING, 0.98, span, "social-form", "greeting")
         }
@@ -54,13 +45,24 @@ class SpeechActParser {
             return act(SpeechActType.CORRECTION, 0.90, span, "correction-cue", "contrast/correction cue")
         }
 
-        val request = hasRequestForm(semanticWords)
-        if (request) return act(
+        if (syntax.addressedRequest) return act(
             SpeechActType.REQUEST,
-            0.94,
+            if (syntax.politeImperative) 0.98 else 0.96,
             span,
-            "request-form",
-            "polite or modal request syntax",
+            "syntax-request",
+            "addressed modal or polite imperative request",
+        )
+
+        if (syntax.question) return act(
+            SpeechActType.QUESTION,
+            if (syntax.explicitQuestionMark) 0.99 else 0.94,
+            span,
+            "syntax-question",
+            when {
+                syntax.explicitQuestionMark -> "terminal question punctuation outside clause span"
+                syntax.interrogativeLead -> "interrogative clause lead"
+                else -> "clause-initial auxiliary inversion"
+            },
         )
 
         if (semanticWords.firstOrNull() in HYPOTHETICAL_MARKERS ||
@@ -75,16 +77,12 @@ class SpeechActParser {
             )
         }
 
-        val firstContent = semanticWords.firstOrNull()
-        val imperative = firstContent in DIRECT_COMMAND_VERBS ||
-            semanticWords.take(2).any { it in DIRECT_COMMAND_VERBS } &&
-                semanticWords.firstOrNull() in POLITENESS_MARKERS
-        if (imperative) return act(
+        if (syntax.imperativeLead) return act(
             SpeechActType.COMMAND,
             0.96,
             span,
-            "imperative-form",
-            "deterministic command verb at clause head",
+            "syntax-imperative",
+            "command verb at clause head",
         )
 
         return act(
@@ -94,15 +92,6 @@ class SpeechActParser {
             "declarative-default",
             "no question/request/command boundary matched",
         )
-    }
-
-    private fun hasRequestForm(words: List<String>): Boolean {
-        if (words.isEmpty()) return false
-        if (words.first() in POLITENESS_MARKERS && words.any { it in DIRECT_COMMAND_VERBS }) return true
-        val prefix = words.take(4).toSet()
-        return prefix.any { it in REQUEST_AUXILIARIES } &&
-            ("du" in prefix || "you" in prefix || "sie" in prefix) &&
-            words.any { it in DIRECT_COMMAND_VERBS }
     }
 
     private fun clauseSpan(
@@ -167,19 +156,6 @@ class SpeechActParser {
             "überweise", "ueberweise", "zahle", "pay", "transfer",
             "weiter", "fortsetzen", "continue", "proceed",
         )
-        private val QUESTION_WORDS = setOf(
-            "wie", "warum", "wieso", "was", "wer", "wen", "wem", "wo", "wohin", "wann", "welche", "welcher",
-            "how", "why", "what", "who", "where", "when", "which",
-        )
-        private val QUESTION_AUXILIARIES = setOf(
-            "ist", "sind", "hat", "haben", "kann", "können", "koennen", "darf", "soll",
-            "is", "are", "do", "does", "did", "can", "could", "would", "should",
-        )
-        private val REQUEST_AUXILIARIES = setOf(
-            "kannst", "könntest", "koenntest", "würdest", "wuerdest", "bitte",
-            "could", "would", "please",
-        )
-        private val POLITENESS_MARKERS = setOf("bitte", "please")
         private val HYPOTHETICAL_MARKERS = setOf(
             "wenn", "falls", "sofern", "angenommen", "hypothetisch", "würde", "wuerde", "könnte", "koennte",
             "if", "unless", "assuming", "hypothetically", "would", "could",
@@ -189,10 +165,6 @@ class SpeechActParser {
         private val ACKNOWLEDGEMENTS = setOf("ok", "okay", "verstanden", "danke", "thanks", "merci")
         private val GREETING_PHRASES = setOf("guten morgen", "guten tag", "guten abend", "good morning", "good evening")
         private val ACKNOWLEDGEMENT_PHRASES = setOf("alles klar", "vielen dank", "thank you")
-        private val CLAUSE_LEADING_CUES = setOf(
-            "und", "oder", "aber", "danach", "anschließend", "anschliessend",
-            "and", "or", "but", "then",
-        )
         private val QUOTE_MARKERS = setOf("\"", "„", "“", "”", "«", "»")
     }
 }
