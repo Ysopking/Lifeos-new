@@ -119,7 +119,10 @@ import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
 import app.lifeos.core.runtime.tasks.DurableCognitivePipeline
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
-import app.lifeos.core.runtime.tasks.TaskScheduler
+import app.lifeos.core.runtime.tasks.PooledTaskScheduler
+import app.lifeos.core.runtime.tasks.CognitiveWorkerSlot
+import app.lifeos.core.runtime.tasks.CognitiveWorkerPool
+import app.lifeos.core.runtime.tasks.CognitiveWorkerLane
 import app.lifeos.core.runtime.tasks.TaskSchedulerLoop
 import app.lifeos.core.runtime.thought.DurableThoughtGraph
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
@@ -139,6 +142,7 @@ import kotlinx.coroutines.SupervisorJob
 class LifeOsKernelFactory(
     private val context: Context,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime? = null,
 ) {
     fun create(): LifeOsKernel {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -408,7 +412,6 @@ class LifeOsKernelFactory(
             taskEngine = taskEngine,
         )
 
-        val durableWorkerId = WorkerId("cognitive-worker-0")
         val workerFactory = CognitiveWorkerFactory(
             tasks = taskRepository,
             photons = store,
@@ -421,15 +424,17 @@ class LifeOsKernelFactory(
                 heartbeatInterval = HEARTBEAT_INTERVAL,
             ),
         )
-        val cognitiveWorker = workerFactory.create(durableWorkerId)
         val durableStateBridge = DurableRuntimeStateBridge()
-        val healthTaskObserver = HealthTaskExecutionObserver(
-            workerNodeId = HealthNodeId("worker:${durableWorkerId.value}"),
-            graph = healthGraph,
-        )
-        val reportingDispatcher = ReportingCognitiveTaskDispatcher(
-            worker = cognitiveWorker,
-            observer = CompositeDurableTaskExecutionObserver(
+        val hardware = hardwareResourceIntelligence?.currentHardwareSnapshot()
+        val availableCores = hardware?.availableProcessors ?: 1
+        val activeWorkers = (availableCores - 1).coerceIn(0, 3)
+        val backgroundWorkers = if (availableCores >= 4) 1 else 0
+        val maintenanceWorkers = if (availableCores >= 6) 1 else 0
+
+        fun workerSlot(lane: CognitiveWorkerLane, ordinal: Int): CognitiveWorkerSlot {
+            val workerId = WorkerId("cognitive-${lane.name.lowercase()}-$ordinal")
+            val worker = workerFactory.create(workerId)
+            val observer = CompositeDurableTaskExecutionObserver(
                 listOf(
                     durableStateBridge,
                     PhotonTransactionObserver(photonTransactions),
@@ -437,15 +442,34 @@ class LifeOsKernelFactory(
                         outcomes = cognitiveOutcomes,
                         triggers = cognitiveTriggers,
                     ),
-                    healthTaskObserver,
+                    HealthTaskExecutionObserver(
+                        workerNodeId = HealthNodeId("worker:${workerId.value}"),
+                        graph = healthGraph,
+                    ),
                     DurableCognitionRecoveryObserver(cognitionReconciler),
                 )
-            ),
+            )
+            return CognitiveWorkerSlot(
+                lane = lane,
+                workerId = workerId,
+                dispatcher = ReportingCognitiveTaskDispatcher(
+                    worker = worker,
+                    observer = observer,
+                ),
+            )
+        }
+
+        val workerPool = CognitiveWorkerPool(
+            buildList {
+                add(workerSlot(CognitiveWorkerLane.INTERACTIVE, 0))
+                repeat(activeWorkers) { add(workerSlot(CognitiveWorkerLane.ACTIVE, it)) }
+                repeat(backgroundWorkers) { add(workerSlot(CognitiveWorkerLane.BACKGROUND, it)) }
+                repeat(maintenanceWorkers) { add(workerSlot(CognitiveWorkerLane.MAINTENANCE, it)) }
+            }
         )
-        val taskScheduler = TaskScheduler(
+        val taskScheduler = PooledTaskScheduler(
             tasks = taskRepository,
-            workerId = durableWorkerId,
-            dispatcher = reportingDispatcher,
+            workers = workerPool,
             leaseDuration = TASK_LEASE_DURATION,
         )
         val schedulerLoop = TaskSchedulerLoop(
