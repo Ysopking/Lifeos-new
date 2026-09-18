@@ -2,6 +2,7 @@ package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.StableCognitiveIds
 import java.time.Instant
 
@@ -12,17 +13,29 @@ import java.time.Instant
  */
 class CognitionJournalIntegrityVerifier(
     private val repository: PhotonRepository,
+    private val journalIndex: CognitionJournalIndex? = null,
 ) {
     suspend fun verify(): CognitionJournalIntegrityReport {
-        val eventCount = verifyKind(CognitionJournalKind.EVENT) { photon ->
+        val photonsByKind = indexedPhotonsByKind()
+
+        val eventCount = verifyKind(
+            CognitionJournalKind.EVENT,
+            photonsByKind.getValue(CognitionJournalKind.EVENT),
+        ) { photon ->
             val value = RuntimeEventJournalCodec.decode(photon.content)
             requireIdentity(photon, CognitionJournalKind.EVENT, value.event.eventId)
         }
-        val transactionCount = verifyKind(CognitionJournalKind.TRANSACTION) { photon ->
+        val transactionCount = verifyKind(
+            CognitionJournalKind.TRANSACTION,
+            photonsByKind.getValue(CognitionJournalKind.TRANSACTION),
+        ) { photon ->
             val value = CognitionTransactionCodec.decode(photon.content)
             requireIdentity(photon, CognitionJournalKind.TRANSACTION, value.transactionId)
         }
-        val outcomeCount = verifyKind(CognitionJournalKind.OUTCOME) { photon ->
+        val outcomeCount = verifyKind(
+            CognitionJournalKind.OUTCOME,
+            photonsByKind.getValue(CognitionJournalKind.OUTCOME),
+        ) { photon ->
             val value = CognitionOutcomeCodec.decode(photon.content)
             val normalized = value.copy(recordedAt = Instant.EPOCH)
             val currentKey = StableCognitiveIds.fingerprint(
@@ -41,7 +54,10 @@ class CognitionJournalIntegrityVerifier(
                 stableIds = listOf(currentKey, legacyKey),
             )
         }
-        val triggerCount = verifyKind(CognitionJournalKind.TRIGGER) { photon ->
+        val triggerCount = verifyKind(
+            CognitionJournalKind.TRIGGER,
+            photonsByKind.getValue(CognitionJournalKind.TRIGGER),
+        ) { photon ->
             val value = CognitionTriggerCodec.decode(photon.content)
             requireIdentity(photon, CognitionJournalKind.TRIGGER, value.id)
         }
@@ -53,14 +69,45 @@ class CognitionJournalIntegrityVerifier(
         )
     }
 
-    private suspend fun verifyKind(
+    private suspend fun indexedPhotonsByKind(): Map<CognitionJournalKind, List<Photon>> {
+        val index = journalIndex
+        if (index == null) {
+            val photons = loadAllCognitionJournalPhotons(repository)
+            return CognitionJournalKind.values().associateWith { kind ->
+                photons.filter { "cognition-journal-kind:${kind.tag}" in it.tags }
+            }
+        }
+
+        val snapshot = index.snapshot()
+        val refs = snapshot.entries.map { it.photonRef }.distinct()
+        val photonsByRef = loadCognitionJournalPhotons(repository, refs)
+            .associateBy { PhotonRevisionRef(it.id, it.revision) }
+        return CognitionJournalKind.values().associateWith { kind ->
+            snapshot.entries(kind).map { entry ->
+                photonsByRef[entry.photonRef]
+                    ?: throw CognitionJournalCorruptionException(
+                        "Missing indexed cognition journal Photon ${entry.photonRef.stableKey}"
+                    )
+            }
+        }
+    }
+
+    private fun verifyKind(
         kind: CognitionJournalKind,
+        photons: List<Photon>,
         verifyPhoton: (Photon) -> Unit,
     ): Int {
-        val photons = loadCognitionJournalPhotons(repository, kind)
         photons.forEach { photon ->
             try {
-                require(photon.mimeType == COGNITION_JOURNAL_MIME) { "Invalid cognition journal MIME" }
+                require(photon.mimeType == COGNITION_JOURNAL_MIME) {
+                    "Invalid cognition journal MIME"
+                }
+                require(COGNITION_JOURNAL_ROOT_TAG in photon.tags) {
+                    "Missing cognition journal root tag"
+                }
+                require("cognition-journal-kind:${kind.tag}" in photon.tags) {
+                    "Cognition journal kind mismatch"
+                }
                 verifyPhoton(photon)
             } catch (error: Exception) {
                 throw CognitionJournalCorruptionException(
