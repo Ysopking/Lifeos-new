@@ -112,8 +112,33 @@ class CognitiveSnapshotManager(
         tailLimit: Int = 4096,
     ): CognitiveSnapshotReplay {
         require(tailLimit > 0)
-        val plan = compactor.selectLatestVerified(repository.loadAll())
-        val tail = journal.readFrom(plan.eventsAfterSequence, tailLimit)
+        val head = journal.size()
+        val candidates = repository.loadAll()
+            .filter { (snapshot, _) -> snapshot.eventSequence <= head }
+        val plan = compactor.selectLatestVerified(candidates)
+        var cursor = plan.eventsAfterSequence
+        val tail = mutableListOf<app.lifeos.core.runtime.cognition.JournalEntry>()
+
+        while (cursor < head) {
+            val remaining = (head - cursor).coerceAtMost(tailLimit.toLong()).toInt()
+            val batch = journal.readFrom(cursor, remaining)
+            check(batch.isNotEmpty()) {
+                "Cognitive snapshot replay stalled before journal head: cursor=$cursor head=$head"
+            }
+            var expected = cursor + 1L
+            batch.forEach { entry ->
+                check(entry.offset == expected) {
+                    "Cognitive snapshot replay gap: expected=$expected actual=${entry.offset}"
+                }
+                expected += 1L
+            }
+            tail += batch
+            cursor = batch.last().offset
+        }
+
+        check(cursor == head) {
+            "Cognitive snapshot replay did not reach frozen journal head: cursor=$cursor head=$head"
+        }
         return CognitiveSnapshotReplay(plan.snapshot, tail).also { lastReplay = it }
     }
 
