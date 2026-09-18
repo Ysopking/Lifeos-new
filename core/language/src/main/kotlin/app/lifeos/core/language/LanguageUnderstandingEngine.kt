@@ -409,13 +409,25 @@ class GoalPhotonFactory {
                         .append('|').append(revision.compositionForce).append('\n')
                 }
         }
+        frame.semanticEntitiesV2.forEachIndexed { index, entity ->
+            append("entity.v2.").append(index).append('=')
+                .append(escape(entity.typeId.value)).append('|')
+                .append(escape(entity.rawText)).append('|')
+                .append(escape(entity.normalizedValue)).append('|')
+                .append(entity.tokenStart).append('|')
+                .append(entity.tokenEndExclusive).append('|')
+                .append(entity.confidence).append('|')
+                .append(escape(entity.source)).append('\n')
+        }
         frame.constraints.sortedWith(compareBy<GoalConstraint> { it.key }.thenBy { it.value }).forEach {
             append("constraint.").append(escape(it.key)).append('=').append(escape(it.value)).append('|').append(it.confidence).append('\n')
         }
         frame.references.forEach {
             append("reference.").append(it.expression.kind.name)
                 .append('=').append(it.targetPhotonId?.value ?: "UNRESOLVED")
-                .append('|').append(it.score).append('\n')
+                .append('|').append(it.score)
+                .append('|').append(it.targetPhotonRef?.revision ?: 0L)
+                .append('\n')
         }
         frame.ambiguities.forEach {
             append("ambiguity.").append(escape(it.code)).append('=').append(escape(it.message)).append('|').append(it.severity).append('\n')
