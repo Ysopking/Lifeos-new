@@ -129,6 +129,9 @@ enum class LearningDerivedWorkKind {
     PROCEDURE_REVIEW,
     OUTCOME_VERIFICATION,
     CAPABILITY_GAP_REVIEW,
+    ABSTRACTION_REVIEW,
+    SCHEMA_INDUCTION,
+    RELATION_INDUCTION,
 }
 
 data class LearningWorkRequest(
@@ -174,11 +177,16 @@ fun interface LearningOutcomeUpdater {
     suspend fun update(event: LearningEvent): LearningProjectionResult
 }
 
+fun interface LearningAbstractionUpdater {
+    suspend fun update(event: LearningEvent): LearningProjectionResult
+}
+
 data class LearningProjectionSummary(
     val context: LearningProjectionResult,
     val memory: LearningProjectionResult,
     val procedure: LearningProjectionResult,
     val outcome: LearningProjectionResult,
+    val abstraction: LearningProjectionResult = LearningProjectionResult(),
 )
 
 fun interface LearningCapabilityGapDetector {
@@ -241,11 +249,17 @@ class DurableLearningWorkSink(
                     LearningDerivedWorkKind.CONTEXT_REEVALUATION,
                     LearningDerivedWorkKind.PROCEDURE_REVIEW,
                     LearningDerivedWorkKind.OUTCOME_VERIFICATION,
-                    LearningDerivedWorkKind.CAPABILITY_GAP_REVIEW -> TaskType.REPROCESS_PHOTON
+                    LearningDerivedWorkKind.CAPABILITY_GAP_REVIEW,
+                    LearningDerivedWorkKind.ABSTRACTION_REVIEW,
+                    LearningDerivedWorkKind.SCHEMA_INDUCTION,
+                    LearningDerivedWorkKind.RELATION_INDUCTION -> TaskType.REPROCESS_PHOTON
                 },
                 priority = when (work.kind) {
-                    LearningDerivedWorkKind.CAPABILITY_GAP_REVIEW -> TaskPriority.HIGH
-                    LearningDerivedWorkKind.OUTCOME_VERIFICATION -> TaskPriority.NORMAL
+                    LearningDerivedWorkKind.CAPABILITY_GAP_REVIEW,
+                    LearningDerivedWorkKind.SCHEMA_INDUCTION -> TaskPriority.HIGH
+                    LearningDerivedWorkKind.OUTCOME_VERIFICATION,
+                    LearningDerivedWorkKind.ABSTRACTION_REVIEW,
+                    LearningDerivedWorkKind.RELATION_INDUCTION -> TaskPriority.NORMAL
                     else -> TaskPriority.BACKGROUND
                 },
                 inputPhotonIds = photonIds,
@@ -300,6 +314,7 @@ class ContinuousLearningCoordinator(
     private val memoryUpdater: LearningMemoryUpdater = LearningMemoryUpdater { LearningProjectionResult() },
     private val procedureUpdater: LearningProcedureUpdater = LearningProcedureUpdater { LearningProjectionResult() },
     private val outcomeUpdater: LearningOutcomeUpdater = LearningOutcomeUpdater { LearningProjectionResult() },
+    private val abstractionUpdater: LearningAbstractionUpdater = LearningAbstractionUpdater { LearningProjectionResult() },
     private val gapDetector: LearningCapabilityGapDetector = LearningCapabilityGapDetector { emptyList() },
     private val workSink: LearningDerivedWorkSink,
     private val maxEventsPerSourcePerCycle: Int = 64,
@@ -366,7 +381,14 @@ class ContinuousLearningCoordinator(
         val memory = memoryUpdater.update(event).canonical()
         val procedure = procedureUpdater.update(event).canonical()
         val outcome = outcomeUpdater.update(event).canonical()
-        val projections = LearningProjectionSummary(context, memory, procedure, outcome)
+        val abstraction = abstractionUpdater.update(event).canonical()
+        val projections = LearningProjectionSummary(
+            context = context,
+            memory = memory,
+            procedure = procedure,
+            outcome = outcome,
+            abstraction = abstraction,
+        )
         val gaps = gapDetector.detect(event).distinct().sortedWith(
             compareBy<CapabilityGap>(
                 { it.requirement.capabilityId.value },
@@ -405,6 +427,7 @@ class ContinuousLearningCoordinator(
             addAll(projections.memory.workRequests)
             addAll(projections.procedure.workRequests)
             addAll(projections.outcome.workRequests)
+            addAll(projections.abstraction.workRequests)
             gaps.forEach { gap ->
                 add(
                     LearningWorkRequest(

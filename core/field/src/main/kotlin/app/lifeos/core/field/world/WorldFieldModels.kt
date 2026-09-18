@@ -30,6 +30,15 @@ enum class WorldNodeKind {
     CAPABILITY,
     HEALTH,
     MODULE,
+    MEMORY,
+    PLAN,
+    STRATEGY,
+    WORLD_MODEL,
+    ABSTRACTION,
+    EXPERIMENT,
+    EXTENSION,
+    RESOURCE,
+    OUTCOME,
 }
 
 /**
@@ -56,6 +65,15 @@ enum class WorldSignalDimension {
     EXPERIENCE_DEPTH,
     MODULE_CONFIDENCE,
     HARDWARE_FIT,
+    CAUSAL_SUPPORT,
+    PREDICTIVE_FIT,
+    TRANSFER_RELEVANCE,
+    STRATEGY_FIT,
+    INFORMATION_GAIN,
+    RESOURCE_PRESSURE,
+    NOVELTY,
+    OUTCOME_ALIGNMENT,
+    MODEL_STABILITY,
 }
 
 data class WorldTargetRef(
