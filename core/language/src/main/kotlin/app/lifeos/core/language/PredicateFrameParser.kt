@@ -129,9 +129,13 @@ class PredicateFrameParser(
 
         if (normalized.any { it in CONTRAST_MARKERS }) add(ScopeType.CONTRAST)
 
+        val linkedContrast = graph.links.any { link ->
+            link.type == SemanticLinkType.CONTRAST &&
+                (link.fromClauseId == clause.id || link.toClauseId == clause.id)
+        }
         val hasExclusionContrast =
             normalized.any { it in NEGATION_MARKERS } &&
-                normalized.any { it in CONTRAST_MARKERS }
+                (normalized.any { it in CONTRAST_MARKERS } || linkedContrast)
         val boundedComparatorNegation = containsComparatorNegation(normalized)
         if (hasExclusionContrast || boundedComparatorNegation) {
             add(ScopeType.EXCLUSION)
@@ -141,6 +145,7 @@ class PredicateFrameParser(
             normalized[index] in NEGATION_MARKERS &&
                 !negationBelongsToComparator(normalized, index) &&
                 !negationBelongsToContrastObject(normalized, index) &&
+                !linkedContrast &&
                 (
                     index <= predicateLocal + ACTION_NEGATION_WINDOW ||
                         index > predicateLocal
@@ -308,11 +313,12 @@ class PredicateFrameParser(
         if (words.isEmpty()) return null
         val raw = words.joinToString(" ") { tokens[it].original }
         val normalized = words.joinToString(" ") { tokens[it].normalized }
+        val deictic = normalized.split(' ').any { it in REFERENCE_PRONOUNS }
         return SemanticValue(
             rawText = raw,
             normalized = normalized,
-            resolved = normalized !in REFERENCE_PRONOUNS,
-            confidence = if (normalized in REFERENCE_PRONOUNS) 0.55 else 0.70,
+            resolved = !deictic,
+            confidence = if (deictic) 0.55 else 0.82,
         )
     }
 
