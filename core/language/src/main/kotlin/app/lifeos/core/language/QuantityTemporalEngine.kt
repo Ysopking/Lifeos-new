@@ -1,7 +1,6 @@
 package app.lifeos.core.language
 
 import java.math.BigDecimal
-import java.math.RoundingMode
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -309,10 +308,18 @@ class QuantityTemporalEngine {
     }
 
     private fun decimal(raw: String): BigDecimal? = runCatching {
-        raw.replace(".", "").replace(',', '.').toBigDecimal().setScale(
-            raw.substringAfter(',', "").length.coerceAtMost(6),
-            RoundingMode.UNNECESSARY,
-        ).stripTrailingZeros()
+        val normalized = when {
+            ',' in raw && '.' in raw -> {
+                if (raw.lastIndexOf(',') > raw.lastIndexOf('.')) {
+                    raw.replace(".", "").replace(',', '.')
+                } else {
+                    raw.replace(",", "")
+                }
+            }
+            ',' in raw -> raw.replace(',', '.')
+            else -> raw
+        }
+        normalized.toBigDecimal().stripTrailingZeros()
     }.getOrNull()
 
     private fun number(raw: String): Int? =
