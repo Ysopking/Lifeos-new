@@ -2,6 +2,8 @@ package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexCursor
+import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.PhotonRevisionRef
@@ -317,14 +319,30 @@ class CognitionJournalIndex(
 
     private suspend fun actualJournalRefsLocked(): List<PhotonRevisionRef> {
         if (photons is RevisionedPhotonRepository) {
-            return photons.query(
-                PhotonIndexQuery(
-                    mimeTypes = setOf(COGNITION_JOURNAL_MIME),
-                    allTags = setOf(COGNITION_JOURNAL_ROOT_TAG),
-                    latestOnly = true,
-                    limit = CognitionJournalIndexSnapshot.MAX_ENTRIES,
+            val refs = mutableListOf<PhotonRevisionRef>()
+            var cursor: PhotonIndexCursor? = null
+            while (true) {
+                val page = photons.query(
+                    PhotonIndexQuery(
+                        mimeTypes = setOf(COGNITION_JOURNAL_MIME),
+                        allTags = setOf(COGNITION_JOURNAL_ROOT_TAG),
+                        latestOnly = true,
+                        order = PhotonIndexOrder.IDENTITY,
+                        after = cursor,
+                        limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
+                    )
                 )
-            )
+                refs += page
+                require(refs.size <= CognitionJournalIndexSnapshot.MAX_ENTRIES) {
+                    "Cognition journal index too large"
+                }
+                if (page.size < PhotonIndexQuery.HARD_PAGE_LIMIT) break
+                cursor = PhotonIndexCursor(
+                    order = PhotonIndexOrder.IDENTITY,
+                    lastRef = page.last(),
+                )
+            }
+            return refs
         }
 
         return photons.loadReport().photons
