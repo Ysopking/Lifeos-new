@@ -4,6 +4,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.runtime.PhotonResidencyController
 import app.lifeos.core.runtime.cognition.CognitionJournalIntegrityVerifier
 
 enum class PhotonHydrationTier {
@@ -109,6 +110,10 @@ class PhotonRehydrator(
                 PhotonHydrationTier.COLD -> cold += photon.id
             }
         }
+
+        (repository as? PhotonResidencyController)?.retainResident(
+            (hot.asSequence() + warm.asSequence()).mapTo(linkedSetOf()) { it.id }
+        )
 
         return PhotonRehydrationResult(
             hot = hot,
