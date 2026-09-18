@@ -121,6 +121,32 @@ class CognitionJournalIndexRecoveryTest {
         assertEquals(0, photons.loadReportCalls)
     }
 
+
+    @Test
+    fun overlappingPendingEventReservationsRemainMonotonic() = runTest {
+        val photons = CountingRevisionedPhotonRepository()
+        val durableIndex = InMemoryIndexRepository()
+        val index = CognitionJournalIndex(durableIndex, photons)
+
+        val first = index.reserveNext(CognitionJournalKind.EVENT, "event-pending-1")
+        val second = index.reserveNext(CognitionJournalKind.EVENT, "event-pending-2")
+        val batch = index.reserveBatch(
+            CognitionJournalKind.EVENT,
+            listOf("event-pending-3", "event-pending-4"),
+        )
+
+        assertEquals(1L, first.sequence)
+        assertEquals(2L, second.sequence)
+        assertEquals(listOf(3L, 4L), batch.map { it.sequence })
+        assertEquals(
+            listOf(1L, 2L, 3L, 4L),
+            index.snapshot().pendingReservations
+                .filter { it.kind == CognitionJournalKind.EVENT }
+                .map { it.sequence }
+                .sorted(),
+        )
+    }
+
     @Test
     fun pendingReservationRecoversPhotonWrittenBeforeIndexCommit() = runTest {
         val photons = CountingRevisionedPhotonRepository()
