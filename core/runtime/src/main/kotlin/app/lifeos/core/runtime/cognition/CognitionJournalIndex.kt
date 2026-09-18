@@ -53,9 +53,14 @@ data class CognitionJournalIndexSnapshot(
         require(entries.map { it.kind to it.sequence }.distinct().size == entries.size) {
             "Duplicate cognition journal sequence"
         }
-        require(pendingReservations.map { it.kind }.distinct().size == pendingReservations.size) {
-            "Only one pending cognition journal reservation is allowed per kind"
-        }
+        require(
+            pendingReservations.map { it.kind to it.sequence }.distinct().size ==
+                pendingReservations.size
+        ) { "Duplicate pending cognition journal sequence" }
+        require(
+            pendingReservations.map { it.kind to it.stableId }.distinct().size ==
+                pendingReservations.size
+        ) { "Duplicate pending cognition journal stable id" }
     }
 
     fun entries(kind: CognitionJournalKind): List<CognitionJournalIndexEntry> {
@@ -133,60 +138,85 @@ class CognitionJournalIndex(
     suspend fun reserveNext(
         kind: CognitionJournalKind,
         stableId: String,
-    ): CognitionJournalReservation = mutex.withLock {
-        require(stableId.isNotBlank())
+    ): CognitionJournalReservation =
+        reserveBatch(kind, listOf(stableId)).single()
+
+    suspend fun reserveBatch(
+        kind: CognitionJournalKind,
+        stableIds: List<String>,
+    ): List<CognitionJournalReservation> = mutex.withLock {
+        if (stableIds.isEmpty()) return@withLock emptyList()
+        require(stableIds.all { it.isNotBlank() })
+        require(stableIds.distinct().size == stableIds.size) {
+            "Cognition journal batch contains duplicate stable ids"
+        }
         val current = currentLocked()
-        require(current.entries.none { it.kind == kind && it.stableId == stableId }) {
-            "Cognition journal entry already indexed for ${kind.tag}:$stableId"
+        val occupied = current.entries.asSequence()
+            .filter { it.kind == kind }
+            .mapTo(mutableSetOf()) { it.stableId }
+        occupied += current.pendingReservations.asSequence()
+            .filter { it.kind == kind }
+            .map { it.stableId }
+        require(stableIds.none { it in occupied }) {
+            "Cognition journal batch contains an already indexed or pending id"
         }
-        require(current.pendingReservations.none { it.kind == kind }) {
-            "Cognition journal reservation already pending for ${kind.tag}"
+        val start = current.head(kind)
+        val reservations = stableIds.mapIndexed { index, stableId ->
+            CognitionJournalReservation(
+                kind = kind,
+                sequence = Math.addExact(start, index.toLong() + 1L),
+                stableId = stableId,
+            )
         }
-        val reservation = CognitionJournalReservation(
-            kind = kind,
-            sequence = Math.addExact(current.head(kind), 1L),
-            stableId = stableId,
-        )
         persistLocked(
             current.copy(
-                pendingReservations = current.pendingReservations + reservation,
+                pendingReservations = current.pendingReservations + reservations,
             )
         )
-        reservation
+        reservations
     }
 
     suspend fun commit(
         reservation: CognitionJournalReservation,
         photonRef: PhotonRevisionRef,
         recordedAt: Instant,
-    ) = mutex.withLock {
-        val current = cached ?: currentLocked()
-        require(reservation in current.pendingReservations) {
-            "Cognition journal reservation is not pending"
-        }
-        require(
-            photonRef.photonId ==
-                CognitionJournalIdentity.photonId(reservation.kind.tag, reservation.stableId)
-        ) {
-            "Cognition journal reservation/ref identity mismatch"
-        }
-        require(current.entries.none {
-            it.kind == reservation.kind &&
-                (it.sequence == reservation.sequence || it.stableId == reservation.stableId)
-        }) {
-            "Cognition journal index commit conflict"
-        }
+    ) = commitBatch(listOf(Triple(reservation, photonRef, recordedAt)))
 
+    suspend fun commitBatch(
+        commits: List<Triple<CognitionJournalReservation, PhotonRevisionRef, Instant>>,
+    ) = mutex.withLock {
+        if (commits.isEmpty()) return@withLock
+        val current = cached ?: currentLocked()
+        val reservations = commits.map { it.first }
+        require(reservations.all { it in current.pendingReservations }) {
+            "Cognition journal batch contains a reservation that is not pending"
+        }
+        require(reservations.distinct().size == reservations.size) {
+            "Duplicate cognition journal reservation in commit batch"
+        }
+        commits.forEach { (reservation, photonRef, _) ->
+            require(
+                photonRef.photonId ==
+                    CognitionJournalIdentity.photonId(reservation.kind.tag, reservation.stableId)
+            ) { "Cognition journal reservation/ref identity mismatch" }
+            require(current.entries.none {
+                it.kind == reservation.kind &&
+                    (it.sequence == reservation.sequence || it.stableId == reservation.stableId)
+            }) { "Cognition journal index commit conflict" }
+        }
+        val appended = commits.map { (reservation, photonRef, recordedAt) ->
+            CognitionJournalIndexEntry(
+                kind = reservation.kind,
+                sequence = reservation.sequence,
+                stableId = reservation.stableId,
+                photonRef = photonRef,
+                recordedAt = recordedAt,
+            )
+        }
         persistLocked(
             current.copy(
-                entries = current.entries + CognitionJournalIndexEntry(
-                    kind = reservation.kind,
-                    sequence = reservation.sequence,
-                    stableId = reservation.stableId,
-                    photonRef = photonRef,
-                    recordedAt = recordedAt,
-                ),
-                pendingReservations = current.pendingReservations - reservation,
+                entries = current.entries + appended,
+                pendingReservations = current.pendingReservations - reservations.toSet(),
             )
         )
     }
