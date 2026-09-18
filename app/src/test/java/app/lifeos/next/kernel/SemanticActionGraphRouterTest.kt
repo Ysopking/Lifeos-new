@@ -124,8 +124,15 @@ class SemanticActionGraphRouterTest {
             content = "Semantic-Recovery-Notiz",
         )
         var communicationReference: PhotonRevisionRef? = null
+        var memoryNodeConfidence: Double? = null
         val dispatcher = GoalActionDispatcher(
-            executeKnowledge = {
+            executeKnowledge = { context ->
+                memoryNodeConfidence = context.goal.confidence
+                val node = context.goal.semanticActionGraph.nodes.single()
+                assertEquals(
+                    minOf(node.frame.confidence, node.executionReadiness),
+                    context.goal.confidence,
+                )
                 LocalKnowledgeExecutionResult.Produced(
                     kind = LocalKnowledgeGoalKind.MEMORY_STORED,
                     output = PhotonSubmissionResult(produced, processingQueued = true),
@@ -178,6 +185,7 @@ class SemanticActionGraphRouterTest {
         assertEquals(2, result.executions.size)
         assertTrue(result.executions.all { it.state == SemanticNodeExecutionState.EXECUTED })
         assertEquals(PhotonRevisionRef(produced.id, 5), communicationReference)
+        assertNotNull(memoryNodeConfidence)
     }
 
     @Test
