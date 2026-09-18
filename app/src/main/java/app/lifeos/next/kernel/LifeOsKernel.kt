@@ -8,6 +8,7 @@ import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingEngine
+import app.lifeos.core.language.LanguageContextRetriever
 import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.BinaryAssetStore
 import app.lifeos.core.model.Photon
@@ -107,6 +108,12 @@ class LifeOsKernel internal constructor(
 ) {
     private val startLock = Any()
     private val conversationClassifier = ConversationSignalClassifier()
+    private val languageContextRetriever = (photonStore as? RevisionedPhotonRepository)?.let {
+        LanguageContextRetriever(
+            photons = it,
+            builder = languageContextBuilder,
+        )
+    }
     private var bootstrapJob: Job? = null
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
@@ -338,11 +345,18 @@ class LifeOsKernel internal constructor(
      */
     suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
         require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
-        val context = languageContextBuilder.build(
-            photons = mutableBootstrapState.value.photons,
-            now = photon.provenance.createdAt,
-            excludeIds = setOf(photon.id),
-        )
+        val context = languageContextRetriever
+            ?.retrieve(
+                utterance = photon.content,
+                now = photon.provenance.createdAt,
+                excludeIds = setOf(photon.id),
+            )
+            ?.context
+            ?: languageContextBuilder.build(
+                photons = mutableBootstrapState.value.photons,
+                now = photon.provenance.createdAt,
+                excludeIds = setOf(photon.id),
+            )
         val source = persistAndIngest(photon)
         return try {
             val understanding = languageUnderstanding.understand(photon.content, context)
