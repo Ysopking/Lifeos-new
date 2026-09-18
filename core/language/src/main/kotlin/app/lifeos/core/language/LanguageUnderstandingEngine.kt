@@ -387,7 +387,7 @@ class GoalPhotonFactory {
             }
         }
         frame.semanticGraph.links.sortedWith(
-            compareBy<SemanticClauseLink> { it.fromClauseId }
+            compareBy<SemanticLink> { it.fromClauseId }
                 .thenBy { it.toClauseId }
                 .thenBy { it.type.name }
                 .thenBy { it.cue }
