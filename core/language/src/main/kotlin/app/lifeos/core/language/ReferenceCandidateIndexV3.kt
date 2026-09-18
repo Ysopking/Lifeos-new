@@ -62,7 +62,8 @@ class ReferenceCandidateIndexV3(
             candidates.forEach { item ->
                 val key = item.photonId.value + "@" + (item.revisionRef?.revision ?: 0L)
                 val old = scored[key]
-                if (old == null || score > old.second) scored[key] = item to score
+                val combined = ((old?.second ?: 0.0) + score).coerceIn(0.0, 1.0)
+                scored[key] = item to combined
             }
         }
 
@@ -70,35 +71,35 @@ class ReferenceCandidateIndexV3(
             .map(::normalize)
             .sorted()
             .forEach { preferred ->
-                add(byKind[preferred].orEmpty(), 0.95)
-                add(byTag[preferred].orEmpty(), 0.92)
-                add(bySemanticType[preferred].orEmpty(), 0.94)
+                add(byKind[preferred].orEmpty(), 0.30)
+                add(byTag[preferred].orEmpty(), 0.25)
+                add(bySemanticType[preferred].orEmpty(), 0.30)
                 bySemanticType.entries
                     .asSequence()
                     .filter { (type, _) -> type.endsWith(":$preferred") || type.endsWith(".$preferred") }
                     .take(MAX_SUFFIX_BUCKETS)
-                    .forEach { (_, values) -> add(values, 0.88) }
+                    .forEach { (_, values) -> add(values, 0.22) }
             }
 
         referenceTerms(expression.rawText).sorted().forEach { term ->
-            add(byTerm[term].orEmpty(), 0.86)
+            add(byTerm[term].orEmpty(), 0.45)
         }
 
         when (expression.kind) {
             ReferenceKind.LAST_RESULT ->
-                add(byTag["result"].orEmpty(), 0.94)
+                add(byTag["result"].orEmpty(), 0.35)
             ReferenceKind.PREVIOUS,
             ReferenceKind.THIS,
             ReferenceKind.THAT ->
-                add(items.asSequence().filter { it.active }.take(ACTIVE_FALLBACK), 0.82)
+                add(items.asSequence().filter { it.active }.take(ACTIVE_FALLBACK), 0.15)
             ReferenceKind.OTHER ->
-                add(items.asSequence().filterNot { it.active }.take(RECENT_FALLBACK), 0.72)
+                add(items.asSequence().filterNot { it.active }.take(RECENT_FALLBACK), 0.10)
             ReferenceKind.YESTERDAY,
             ReferenceKind.EXPLICIT_ID -> Unit
         }
 
         if (scored.size < limit) {
-            add(items.take(RECENT_FALLBACK), 0.52)
+            add(items.take(RECENT_FALLBACK), 0.05)
         }
 
         return scored.values
