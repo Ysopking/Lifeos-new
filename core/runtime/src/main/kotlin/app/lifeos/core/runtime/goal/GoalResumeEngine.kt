@@ -28,6 +28,8 @@ import app.lifeos.core.language.ReferenceKind
 import app.lifeos.core.language.ResolvedReference
 import app.lifeos.core.language.SemanticClause
 import app.lifeos.core.language.SemanticEntity
+import app.lifeos.core.language.SemanticEntityV2
+import app.lifeos.core.language.SemanticEntityTypeId
 import app.lifeos.core.language.SemanticLink
 import app.lifeos.core.language.SemanticLinkType
 import app.lifeos.core.language.SemanticModality
@@ -37,6 +39,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRelation
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import java.time.Instant
@@ -256,10 +259,15 @@ private object PersistedGoalFrameDecoder {
             .map { line ->
                 val assignment = requireNotNull(splitUnescaped(line.removePrefix("reference."), '='))
                 val kind = ReferenceKind.valueOf(unescape(assignment.first))
-                val payload = requireNotNull(splitUnescaped(assignment.second, '|'))
-                val rawTarget = unescape(payload.first)
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size in 2..3) { "Malformed persisted reference" }
+                val rawTarget = unescape(fields[0])
                 val target = rawTarget.takeUnless { it == "UNRESOLVED" }?.let(::PhotonId)
-                val score = payload.second.toDouble().also { require(it in 0.0..1.0) }
+                val score = fields[1].toDouble().also { require(it in 0.0..1.0) }
+                val revision = fields.getOrNull(2)?.toLong()?.also { require(it >= 0L) } ?: 0L
+                val targetRef = target?.takeIf { revision > 0L }?.let {
+                    PhotonRevisionRef(it, revision)
+                }
                 ResolvedReference(
                     expression = ReferenceExpression(
                         kind = kind,
@@ -269,8 +277,29 @@ private object PersistedGoalFrameDecoder {
                     ),
                     targetPhotonId = target,
                     score = score,
+                    targetPhotonRef = targetRef,
                 )
             }
+
+        val semanticEntitiesV2 = if (version == GOAL_V4) {
+            lines.filter { it.startsWith("entity.v2.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("entity.v2."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 7) { "Malformed persisted v2 entity" }
+                SemanticEntityV2(
+                    typeId = SemanticEntityTypeId(unescape(fields[0])),
+                    rawText = unescape(fields[1]),
+                    normalizedValue = unescape(fields[2]),
+                    tokenStart = fields[3].toInt().also { require(it >= 0) },
+                    tokenEndExclusive = fields[4].toInt(),
+                    confidence = fields[5].toDouble().also { require(it in 0.0..1.0) },
+                    source = unescape(fields[6]),
+                ).also { require(it.tokenEndExclusive > it.tokenStart) }
+            }
+        } else {
+            emptyList()
+        }
 
         val ambiguities = lines
             .filter { it.startsWith("ambiguity.") }
@@ -308,6 +337,7 @@ private object PersistedGoalFrameDecoder {
             language = language,
             semanticGraph = semanticGraph,
             semanticActionGraph = semanticActionGraph,
+            semanticEntitiesV2 = semanticEntitiesV2,
         )
     }.getOrNull()
 
@@ -324,11 +354,19 @@ private object PersistedGoalFrameDecoder {
                 val nodeIndex = key[0].toInt().also { require(it >= 0) }
                 val role = SemanticRole.valueOf(key[1])
                 val fields = splitAllUnescaped(assignment.second, '|')
-                require(fields.size == 5) { "Malformed action role" }
+                require(fields.size == 5 || fields.size == 7) { "Malformed action role" }
+                val refId = fields.getOrNull(5)?.let(::unescape).orEmpty()
+                val refRevision = fields.getOrNull(6)?.toLong()?.also { require(it >= 0L) } ?: 0L
+                val referencePhoton = if (refId.isNotBlank() && refRevision > 0L) {
+                    PhotonRevisionRef(PhotonId(refId), refRevision)
+                } else {
+                    null
+                }
                 (nodeIndex to role) to SemanticValue(
                     rawText = unescape(fields[0]),
                     normalized = unescape(fields[1]),
                     entityType = unescape(fields[2]).takeIf { it.isNotBlank() }?.let(EntityType::valueOf),
+                    referencePhoton = referencePhoton,
                     resolved = fields[3].toBooleanStrict(),
                     confidence = fields[4].toDouble().also { require(it in 0.0..1.0) },
                 )
