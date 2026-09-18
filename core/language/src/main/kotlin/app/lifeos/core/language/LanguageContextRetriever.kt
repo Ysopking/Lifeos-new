@@ -84,10 +84,18 @@ class LanguageContextRetriever(
             }
         }
 
+        val perQueryRefs = querySpecs.map { (name, query) ->
+            name to photons.query(query).filterNot { it.photonId in excludeIds }
+        }
         val refs = linkedSetOf<PhotonRevisionRef>()
-        querySpecs.forEach { (_, query) ->
-            photons.query(query).forEach { ref ->
-                if (ref.photonId !in excludeIds && refs.size < maxCandidates) refs += ref
+        // First pass guarantees each contextual authority class can contribute before broad pools.
+        perQueryRefs.forEach { (_, candidates) ->
+            candidates.take(MIN_PER_QUERY).forEach(refs::add)
+        }
+        // Second pass fills the remaining bounded pool in deterministic query order.
+        perQueryRefs.forEach { (_, candidates) ->
+            candidates.forEach { ref ->
+                if (refs.size < maxCandidates) refs += ref
             }
         }
 
@@ -181,6 +189,7 @@ class LanguageContextRetriever(
 
     private companion object {
         const val MAX_CONTENT_TERMS = 128
+        const val MIN_PER_QUERY = 8
         val TERM_REGEX = Regex("[\\p{L}\\p{N}]+")
         val STOP_WORDS = setOf(
             "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "und", "oder",
