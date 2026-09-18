@@ -21,6 +21,12 @@ class SpeechActParserTest {
     }
 
     @Test
+    fun `third person modal question differs from formal addressed request`() {
+        assertEquals(SpeechActType.QUESTION, speechAct("Kann sie die Mail senden?").type)
+        assertEquals(SpeechActType.REQUEST, speechAct("Können Sie die Mail senden?").type)
+    }
+
+    @Test
     fun `first person modal question differs from second person assertion`() {
         assertEquals(SpeechActType.QUESTION, speechAct("Soll ich die Mail senden?").type)
         assertEquals(SpeechActType.ASSERTION, speechAct("Du sollst die Mail senden.").type)
