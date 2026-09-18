@@ -101,5 +101,10 @@ interface TaskSnapshotRepository : TaskRepository {
  */
 interface IndexedTaskSnapshotRepository : TaskSnapshotRepository {
     suspend fun activeCount(types: Set<TaskType>): Int
+    suspend fun listByStates(
+        types: Set<TaskType>,
+        states: Set<TaskState>,
+        limit: Int = 100,
+    ): List<LifeTask>
     suspend fun rebuildIndex(): TaskIndexReport
 }
