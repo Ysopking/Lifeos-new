@@ -17,7 +17,10 @@ class PhotonBackedRuntimeEventJournal(
         store.load(id)?.let { existing ->
             val old = decode(existing)
             check(old.event == event) { "Runtime event id conflict" }
-            return@withLock old.offset
+            return@withLock journalIndex
+                ?.entry(CognitionJournalKind.EVENT, event.eventId)
+                ?.sequence
+                ?: old.offset
         }
 
         if (journalIndex == null) {
@@ -56,7 +59,7 @@ class PhotonBackedRuntimeEventJournal(
             "Runtime event batch contains duplicate ids"
         }
 
-        val existingById = linkedMapOf<String, RuntimeEventEnvelope>()
+        val existingOffsets = linkedMapOf<String, Long>()
         val missing = mutableListOf<CognitiveEvent>()
         events.forEach { event ->
             val id = CognitionJournalIdentity.photonId(CognitionJournalKind.EVENT.tag, event.eventId)
@@ -66,7 +69,10 @@ class PhotonBackedRuntimeEventJournal(
             } else {
                 val decoded = decode(existing)
                 check(decoded.event == event) { "Runtime event id conflict" }
-                existingById[event.eventId] = decoded
+                existingOffsets[event.eventId] = journalIndex
+                    ?.entry(CognitionJournalKind.EVENT, event.eventId)
+                    ?.sequence
+                    ?: decoded.offset
             }
         }
 
@@ -87,7 +93,7 @@ class PhotonBackedRuntimeEventJournal(
                 next = Math.addExact(next, 1L)
             }
             return@withLock events.map { event ->
-                existingById[event.eventId]?.offset
+                existingOffsets[event.eventId]
                     ?: checkNotNull(created[event.eventId])
             }
         }
@@ -116,7 +122,7 @@ class PhotonBackedRuntimeEventJournal(
         )
         val created = reservations.associate { it.stableId to it.sequence }
         events.map { event ->
-            existingById[event.eventId]?.offset
+            existingOffsets[event.eventId]
                 ?: checkNotNull(created[event.eventId])
         }
     }
@@ -139,9 +145,11 @@ class PhotonBackedRuntimeEventJournal(
             .filter { it.sequence > offsetExclusive }
             .take(limit)
             .toList()
-        loadCognitionJournalPhotons(store, entries.map { it.photonRef })
-            .map(::decode)
-            .map { JournalEntry(it.offset, it.event) }
+        entries.zip(loadCognitionJournalPhotons(store, entries.map { it.photonRef }))
+            .map { (entry, photon) ->
+                val decoded = decode(photon)
+                JournalEntry(entry.sequence, decoded.event)
+            }
     }
 
     override suspend fun size(): Long = lock.withLock {
