@@ -160,7 +160,11 @@ class CognitionJournalIndex(
         require(stableIds.none { it in occupied }) {
             "Cognition journal batch contains an already indexed or pending id"
         }
-        val start = current.head(kind)
+        val pendingHead = current.pendingReservations.asSequence()
+            .filter { it.kind == kind }
+            .maxOfOrNull { it.sequence }
+            ?: 0L
+        val start = maxOf(current.head(kind), pendingHead)
         val reservations = stableIds.mapIndexed { index, stableId ->
             CognitionJournalReservation(
                 kind = kind,
