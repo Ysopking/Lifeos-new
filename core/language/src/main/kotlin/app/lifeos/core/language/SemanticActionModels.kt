@@ -111,6 +111,7 @@ enum class PredicateConcept {
     DELETE,
     UPLOAD,
     SELECT,
+    CONDITION_CHECK,
     UNKNOWN,
 }
 
