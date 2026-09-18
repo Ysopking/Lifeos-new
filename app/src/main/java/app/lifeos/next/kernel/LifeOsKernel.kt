@@ -56,6 +56,7 @@ import app.lifeos.core.runtime.goal.LocalDeepSearchGoalResult
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
 import app.lifeos.core.runtime.goal.LocalSharePreparation
+import app.lifeos.core.runtime.query.ProductivePhotonQueryService
 import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.SceneGraphPhotonFactory
 import app.lifeos.core.scene.SceneRasterizer
@@ -121,6 +122,8 @@ class LifeOsKernel internal constructor(
         photons = revisionedPhotonStore,
         builder = languageContextBuilder,
     )
+    val productivePhotonQueries: ProductivePhotonQueryService =
+        ProductivePhotonQueryService(revisionedPhotonStore)
     private var bootstrapJob: Job? = null
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
@@ -585,6 +588,16 @@ class LifeOsKernel internal constructor(
         }
     }
 
+    private suspend fun boundedContextPhotons(): List<Photon> =
+        productivePhotonQueries.latest(
+            limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
+            order = PhotonIndexOrder.NEWEST_FIRST,
+        ).photons.sortedWith(
+            compareBy<Photon> { it.provenance.createdAt }
+                .thenBy { it.id.value }
+                .thenBy { it.revision }
+        )
+
     private fun requireCompletedBoot(action: String) {
         require(
             mutableBootstrapState.value.status == KernelBootstrapStatus.READY ||
@@ -603,7 +616,7 @@ class LifeOsKernel internal constructor(
                     request = requestGoal,
                     requestSource = requestSource,
                     requestGoalPhotonId = requestGoalPhotonId,
-                    photons = photonStore.loadAll(),
+                    photons = boundedContextPhotons(),
                     createdAt = requestSource.provenance.createdAt,
                 )
             ) {
@@ -645,7 +658,7 @@ class LifeOsKernel internal constructor(
                 goal = goal,
                 sourcePhoton = sourcePhoton,
                 goalPhotonId = goalPhotonId,
-                photons = photonStore.loadAll(),
+                photons = boundedContextPhotons(),
                 createdAt = sourcePhoton.provenance.createdAt,
             )
             when (result) {
@@ -678,7 +691,7 @@ class LifeOsKernel internal constructor(
                     goal = goal,
                     sourcePhoton = sourcePhoton,
                     goalPhotonId = goalPhotonId,
-                    photons = photonStore.loadAll(),
+                    photons = boundedContextPhotons(),
                     createdAt = sourcePhoton.provenance.createdAt,
                 )
             ) {
@@ -712,7 +725,7 @@ class LifeOsKernel internal constructor(
                     goal = goal,
                     sourcePhoton = sourcePhoton,
                     goalPhotonId = goalPhotonId,
-                    photons = photonStore.loadAll(),
+                    photons = boundedContextPhotons(),
                 )
             ) {
                 is LocalCommunicationGoalResult.Prepared ->
