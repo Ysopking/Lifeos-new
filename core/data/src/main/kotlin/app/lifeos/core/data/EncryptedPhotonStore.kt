@@ -304,6 +304,37 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
         var changed = false
         val entries = index.entries.toMutableMap()
 
+        val indexedIds = entries.values.mapTo(linkedSetOf()) { it.ref.photonId }
+        revisionDirectories().forEach { idDirectory ->
+            val id = runCatching {
+                PhotonId(idDirectory.name).also { safeId(it) }
+            }.getOrNull() ?: return@forEach
+            if (id in indexedIds) return@forEach
+
+            var revision = 1L
+            var previous: PhotonIndexEntry? = null
+            while (revision > 0L) {
+                val ref = PhotonRevisionRef(id, revision)
+                if (!exists(revisionFile(ref))) break
+                val photon = readRevisionInternal(ref)
+                previous?.let { entries[it.ref] = it.copy(latest = false, tombstoned = false) }
+                val current = indexEntry(photon, latest = true, tombstoned = false)
+                entries[ref] = current
+                previous = current
+                changed = true
+                if (revision == Long.MAX_VALUE) break
+                revision += 1L
+            }
+            previous?.let { head ->
+                val tombstonedRevision = readTombstoneLocked(id)
+                if (tombstonedRevision == head.ref.revision) {
+                    entries[head.ref] = head.copy(tombstoned = true)
+                } else if (tombstonedRevision != null) {
+                    AtomicFile(tombstoneFile(id)).delete()
+                }
+            }
+        }
+
         index.entries.values
             .asSequence()
             .filter { it.latest }
