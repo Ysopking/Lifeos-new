@@ -45,10 +45,18 @@ class DurableCognitionDispatcher(
         )
 
         when (ledger.state(key)) {
-            ProcessingState.PROCESSING -> return DurableCognitiveDispatchResult(
-                workId = item.id,
-                skippedReason = "already-processing",
-            )
+            ProcessingState.PROCESSING -> {
+                // Join the durable idempotency boundary instead of returning a process-local skip.
+                // A concurrent submit may have set PROCESSING before its TaskStore write completed;
+                // taskEngine.submit() is itself idempotent, so this either creates or joins the one
+                // canonical durable task. Only real admission backpressure may still return null.
+                val task = submitDurably(draft)
+                return DurableCognitiveDispatchResult(
+                    workId = item.id,
+                    task = task,
+                    skippedReason = if (task == null) BACKPRESSURE_REASON else "joined-processing",
+                )
+            }
             ProcessingState.COMMITTED -> {
                 val task = submitDurably(draft)
                 return DurableCognitiveDispatchResult(
