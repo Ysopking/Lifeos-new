@@ -94,7 +94,7 @@ class GermanMorphologyEngine {
 /**
  * Immutable candidate index for the field lexicon.
  *
- * Exact/morphology/prefix/suffix/phonetic/BK-style typo candidates are gathered before field
+ * Exact/morphology/prefix/suffix/phonetic/BK-tree typo candidates are gathered before field
  * convergence. The expensive field iterations therefore operate on a small bounded set only.
  */
 class LinguisticFieldIndexV2(
@@ -126,6 +126,11 @@ class LinguisticFieldIndexV2(
     private val phonetic: Map<String, List<String>> = forms
         .groupBy({ phoneticKey(it.form) }, { it.conceptId })
         .mapValues { (_, ids) -> ids.distinct().sorted() }
+
+    private val typoIndex = BkTreeIndex(
+        entries = forms.map { it.form }.distinct(),
+        keyOf = { it },
+    )
 
     private val trieRoot = TrieNode().also { root ->
         forms.forEach { indexed ->
@@ -162,22 +167,18 @@ class LinguisticFieldIndexV2(
         if (scored.size < maxCandidates) {
             val maxDistance = when {
                 normalized.length <= 4 -> 1
-                normalized.length <= 9 -> 2
                 else -> 2
             }
-            forms.asSequence()
-                .filter { kotlin.math.abs(it.form.length - normalized.length) <= maxDistance }
-                .map { it to boundedEditDistance(normalized, it.form, maxDistance) }
-                .filter { it.second <= maxDistance }
-                .sortedWith(
-                    compareBy<Pair<IndexedLinguisticForm, Int>> { it.second }
-                        .thenBy { it.first.form }
-                        .thenBy { it.first.conceptId }
+            typoIndex.search(
+                rawQuery = normalized,
+                maxDistance = maxDistance,
+                limit = maxCandidates,
+            ).forEach { match ->
+                add(
+                    exact[match.value].orEmpty(),
+                    0.52 - match.distance * 0.08,
                 )
-                .take(maxCandidates)
-                .forEach { (form, distance) ->
-                    add(listOf(form.conceptId), 0.52 - distance * 0.08)
-                }
+            }
         }
 
         return scored.entries
@@ -228,32 +229,6 @@ class LinguisticFieldIndexV2(
             previous = mapped
         }
         return normalized.first() + out.toString()
-    }
-
-    private fun boundedEditDistance(
-        a: String,
-        b: String,
-        maxDistance: Int,
-    ): Int {
-        if (kotlin.math.abs(a.length - b.length) > maxDistance) return maxDistance + 1
-        var previous = IntArray(b.length + 1) { it }
-        for (i in 1..a.length) {
-            val current = IntArray(b.length + 1)
-            current[0] = i
-            var rowMin = current[0]
-            for (j in 1..b.length) {
-                val cost = if (a[i - 1] == b[j - 1]) 0 else 1
-                current[j] = minOf(
-                    current[j - 1] + 1,
-                    previous[j] + 1,
-                    previous[j - 1] + cost,
-                )
-                rowMin = minOf(rowMin, current[j])
-            }
-            if (rowMin > maxDistance) return maxDistance + 1
-            previous = current
-        }
-        return previous[b.length]
     }
 
     private class TrieNode {
