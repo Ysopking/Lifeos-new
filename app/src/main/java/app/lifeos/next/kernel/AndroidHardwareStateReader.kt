@@ -45,6 +45,11 @@ internal class AndroidHardwareStateReader(
         )
     }
 
+    fun isDeviceIdle(): Boolean {
+        val powerManager = appContext.getSystemService(PowerManager::class.java)
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && powerManager.isDeviceIdleMode
+    }
+
     private fun batteryFraction(intent: Intent?): Double? {
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
