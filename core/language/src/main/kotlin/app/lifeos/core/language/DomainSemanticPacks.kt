@@ -187,9 +187,9 @@ class DomainSemanticInterpreter(
             val localQuantities = context.quantities.mapNotNull(quantityNodes::get)
             val localTemporals = context.temporals.mapNotNull(temporalNodes::get)
 
-            fun entitiesOf(vararg types: SemanticEntityTypeId): List<Pair<SemanticEntityV2, DomainSemanticNode>> =
+            fun entitiesOf(types: Set<SemanticEntityTypeId>): List<Pair<SemanticEntityV2, DomainSemanticNode>> =
                 localEntities.entries
-                    .filter { it.key.typeId in types.toSet() }
+                    .filter { it.key.typeId in types }
                     .sortedBy { it.key.tokenStart }
                     .map { it.key to it.value }
 
@@ -203,16 +203,18 @@ class DomainSemanticInterpreter(
                     ?.second
                     ?: candidates.minByOrNull { kotlin.math.abs(it.first.tokenStart - target.tokenStart) }?.second
 
-            val authorities = entitiesOf(EntityTypeRegistry.AUTHORITY.id)
+            val authorities = entitiesOf(setOf(EntityTypeRegistry.AUTHORITY.id))
             val notices = entitiesOf(
-                EntityTypeRegistry.NOTICE.id,
-                EntityTypeRegistry.INVOICE.id,
-                EntityTypeRegistry.APPLICATION.id,
-                EntityTypeRegistry.CONTRACT.id,
-                EntityTypeRegistry.DOCUMENT.id,
+                setOf(
+                    EntityTypeRegistry.NOTICE.id,
+                    EntityTypeRegistry.INVOICE.id,
+                    EntityTypeRegistry.APPLICATION.id,
+                    EntityTypeRegistry.CONTRACT.id,
+                    EntityTypeRegistry.DOCUMENT.id,
+                )
             )
-            val claims = entitiesOf(EntityTypeRegistry.CLAIM.id, EntityTypeRegistry.DEBT.id)
-            val deadlines = entitiesOf(EntityTypeRegistry.DEADLINE.id)
+            val claims = entitiesOf(setOf(EntityTypeRegistry.CLAIM.id, EntityTypeRegistry.DEBT.id))
+            val deadlines = entitiesOf(setOf(EntityTypeRegistry.DEADLINE.id))
 
             notices.forEach { (noticeEntity, noticeNode) ->
                 nearestBefore(noticeEntity, authorities)?.let { authority ->
@@ -248,7 +250,7 @@ class DomainSemanticInterpreter(
                 }
             }
 
-            entitiesOf(EntityTypeRegistry.APPOINTMENT.id).forEach { (_, appointment) ->
+            entitiesOf(setOf(EntityTypeRegistry.APPOINTMENT.id)).forEach { (_, appointment) ->
                 localTemporals.forEach { temporal ->
                     if (appointment.id != temporal.id) {
                         relations += relation(appointment, temporal, DomainSemanticRelationType.RELATES_TO)
@@ -256,8 +258,8 @@ class DomainSemanticInterpreter(
                 }
             }
 
-            entitiesOf(EntityTypeRegistry.CONTRACT.id).forEach { (_, contractNode) ->
-                entitiesOf(EntityTypeRegistry.DURATION.id).forEach { (_, duration) ->
+            entitiesOf(setOf(EntityTypeRegistry.CONTRACT.id)).forEach { (_, contractNode) ->
+                entitiesOf(setOf(EntityTypeRegistry.DURATION.id)).forEach { (_, duration) ->
                     relations += relation(contractNode, duration, DomainSemanticRelationType.HAS_DURATION)
                 }
                 deadlines.firstOrNull()?.second?.let { deadline ->
@@ -267,8 +269,8 @@ class DomainSemanticInterpreter(
                 }
             }
 
-            entitiesOf(EntityTypeRegistry.MEDICATION.id).forEach { (_, medication) ->
-                val dosageNodes = entitiesOf(EntityTypeRegistry.DOSAGE.id).map { it.second }
+            entitiesOf(setOf(EntityTypeRegistry.MEDICATION.id)).forEach { (_, medication) ->
+                val dosageNodes = entitiesOf(setOf(EntityTypeRegistry.DOSAGE.id)).map { it.second }
                     .ifEmpty { localQuantities.filter { it.type == "quantity.value" } }
                 dosageNodes.forEach { dosage ->
                     if (dosage.id != medication.id) {
