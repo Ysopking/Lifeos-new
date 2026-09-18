@@ -36,6 +36,7 @@ sealed interface RootMutationDecision {
 
 object ProtectedRootFirewall {
     fun evaluate(request: RootMutationRequest): RootMutationDecision =
-        request.component?.let(RootMutationDecision::BlockedProtectedRoot)
-            ?: RootMutationDecision.CandidateAllowed(request)
+        request.component?.let { component ->
+            RootMutationDecision.BlockedProtectedRoot(component)
+        } ?: RootMutationDecision.CandidateAllowed(request)
 }
