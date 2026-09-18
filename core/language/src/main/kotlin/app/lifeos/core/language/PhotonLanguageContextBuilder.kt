@@ -2,6 +2,7 @@ package app.lifeos.core.language
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonPhase
+import app.lifeos.core.model.PhotonRevisionRef
 import java.time.Instant
 import java.util.Locale
 
@@ -35,6 +36,7 @@ class PhotonLanguageContextBuilder {
                 active = photon.id == activeGoal || photon.phase in setOf(PhotonPhase.ACTIVE, PhotonPhase.REFLECTING),
                 contentTerms = extractTerms(photon.content),
                 confidence = photon.confidence,
+                revisionRef = PhotonRevisionRef(photon.id, photon.revision),
             )
         }
         return LanguageContext(items = items, activeGoalId = activeGoal, now = now)
