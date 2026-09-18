@@ -1,6 +1,7 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.language.IntentType
+import app.lifeos.core.language.SemanticExecutionGate
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.agency.ExternalEffectState
 import app.lifeos.core.runtime.policy.OwnerEffectRequest
@@ -91,6 +92,20 @@ class PrivateGoalActionExecutionGuard(
     private val ownerPolicyGate: OwnerPolicyEffectGate = OwnerPolicyEffectGate(ownerPolicy),
 ) : GoalActionExecutionGuard {
     override suspend fun prepare(context: GoalActionContext): GoalActionExecutionPermit {
+        val semantic = SemanticExecutionGate.evaluate(context.goal)
+        if (!semantic.allowed) {
+            return GoalActionExecutionPermit.Blocked(
+                "semantic-admission:${semantic.reason}",
+            )
+        }
+        if (context.externalActionContract != null &&
+            !SemanticExecutionGate.externalEffectAllowed(context.goal)
+        ) {
+            return GoalActionExecutionPermit.Blocked(
+                "NO_EXTERNAL_SIDE_EFFECT_WITHOUT_EXECUTABLE_SEMANTIC_ACTION",
+            )
+        }
+
         val profile = profile(context) ?: return GoalActionExecutionPermit.Unmetered
         val traceBinding = traceBinding(context)
         val policy = policyRequest(context)
