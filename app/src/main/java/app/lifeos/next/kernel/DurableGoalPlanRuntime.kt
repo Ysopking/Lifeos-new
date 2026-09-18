@@ -22,6 +22,7 @@ import app.lifeos.core.runtime.goal.GoalStepExecutionKind
 import app.lifeos.core.runtime.goal.GoalStepState
 import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
+import app.lifeos.core.runtime.query.GoalOutcomeLookup
 import java.time.Instant
 
 sealed interface DurableGoalPlanAdmission {
@@ -51,7 +52,7 @@ class DurableGoalPlanRuntime(
     private val ledger: DurableGoalPlanLedger,
     private val convergence: GoalConvergenceDecisionProvider,
     private val persistDerivedOutcome: suspend (Photon) -> PhotonSubmissionResult? = { null },
-    private val loadPersistedPhotons: suspend () -> List<Photon> = { emptyList() },
+    private val outcomeLookup: GoalOutcomeLookup,
     private val builder: GoalPlanBuilder = GoalPlanBuilder(),
     private val coordinator: GoalPlanExecutionCoordinator = GoalPlanExecutionCoordinator(ledger),
     private val projector: GoalStepDecisionProjector = GoalStepDecisionProjector(),
@@ -201,12 +202,19 @@ class DurableGoalPlanRuntime(
      * archived failed reminders cannot satisfy recovery.
      */
     private suspend fun recoverPersistedOutcome(context: GoalActionContext): Photon? =
-        loadPersistedPhotons()
+        outcomeLookup.candidates(
+            goalPhotonId = context.goalPhotonId,
+            limit = MAX_OUTCOME_RECOVERY_CANDIDATES,
+        )
             .asSequence()
             .filter { it.phase != PhotonPhase.ARCHIVED }
             .filter { context.goalPhotonId in it.provenance.parentIds }
             .filter { candidate -> isFinalOutcomeFor(context.goal.intent, candidate) }
-            .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+            .sortedWith(
+                compareBy<Photon> { it.provenance.createdAt }
+                    .thenBy { it.id.value }
+                    .thenBy { it.revision }
+            )
             .lastOrNull()
 
     private fun isFinalOutcomeFor(intent: IntentType, photon: Photon): Boolean = when (intent) {
