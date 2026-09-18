@@ -13,7 +13,14 @@ data class WorldFormulaBudget(
 
 data class WorldDelta(val valuesMicros: Map<String, Long>, val iterations: Int, val truncated: Boolean)
 
-/** Sparse, local, deterministic first kernel: F_i=sum(C_ij*S_j), delta=alpha*F. */
+/**
+ * Legacy sparse kernel retained only for compatibility tests.
+ * Productive authority is WorldFieldEquation + WorldFormulaCoordinator.
+ */
+@Deprecated(
+    message = "Use WorldFieldEquation + WorldFormulaCoordinator",
+    level = DeprecationLevel.WARNING,
+)
 class WorldFormulaEngine(private val alphaMicros: Long = 250_000L) {
     init { require(alphaMicros in 1..1_000_000L) }
 
