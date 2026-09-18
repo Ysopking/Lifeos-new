@@ -25,6 +25,7 @@ import app.lifeos.core.runtime.artifact.OwnerAssetReviewRecord
 import app.lifeos.next.AssetReviewFilter
 import app.lifeos.next.OwnerAssetReviewUiState
 import app.lifeos.next.OwnerAssetReviewViewModel
+import app.lifeos.next.ui.components.LifeOsScreenHeader
 
 @Composable
 fun OwnerAssetReviewScreen(
@@ -76,14 +77,11 @@ private fun AssetReviewOverview(
         modifier = modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Asset-Freigaben", style = MaterialTheme.typography.headlineMedium)
-            Text(
-                "Prüfe neue Ergebnisse, bevor LIFEOS sie veröffentlicht oder weiterverwendet.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        LifeOsScreenHeader(
+            title = "Asset-Freigaben",
+            subtitle = "Prüfe neue Ergebnisse, bevor LIFEOS sie veröffentlicht oder weiterverwendet.",
+            eyebrow = "Owner Review",
+        )
 
         TabRow(selectedTabIndex = state.filter.ordinal) {
             AssetReviewFilter.entries.forEach { filter ->
