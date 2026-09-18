@@ -76,6 +76,13 @@ class PredicateFrameParser {
 
     private fun predicate(tokens: List<LanguageToken>): PredicateConcept? {
         val words = tokens.filter { it.kind == TokenKind.WORD }.map { it.normalized }
+        if (words.any { it in MAKE_FORMS } && words.any { it in IMAGE_WORDS }) {
+            return if (words.any { it in IMAGE_TRANSFORM_MODIFIERS }) {
+                PredicateConcept.TRANSFORM_IMAGE
+            } else {
+                PredicateConcept.CREATE_IMAGE
+            }
+        }
         return PREDICATE_ORDER.firstOrNull { concept ->
             words.any { it in PREDICATE_FORMS.getValue(concept) }
         }
@@ -98,7 +105,9 @@ class PredicateFrameParser {
         val normalized = range.map { tokens[it].normalized }
         val predicateLocal = predicateTokenIndex - clause.tokenStart
 
-        if (speechAct.type == SpeechActType.QUOTATION) add(ScopeType.QUOTATION)
+        if (speechAct.type == SpeechActType.QUOTATION ||
+            predicateInsideQuote(utterance, predicateTokenIndex)
+        ) add(ScopeType.QUOTATION)
         if (speechAct.type == SpeechActType.HYPOTHETICAL) add(ScopeType.HYPOTHETICAL)
         if (clause.modality != SemanticModality.NONE) add(ScopeType.MODALITY)
 
@@ -289,9 +298,24 @@ class PredicateFrameParser {
         return SemanticValue(
             rawText = raw,
             normalized = normalized,
-            resolved = true,
-            confidence = 0.70,
+            resolved = normalized !in REFERENCE_PRONOUNS,
+            confidence = if (normalized in REFERENCE_PRONOUNS) 0.55 else 0.70,
         )
+    }
+
+    private fun predicateInsideQuote(
+        utterance: NormalizedUtterance,
+        predicateTokenIndex: Int,
+    ): Boolean {
+        val predicate = utterance.tokens[predicateTokenIndex]
+        var quoted = false
+        utterance.tokens.forEachIndexed { index, token ->
+            if (index >= predicateTokenIndex) return@forEachIndexed
+            if (token.kind == TokenKind.PUNCTUATION && token.original in QUOTE_MARKERS) {
+                quoted = !quoted
+            }
+        }
+        return quoted && predicate.start >= 0
     }
 
     private fun containsComparatorNegation(words: List<String>): Boolean =
@@ -389,6 +413,17 @@ class PredicateFrameParser {
         private val USER_RECIPIENT_MARKERS = setOf("mir", "mich", "me", "myself")
         private val RECIPIENT_PREPOSITIONS = setOf("an", "to")
         private val CURRENCY_UNITS = setOf("€", "eur", "euro", "euros", "$", "usd", "dollar", "£", "gbp", "pound", "pounds")
+        private val MAKE_FORMS = setOf("mach", "mache", "macht", "make")
+        private val IMAGE_WORDS = setOf("bild", "foto", "grafik", "image", "photo", "picture")
+        private val IMAGE_TRANSFORM_MODIFIERS = setOf(
+            "heller", "dunkler", "wärmer", "waermer", "schaerfer", "schärfer",
+            "brighter", "darker", "warmer", "sharper",
+        )
+        private val REFERENCE_PRONOUNS = setOf(
+            "das", "dies", "diese", "diesen", "dieses", "ihn", "sie", "es", "andere", "anderen",
+            "it", "this", "that", "him", "her", "them", "other",
+        )
+        private val QUOTE_MARKERS = setOf(""", "„", "“", "”", "«", "»")
         private val OBJECT_STOP_WORDS = setOf(
             "bitte", "please", "mir", "mich", "me", "an", "to", "nicht", "not",
             "anschließend", "anschliessend", "danach", "then", "und", "and", "oder", "or",
