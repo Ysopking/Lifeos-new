@@ -181,6 +181,8 @@ data class GoalFrame(
     val semanticActionGraph: SemanticActionGraph = SemanticActionGraph.empty(),
     val semanticEntitiesV2: List<SemanticEntityV2> = emptyList(),
     val quantityTemporal: QuantityTemporalResult = QuantityTemporalResult(emptyList(), emptyList()),
+    val domainSemanticGraph: DomainSemanticGraph = DomainSemanticGraph.empty(),
+    val interpretationQuality: SemanticInterpretationQuality = SemanticInterpretationQuality.unknown(),
 ) {
     init {
         require(objective.isNotBlank())
