@@ -93,3 +93,13 @@ interface TaskRepository {
 interface TaskSnapshotRepository : TaskRepository {
     suspend fun loadReport(): TaskLoadReport
 }
+
+
+/**
+ * Durable task store with reconstructible metadata indexes for scheduler/admission hot paths.
+ * Task payloads remain authoritative; rebuildIndex() is the explicit recovery/integrity path.
+ */
+interface IndexedTaskSnapshotRepository : TaskSnapshotRepository {
+    suspend fun activeCount(types: Set<TaskType>): Int
+    suspend fun rebuildIndex(): TaskIndexReport
+}
