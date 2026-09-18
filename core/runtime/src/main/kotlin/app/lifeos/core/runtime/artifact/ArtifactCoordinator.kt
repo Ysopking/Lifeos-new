@@ -8,6 +8,7 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
+import app.lifeos.core.model.SemanticArtifactPlan
 import app.lifeos.core.runtime.cognition.CognitivePriority
 import app.lifeos.core.runtime.cognition.CognitiveWorkBudget
 import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
@@ -103,8 +104,10 @@ class ArtifactCoordinator(
         finalizedAt: Instant,
         parentRevision: ArtifactRevisionRef? = null,
         materializedAsset: AssetRef? = null,
+        semanticPlan: SemanticArtifactPlan? = null,
     ): ArtifactFinalizationResult {
         val validation = validator.requireValid(request, contributions, finalizedAt)
+        semanticPlan?.let { requireSemanticPlan(contributions, it) }
         materializedAsset?.let { asset ->
             require(asset.mediaType == request.targetMimeType) {
                 "Materialized asset MIME type ${asset.mediaType} does not match requested ${request.targetMimeType}"
@@ -127,6 +130,7 @@ class ArtifactCoordinator(
             parentRevision = parentRevision,
             materializedAsset = materializedAsset,
             validation = validation,
+            semanticPlan = semanticPlan,
         )
         val photonId = artifactPhotonId(request, revision)
         val existing = photons.load(photonId)
@@ -180,6 +184,34 @@ class ArtifactCoordinator(
         }
     }
 
+    private fun requireSemanticPlan(
+        contributions: List<ArtifactContribution>,
+        plan: SemanticArtifactPlan,
+    ) {
+        val claims = plan.claims.associateBy { it.claimId }
+        contributions.forEach { contribution ->
+            require(contribution.claimIds.size == 1) {
+                "Semantic artifact contribution ${contribution.id} must map to exactly one claim"
+            }
+            val claimId = contribution.claimIds.single()
+            val claim = requireNotNull(claims[claimId]) {
+                "Artifact contribution references unknown semantic claim: $claimId"
+            }
+            require(claimId !in plan.unresolvedClaimIds) {
+                "Unresolved semantic claim cannot be rendered as a secured artifact assertion: $claimId"
+            }
+            require(claim.evidence.isNotEmpty()) {
+                "Semantic artifact claim has no revision evidence: $claimId"
+            }
+            require(contribution.content == claim.canonicalContent) {
+                "Artifact contribution changed canonical semantic claim content: $claimId"
+            }
+        }
+        val renderedClaimIds = contributions.map { it.claimIds.single() }.toSet()
+        require(renderedClaimIds.isNotEmpty()) { "Semantic artifact must render at least one claim" }
+        require(renderedClaimIds.none { it in plan.unresolvedClaimIds })
+    }
+
     private suspend fun requireParentRevision(
         request: CollaborativeArtifactRequest,
         parentRevision: ArtifactRevisionRef,
@@ -205,6 +237,7 @@ class ArtifactCoordinator(
         parentRevision: ArtifactRevisionRef?,
         materializedAsset: AssetRef?,
         validation: ArtifactValidationEvidence,
+        semanticPlan: SemanticArtifactPlan?,
     ): ArtifactRevisionManifest {
         val inputPhotonIds = contributions
             .flatMap { it.provenance.parentIds }
@@ -222,6 +255,12 @@ class ArtifactCoordinator(
             add(validation.profile.minimumDistinctModules.toString())
             request.requiredFields.sorted().forEach(::add)
             contributions.map { it.contentFingerprint() }.forEach(::add)
+            semanticPlan?.let { plan ->
+                add(plan.fingerprint)
+                add(plan.planId)
+                add(plan.planRevision.toString())
+                add(plan.sourceWorldRevision.toString())
+            }
             materializedAsset?.let { asset ->
                 add(asset.id.value)
                 add(asset.mediaType)
@@ -249,6 +288,7 @@ class ArtifactCoordinator(
             stateHash = stateHash,
             materializedAsset = materializedAsset,
             validation = validation,
+            semanticPlanFingerprint = semanticPlan?.fingerprint,
         )
     }
 
@@ -320,6 +360,9 @@ class ArtifactCoordinator(
                 }
                 revision.materializedAsset?.let { asset ->
                     add("artifact-output-sha256:${asset.sha256}")
+                }
+                revision.semanticPlanFingerprint?.let { fingerprint ->
+                    add("artifact-semantic-plan:$fingerprint")
                 }
                 revision.participatingModules.forEach { module ->
                     add("artifact-module:$module")
@@ -409,6 +452,8 @@ class ArtifactCoordinator(
             append("\"sha256\":"); appendJson(asset.sha256)
             append('}')
         } ?: append("null")
+        append(",\"semanticPlanFingerprint\":")
+        revision.semanticPlanFingerprint?.let(::appendJson) ?: append("null")
         append(",\"validation\":{")
         append("\"minimumDistinctModules\":")
         append(revision.validation.profile.minimumDistinctModules)
