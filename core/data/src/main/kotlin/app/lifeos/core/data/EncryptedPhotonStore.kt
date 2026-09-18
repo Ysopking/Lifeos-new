@@ -9,6 +9,7 @@ import app.lifeos.core.model.PhotonCodec
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonIndexEntry
 import app.lifeos.core.model.PhotonIndexQuery
+import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonIndexReport
 import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonPhase
@@ -107,13 +108,35 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
     override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> =
         withContext(Dispatchers.IO) {
             mutex.withLock {
+                val ordering = when (query.order) {
+                    PhotonIndexOrder.IDENTITY ->
+                        compareBy<PhotonIndexEntry> { it.ref.photonId.value }
+                            .thenBy { it.ref.revision }
+
+                    PhotonIndexOrder.NEWEST_FIRST ->
+                        compareByDescending<PhotonIndexEntry> { it.createdAt }
+                            .thenBy { it.ref.photonId.value }
+                            .thenByDescending { it.ref.revision }
+
+                    PhotonIndexOrder.OLDEST_FIRST ->
+                        compareBy<PhotonIndexEntry> { it.createdAt }
+                            .thenBy { it.ref.photonId.value }
+                            .thenBy { it.ref.revision }
+
+                    PhotonIndexOrder.HIGHEST_SEMANTIC_MASS ->
+                        compareByDescending<PhotonIndexEntry> { it.semanticMass }
+                            .thenByDescending { it.createdAt }
+                            .thenBy { it.ref.photonId.value }
+
+                    PhotonIndexOrder.HIGHEST_CONFIDENCE ->
+                        compareByDescending<PhotonIndexEntry> { it.confidence }
+                            .thenByDescending { it.createdAt }
+                            .thenBy { it.ref.photonId.value }
+                }
                 ensureIndexLocked().entries.values
                     .asSequence()
                     .filter { it.matches(query) }
-                    .sortedWith(
-                        compareBy<PhotonIndexEntry> { it.ref.photonId.value }
-                            .thenBy { it.ref.revision }
-                    )
+                    .sortedWith(ordering)
                     .take(query.limit)
                     .map { it.ref }
                     .toList()
