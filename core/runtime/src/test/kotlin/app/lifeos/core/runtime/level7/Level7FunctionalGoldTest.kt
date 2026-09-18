@@ -102,86 +102,271 @@ class Level7FunctionalGoldTest {
         assertFalse(transfer.semanticIdentityEstablished)
         assertEquals(1.0, transfer.structuralSimilarity)
 
-        val checkpoint = ProcessDeathSemanticCheckpoint(
-            worldHeadFingerprint = "world-head-v1",
-            equationVersion = "lifeos-world-cognitive-v1",
-            cycleFingerprint = "cycle-x",
-            decisionSemanticFingerprint = "decision-x",
-            learningLedgerHeadFingerprint = "learning-x",
+        val worldSnapshotId = "world-snapshot:" + StableFieldIds.fingerprint(
+            "functional-world",
+            induction.fingerprint,
+            generalized.strategy.id,
         )
-        val rootDecision = ProtectedRootFirewall.evaluate(
-            RootMutationRequest(
-                subjectId = "meta-candidate",
-                target = MutationTarget("core/runtime/boot/BootEngineRuntime.kt", "BootEngineRuntime"),
-                candidateFingerprint = "meta-fp",
+        val worldSnapshotFingerprint = StableFieldIds.fingerprint(
+            worldSnapshotId,
+            "lifeos-world-cognitive-v1",
+            "world-prov-x",
+        )
+        val decisionCheckpointId = "convergence-checkpoint:" + StableFieldIds.fingerprint(
+            worldSnapshotId,
+            generalized.strategy.id,
+            "unseen-x-case",
+        )
+        val checkpoint = ProcessDeathSemanticCheckpoint(
+            worldHeadFingerprint = StableFieldIds.fingerprint("world-head", worldSnapshotId),
+            equationVersion = "lifeos-world-cognitive-v1",
+            cycleFingerprint = StableFieldIds.fingerprint("cycle", "X", worldSnapshotId),
+            decisionSemanticFingerprint = StableFieldIds.fingerprint(
+                "decision",
+                decisionCheckpointId,
+                worldSnapshotFingerprint,
+            ),
+            learningLedgerHeadFingerprint = StableFieldIds.fingerprint(
+                "learning",
+                induction.fingerprint,
+                generalized.strategy.id,
+            ),
+        )
+        val rootRequest = RootMutationRequest(
+            subjectId = "meta-candidate",
+            target = MutationTarget(
+                "core/runtime/boot/BootEngineRuntime.kt",
+                "BootEngineRuntime",
+            ),
+            candidateFingerprint = generalized.strategy.id,
+        )
+        val rootDecision = ProtectedRootFirewall.evaluate(rootRequest)
+            as RootMutationDecision.BlockedProtectedRoot
+
+        val goal = GeneratedGoal.propose(
+            semanticKey = "novel-domain-X",
+            parentGoalId = null,
+            targetField = GoalTargetField(
+                worldTargetFingerprint = worldSnapshotFingerprint,
+                desiredStateFingerprint = "domain-x-solved",
+                priority = 0.9,
+            ),
+            provenanceFingerprint = induction.fingerprint,
+        ).activate(
+            authorityDecisionId = "owner:" + StableFieldIds.fingerprint(
+                "goal-authority",
+                generalized.strategy.id,
             )
-        ) as RootMutationDecision.BlockedProtectedRoot
+        )
+
+        val scenario = WorldModelNamespaceGate.counterfactual(
+            baseProductiveSnapshotId = worldSnapshotId,
+            baseEquationVersion = checkpoint.equationVersion,
+            interventionFingerprint = StableFieldIds.fingerprint(
+                discrimination.interventionVariableId,
+                discrimination.rationale,
+            ),
+        )
+
+        val logicalKeys = setOf(
+            StableFieldIds.fingerprint("learning-key", induction.fingerprint),
+            StableFieldIds.fingerprint("learning-key", generalized.strategy.id),
+        )
+        val promotionSubject = StableFieldIds.fingerprint(
+            "world-promotion-subject",
+            generalized.strategy.id,
+            induction.fingerprint,
+        )
+        val holdoutId = StableFieldIds.fingerprint("holdout", transitions[0].outcomeEvidenceFingerprint)
+        val shadowId = StableFieldIds.fingerprint("shadow", transitions[1].outcomeEvidenceFingerprint)
+        val trialId = StableFieldIds.fingerprint(
+            "trial",
+            discrimination.interventionVariableId,
+            discrimination.rationale,
+        )
+        val promotionId = StableFieldIds.fingerprint(
+            "promotion",
+            promotionSubject,
+            holdoutId,
+            shadowId,
+            trialId,
+        )
+        val architectureFingerprint = StableFieldIds.fingerprint(
+            "architecture",
+            "BootEngineRuntime",
+            "DefaultProductiveConvergenceAuthority",
+            "ProductivePhotonQueryService",
+        )
+        val rollbackDecisionId = StableFieldIds.fingerprint(
+            "rollback",
+            "v18",
+            checkpoint.equationVersion,
+            checkpoint.worldHeadFingerprint,
+        )
 
         val proofs = listOf<Level7InvariantProof>(
-            ArchitectureProof(true, true, true, true, true, "architecture-source-fp"),
-            WorldFormulaProof(
-                worldSnapshotId = "world-snapshot-x",
-                worldSnapshotFingerprint = "world-snapshot-fp",
-                provenanceFingerprint = "world-prov",
-                equationVersion = "lifeos-world-cognitive-v1",
-                cycleFingerprint = "cycle-x",
-                convergenceCheckpointId = "decision-x",
-                noScalarTruthScore = true,
-                noExternalEffectAuthority = true,
-                noDirectMutation = true,
+            AuthorityTopologyProof(
+                proofId = "authority:" + architectureFingerprint,
+                bootEngineOwnerId = "BootEngineRuntime",
+                productiveCouplingAuthorityId = "DefaultProductiveConvergenceAuthority",
+                productiveCouplingPathCount = 1,
+                cognitiveLifecycleOwnerCount = 1,
+                foundationModelRuntimeDependencyCount = 0,
             ),
-            PromotionChainProof("holdout", "shadow", "trial", "promotion", true),
+            WorldFormulaProof(
+                proofId = "world-formula:" + worldSnapshotFingerprint,
+                cycleId = checkpoint.cycleFingerprint,
+                equationVersion = checkpoint.equationVersion,
+                productiveSnapshotId = worldSnapshotId,
+                productiveSnapshotFingerprint = worldSnapshotFingerprint,
+                provenanceFingerprint = StableFieldIds.fingerprint(
+                    induction.fingerprint,
+                    generalized.strategy.id,
+                    transfer.id,
+                ),
+                decisionCheckpointId = decisionCheckpointId,
+                decisionWorldSnapshotId = worldSnapshotId,
+                equationStayedFrozenDuringCycle = true,
+                truthScoreExposed = false,
+                externalEffectAuthority = false,
+                directSubsystemMutationObserved = false,
+            ),
+            EvolutionPromotionProof(
+                proofId = "promotion:" + promotionId,
+                subjectId = promotionSubject,
+                holdoutEvidenceId = holdoutId,
+                shadowEvidenceId = shadowId,
+                trialEvidenceId = trialId,
+                promotionDecisionId = promotionId,
+                moduleDirectPhysicsWriteObserved = false,
+                metaAdaptedProtectedRoot = false,
+            ),
             CausalDiscriminationProof(
-                candidateIds = competing.take(2).mapTo(linkedSetOf()) { it.id },
-                discriminationRequestFingerprint = StableFieldIds.fingerprint(
+                proofId = "causal:" + discrimination.expectedInformationGain.toString(),
+                competingModelIds = competing.take(2).mapTo(linkedSetOf()) { it.id },
+                discriminationRequestId = StableFieldIds.fingerprint(
                     discrimination.interventionVariableId,
                     discrimination.rationale,
                 ),
-                correlationOnlyRejected = true,
+                discriminatingEvidenceFingerprint = StableFieldIds.fingerprint(
+                    correlation.fingerprint(),
+                    discrimination.expectedInformationGain.toString(),
+                ),
+                selectedWorldModelId = competing.first().id,
+                correlationOnly = false,
+            ),
+            CounterfactualIsolationProof(
+                proofId = "counterfactual:" + scenario.id,
+                productiveSnapshotId = worldSnapshotId,
+                counterfactualSnapshotId = scenario.id,
+                counterfactualNamespace = scenario.namespace.name,
+                productiveHeadUnchanged = !scenario.productiveCommitAllowed,
             ),
             StrategyReuseProof(
+                proofId = "strategy:" + generalized.strategy.id,
                 strategyCandidateId = generalized.strategy.id,
-                verifiedTransitionFingerprints = transitions.mapTo(linkedSetOf()) {
-                    StableFieldIds.fingerprint(
-                        it.beforeSnapshotId,
-                        it.afterSnapshotId,
-                        it.actionFingerprint,
-                        it.outcomeEvidenceFingerprint,
-                    )
+                verifiedOutcomeIds = transitions.mapTo(linkedSetOf()) {
+                    it.outcomeEvidenceFingerprint
                 },
-                reuseOutcomeFingerprint = "unseen-x-case-solved",
+                unseenCaseId = "unseen-x-case",
+                reuseDecisionId = decisionCheckpointId,
+                reusedSuccessfully = true,
             ),
-            ProtectedRootProof(rootDecision.component, "BootEngineRuntime.kt", true, true),
-            CounterfactualProof("cf-x", "world-head-v1", "world-head-v1"),
-            LearningDedupProof(setOf("learning-key-x"), setOf("learning-key-x"), "watermark-x"),
-            RecoveryProof(checkpoint, checkpoint),
+            GoalAuthorityProof(
+                proofId = "goal:" + goal.id,
+                generatedGoalId = goal.id,
+                ownerAuthorityDecisionId = requireNotNull(goal.authorityDecisionId),
+                activatedState = goal.state.name,
+            ),
+            BoundedRetrievalProof(
+                proofId = "retrieval:" + architectureFingerprint,
+                architectureScanFingerprint = architectureFingerprint,
+                productiveFullVaultScanViolations = emptyList(),
+                maxObservedPageSize = 256,
+            ),
+            LearningDedupProof(
+                proofId = "learning:" + checkpoint.learningLedgerHeadFingerprint,
+                watermarkFingerprintBefore = checkpoint.learningLedgerHeadFingerprint,
+                watermarkFingerprintAfterReplay = checkpoint.learningLedgerHeadFingerprint,
+                logicalKeysBefore = logicalKeys,
+                logicalKeysAfterReplay = logicalKeys,
+            ),
+            RecoveryProof(
+                proofId = "recovery:" + checkpoint.fingerprint(),
+                planId = "rehydration:" + StableFieldIds.fingerprint(
+                    checkpoint.worldHeadFingerprint,
+                    checkpoint.cycleFingerprint,
+                ),
+                preDeath = checkpoint,
+                postRehydration = checkpoint,
+                restoredExactEquationVersion = checkpoint.equationVersion,
+                restoredExactWorldHeadFingerprint = checkpoint.worldHeadFingerprint,
+            ),
             RollbackProof(
-                degradedVersion = "v18",
-                restoredEquationVersion = "v17",
-                expectedEquationVersion = "v17",
-                restoredWorldHeadFingerprint = "world-head-v1",
-                expectedWorldHeadFingerprint = "world-head-v1",
+                proofId = "rollback:" + rollbackDecisionId,
+                degradedEquationVersion = "lifeos-world-cognitive-v18-trial",
+                restoredEquationVersion = checkpoint.equationVersion,
+                expectedPredecessorEquationVersion = checkpoint.equationVersion,
+                degradedWorldHeadFingerprint = StableFieldIds.fingerprint(
+                    "degraded-head",
+                    checkpoint.worldHeadFingerprint,
+                ),
+                restoredWorldHeadFingerprint = checkpoint.worldHeadFingerprint,
+                expectedPredecessorWorldHeadFingerprint = checkpoint.worldHeadFingerprint,
+                rollbackDecisionId = rollbackDecisionId,
+                processDeathCrossed = true,
+            ),
+            ProtectedRootProof(
+                proofId = "root:" + rootRequest.candidateFingerprint,
+                targetPath = rootRequest.target.path,
+                targetType = rootRequest.target.type,
+                classifiedComponent = rootDecision.component,
+                mutationBlocked = true,
             ),
             NovelDomainProof(
+                proofId = "novel:" + induction.fingerprint,
                 domainId = "X",
                 staticDomainRulePresent = false,
-                beforeLearningUnresolved = true,
+                initialDecisionState = "UNRESOLVED",
                 abstractionCandidateId = induction.fingerprint,
-                learnedRepresentationFingerprint = "representation-x-learned",
-                unseenCaseOutcomeFingerprint = "unseen-x-case-solved",
+                representationOrStrategyId = generalized.strategy.id,
+                unseenCaseId = "unseen-x-case",
+                finalDecisionCheckpointId = decisionCheckpointId,
+                solvedUsingLearnedStructure = true,
             ),
             TransferProof(
+                proofId = "transfer:" + transfer.id,
                 sourceDomainId = "X",
                 targetDomainId = "Y",
-                semanticIdentityAssumed = false,
+                semanticIdentityAssumed = transfer.semanticIdentityEstablished,
                 structuralTransferCandidateId = transfer.id,
                 validationFingerprint = "transfer-validation",
-                adaptedOutcomeFingerprint = "domain-y-adapted",
+                adaptedStrategyId = generalized.strategy.id,
+            ),
+            ProvenanceTraceProof(
+                proofId = "trace:" + StableFieldIds.fingerprint(
+                    induction.fingerprint,
+                    correlation.fingerprint(),
+                    generalized.strategy.id,
+                ),
+                traceIds = setOf(
+                    discrimination.interventionVariableId,
+                    decisionCheckpointId,
+                ),
+                revisionRefs = setOf(
+                    worldSnapshotId,
+                    checkpoint.worldHeadFingerprint,
+                ),
+                provenanceFingerprints = setOf(
+                    induction.fingerprint,
+                    correlation.provenanceFingerprint,
+                    transfer.validationFingerprint,
+                ),
             ),
         )
 
         val gold = Level7GoldVerifier.verify(Level7GoldEvidence(proofs))
-        assertTrue(gold.startsWith("LEVEL7-GOLD:"))
+        assertTrue(gold.startsWith("LEVEL7-FUNCTIONAL-GOLD:"))
     }
 
     private fun occurrence(
