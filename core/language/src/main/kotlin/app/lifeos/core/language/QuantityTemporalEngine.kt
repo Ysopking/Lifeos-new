@@ -255,6 +255,7 @@ class QuantityTemporalEngine {
             )
         }.distinctBy { listOf(it.instant.toString(), it.zoneId, it.span.start, it.span.endExclusive) }
             .sortedBy { it.span.start }
+            .toList()
     }
 
     private fun parseTemporals(
