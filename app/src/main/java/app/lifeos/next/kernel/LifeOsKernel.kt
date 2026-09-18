@@ -249,11 +249,21 @@ class LifeOsKernel internal constructor(
     }
 
     fun requireCognitiveReady() {
-        val state = mutableBootstrapState.value.status
+        val bootstrap = mutableBootstrapState.value
+        val state = bootstrap.status
         require(
             state == KernelBootstrapStatus.READY || state == KernelBootstrapStatus.DEGRADED
         ) {
-            "Cognitive runtime is not ready: $state"
+            buildString {
+                append("Cognitive runtime is not ready: ")
+                append(state)
+                bootstrap.failureMessage
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let {
+                        append(" · ")
+                        append(it)
+                    }
+            }
         }
     }
 
