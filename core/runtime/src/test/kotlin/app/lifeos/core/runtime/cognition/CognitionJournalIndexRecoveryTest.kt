@@ -88,6 +88,40 @@ class CognitionJournalIndexRecoveryTest {
     }
 
     @Test
+    fun legacyOutcomeRebuildUsesCanonicalDedupeKeyWithoutScanningVault() = runTest {
+        val photons = CountingRevisionedPhotonRepository()
+        val legacyOutcome = CognitiveOutcome(
+            taskId = TaskId("legacy-task"),
+            photonId = PhotonId("legacy-source"),
+            finalState = TaskState.COMPLETED,
+            influences = emptyList(),
+            failures = emptyList(),
+            recordedAt = t0,
+        )
+        val legacyKey = cognitionOutcomeLegacyStableId(legacyOutcome)
+        photons.save(
+            cognitionJournalPhoton(
+                kind = CognitionJournalKind.OUTCOME,
+                stableId = legacyKey,
+                at = legacyOutcome.recordedAt,
+                content = CognitionOutcomeCodec.encode(legacyOutcome),
+            )
+        )
+
+        val index = CognitionJournalIndex(InMemoryIndexRepository(), photons)
+        val recovery = index.reconcile()
+        val journal = PhotonBackedCognitiveOutcomeJournal(photons, index)
+
+        assertTrue(recovery.rebuilt)
+        assertEquals(
+            1L,
+            journal.record(legacyOutcome.copy(recordedAt = t0.plusSeconds(30))),
+        )
+        assertEquals(1, photons.photonCount)
+        assertEquals(0, photons.loadReportCalls)
+    }
+
+    @Test
     fun pendingReservationRecoversPhotonWrittenBeforeIndexCommit() = runTest {
         val photons = CountingRevisionedPhotonRepository()
         val durableIndex = InMemoryIndexRepository()
@@ -143,6 +177,9 @@ class CognitionJournalIndexRecoveryTest {
         private val values = linkedMapOf<PhotonId, Photon>()
         var loadReportCalls: Int = 0
             private set
+
+        val photonCount: Int
+            get() = values.size
 
         override suspend fun save(photon: Photon) {
             val current = values[photon.id]
