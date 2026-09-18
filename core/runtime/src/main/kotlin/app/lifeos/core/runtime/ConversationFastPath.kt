@@ -39,11 +39,71 @@ data class FastConversationContext(
     }
 }
 
+data class FastConversationSafetyDecision(
+    val safe: Boolean,
+    val reasons: Set<String>,
+)
+
+class FastConversationSafetyGuard {
+    fun evaluate(text: String): FastConversationSafetyDecision {
+        val normalized = text.trim().lowercase()
+        val reasons = buildSet {
+            if (ACTION_VERBS.any { Regex("""\b${Regex.escape(it)}\b""").containsMatchIn(normalized) }) {
+                add("action-verb")
+            }
+            if (NEGATION_CUES.any { Regex("""\b${Regex.escape(it)}\b""").containsMatchIn(normalized) }) {
+                add("negation")
+            }
+            if (CONDITION_CUES.any { Regex("""\b${Regex.escape(it)}\b""").containsMatchIn(normalized) }) {
+                add("condition")
+            }
+            if (QUOTE_MARKERS.any(normalized::contains)) add("quotation")
+            if (REFERENCE_CUES.any { Regex("""\b${Regex.escape(it)}\b""").containsMatchIn(normalized) }) {
+                add("reference")
+            }
+            if (MULTI_CLAUSE_CUES.any { Regex("""\b${Regex.escape(it)}\b""").containsMatchIn(normalized) } ||
+                normalized.count { it == ',' || it == ';' } > 0
+            ) {
+                add("multi-clause")
+            }
+        }
+        return FastConversationSafetyDecision(
+            safe = reasons.isEmpty(),
+            reasons = reasons,
+        )
+    }
+
+    private companion object {
+        val ACTION_VERBS = setOf(
+            "sende", "send", "schick", "schicke", "teile", "share", "lösche", "loesche", "delete",
+            "erstelle", "erzeuge", "generiere", "create", "generate", "mach", "mache", "make",
+            "suche", "finde", "search", "find", "plane", "schedule", "erinnere", "remind",
+            "speichere", "merke", "save", "remember", "überweise", "ueberweise", "transfer", "pay",
+            "lade", "upload", "bearbeite", "ändere", "aendere", "edit", "change",
+        )
+        val NEGATION_CUES = setOf(
+            "nicht", "nie", "niemals", "kein", "keine", "keinen", "not", "never", "no",
+        )
+        val CONDITION_CUES = setOf("wenn", "falls", "sofern", "if", "unless")
+        val REFERENCE_CUES = setOf(
+            "das", "dies", "diese", "diesen", "dieses", "andere", "anderen",
+            "it", "this", "that", "other",
+        )
+        val MULTI_CLAUSE_CUES = setOf(
+            "aber", "sondern", "und", "oder", "danach", "anschließend", "anschliessend",
+            "but", "rather", "and", "or", "then",
+        )
+        val QUOTE_MARKERS = setOf(""", "„", "“", "”", "«", "»")
+    }
+}
+
 /**
  * Conservative classifier. FAST_CHAT is selected only for clearly social/local turns.
  * Any memory, life-matter, artifact, scheduling, communication or action cue escalates.
  */
-class ConversationSignalClassifier {
+class ConversationSignalClassifier(
+    private val fastSafety: FastConversationSafetyGuard = FastConversationSafetyGuard(),
+) {
     fun classify(
         text: String,
         tags: Set<String> = emptySet(),
@@ -59,20 +119,22 @@ class ConversationSignalClassifier {
             requestsExternalEffect = AGENCY_CUES.any(normalized::contains) ||
                 tags.any { it.startsWith("agency") || it.startsWith("external-effect") },
         )
+        val fastSafetyDecision = fastSafety.evaluate(text)
         val path = when {
             signals.requestsExternalEffect -> ConversationPath.AGENCY
             signals.requestsArtifact -> ConversationPath.ARTIFACT
             signals.requiresMatter || signals.requiresMemory -> ConversationPath.COGNITIVE
-            isClearlyFastConversation(normalized) -> ConversationPath.FAST_CHAT
+            fastSafetyDecision.safe && isClearlyFastConversation(normalized) -> ConversationPath.FAST_CHAT
             else -> ConversationPath.COGNITIVE
         }
         val reason = when (path) {
             ConversationPath.AGENCY -> "external-effect-cue"
             ConversationPath.ARTIFACT -> "artifact-cue"
-            ConversationPath.COGNITIVE -> if (signals.requiresMatter || signals.requiresMemory) {
-                "world-context-required"
-            } else {
-                "conservative-escalation"
+            ConversationPath.COGNITIVE -> when {
+                signals.requiresMatter || signals.requiresMemory -> "world-context-required"
+                !fastSafetyDecision.safe ->
+                    "semantic-fast-path-guard:" + fastSafetyDecision.reasons.sorted().joinToString(",")
+                else -> "conservative-escalation"
             }
             ConversationPath.FAST_CHAT -> "local-social-turn"
         }
