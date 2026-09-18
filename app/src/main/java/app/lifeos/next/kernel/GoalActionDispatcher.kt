@@ -38,6 +38,7 @@ data class GoalActionDispatchResult(
     val localSchedule: LocalScheduleExecutionResult? = null,
     val localCommunication: LocalCommunicationExecutionResult? = null,
     val externalEffect: EffectReceipt? = null,
+    val recoveredOutcome: Photon? = null,
 )
 
 class GoalActionDispatcher(
@@ -97,7 +98,9 @@ class GoalActionDispatcher(
         val durablePermit = when (val admission = durableRuntime?.prepare(context)) {
             null -> null
             is DurableGoalPlanAdmission.Ready -> admission.permit
-            is DurableGoalPlanAdmission.Completed -> return GoalActionDispatchResult()
+            is DurableGoalPlanAdmission.Completed -> return GoalActionDispatchResult(
+                recoveredOutcome = admission.outcome,
+            )
             is DurableGoalPlanAdmission.Blocked -> return blocked(context.goal.intent, admission.reason)
         }
 
