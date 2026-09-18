@@ -257,6 +257,7 @@ data class SemanticActionGraph(
         require(nodes.map { it.id }.distinct().size == nodes.size)
         val ids = nodes.mapTo(linkedSetOf()) { it.id }
         require(edges.all { it.from in ids && it.to in ids })
+        require(scopes.all { scope -> scope.targetNodeIds.isNotEmpty() && scope.targetNodeIds.all { it in ids } })
         require(fingerprint.isNotBlank())
     }
 
