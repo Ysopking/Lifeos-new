@@ -282,6 +282,7 @@ class DurableGoalPlanRuntime(
     )
 
     private companion object {
+        const val MAX_OUTCOME_RECOVERY_CANDIDATES: Int = 64
         const val COMMUNICATION_PREPARATION_MIME =
             "application/vnd.lifeos.communication-preparation+text"
         val CONVERGENCE_MUTABLE_STATES = setOf(
