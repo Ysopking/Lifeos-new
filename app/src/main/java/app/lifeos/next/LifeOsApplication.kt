@@ -383,6 +383,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             photons = lifePhotonRepository,
             memory = lifeMemoryRuntime,
             sources = initialDataSources.sources + AndroidSharedFilesInitialDataSource(this),
+            budgetProvider = {
+                hardwareResourceIntelligence.cognitiveBudget(CognitiveWorkload.INGEST)
+            },
         )
         refreshInitialDataBootstrap()
     }
@@ -473,7 +476,15 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
      * preserves already durable per-source cursors.
      */
     private suspend fun refreshLiveSourceRuntime() {
+        val completedSourceIds = latestInitialDataBootstrap
+            ?.sources
+            ?.asSequence()
+            ?.filter { it.completed }
+            ?.map { it.descriptor.sourceId }
+            ?.toSet()
+            .orEmpty()
         val adapters = AndroidLiveSourceCatalog(this).authorizedAdapters()
+            .filter { it.sourceId.value in completedSourceIds }
         liveSourceObservers?.stop()
         liveSourceObservers = null
         liveSourceDeltaRuntime = null
