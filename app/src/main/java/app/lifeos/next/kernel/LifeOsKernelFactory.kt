@@ -23,6 +23,8 @@ import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.health.ProtectionMode
 import app.lifeos.core.model.health.ProtectionStateLoadResult
 import app.lifeos.core.model.worker.WorkerId
+import app.lifeos.core.runtime.CognitiveBudget
+import app.lifeos.core.runtime.CognitiveWorkload
 import app.lifeos.core.runtime.DurableLifeOsRuntime
 import app.lifeos.core.runtime.DurableRuntimeStateBridge
 import app.lifeos.core.runtime.IndexedPhotonRepository
@@ -125,6 +127,7 @@ import kotlinx.coroutines.SupervisorJob
 class LifeOsKernelFactory(
     private val context: Context,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val cognitiveBudgetProvider: ((CognitiveWorkload) -> CognitiveBudget)? = null,
 ) {
     fun create(): LifeOsKernel {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -171,6 +174,9 @@ class LifeOsKernelFactory(
             sceneCompiler = sceneCompiler,
             sceneRasterizer = sceneRasterizer,
             computeDispatcher = dispatcher,
+            creativeBudgetProvider = cognitiveBudgetProvider?.let { provider ->
+                { provider(CognitiveWorkload.CREATIVE) }
+            },
         )
         val capabilityRegistry = CapabilityRegistry(
             listOf(
