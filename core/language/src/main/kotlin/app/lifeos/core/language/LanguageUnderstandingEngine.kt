@@ -485,6 +485,52 @@ class GoalPhotonFactory {
                 .append(entity.confidence).append('|')
                 .append(escape(entity.source)).append('\n')
         }
+        frame.quantityTemporal.quantities.forEachIndexed { index, quantity ->
+            append("canonical.quantity.").append(index).append('=')
+                .append(quantity.comparator.name).append('|')
+                .append(escape(quantity.value?.toPlainString().orEmpty())).append('|')
+                .append(escape(quantity.lowerBound?.toPlainString().orEmpty())).append('|')
+                .append(escape(quantity.upperBound?.toPlainString().orEmpty())).append('|')
+                .append(escape(quantity.unit.orEmpty())).append('|')
+                .append(escape(quantity.currency?.currencyCode.orEmpty())).append('|')
+                .append(quantity.span.start).append('|')
+                .append(quantity.span.endExclusive).append('|')
+                .append(quantity.confidence).append('\n')
+        }
+        frame.quantityTemporal.temporals.forEachIndexed { index, temporal ->
+            append("canonical.temporal.").append(index).append('=')
+                .append(temporal.relation.name).append('|')
+                .append(escape(temporal.startInclusive?.toString().orEmpty())).append('|')
+                .append(escape(temporal.endInclusive?.toString().orEmpty())).append('|')
+                .append(escape(temporal.sourceText)).append('|')
+                .append(temporal.span.start).append('|')
+                .append(temporal.span.endExclusive).append('|')
+                .append(temporal.confidence).append('\n')
+        }
+        append("domain.fingerprint=").append(frame.domainSemanticGraph.fingerprint).append('\n')
+        frame.domainSemanticGraph.nodes.forEachIndexed { index, node ->
+            append("domain.node.").append(index).append('=')
+                .append(escape(node.id.value)).append('|')
+                .append(node.pack.name).append('|')
+                .append(escape(node.type)).append('|')
+                .append(escape(node.value)).append('|')
+                .append(node.confidence).append('|')
+                .append(escape(node.sourceEntityType?.value.orEmpty())).append('\n')
+        }
+        frame.domainSemanticGraph.relations.forEachIndexed { index, relation ->
+            append("domain.relation.").append(index).append('=')
+                .append(escape(relation.from.value)).append('|')
+                .append(escape(relation.to.value)).append('|')
+                .append(relation.type.name).append('|')
+                .append(relation.confidence).append('\n')
+        }
+        append("quality=")
+            .append(frame.interpretationQuality.evidenceStrength).append('|')
+            .append(frame.interpretationQuality.interpretationMargin).append('|')
+            .append(frame.interpretationQuality.completeness).append('|')
+            .append(frame.interpretationQuality.contradictionCount).append('|')
+            .append(frame.interpretationQuality.ambiguityCount).append('|')
+            .append(frame.interpretationQuality.executionReadiness).append('\n')
         frame.constraints.sortedWith(compareBy<GoalConstraint> { it.key }.thenBy { it.value }).forEach {
             append("constraint.").append(escape(it.key)).append('=').append(escape(it.value)).append('|').append(it.confidence).append('\n')
         }
