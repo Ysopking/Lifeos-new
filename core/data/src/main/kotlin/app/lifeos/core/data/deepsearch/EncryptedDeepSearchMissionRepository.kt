@@ -26,6 +26,7 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
     override suspend fun loadReport(): DeepSearchMissionRepositoryLoadReport = withContext(Dispatchers.IO) {
         processMutex.withLock {
             ensureMigrated()
+            readHeadOrRecover()
             val unreadable = mutableListOf<String>()
             val events = eventFiles().mapNotNull { file ->
                 runCatching { readEvent(file) }
@@ -108,13 +109,26 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
     }
 
     private fun readHeadOrRecover(): Long {
-        if (exists(headFile)) runCatching { return readHead() }
-        val revisions = eventFiles().mapNotNull { file ->
-            file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
-        }.toSet()
-        val recovered = revisions.maxOrNull() ?: 0L
-        if (recovered > 0L) require((1L..recovered).all { it in revisions })
-        writeHead(recovered)
+        val files = eventFiles()
+        val byRevision = files.groupBy { file ->
+            requireNotNull(
+                file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
+            ) { "Invalid DeepSearch event segment name: ${file.name}" }
+        }
+        require(byRevision.values.all { it.size == 1 }) {
+            "DeepSearch contains duplicate global event revisions"
+        }
+        val revisions = byRevision.keys.sorted()
+        val recovered = revisions.lastOrNull() ?: 0L
+        require(revisions == if (recovered == 0L) emptyList() else (1L..recovered).toList()) {
+            "DeepSearch event segments are not contiguous"
+        }
+
+        val storedHead = if (exists(headFile)) runCatching(::readHead).getOrNull() else null
+        require(storedHead == null || storedHead <= recovered) {
+            "DeepSearch head points past durable event tail"
+        }
+        if (storedHead != recovered) writeHead(recovered)
         return recovered
     }
 
