@@ -101,6 +101,8 @@ internal object LifeOsRuntimeWiring {
         LifeOsStartupStage.SELF_HEALING -> "application:self-healing"
         LifeOsStartupStage.DURABLE_GOALS -> "application:durable-goals"
         LifeOsStartupStage.GOAL_EXECUTION,
+        LifeOsStartupStage.KERNEL_BOOT,
+        LifeOsStartupStage.COGNITIVE_STATE_READY,
         LifeOsStartupStage.RUNTIME_STARTED -> error("Stage $stage does not own subsystem manifests")
     }
 
