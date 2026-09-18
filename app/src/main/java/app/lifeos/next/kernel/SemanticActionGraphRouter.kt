@@ -274,8 +274,15 @@ class SemanticActionGraphRouter(
         }
 
         val dependencyRawText = dependencyReference?.expression?.rawText
+        val nodeConfidence = when (updatedNode.type) {
+            SemanticActionNodeType.ACTION ->
+                minOf(updatedNode.frame.confidence, updatedNode.executionReadiness)
+            SemanticActionNodeType.QUERY -> updatedNode.frame.confidence
+            else -> base.confidence
+        }
         return base.copy(
             intent = intent,
+            confidence = nodeConfidence,
             references = buildList {
                 dependencyReference?.let(::add)
                 addAll(base.references.filterNot { reference ->
