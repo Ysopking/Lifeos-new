@@ -44,22 +44,33 @@ class DurableGoalPlanRuntimeTest {
         val goalRepository = MemoryGoalPlanRepository()
         val checkpointRepository = MemoryCheckpointRepository()
         val ledger = DurableGoalPlanLedger(goalRepository)
-        val durableRuntime = runtime(ledger, checkpointRepository)
+        val persisted = mutableListOf<Photon>()
+        val durableRuntime = runtime(
+            ledger = ledger,
+            checkpoints = checkpointRepository,
+            loadPersistedPhotons = { persisted.toList() },
+        )
         val goal = goal(IntentType.QUERY, "Resolve the local query")
         val routing = routing(goal)
+        val goalId = PhotonId("goal-e2e")
         val source = photon("source-e2e", tags = setOf("chat"))
-        val outcome = photon("outcome-e2e", tags = setOf("answer", "result"))
+        val outcome = photon(
+            id = "outcome-e2e",
+            tags = setOf("answer", "result", "local-query-answer"),
+            parentIds = setOf(goalId),
+        )
         val context = GoalActionContext(
             goal = goal,
             routing = routing,
             sourcePhoton = source,
-            goalPhotonId = PhotonId("goal-e2e"),
+            goalPhotonId = goalId,
             goalPhotonRevision = 1,
         )
         var executions = 0
         val dispatcher = GoalActionDispatcher(
             executeKnowledge = {
                 executions += 1
+                persisted += outcome
                 LocalKnowledgeExecutionResult.Produced(
                     kind = LocalKnowledgeGoalKind.QUERY_ANSWER,
                     output = PhotonSubmissionResult(outcome, processingQueued = true),
@@ -158,12 +169,14 @@ class DurableGoalPlanRuntimeTest {
         ledger: DurableGoalPlanLedger,
         checkpoints: MemoryCheckpointRepository,
         persistDerivedOutcome: suspend (Photon) -> PhotonSubmissionResult? = { null },
+        loadPersistedPhotons: suspend () -> List<Photon> = { emptyList() },
     ) = DurableGoalPlanRuntime(
         ledger = ledger,
         convergence = GoalConvergenceDecisionProvider(
             DurableConvergenceDecisionCoordinator(checkpoints)
         ),
         persistDerivedOutcome = persistDerivedOutcome,
+        loadPersistedPhotons = loadPersistedPhotons,
         now = { at },
     )
 
@@ -188,7 +201,11 @@ class DurableGoalPlanRuntimeTest {
         gaps = emptyList(),
     )
 
-    private fun photon(id: String, tags: Set<String>) = Photon(
+    private fun photon(
+        id: String,
+        tags: Set<String>,
+        parentIds: Set<PhotonId> = emptySet(),
+    ) = Photon(
         id = PhotonId(id),
         content = "test content",
         semanticMass = 1.0,
@@ -198,6 +215,7 @@ class DurableGoalPlanRuntimeTest {
             source = "unit-test",
             actor = "test",
             createdAt = at,
+            parentIds = parentIds,
         ),
         tags = tags,
     )
