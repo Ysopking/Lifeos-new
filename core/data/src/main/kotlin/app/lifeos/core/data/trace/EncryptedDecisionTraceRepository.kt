@@ -28,7 +28,7 @@ class EncryptedDecisionTraceRepository(context: Context) : DecisionTraceReposito
             ensureMigrated()
             val unreadable = mutableListOf<String>()
             val traces = traceFiles().mapNotNull { file ->
-                runCatching { readTrace(file) }
+                runCatching { readValidatedTrace(file) }
                     .onFailure { unreadable += file.relativeTo(directory).path }
                     .getOrNull()
             }
@@ -46,18 +46,20 @@ class EncryptedDecisionTraceRepository(context: Context) : DecisionTraceReposito
         processMutex.withLock {
             require(expectedRevision >= 0L)
             ensureMigrated()
-            val traceDirectory = traceDirectory(trace.id.value)
-            val currentRevision = traceDirectory.listFiles().orEmpty()
-                .filter { it.name.startsWith(REVISION_PREFIX) && it.name.endsWith(REVISION_SUFFIX) }
-                .mapNotNull { it.name.removePrefix(REVISION_PREFIX).removeSuffix(REVISION_SUFFIX).toLongOrNull() }
-                .maxOrNull() ?: 0L
+            val revisions = traceFiles(trace.id.value)
+                .map { file -> readValidatedTrace(file).revision }
+                .sorted()
+            val currentRevision = revisions.lastOrNull() ?: 0L
+            require(
+                revisions == if (currentRevision == 0L) emptyList() else (1L..currentRevision).toList()
+            ) { "Decision trace revisions are not contiguous on disk" }
             if (currentRevision != expectedRevision) return@withLock false
             require(trace.revision == expectedRevision + 1L) {
                 "Decision trace append revision mismatch"
             }
             val target = revisionFile(trace.id.value, trace.revision)
             if (exists(target)) {
-                require(readTrace(target) == trace) { "Decision trace revision collision" }
+                require(readValidatedTrace(target) == trace) { "Decision trace revision collision" }
             } else {
                 target.parentFile?.let { check(it.isDirectory || it.mkdirs()) }
                 writeTrace(target, trace)
@@ -90,6 +92,23 @@ class EncryptedDecisionTraceRepository(context: Context) : DecisionTraceReposito
         return values.single()
     }
 
+    private fun readValidatedTrace(file: File): DecisionTrace {
+        val trace = readTrace(file)
+        require(trace.revision == traceRevision(file)) {
+            "Decision trace payload revision does not match segment path"
+        }
+        val idDirectory = requireNotNull(file.parentFile) {
+            "Decision trace segment has no trace directory"
+        }
+        require(idDirectory.parentFile == tracesDirectory) {
+            "Decision trace segment is not stored under the trace directory"
+        }
+        require(idDirectory.name == sha256(trace.id.value)) {
+            "Decision trace id does not match segment path"
+        }
+        return trace
+    }
+
     private fun writeTrace(file: File, trace: DecisionTrace) {
         writeEncrypted(
             file,
@@ -113,6 +132,19 @@ class EncryptedDecisionTraceRepository(context: Context) : DecisionTraceReposito
             .sortedBy { it.path }
             .toList()
     }
+
+    private fun traceFiles(traceId: String): List<File> {
+        val directory = traceDirectory(traceId)
+        if (!directory.exists()) return emptyList()
+        return directory.listFiles().orEmpty()
+            .filter { it.isFile && it.name.startsWith(REVISION_PREFIX) && it.name.endsWith(REVISION_SUFFIX) }
+            .sortedBy { it.name }
+    }
+
+    private fun traceRevision(file: File): Long =
+        requireNotNull(
+            file.name.removePrefix(REVISION_PREFIX).removeSuffix(REVISION_SUFFIX).toLongOrNull()
+        ) { "Invalid decision trace segment name: ${file.name}" }
 
     private fun decrypt(file: File, maxPlaintextBytes: Int): ByteArray =
         EncryptedLedgerVaultSupport.decrypt(

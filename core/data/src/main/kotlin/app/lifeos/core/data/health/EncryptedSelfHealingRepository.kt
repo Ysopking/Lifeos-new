@@ -28,12 +28,14 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
     override suspend fun loadReport(): SelfHealingRepositoryLoadReport = withContext(Dispatchers.IO) {
         processMutex.withLock {
             ensureMigrated()
-            readHeadOrRecover()
             val unreadable = mutableListOf<String>()
             val events = eventFiles().mapNotNull { file ->
-                runCatching { readEvent(file) }
+                runCatching { readValidatedEvent(file) }
                     .onFailure { unreadable += file.relativeTo(directory).path }
                     .getOrNull()
+            }
+            if (unreadable.isEmpty()) {
+                readHeadOrRecover()
             }
             SelfHealingRepositoryLoadReport(events.sortedBy { it.revision }, unreadable.sorted())
         }
@@ -46,6 +48,7 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
         processMutex.withLock {
             require(expectedRevision >= 0L)
             ensureMigrated()
+            requireReadableEventHistory()
             val currentRevision = readHeadOrRecover()
             if (currentRevision != expectedRevision) return@withLock false
             require(event.revision == expectedRevision + 1L) {
@@ -53,7 +56,7 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
             }
             val target = eventFile(event)
             if (exists(target)) {
-                require(readEvent(target) == event) { "Self-healing event revision collision" }
+                require(readValidatedEvent(target) == event) { "Self-healing event revision collision" }
             } else {
                 writeEvent(target, event)
             }
@@ -88,6 +91,27 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
         return event
     }
 
+    private fun readValidatedEvent(file: File): SelfHealingEvent {
+        val event = readEvent(file)
+        require(event.revision == segmentRevision(file)) {
+            "Self-healing event payload revision does not match segment path"
+        }
+        val incidentDirectory = requireNotNull(file.parentFile) {
+            "Self-healing event segment has no incident directory"
+        }
+        require(incidentDirectory.parentFile == incidentsDirectory) {
+            "Self-healing event segment is not stored under the incident directory"
+        }
+        require(incidentDirectory.name == sha256(event.incidentId.value)) {
+            "Self-healing event incident does not match segment path"
+        }
+        return event
+    }
+
+    private fun requireReadableEventHistory() {
+        eventFiles().forEach { file -> readValidatedEvent(file) }
+    }
+
     private fun writeEvent(file: File, event: SelfHealingEvent) {
         file.parentFile?.let { check(it.isDirectory || it.mkdirs()) }
         writeEncrypted(
@@ -111,11 +135,7 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
 
     private fun readHeadOrRecover(): Long {
         val files = eventFiles()
-        val byRevision = files.groupBy { file ->
-            requireNotNull(
-                file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
-            ) { "Invalid Self-healing event segment name: ${file.name}" }
-        }
+        val byRevision = files.groupBy(::segmentRevision)
         require(byRevision.values.all { it.size == 1 }) {
             "Self-healing contains duplicate global event revisions"
         }
@@ -132,6 +152,11 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
         if (storedHead != recovered) writeHead(recovered)
         return recovered
     }
+
+    private fun segmentRevision(file: File): Long =
+        requireNotNull(
+            file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
+        ) { "Invalid Self-healing event segment name: ${file.name}" }
 
     private fun readHead(): Long {
         val bytes = decrypt(headFile, 64)

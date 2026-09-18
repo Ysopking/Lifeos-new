@@ -26,12 +26,14 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
     override suspend fun loadReport(): ToolWorkshopJobRepositoryLoadReport = withContext(Dispatchers.IO) {
         processMutex.withLock {
             ensureMigrated()
-            readHeadOrRecover()
             val unreadable = mutableListOf<String>()
             val events = eventFiles().mapNotNull { file ->
-                runCatching { readEvent(file) }
+                runCatching { readValidatedEvent(file) }
                     .onFailure { unreadable += file.relativeTo(directory).path }
                     .getOrNull()
+            }
+            if (unreadable.isEmpty()) {
+                readHeadOrRecover()
             }
             ToolWorkshopJobRepositoryLoadReport(events.sortedBy { it.revision }, unreadable.sorted())
         }
@@ -44,6 +46,7 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
         processMutex.withLock {
             require(expectedRevision >= 0L)
             ensureMigrated()
+            requireReadableEventHistory()
             val currentRevision = readHeadOrRecover()
             if (currentRevision != expectedRevision) return@withLock false
             require(event.revision == expectedRevision + 1L) {
@@ -51,7 +54,7 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
             }
             val target = eventFile(event)
             if (exists(target)) {
-                require(readEvent(target) == event) { "ToolWorkshop job event revision collision" }
+                require(readValidatedEvent(target) == event) { "ToolWorkshop job event revision collision" }
             } else {
                 writeEvent(target, event)
             }
@@ -84,6 +87,27 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
         return event
     }
 
+    private fun readValidatedEvent(file: File): ToolWorkshopJobEvent {
+        val event = readEvent(file)
+        require(event.revision == segmentRevision(file)) {
+            "ToolWorkshop event payload revision does not match segment path"
+        }
+        val jobDirectory = requireNotNull(file.parentFile) {
+            "ToolWorkshop event segment has no job directory"
+        }
+        require(jobDirectory.parentFile == jobsDirectory) {
+            "ToolWorkshop event segment is not stored under the job directory"
+        }
+        require(jobDirectory.name == sha256(event.definition.id.value)) {
+            "ToolWorkshop event job does not match segment path"
+        }
+        return event
+    }
+
+    private fun requireReadableEventHistory() {
+        eventFiles().forEach { file -> readValidatedEvent(file) }
+    }
+
     private fun writeEvent(file: File, event: ToolWorkshopJobEvent) {
         file.parentFile?.let { check(it.isDirectory || it.mkdirs()) }
         writeEncrypted(
@@ -95,11 +119,7 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
 
     private fun readHeadOrRecover(): Long {
         val files = eventFiles()
-        val byRevision = files.groupBy { file ->
-            requireNotNull(
-                file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
-            ) { "Invalid ToolWorkshop event segment name: ${file.name}" }
-        }
+        val byRevision = files.groupBy(::segmentRevision)
         require(byRevision.values.all { it.size == 1 }) {
             "ToolWorkshop contains duplicate global event revisions"
         }
@@ -116,6 +136,11 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
         if (storedHead != recovered) writeHead(recovered)
         return recovered
     }
+
+    private fun segmentRevision(file: File): Long =
+        requireNotNull(
+            file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
+        ) { "Invalid ToolWorkshop event segment name: ${file.name}" }
 
     private fun readHead(): Long {
         val bytes = decrypt(headFile, 64)

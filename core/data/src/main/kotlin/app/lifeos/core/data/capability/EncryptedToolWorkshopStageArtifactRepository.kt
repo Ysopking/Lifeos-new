@@ -27,7 +27,7 @@ class EncryptedToolWorkshopStageArtifactRepository(context: Context) : ToolWorks
             ensureMigrated()
             val target = targetFor(artifact.jobId, artifact.stage)
             if (exists(target)) {
-                val existing = readOne(target)
+                val existing = readValidatedOne(target)
                 require(existing.fingerprint == artifact.fingerprint && existing.payload == artifact.payload) {
                     "ToolWorkshop stage artifact is immutable once persisted"
                 }
@@ -44,7 +44,7 @@ class EncryptedToolWorkshopStageArtifactRepository(context: Context) : ToolWorks
         processMutex.withLock {
             ensureMigrated()
             val target = targetFor(jobId, stage)
-            if (!exists(target)) null else readOne(target).also {
+            if (!exists(target)) null else readValidatedOne(target).also {
                 require(it.jobId == jobId && it.stage == stage) {
                     "ToolWorkshop stage artifact identity mismatch"
                 }
@@ -60,7 +60,7 @@ class EncryptedToolWorkshopStageArtifactRepository(context: Context) : ToolWorks
                 if (!jobDirectory.exists()) return@withLock emptyList()
                 jobDirectory.listFiles().orEmpty()
                     .filter { it.isFile && it.name.endsWith(RECORD_SUFFIX) }
-                    .map(::readOne)
+                    .map(::readValidatedOne)
                     .onEach { require(it.jobId == jobId) }
                     .sortedBy { it.stage.ordinal }
             }
@@ -80,6 +80,14 @@ class EncryptedToolWorkshopStageArtifactRepository(context: Context) : ToolWorks
         val values = readMany(file)
         require(values.size == 1) { "Stage artifact record must contain one artifact" }
         return values.single()
+    }
+
+    private fun readValidatedOne(file: File): ToolWorkshopStageArtifact {
+        val artifact = readOne(file)
+        require(file == targetFor(artifact.jobId, artifact.stage)) {
+            "ToolWorkshop stage artifact payload does not match record path"
+        }
+        return artifact
     }
 
     private fun readMany(file: File): List<ToolWorkshopStageArtifact> {

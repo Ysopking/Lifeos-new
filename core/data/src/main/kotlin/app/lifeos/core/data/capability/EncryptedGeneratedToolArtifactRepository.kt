@@ -33,7 +33,7 @@ class EncryptedGeneratedToolArtifactRepository(context: Context) : GeneratedTool
         ensureMigrated()
         val target = targetFor(artifact.toolId)
         if (exists(target)) {
-            val existing = readArtifact(target)
+            val existing = readValidatedArtifact(target)
             require(existing == artifact) { "Generated-tool artifact for ${artifact.toolId} is immutable" }
             return@ioLocked
         }
@@ -44,14 +44,14 @@ class EncryptedGeneratedToolArtifactRepository(context: Context) : GeneratedTool
         require(toolId.isNotBlank()) { "Generated-tool artifact id must not be blank" }
         ensureMigrated()
         val target = targetFor(toolId)
-        if (!exists(target)) null else readArtifact(target).also {
+        if (!exists(target)) null else readValidatedArtifact(target).also {
             require(it.toolId == toolId) { "Generated-tool artifact identity mismatch" }
         }
     }
 
     override suspend fun loadAll(): List<GeneratedToolArtifact> = ioLocked {
         ensureMigrated()
-        recordFiles().map(::readArtifact).sortedBy { it.toolId }
+        recordFiles().map(::readValidatedArtifact).sortedBy { it.toolId }
     }
 
     private fun ensureMigrated() {
@@ -69,6 +69,14 @@ class EncryptedGeneratedToolArtifactRepository(context: Context) : GeneratedTool
         val values = readArtifacts(target)
         require(values.size == 1) { "Generated-tool artifact record must contain one artifact" }
         return values.single()
+    }
+
+    private fun readValidatedArtifact(target: AtomicFile): GeneratedToolArtifact {
+        val artifact = readArtifact(target)
+        require(target.baseFile == targetFor(artifact.toolId).baseFile) {
+            "Generated-tool artifact payload does not match record path"
+        }
+        return artifact
     }
 
     private fun readArtifacts(target: AtomicFile): List<GeneratedToolArtifact> {

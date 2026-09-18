@@ -186,22 +186,27 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
 
     private fun readStatesLocked(): List<GeneratedToolPersistentState> {
         ensureMigrated()
-        return recordFiles().map { target ->
-            val values = readStates(target)
-            require(values.size == 1) { "Generated-tool state record must contain one tool" }
-            values.single()
-        }.sortedBy { it.record.manifest.toolId }
+        return recordFiles().map(::readValidatedState)
+            .sortedBy { it.record.manifest.toolId }
     }
 
     private fun readStateLocked(toolId: String): GeneratedToolPersistentState? {
         ensureMigrated()
         val target = targetFor(toolId)
         if (!exists(target)) return null
-        val values = readStates(target)
-        require(values.size == 1) { "Generated-tool state record must contain one tool" }
-        return values.single().also {
+        return readValidatedState(target).also {
             require(it.record.manifest.toolId == toolId) { "Generated-tool state identity mismatch" }
         }
+    }
+
+    private fun readValidatedState(target: AtomicFile): GeneratedToolPersistentState {
+        val values = readStates(target)
+        require(values.size == 1) { "Generated-tool state record must contain one tool" }
+        val state = values.single()
+        require(target.baseFile == targetFor(state.record.manifest.toolId).baseFile) {
+            "Generated-tool state payload does not match record path"
+        }
+        return state
     }
 
     private fun writeStateLocked(state: GeneratedToolPersistentState) {
