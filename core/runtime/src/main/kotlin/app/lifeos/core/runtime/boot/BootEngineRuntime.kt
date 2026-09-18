@@ -163,6 +163,28 @@ data class BootEngineCycle private constructor(
             )
         }
 
+        fun restore(
+            cycleId: CognitiveCycleId,
+            context: WorldFormulaCycleContext,
+            frozenInputsFingerprint: String,
+            state: BootEngineCycleState,
+            productiveRequestId: String?,
+            worldSnapshotId: String?,
+            productiveHeadRevision: Long?,
+            failure: String?,
+            fingerprint: String,
+        ): BootEngineCycle = BootEngineCycle(
+            cycleId = cycleId,
+            context = context,
+            frozenInputsFingerprint = frozenInputsFingerprint,
+            state = state,
+            productiveRequestId = productiveRequestId,
+            worldSnapshotId = worldSnapshotId,
+            productiveHeadRevision = productiveHeadRevision,
+            failure = failure,
+            fingerprint = fingerprint,
+        )
+
         private fun create(
             cycleId: CognitiveCycleId,
             context: WorldFormulaCycleContext,
@@ -199,14 +221,43 @@ data class BootEngineCycle private constructor(
     }
 }
 
+data class BootEngineCycleLoadReport(
+    val activeCycle: BootEngineCycle?,
+    val latestCommitted: BootEngineCycle?,
+    val corrupted: Boolean,
+    val message: String?,
+) {
+    init {
+        require(message == null || message.isNotBlank())
+        require(!corrupted || message != null) {
+            "Corrupted BootEngine cycle report requires a message"
+        }
+        require(activeCycle == null || !activeCycle.terminal) {
+            "Active BootEngine cycle report cannot expose a terminal cycle"
+        }
+        require(latestCommitted == null || latestCommitted.state == BootEngineCycleState.COMMITTED) {
+            "Latest committed BootEngine cycle must be COMMITTED"
+        }
+    }
+}
+
 interface BootEngineCycleRepository {
     suspend fun create(cycle: BootEngineCycle): Boolean
     suspend fun load(cycleId: CognitiveCycleId): BootEngineCycle?
     suspend fun loadActive(): BootEngineCycle?
+    suspend fun loadLatestCommitted(): BootEngineCycle? = null
     suspend fun compareAndSet(
         expectedFingerprint: String,
         next: BootEngineCycle,
     ): Boolean
+
+    suspend fun loadReport(): BootEngineCycleLoadReport =
+        BootEngineCycleLoadReport(
+            activeCycle = loadActive(),
+            latestCommitted = loadLatestCommitted(),
+            corrupted = false,
+            message = null,
+        )
 }
 
 sealed interface BootEngineWorldEvaluation {
