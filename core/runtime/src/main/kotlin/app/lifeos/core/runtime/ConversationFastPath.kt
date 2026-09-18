@@ -53,12 +53,19 @@ class ConversationFastPath {
             else -> false
         }
         val requiresMemory = when (intent) {
+            IntentType.CONVERSATION -> resolvedReference || unresolvedReference
+            IntentType.CREATE_IMAGE,
+            IntentType.TRANSFORM_IMAGE,
+            IntentType.BUILD_OR_IMPLEMENT,
+            IntentType.SCHEDULE,
+            IntentType.COMMUNICATE,
+            -> resolvedReference || unresolvedReference
             IntentType.STORE_OR_REMEMBER,
             IntentType.CONTINUE,
             IntentType.SEARCH,
+            IntentType.QUERY,
+            IntentType.UNKNOWN,
             -> true
-            IntentType.QUERY -> resolvedReference || unresolvedReference || hasBoundReference || artifactContextActive
-            else -> resolvedReference || unresolvedReference
         }
         val requiresMatter = matterContextActive && when (intent) {
             IntentType.QUERY,
