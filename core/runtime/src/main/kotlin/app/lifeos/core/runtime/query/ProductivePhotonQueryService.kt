@@ -18,7 +18,10 @@ data class ProductivePhotonPage(
 }
 
 fun interface GoalOutcomeLookup {
-    suspend fun findLatestOutcome(goalPhotonId: PhotonId): Photon?
+    suspend fun candidates(
+        goalPhotonId: PhotonId,
+        limit: Int,
+    ): List<Photon>
 }
 
 class ProductivePhotonQueryService(
@@ -128,15 +131,13 @@ class ProductivePhotonQueryService(
         limit = limit,
     )
 
-    override suspend fun findLatestOutcome(goalPhotonId: PhotonId): Photon? =
-        byParent(
-            parentId = goalPhotonId,
-            limit = MAX_GOAL_OUTCOME_CANDIDATES,
-        ).maxWithOrNull(
-            compareBy<Photon> { it.provenance.createdAt }
-                .thenBy { it.id.value }
-                .thenBy { it.revision }
-        )
+    override suspend fun candidates(
+        goalPhotonId: PhotonId,
+        limit: Int,
+    ): List<Photon> = byParent(
+        parentId = goalPhotonId,
+        limit = limit,
+    )
 
     companion object {
         const val DEFAULT_PARENT_SCAN_PAGES: Int = 4
