@@ -55,6 +55,20 @@ class InMemoryTaskRepository : IndexedTaskSnapshotRepository {
         }
     }
 
+    override suspend fun listByStates(
+        types: Set<TaskType>,
+        states: Set<TaskState>,
+        limit: Int,
+    ): List<LifeTask> = mutex.withLock {
+        require(limit > 0)
+        if (types.isEmpty() || states.isEmpty()) return@withLock emptyList()
+        tasks.values.asSequence()
+            .filter { it.type in types && it.state in states }
+            .sortedWith(compareBy<LifeTask> { it.createdAt }.thenBy { it.id.value })
+            .take(limit)
+            .toList()
+    }
+
     override suspend fun rebuildIndex(): TaskIndexReport = mutex.withLock {
         TaskIndexReport(
             formatVersion = 1,
