@@ -231,6 +231,19 @@ data class ProductiveWorldHead private constructor(
     }
 }
 
+data class ProductiveWorldHeadLoadReport(
+    val head: ProductiveWorldHead?,
+    val corrupted: Boolean,
+    val message: String?,
+) {
+    init {
+        require(message == null || message.isNotBlank())
+        require(!corrupted || message != null) {
+            "Corrupted productive world head report requires a message"
+        }
+    }
+}
+
 interface ProductiveWorldHeadRepository {
     suspend fun load(): ProductiveWorldHead?
 
@@ -238,6 +251,13 @@ interface ProductiveWorldHeadRepository {
         expectedRevision: Long?,
         next: ProductiveWorldHead,
     ): Boolean
+
+    suspend fun loadReport(): ProductiveWorldHeadLoadReport =
+        ProductiveWorldHeadLoadReport(
+            head = load(),
+            corrupted = false,
+            message = null,
+        )
 }
 
 sealed interface ProductiveWorldCommitResult {
