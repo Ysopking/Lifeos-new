@@ -6,7 +6,9 @@ package app.lifeos.core.language
  * Predicate detection is lexical/syntactic and deliberately independent from IntentType.
  * Intent evidence can describe a topic, but cannot create an executable node.
  */
-class PredicateFrameParser {
+class PredicateFrameParser(
+    private val morphology: GermanMorphologyEngine = GermanMorphologyEngine(),
+) {
     fun parse(
         utterance: NormalizedUtterance,
         graph: LanguageSemanticGraph,
@@ -23,7 +25,7 @@ class PredicateFrameParser {
         if (predicate == null) return@mapNotNull null
 
         val predicateLocalIndex = tokens.indexOfFirst { token ->
-            token.normalized in PREDICATE_FORMS[predicate].orEmpty()
+            matchesPredicate(token.normalized, predicate)
         }.takeIf { it >= 0 } ?: 0
         val predicateTokenIndex = clause.tokenStart + predicateLocalIndex
         val nodeId = SemanticNodeId.create(
@@ -84,8 +86,18 @@ class PredicateFrameParser {
             }
         }
         return PREDICATE_ORDER.firstOrNull { concept ->
-            words.any { it in PREDICATE_FORMS.getValue(concept) }
+            words.any { matchesPredicate(it, concept) }
         }
+    }
+
+    private fun matchesPredicate(
+        token: String,
+        concept: PredicateConcept,
+    ): Boolean {
+        val forms = PREDICATE_FORMS[concept].orEmpty()
+        if (token in forms) return true
+        val morphological = morphology.candidates(token)
+        return morphological.any { it in forms }
     }
 
     private fun conditionPredicate(tokens: List<LanguageToken>): PredicateConcept? {
