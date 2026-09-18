@@ -1,13 +1,17 @@
 package app.lifeos.next.ui.system
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -15,14 +19,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.LifeOsDecisionTraceViewModel
 import app.lifeos.next.LifeOsToolCenterViewModel
 import app.lifeos.next.OwnerAssetReviewViewModel
 import app.lifeos.next.ui.assets.OwnerAssetReviewScreen
+import app.lifeos.next.ui.components.LifeOsScreenHeader
 import app.lifeos.next.ui.decision.LifeOsDecisionTraceScreen
+import app.lifeos.next.ui.theme.LifeOsTokens
 import app.lifeos.next.ui.tools.LifeOsToolCenterScreen
 
 private enum class SystemHubPage {
@@ -47,23 +53,13 @@ fun LifeOsSystemHub(
     }
 
     when (page) {
-        SystemHubPage.OVERVIEW -> Column(modifier = modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text("Weitere Bereiche", style = MaterialTheme.typography.titleMedium)
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = { page = SystemHubPage.WHY }) { Text("Warum") }
-                    TextButton(onClick = { page = SystemHubPage.TOOLS }) { Text("Tools") }
-                    TextButton(onClick = { page = SystemHubPage.ASSETS }) { Text("Assets") }
-                }
-            }
-            SystemRuntimeHealthScreen(
-                model = model,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        SystemHubPage.OVERVIEW -> SystemOverview(
+            model = model,
+            onWhy = { page = SystemHubPage.WHY },
+            onTools = { page = SystemHubPage.TOOLS },
+            onAssets = { page = SystemHubPage.ASSETS },
+            modifier = modifier,
+        )
         SystemHubPage.WHY -> TechnicalSubpage(
             title = "Warum",
             onBack = { page = SystemHubPage.OVERVIEW },
@@ -89,6 +85,100 @@ fun LifeOsSystemHub(
 }
 
 @Composable
+private fun SystemOverview(
+    model: LifeOsChatViewModel,
+    onWhy: () -> Unit,
+    onTools: () -> Unit,
+    onAssets: () -> Unit,
+    modifier: Modifier,
+) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .widthIn(max = LifeOsTokens.Layout.contentMaxWidth)
+                .padding(
+                    horizontal = LifeOsTokens.Spacing.large,
+                    vertical = LifeOsTokens.Spacing.medium,
+                ),
+            verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.medium),
+        ) {
+            LifeOsScreenHeader(
+                title = "System",
+                subtitle = "Runtime-Gesundheit, Nachvollziehbarkeit und kontrollierte Erweiterungen.",
+                eyebrow = "Owner Console",
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
+            ) {
+                SystemEntryCard(
+                    title = "Warum",
+                    subtitle = "DecisionTrace & Evidenz",
+                    glyph = "?",
+                    onClick = onWhy,
+                    modifier = Modifier.weight(1f),
+                )
+                SystemEntryCard(
+                    title = "Tools",
+                    subtitle = "Fähigkeiten & Trials",
+                    glyph = "⚙",
+                    onClick = onTools,
+                    modifier = Modifier.weight(1f),
+                )
+                SystemEntryCard(
+                    title = "Assets",
+                    subtitle = "Artefakte & Reviews",
+                    glyph = "▣",
+                    onClick = onAssets,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            SystemRuntimeHealthScreen(
+                model = model,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SystemEntryCard(
+    title: String,
+    subtitle: String,
+    glyph: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.clickable(onClick = onClick),
+        color = MaterialTheme.colorScheme.surface,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = LifeOsTokens.Elevation.resting,
+    ) {
+        Column(
+            modifier = Modifier.padding(LifeOsTokens.Spacing.medium),
+            verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.xSmall),
+        ) {
+            Text(
+                text = glyph,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 private fun TechnicalSubpage(
     title: String,
     onBack: () -> Unit,
@@ -97,11 +187,18 @@ private fun TechnicalSubpage(
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = LifeOsTokens.Spacing.small,
+                    vertical = LifeOsTokens.Spacing.xSmall,
+                ),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onBack) { Text("Zurück") }
-            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(12.dp))
+            TextButton(onClick = onBack) { Text("← Zurück") }
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            TextButton(onClick = {}) { Text("") }
         }
         content(Modifier.fillMaxSize())
     }
