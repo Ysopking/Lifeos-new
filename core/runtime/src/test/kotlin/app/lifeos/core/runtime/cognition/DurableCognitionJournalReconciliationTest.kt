@@ -61,15 +61,26 @@ class DurableCognitionJournalReconciliationTest {
             tasks = tasks,
             cognition = cognition,
             taskEngine = taskEngine,
+            coverage = CognitionCoverageIndex(MemoryCoverageRepository()),
         )
 
         val result = reconciler.reconcile()
         val durableTasks = tasks.loadReport().tasks
 
-        assertEquals(1, result.scannedPhotons)
+        assertEquals(2, result.scannedPhotons)
         assertEquals(1, result.submitted)
         assertEquals(1, durableTasks.size)
         assertEquals(setOf(normal.id), durableTasks.single().inputPhotonIds)
+    }
+
+    private class MemoryCoverageRepository : CognitionCoverageRepository {
+        private var snapshot: CognitionCoverageSnapshot? = null
+
+        override suspend fun load(): CognitionCoverageSnapshot? = snapshot
+
+        override suspend fun save(snapshot: CognitionCoverageSnapshot) {
+            this.snapshot = snapshot
+        }
     }
 
     private class TestPhotonRepository(initial: List<Photon>) : PhotonRepository {
