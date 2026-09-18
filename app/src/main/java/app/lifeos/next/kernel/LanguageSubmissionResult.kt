@@ -5,6 +5,7 @@ import app.lifeos.core.language.GoalPhoton
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingResult
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
+import app.lifeos.core.runtime.agency.EffectReceipt
 
 data class LanguageSubmissionResult(
     val source: PhotonSubmissionResult,
@@ -19,6 +20,7 @@ data class LanguageSubmissionResult(
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
     val localSchedule: LocalScheduleExecutionResult? = null,
     val localCommunication: LocalCommunicationExecutionResult? = null,
+    val externalEffect: EffectReceipt? = null,
     val languageFailure: String? = null,
 ) {
     init {
