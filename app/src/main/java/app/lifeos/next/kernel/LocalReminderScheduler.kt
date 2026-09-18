@@ -14,9 +14,12 @@ import android.net.Uri
 import android.os.Build
 import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.agency.ActionEffectStatus
+import app.lifeos.core.runtime.agency.ActionEffectVerification
 import app.lifeos.core.runtime.goal.LocalReminderRecord
 import app.lifeos.core.runtime.goal.LocalScheduleGoalEngine
-import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
+import app.lifeos.core.runtime.trace.DecisionTraceId
 import app.lifeos.next.MainActivity
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -26,7 +29,11 @@ import kotlinx.coroutines.launch
 
 interface LocalReminderScheduler {
     fun canNotify(): Boolean
-    suspend fun schedule(reminderId: PhotonId, record: LocalReminderRecord)
+    suspend fun schedule(
+        reminderId: PhotonId,
+        record: LocalReminderRecord,
+        traceId: DecisionTraceId = DecisionTraceId.create("reminder-photon", reminderId.value),
+    )
 }
 
 /** Uses inexact while-idle alarms so LIFEOS does not require privileged exact-alarm access. */
@@ -41,40 +48,84 @@ class AndroidLocalReminderScheduler(
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             appContext.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-    override suspend fun schedule(reminderId: PhotonId, record: LocalReminderRecord) {
+    override suspend fun schedule(
+        reminderId: PhotonId,
+        record: LocalReminderRecord,
+        traceId: DecisionTraceId,
+    ) {
         require(record.triggerAt.isAfter(now())) { "Reminder trigger must be in the future" }
-        val exposure = PrivateOwnerEffectAuthority.expose(
+        val expectedEffect = StableCognitiveIds.fingerprint(
+            "android-reminder-effect/v1",
+            reminderId.value,
+            record.triggerAt.toString(),
+            record.zoneId,
+            record.message,
+        )
+        val result = PrivateOwnerEffectAuthority.transact(
             context = appContext,
+            traceId = traceId,
+            intentId = "schedule-reminder:${reminderId.value}",
             request = PrivateOwnerEffectAuthority.reminderRequest(
                 PrivateOwnerEffectAuthority.REMINDER_SCHEDULE_RESOURCE
             ),
-        ) {
-            scheduleUnchecked(reminderId, record)
-        }
-        if (exposure is OwnerEffectExposureResult.Blocked) {
-            throw SecurityException(
-                "owner-policy:${exposure.assessment.reasonCodes.joinToString(",") { it.name }}"
+            expectedEffectFingerprint = expectedEffect,
+            effect = {
+                scheduleUnchecked(reminderId, record)
+                reminderUri(reminderId).toString()
+            },
+            verify = { observedId ->
+                val exists = pendingIntent(
+                    reminderId = reminderId,
+                    message = record.message,
+                    flags = PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+                ) != null
+                ActionEffectVerification(
+                    confirmed = exists,
+                    observedEffectId = observedId.takeIf { exists },
+                    detail = if (exists) "android-alarm-pending-intent-present" else "android-alarm-unverified",
+                )
+            },
+        )
+        when (result.receipt.status) {
+            ActionEffectStatus.SUCCEEDED -> Unit
+            ActionEffectStatus.DENIED -> throw SecurityException(
+                "owner-policy:${result.receipt.policyAssessment.reasonCodes.joinToString(",") { it.name }}"
+            )
+            ActionEffectStatus.UNKNOWN_OUTCOME -> error(
+                "reminder-outcome-unknown:${result.receipt.contractId.value}"
             )
         }
     }
 
     private fun scheduleUnchecked(reminderId: PhotonId, record: LocalReminderRecord) {
-        val intent = Intent(appContext, ReminderAlarmReceiver::class.java).apply {
-            action = ACTION_REMINDER
-            data = reminderUri(reminderId)
-            putExtra(EXTRA_REMINDER_ID, reminderId.value)
-            putExtra(EXTRA_MESSAGE, record.message)
-        }
-        val pending = PendingIntent.getBroadcast(
-            appContext,
-            reminderId.value.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val pending = pendingIntent(
+            reminderId = reminderId,
+            message = record.message,
+            flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        ) ?: error("Unable to create reminder PendingIntent")
         alarmManager.setAndAllowWhileIdle(
             AlarmManager.RTC_WAKEUP,
             record.triggerAt.toEpochMilli(),
             pending,
+        )
+    }
+
+    private fun pendingIntent(
+        reminderId: PhotonId,
+        message: String,
+        flags: Int,
+    ): PendingIntent? {
+        val intent = Intent(appContext, ReminderAlarmReceiver::class.java).apply {
+            action = ACTION_REMINDER
+            data = reminderUri(reminderId)
+            putExtra(EXTRA_REMINDER_ID, reminderId.value)
+            putExtra(EXTRA_MESSAGE, message)
+        }
+        return PendingIntent.getBroadcast(
+            appContext,
+            reminderId.value.hashCode(),
+            intent,
+            flags,
         )
     }
 
