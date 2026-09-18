@@ -91,10 +91,10 @@ class SingleWorldFormulaCouplingPathTest {
         val thought = Level7SourceArchitecture.text(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/convergence/ThoughtGraphConvergenceService.kt"
         )
-        assertFalse(Regex("""(?<![A-Za-z0-9_])ConvergenceCoordinator\\s*\\(""").containsMatchIn(app))
-        assertFalse(Regex("""(?<![A-Za-z0-9_])DurableConvergenceDecisionCoordinator\\s*\\(""").containsMatchIn(app))
-        assertFalse(Regex("""(?<![A-Za-z0-9_])ConvergenceCoordinator\\s*\\(""").containsMatchIn(goal))
-        assertFalse(Regex("""(?<![A-Za-z0-9_])DurableConvergenceDecisionCoordinator\\s*\\(""").containsMatchIn(goal))
+        assertFalse(Regex("""\\bConvergenceCoordinator\\s*\\(""").containsMatchIn(app))
+        assertFalse(Regex("""\\bDurableConvergenceDecisionCoordinator\\s*\\(""").containsMatchIn(app))
+        assertFalse(Regex("""\\bConvergenceCoordinator\\s*\\(""").containsMatchIn(goal))
+        assertFalse(Regex("""\\bDurableConvergenceDecisionCoordinator\\s*\\(""").containsMatchIn(goal))
         assertTrue("ProductiveConvergenceAuthority" in goal)
         assertTrue("WorldFormulaBoundConvergenceService" in thought)
     }
