@@ -810,7 +810,6 @@ class LifeOsKernel internal constructor(
         warnings: List<String>,
         degraded: Boolean,
     ) {
-        val displayReport = photonStore.loadReport()
         supervisor.start()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
@@ -820,11 +819,8 @@ class LifeOsKernel internal constructor(
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = if (degraded) KernelBootstrapStatus.DEGRADED else KernelBootstrapStatus.READY,
-            photons = displayReport.photons,
-            unreadableFiles = maxOf(
-                displayReport.unreadableFiles.size,
-                context.photons.unreadableFiles.size,
-            ),
+            photons = context.photons.allPhotons,
+            unreadableFiles = context.photons.unreadableFiles.size,
             warnings = warnings,
         )
     }
