@@ -74,12 +74,96 @@ class DurableCognitionAdmissionController(
         taskEngine.submit(draft)
     }
 
+    suspend fun submitBatch(drafts: List<TaskDraft>): List<LifeTask?> = mutex.withLock {
+        if (drafts.isEmpty()) return@withLock emptyList()
+        require(drafts.all { it.type.isCognitionTask() }) {
+            "Admission controller accepts cognition tasks only"
+        }
+        require(drafts.map { it.idempotencyKey }.distinct().size == drafts.size) {
+            "Cognition admission batch contains duplicate idempotency keys"
+        }
+
+        val existing = linkedMapOf<Int, LifeTask>()
+        val newIndices = mutableListOf<Int>()
+        drafts.forEachIndexed { index, draft ->
+            val task = tasks.findByIdempotencyKey(draft.idempotencyKey)
+            if (task == null) {
+                newIndices += index
+            } else {
+                check(task.type == draft.type) {
+                    "Idempotency key collision across task types: ${draft.idempotencyKey}"
+                }
+                existing[index] = task
+            }
+        }
+
+        val active = tasks.activeCount(COGNITION_TYPES)
+        val capacity = (maxActiveTasks - active).coerceAtLeast(0)
+        val acceptedNew = newIndices.take(capacity)
+
+        if (acceptedNew.isNotEmpty()) {
+            sharedBudgets?.let { broker ->
+                val request = scaleUsage(COGNITION_ADMISSION_REQUEST, acceptedNew.size.toLong())
+                val maxPriority = acceptedNew.maxOf { drafts[it].priority.weight }
+                val priority = (maxPriority.toDouble() / 100.0).coerceIn(0.0, 1.0)
+                val demand = ResourceBudgetDemand(
+                    domain = ResourceBudgetDomain.COGNITION,
+                    requested = request,
+                    goalRelevance = priority,
+                    priority = priority,
+                    expectedUtility = if (maxPriority >= 75) 0.85 else 0.60,
+                    confidence = 1.0,
+                )
+                when (val decision = broker.allocate(scaleQuota(COGNITION_HARD_QUOTA, acceptedNew.size.toLong()), listOf(demand))) {
+                    is SharedResourceBudgetDecision.Blocked ->
+                        return@withLock drafts.indices.map { existing[it] }
+                    is SharedResourceBudgetDecision.Ready -> {
+                        val allocation = decision.allocation.allocation(ResourceBudgetDomain.COGNITION)
+                            ?: return@withLock drafts.indices.map { existing[it] }
+                        if (!request.isWithin(allocation.allocated)) {
+                            return@withLock drafts.indices.map { existing[it] }
+                        }
+                    }
+                }
+            }
+        }
+
+        val admitted = acceptedNew.toSet()
+        drafts.indices.map { index ->
+            when {
+                index in existing -> taskEngine.submit(drafts[index])
+                index in admitted -> taskEngine.submit(drafts[index])
+                else -> null
+            }
+        }
+    }
+
     suspend fun availableCapacity(): Int = mutex.withLock {
         val active = tasks.activeCount(COGNITION_TYPES)
         (maxActiveTasks - active).coerceAtLeast(0)
     }
 
     private fun TaskType.isCognitionTask(): Boolean = this in COGNITION_TYPES
+
+    private fun scaleUsage(value: ResourceBudgetUsage, count: Long): ResourceBudgetUsage =
+        ResourceBudgetUsage(
+            elapsedMillis = Math.multiplyExact(value.elapsedMillis, count),
+            workUnits = Math.multiplyExact(value.workUnits, count),
+            memoryBytes = Math.multiplyExact(value.memoryBytes, count),
+            ioBytes = Math.multiplyExact(value.ioBytes, count),
+            networkBytes = Math.multiplyExact(value.networkBytes, count),
+            candidates = Math.multiplyExact(value.candidates, count),
+        )
+
+    private fun scaleQuota(value: ResourceBudgetQuota, count: Long): ResourceBudgetQuota =
+        ResourceBudgetQuota(
+            elapsedMillis = Math.multiplyExact(value.elapsedMillis, count),
+            workUnits = Math.multiplyExact(value.workUnits, count),
+            memoryBytes = Math.multiplyExact(value.memoryBytes, count),
+            ioBytes = Math.multiplyExact(value.ioBytes, count),
+            networkBytes = Math.multiplyExact(value.networkBytes, count),
+            candidates = Math.multiplyExact(value.candidates, count),
+        )
 
     private companion object {
         const val DEFAULT_MAX_ACTIVE_TASKS = 100
