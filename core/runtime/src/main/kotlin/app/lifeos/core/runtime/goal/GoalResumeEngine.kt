@@ -350,9 +350,9 @@ private object PersistedGoalFrameDecoder {
                 val speechConfidence = fields[5].toDouble().also { require(it in 0.0..1.0) }
                 val speechSpan = TextSpan(fields[6].toInt(), fields[7].toInt())
                 val frameConfidence = fields[8].toDouble().also { require(it in 0.0..1.0) }
-                val scopeTypes = enumSet(fields[9], ScopeType::valueOf)
-                val requiredRoles = enumSet(fields[10], SemanticRole::valueOf)
-                val unresolvedRoles = enumSet(fields[11], SemanticRole::valueOf)
+                val scopeTypes = enumSet(fields[9]) { ScopeType.valueOf(it) }
+                val requiredRoles = enumSet(fields[10]) { SemanticRole.valueOf(it) }
+                val unresolvedRoles = enumSet(fields[11]) { SemanticRole.valueOf(it) }
                 val unresolvedReference = fields[12].toBooleanStrict()
                 val unresolvedCondition = fields[13].toBooleanStrict()
                 val externalSideEffect = fields[14].toBooleanStrict()
@@ -430,7 +430,7 @@ private object PersistedGoalFrameDecoder {
                 val targets = unescape(fields[1])
                     .split(',')
                     .filter { it.isNotBlank() }
-                    .mapTo(linkedSetOf(), ::SemanticNodeId)
+                    .mapTo(linkedSetOf()) { SemanticNodeId(it) }
                 SemanticScope(
                     type = ScopeType.valueOf(fields[0]),
                     targetNodeIds = targets,
