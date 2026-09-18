@@ -44,13 +44,24 @@ import java.time.Instant
  * DurableConvergenceDecisionCoordinator remain authoritative, including all score, freshness,
  * conflict and capability gates. The resulting decision checkpoint is persisted before exposure.
  */
+fun interface GoalConvergenceDecisionSource {
+    suspend fun decide(
+        goal: GoalFrame,
+        routing: GoalCapabilityResolution,
+        sourcePhoton: Photon,
+        goalPhotonId: PhotonId,
+        goalPhotonRevision: Long,
+        at: Instant,
+    ): ConvergenceDecisionCheckpoint
+}
+
 class GoalConvergenceDecisionProvider(
     private val productiveConvergence: ProductiveConvergenceAuthority,
     private val bootEngine: BootEngineRuntime,
     private val photons: RevisionedPhotonRepository,
     private val thoughtGraph: GoalThoughtGraphProjector = GoalThoughtGraphProjector(),
-) {
-    suspend fun decide(
+) : GoalConvergenceDecisionSource {
+    override suspend fun decide(
         goal: GoalFrame,
         routing: GoalCapabilityResolution,
         sourcePhoton: Photon,
