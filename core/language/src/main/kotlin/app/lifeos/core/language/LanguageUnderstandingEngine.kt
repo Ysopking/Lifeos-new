@@ -374,7 +374,7 @@ class GoalPhotonFactory {
         append("confidence=").append(frame.confidence).append('\n')
         append("objective=").append(escape(frame.objective)).append('\n')
         append("semantic.fingerprint=").append(frame.semanticGraph.fingerprint).append('\n')
-        frame.semanticGraph.clauses.forEach { clause ->
+        frame.semanticGraph.clauses.sortedBy { it.id }.forEach { clause ->
             append("semantic.clause.").append(clause.id).append('=')
                 .append(clause.polarity.name).append('|')
                 .append(clause.modality.name).append('|')
@@ -386,7 +386,12 @@ class GoalPhotonFactory {
                     .append(escape(quantity.unit.orEmpty())).append('\n')
             }
         }
-        frame.semanticGraph.links.forEachIndexed { index, link ->
+        frame.semanticGraph.links.sortedWith(
+            compareBy<SemanticClauseLink> { it.fromClauseId }
+                .thenBy { it.toClauseId }
+                .thenBy { it.type.name }
+                .thenBy { it.cue }
+        ).forEachIndexed { index, link ->
             append("semantic.link.").append(index).append('=')
                 .append(link.fromClauseId).append('|')
                 .append(link.toClauseId).append('|')
@@ -424,14 +429,23 @@ class GoalPhotonFactory {
                     .append('\n')
             }
         }
-        frame.semanticActionGraph.edges.forEachIndexed { index, edge ->
+        frame.semanticActionGraph.edges.sortedWith(
+            compareBy<SemanticActionEdge> { it.from.value }
+                .thenBy { it.to.value }
+                .thenBy { it.type.name }
+        ).forEachIndexed { index, edge ->
             append("action.edge.").append(index).append('=')
                 .append(escape(edge.from.value)).append('|')
                 .append(escape(edge.to.value)).append('|')
                 .append(edge.type.name).append('|')
                 .append(edge.confidence).append('\n')
         }
-        frame.semanticActionGraph.scopes.forEachIndexed { index, scope ->
+        frame.semanticActionGraph.scopes.sortedWith(
+            compareBy<SemanticScope> { it.span.start }
+                .thenBy { it.span.endExclusive }
+                .thenBy { it.type.name }
+                .thenBy { it.cue }
+        ).forEachIndexed { index, scope ->
             append("action.scope.").append(index).append('=')
                 .append(scope.type.name).append('|')
                 .append(escape(scope.targetNodeIds.map { it.value }.sorted().joinToString(","))).append('|')
@@ -475,7 +489,12 @@ class GoalPhotonFactory {
                         .append('|').append(revision.compositionForce).append('\n')
                 }
         }
-        frame.semanticEntitiesV2.forEachIndexed { index, entity ->
+        frame.semanticEntitiesV2.sortedWith(
+            compareBy<SemanticEntityV2> { it.tokenStart }
+                .thenBy { it.tokenEndExclusive }
+                .thenBy { it.typeId.value }
+                .thenBy { it.normalizedValue }
+        ).forEachIndexed { index, entity ->
             append("entity.v2.").append(index).append('=')
                 .append(escape(entity.typeId.value)).append('|')
                 .append(escape(entity.rawText)).append('|')
@@ -485,7 +504,12 @@ class GoalPhotonFactory {
                 .append(entity.confidence).append('|')
                 .append(escape(entity.source)).append('\n')
         }
-        frame.quantityTemporal.quantities.forEachIndexed { index, quantity ->
+        frame.quantityTemporal.quantities.sortedWith(
+            compareBy<SemanticQuantityV2> { it.span.start }
+                .thenBy { it.span.endExclusive }
+                .thenBy { it.comparator.name }
+                .thenBy { it.value?.toPlainString().orEmpty() }
+        ).forEachIndexed { index, quantity ->
             append("canonical.quantity.").append(index).append('=')
                 .append(quantity.comparator.name).append('|')
                 .append(escape(quantity.value?.toPlainString().orEmpty())).append('|')
@@ -497,7 +521,11 @@ class GoalPhotonFactory {
                 .append(quantity.span.endExclusive).append('|')
                 .append(quantity.confidence).append('\n')
         }
-        frame.quantityTemporal.temporals.forEachIndexed { index, temporal ->
+        frame.quantityTemporal.temporals.sortedWith(
+            compareBy<SemanticTemporalValue> { it.span.start }
+                .thenBy { it.span.endExclusive }
+                .thenBy { it.relation.name }
+        ).forEachIndexed { index, temporal ->
             append("canonical.temporal.").append(index).append('=')
                 .append(temporal.relation.name).append('|')
                 .append(escape(temporal.startInclusive?.toString().orEmpty())).append('|')
@@ -508,7 +536,7 @@ class GoalPhotonFactory {
                 .append(temporal.confidence).append('\n')
         }
         append("domain.fingerprint=").append(frame.domainSemanticGraph.fingerprint).append('\n')
-        frame.domainSemanticGraph.nodes.forEachIndexed { index, node ->
+        frame.domainSemanticGraph.nodes.sortedBy { it.id.value }.forEachIndexed { index, node ->
             append("domain.node.").append(index).append('=')
                 .append(escape(node.id.value)).append('|')
                 .append(node.pack.name).append('|')
@@ -517,7 +545,11 @@ class GoalPhotonFactory {
                 .append(node.confidence).append('|')
                 .append(escape(node.sourceEntityType?.value.orEmpty())).append('\n')
         }
-        frame.domainSemanticGraph.relations.forEachIndexed { index, relation ->
+        frame.domainSemanticGraph.relations.sortedWith(
+            compareBy<DomainSemanticRelation> { it.from.value }
+                .thenBy { it.to.value }
+                .thenBy { it.type.name }
+        ).forEachIndexed { index, relation ->
             append("domain.relation.").append(index).append('=')
                 .append(escape(relation.from.value)).append('|')
                 .append(escape(relation.to.value)).append('|')
@@ -534,14 +566,23 @@ class GoalPhotonFactory {
         frame.constraints.sortedWith(compareBy<GoalConstraint> { it.key }.thenBy { it.value }).forEach {
             append("constraint.").append(escape(it.key)).append('=').append(escape(it.value)).append('|').append(it.confidence).append('\n')
         }
-        frame.references.forEach {
+        frame.references.sortedWith(
+            compareBy<ResolvedReference> { it.expression.kind.name }
+                .thenBy { it.targetPhotonRef?.photonId?.value.orEmpty() }
+                .thenBy { it.targetPhotonRef?.revision ?: 0L }
+                .thenByDescending { it.score }
+        ).forEach {
             append("reference.").append(it.expression.kind.name)
                 .append('=').append(it.targetPhotonId?.value ?: "UNRESOLVED")
                 .append('|').append(it.score)
                 .append('|').append(it.targetPhotonRef?.revision ?: 0L)
                 .append('\n')
         }
-        frame.ambiguities.forEach {
+        frame.ambiguities.sortedWith(
+            compareBy<Ambiguity> { it.code }
+                .thenByDescending { it.severity }
+                .thenBy { it.message }
+        ).forEach {
             append("ambiguity.").append(escape(it.code)).append('=').append(escape(it.message)).append('|').append(it.severity).append('\n')
         }
     }.trimEnd()
