@@ -175,5 +175,5 @@ run_test \
 
 run_suite \
   'app.lifeos.next.DeepSearchEncryptedRepositoryCorruptionDeviceTest' \
-  '2' \
+  '4' \
   "$report_dir/deepsearch-encrypted-recovery-corruption.txt"
