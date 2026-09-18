@@ -1,6 +1,7 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.model.Photon
+import app.lifeos.core.runtime.LifeOsGoldLoopProjectionRuntimeRegistry
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.artifact.ArtifactCoordinator
 import app.lifeos.core.runtime.artifact.ArtifactGenerationCoordinator
@@ -120,6 +121,8 @@ class CanonicalPhotonIngress(
         check(submission.processingQueued) {
             submission.processingFailure ?: "Photon cognitive work was not durabilized"
         }
+        LifeOsGoldLoopProjectionRuntimeRegistry.currentOrNull()
+            ?.observeIngress(photon, mode)
         return submission
     }
 }
