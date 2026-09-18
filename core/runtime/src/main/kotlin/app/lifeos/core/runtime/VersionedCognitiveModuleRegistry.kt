@@ -94,6 +94,21 @@ fun interface CognitiveModuleResolver {
     fun resolve(stableFingerprint: String): CognitiveModule?
 }
 
+data class FrozenCognitiveModuleRegistry(
+    val snapshotId: String,
+    private val modules: List<CognitiveModule>,
+) : CognitiveModuleRegistry {
+    init {
+        require(snapshotId.isNotBlank())
+        require(modules.isNotEmpty())
+        require(
+            modules.map { it.descriptor.identity.stableFingerprint }.distinct().size == modules.size
+        )
+    }
+
+    override fun activeModules(): List<CognitiveModule> = modules
+}
+
 class VersionedCognitiveModuleRegistry(
     builtIns: Collection<CognitiveModule>,
     private val snapshots: CognitiveModuleSnapshotRepository,
@@ -115,10 +130,24 @@ class VersionedCognitiveModuleRegistry(
                 .thenBy { it.descriptor.identity.stableFingerprint }
         )
 
+    suspend fun freezeForCycle(
+        extensionSnapshotId: String,
+    ): FrozenCognitiveModuleRegistry {
+        val snapshot = snapshotForCycle(extensionSnapshotId)
+        val modules = resolveModules(snapshot)
+        return FrozenCognitiveModuleRegistry(snapshot.id, modules)
+    }
+
     suspend fun modulesForCycle(
         extensionSnapshotId: String,
     ): List<CognitiveModule> {
         val snapshot = snapshotForCycle(extensionSnapshotId)
+        return resolveModules(snapshot)
+    }
+
+    private fun resolveModules(
+        snapshot: CognitiveModuleSnapshot,
+    ): List<CognitiveModule> {
         return snapshot.moduleFingerprints.map { fingerprint ->
             synchronized(lock) {
                 promotedModules[fingerprint] ?: builtInModules[fingerprint]
