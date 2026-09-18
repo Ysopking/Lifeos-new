@@ -327,8 +327,12 @@ class ThoughtGraphAttentionProjector {
             ThoughtGraphEdgeKind.COMPETES_WITH,
             ThoughtGraphEdgeKind.CONFLICTS_WITH,
             ThoughtGraphEdgeKind.EVIDENCE_AGAINST -> 4.0
+            ThoughtGraphEdgeKind.CAUSES,
+            ThoughtGraphEdgeKind.PREDICTS -> 3.5
             ThoughtGraphEdgeKind.SUPPORTS,
             ThoughtGraphEdgeKind.EVIDENCE_FOR -> 3.0
+            ThoughtGraphEdgeKind.GENERALIZES_TO,
+            ThoughtGraphEdgeKind.ANALOGOUS_TO -> 2.5
             ThoughtGraphEdgeKind.DERIVED_FROM,
             ThoughtGraphEdgeKind.REFERENCES,
             ThoughtGraphEdgeKind.TRANSFORMS -> 2.0
