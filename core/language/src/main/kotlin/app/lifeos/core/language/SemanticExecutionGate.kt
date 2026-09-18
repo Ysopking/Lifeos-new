@@ -17,6 +17,12 @@ data class SemanticExecutionDecision(
 object SemanticExecutionGate {
     fun evaluate(goal: GoalFrame): SemanticExecutionDecision {
         val graph = goal.semanticActionGraph
+        if (goal.intent != IntentType.QUERY && graph.executableNodes.size > 1) {
+            return SemanticExecutionDecision(
+                allowed = false,
+                reason = "semantic-multi-action-requires-action-graph-router",
+            )
+        }
         return when (goal.intent) {
             IntentType.QUERY -> {
                 val query = graph.nodes
