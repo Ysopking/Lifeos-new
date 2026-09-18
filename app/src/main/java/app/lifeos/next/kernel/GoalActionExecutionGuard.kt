@@ -197,11 +197,20 @@ class PrivateGoalActionExecutionGuard(
             ready.plan.recommendedReservation
         }
 
-        val accountId = ResourceBudgetAccountId("goal-action:${context.goalPhotonId.value}")
+        val semanticNodeIdentity = context.goal.semanticActionGraph.nodes
+            .singleOrNull()
+            ?.id
+            ?.value
+            ?: context.goal.intent.name.lowercase()
+        val accountId = ResourceBudgetAccountId(
+            "goal-action:${context.goalPhotonId.value}:$semanticNodeIdentity"
+        )
         budgets.createAccount(accountId, profile.hardQuota)
         val idempotencyKey = buildString {
             append("goal-action:")
             append(context.goalPhotonId.value)
+            append(':')
+            append(semanticNodeIdentity)
             append(':')
             append(context.goal.intent.name)
             append(":policy-")
