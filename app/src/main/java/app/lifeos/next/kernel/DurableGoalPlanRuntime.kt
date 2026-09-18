@@ -240,7 +240,7 @@ class DurableGoalPlanRuntime(
 
     private fun communicationPreparationOutcome(share: LocalSharePreparation): Photon = Photon(
         id = PhotonId(
-            "communication-preparation:" + StableFieldIds.fingerprint(
+            "communication-preparation-" + StableFieldIds.fingerprint(
                 "communication-preparation/v1",
                 share.requestSourceId.value,
                 share.requestGoalId.value,
