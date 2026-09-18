@@ -1,5 +1,8 @@
 package app.lifeos.core.data
 
+import app.lifeos.core.runtime.CognitiveUtilityFunction
+import app.lifeos.core.runtime.CognitiveUtilityInput
+
 enum class IngestPass {
     INVENTORY,
     FINGERPRINT_DEDUP,
@@ -20,19 +23,52 @@ data class IngestCandidate(
     val sourceType: String? = null,
     val observedAtEpochMillis: Long? = null,
     val relationKeys: Set<String> = emptySet(),
+    val urgencyMicros: Long = 0L,
+    val noveltyMicros: Long = 0L,
+    val activeMatterAffinityMicros: Long = 0L,
+    val goalAffinityMicros: Long = 0L,
+    val confidenceMicros: Long = 1_000_000L,
+    val authorityMicros: Long = 0L,
+    val processingCostMicros: Long = 0L,
+    val riskMicros: Long = 0L,
 ) {
     init {
         require(externalKey.isNotBlank())
-        listOf(relevanceMicros, informationDensityMicros, connectivityMicros, accessibilityMicros)
-            .forEach { require(it in 0L..1_000_000L) }
+        listOf(
+            relevanceMicros,
+            informationDensityMicros,
+            connectivityMicros,
+            accessibilityMicros,
+            urgencyMicros,
+            noveltyMicros,
+            activeMatterAffinityMicros,
+            goalAffinityMicros,
+            confidenceMicros,
+            authorityMicros,
+            processingCostMicros,
+            riskMicros,
+        ).forEach { require(it in 0L..1_000_000L) }
         fingerprint?.let { require(it.isNotBlank()) }
         sourceType?.let { require(it.isNotBlank()) }
         observedAtEpochMillis?.let { require(it >= 0L) }
         require(relationKeys.none { it.isBlank() })
     }
 
-    val priorityScore: Long get() =
-        relevanceMicros + informationDensityMicros + connectivityMicros + accessibilityMicros
+    val priorityScore: Long get() = INGEST_UTILITY.score(
+        CognitiveUtilityInput(
+            relevanceMicros = relevanceMicros,
+            urgencyMicros = urgencyMicros,
+            informationGainMicros = informationDensityMicros,
+            matterAffinityMicros = maxOf(activeMatterAffinityMicros, connectivityMicros),
+            goalAffinityMicros = goalAffinityMicros,
+            confidenceMicros = confidenceMicros,
+            authorityMicros = authorityMicros,
+            noveltyMicros = noveltyMicros,
+            hardwareBudgetMicros = accessibilityMicros,
+            costMicros = processingCostMicros,
+            riskMicros = riskMicros,
+        )
+    )
 
     val stableIngestKey: String get() = fingerprint ?: "${sourceId.value}:$externalKey"
 }
@@ -142,3 +178,6 @@ class InitialLifeIngestCoordinator {
     private fun stableOrdering(): Comparator<IngestCandidate> =
         compareBy<IngestCandidate> { it.sourceId.value }.thenBy { it.externalKey }
 }
+
+
+private val INGEST_UTILITY = CognitiveUtilityFunction()
