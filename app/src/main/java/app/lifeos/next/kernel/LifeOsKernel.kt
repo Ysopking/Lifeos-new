@@ -13,6 +13,8 @@ import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.BinaryAssetStore
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexOrder
+import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.PhotonRevisionWriteResult
 import app.lifeos.core.model.RevisionedPhotonRepository
@@ -108,12 +110,14 @@ class LifeOsKernel internal constructor(
 ) {
     private val startLock = Any()
     private val conversationClassifier = ConversationSignalClassifier()
-    private val languageContextRetriever = (photonStore as? RevisionedPhotonRepository)?.let {
-        LanguageContextRetriever(
-            photons = it,
-            builder = languageContextBuilder,
-        )
-    }
+    private val revisionedPhotonStore: RevisionedPhotonRepository =
+        requireNotNull(photonStore as? RevisionedPhotonRepository) {
+            "LifeOsKernel requires RevisionedPhotonRepository for bounded language retrieval"
+        }
+    private val languageContextRetriever = LanguageContextRetriever(
+        photons = revisionedPhotonStore,
+        builder = languageContextBuilder,
+    )
     private var bootstrapJob: Job? = null
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
@@ -284,15 +288,18 @@ class LifeOsKernel internal constructor(
         }
     }
 
-    private fun fastConversationContext(photon: Photon): FastConversationContext {
+    private suspend fun fastConversationContext(photon: Photon): FastConversationContext {
         val conversationTag = photon.tags.firstOrNull { it.startsWith("conversation:") }
             ?: "conversation:default"
-        val recent = mutableBootstrapState.value.photons
-            .asSequence()
-            .filter { "chat" in it.tags && conversationTag in it.tags }
-            .sortedByDescending { it.provenance.createdAt }
-            .take(8)
-            .toList()
+        val refs = revisionedPhotonStore.query(
+            PhotonIndexQuery(
+                allTags = setOf("chat", conversationTag),
+                latestOnly = true,
+                order = PhotonIndexOrder.NEWEST_FIRST,
+                limit = 8,
+            )
+        )
+        val recent = refs.mapNotNull(revisionedPhotonStore::load)
         return FastConversationContext(
             conversationId = conversationTag.substringAfter(':', "default"),
             recentTurnCount = recent.size,
@@ -350,18 +357,11 @@ class LifeOsKernel internal constructor(
      */
     suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
         require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
-        val context = languageContextRetriever
-            ?.retrieve(
-                utterance = photon.content,
-                now = photon.provenance.createdAt,
-                excludeIds = setOf(photon.id),
-            )
-            ?.context
-            ?: languageContextBuilder.build(
-                photons = mutableBootstrapState.value.photons,
-                now = photon.provenance.createdAt,
-                excludeIds = setOf(photon.id),
-            )
+        val context = languageContextRetriever.retrieve(
+            utterance = photon.content,
+            now = photon.provenance.createdAt,
+            excludeIds = setOf(photon.id),
+        ).context
         val source = persistAndIngest(photon)
         return try {
             val understanding = languageUnderstanding.understand(photon.content, context)
