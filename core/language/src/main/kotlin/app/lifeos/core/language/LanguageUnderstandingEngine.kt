@@ -82,6 +82,7 @@ class LanguageUnderstandingEngine(
         )
         val domainSemanticGraph = domainSemanticInterpreter.interpret(
             utterance = utterance,
+            semanticGraph = semanticGraph,
             entities = entityV2.entities,
             quantityTemporal = quantityTemporal,
             actionGraph = semanticActionGraph,
