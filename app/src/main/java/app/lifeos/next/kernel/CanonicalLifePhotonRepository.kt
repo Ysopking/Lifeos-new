@@ -2,10 +2,12 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
-import app.lifeos.core.model.PhotonLoadReport
-import app.lifeos.core.model.RevisionedPhotonRepository
-import app.lifeos.core.model.PhotonIndexQuery
+import app.lifeos.core.model.PhotonIndexCursor
 import app.lifeos.core.model.PhotonIndexOrder
+import app.lifeos.core.model.PhotonIndexQuery
+import app.lifeos.core.model.PhotonLoadReport
+import app.lifeos.core.model.PhotonRevisionRef
+import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.PhotonIngressMode
 
@@ -44,19 +46,46 @@ internal class CanonicalLifePhotonRepository(
     suspend fun reconcilePersisted(): Int {
         var reconciled = 0
         val candidates = if (delegate is RevisionedPhotonRepository) {
-            PRODUCTIVE_TAGS
-                .flatMap { tag ->
-                    delegate.query(
+            val refs = linkedSetOf<PhotonRevisionRef>()
+            PRODUCTIVE_TAGS.sorted().forEach { tag ->
+                var cursor: PhotonIndexCursor? = null
+                var exhausted = false
+                repeat(MAX_RECONCILIATION_PAGES_PER_TAG) {
+                    val page = delegate.query(
                         PhotonIndexQuery(
                             allTags = setOf(tag),
                             latestOnly = true,
                             order = PhotonIndexOrder.OLDEST_FIRST,
-                            limit = Int.MAX_VALUE,
+                            after = cursor,
+                            limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
                         )
                     )
+                    refs += page
+                    if (page.size < PhotonIndexQuery.HARD_PAGE_LIMIT) {
+                        exhausted = true
+                        return@repeat
+                    }
+                    cursor = PhotonIndexCursor(
+                        order = PhotonIndexOrder.OLDEST_FIRST,
+                        lastRef = page.last(),
+                    )
                 }
-                .distinct()
-                .mapNotNull { delegate.load(it) }
+                if (!exhausted) {
+                    val overflow = delegate.query(
+                        PhotonIndexQuery(
+                            allTags = setOf(tag),
+                            latestOnly = true,
+                            order = PhotonIndexOrder.OLDEST_FIRST,
+                            after = cursor,
+                            limit = 1,
+                        )
+                    )
+                    require(overflow.isEmpty()) {
+                        "Productive life reconciliation exceeds bounded capacity for tag: $tag"
+                    }
+                }
+            }
+            refs.mapNotNull { delegate.load(it) }
         } else {
             delegate.loadAll()
         }
@@ -71,6 +100,8 @@ internal class CanonicalLifePhotonRepository(
     }
 
     internal companion object {
+        private const val MAX_RECONCILIATION_PAGES_PER_TAG: Int = 16
+
         private val PRODUCTIVE_TAGS = setOf(
             "life-source-evidence",
             "life-source-gap",
