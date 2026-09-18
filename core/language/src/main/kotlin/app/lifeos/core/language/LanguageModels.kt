@@ -173,6 +173,7 @@ data class GoalFrame(
     val confidence: Double,
     val language: LanguageCode,
     val semanticGraph: LanguageSemanticGraph = LanguageSemanticGraph.empty(language),
+    val semanticActionGraph: SemanticActionGraph = SemanticActionGraph.empty(),
 ) {
     init {
         require(objective.isNotBlank())
