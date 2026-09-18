@@ -2,7 +2,9 @@ package app.lifeos.core.language
 
 import app.lifeos.core.model.StableCognitiveIds
 
-class SemanticActionGraphBuilder {
+class SemanticActionGraphBuilder(
+    private val contracts: PredicateContractRegistry = PredicateContractRegistry(),
+) {
     fun build(
         utterance: NormalizedUtterance,
         semanticGraph: LanguageSemanticGraph,
@@ -12,17 +14,22 @@ class SemanticActionGraphBuilder {
         if (frames.isEmpty()) return SemanticActionGraph.empty()
 
         val preliminary = frames.map { frame ->
-            val required = requiredRoles(frame.predicate)
-            val referenceRequired = requiresReference(frame)
-            val boundReference = hasBoundReference(frame, references)
+            val contract = contracts.contract(frame.predicate)
+            val required = contract.requiredRoles(frame.roles, external = false)
+            val externalRequired = contract.requiredRoles(frame.roles, external = true)
+            val referenceRequired = requiresReference(frame, contract)
+            val boundReference = hasBoundReference(frame, references, contract)
             val unresolvedReference = referenceRequired && !boundReference
-            val unresolved = required.filterTo(linkedSetOf()) { role ->
-                if (role == SemanticRole.OBJECT && boundReference) {
-                    false
-                } else {
-                    frame.roles[role]?.resolved != true
+            fun unresolved(requiredRoles: Set<SemanticRole>): Set<SemanticRole> =
+                requiredRoles.filterTo(linkedSetOf()) { role ->
+                    if (role == contract.referenceRole && boundReference) {
+                        false
+                    } else {
+                        frame.roles[role]?.resolved != true
+                    }
                 }
-            }
+            val unresolved = unresolved(required)
+            val unresolvedExternal = unresolved(externalRequired)
             val type = nodeType(frame)
             val readiness = readiness(
                 frame = frame,
@@ -39,8 +46,10 @@ class SemanticActionGraphBuilder {
                 unresolvedRoles = unresolved,
                 unresolvedReference = unresolvedReference,
                 unresolvedCondition = false,
-                externalSideEffect = externalSideEffect(frame.predicate),
+                externalSideEffect = contract.externalSideEffect,
                 executionReadiness = readiness,
+                externalRequiredRoles = externalRequired,
+                unresolvedExternalRoles = unresolvedExternal,
             )
         }
 
@@ -113,6 +122,7 @@ class SemanticActionGraphBuilder {
                 original.copy(
                     unresolvedRoles = original.unresolvedRoles - SemanticRole.OBJECT,
                     unresolvedReference = false,
+                    unresolvedExternalRoles = original.unresolvedExternalRoles - SemanticRole.OBJECT,
                 )
             }
             if (node.id !in incomingConditions) {
@@ -171,6 +181,8 @@ class SemanticActionGraphBuilder {
                             node.frame.scopeTypes.map { it.name }.sorted().joinToString(","),
                             node.requiredRoles.map { it.name }.sorted().joinToString(","),
                             node.unresolvedRoles.map { it.name }.sorted().joinToString(","),
+                            node.externalRequiredRoles.map { it.name }.sorted().joinToString(","),
+                            node.unresolvedExternalRoles.map { it.name }.sorted().joinToString(","),
                             node.unresolvedReference.toString(),
                             node.unresolvedCondition.toString(),
                             node.externalSideEffect.toString(),
@@ -205,45 +217,23 @@ class SemanticActionGraphBuilder {
         else -> SemanticActionNodeType.ASSERTION
     }
 
-    private fun requiredRoles(predicate: PredicateConcept): Set<SemanticRole> = when (predicate) {
-        PredicateConcept.CREATE_IMAGE,
-        PredicateConcept.TRANSFORM_IMAGE,
-        PredicateConcept.SEARCH,
-        PredicateConcept.COMMUNICATE,
-        PredicateConcept.STORE_MEMORY,
-        PredicateConcept.BUILD,
-        PredicateConcept.DELETE,
-        PredicateConcept.UPLOAD,
-        PredicateConcept.SELECT -> setOf(SemanticRole.OBJECT)
-
-        PredicateConcept.SCHEDULE -> setOf(SemanticRole.OBJECT)
-        PredicateConcept.PAY -> setOf(SemanticRole.AMOUNT)
-        PredicateConcept.OWE -> setOf(SemanticRole.DEBTOR, SemanticRole.CREDITOR, SemanticRole.AMOUNT)
-        PredicateConcept.CONTINUE,
-        PredicateConcept.QUERY,
-        PredicateConcept.CONDITION_CHECK,
-        PredicateConcept.UNKNOWN -> emptySet()
-    }
-
-    private fun requiresReference(frame: PredicateFrame): Boolean {
+    private fun requiresReference(
+        frame: PredicateFrame,
+        contract: PredicateActionContract,
+    ): Boolean {
+        val role = contract.referenceRole ?: return false
         if (frame.predicate == PredicateConcept.TRANSFORM_IMAGE) return true
-        if (frame.predicate !in setOf(
-                PredicateConcept.COMMUNICATE,
-                PredicateConcept.DELETE,
-                PredicateConcept.UPLOAD,
-                PredicateConcept.SELECT,
-            )
-        ) return false
-        val value = frame.roles[SemanticRole.OBJECT] ?: return false
+        val value = frame.roles[role] ?: return false
         return !value.resolved || value.normalized in REFERENCE_WORDS
     }
 
     private fun hasBoundReference(
         frame: PredicateFrame,
         references: List<ResolvedReference>,
+        contract: PredicateActionContract,
     ): Boolean {
-        if (!requiresReference(frame)) return false
-        val objectValue = frame.roles[SemanticRole.OBJECT]
+        if (!requiresReference(frame, contract)) return false
+        val objectValue = contract.referenceRole?.let(frame.roles::get)
         return references.any { reference ->
             reference.targetPhotonId != null &&
                 (
@@ -254,14 +244,6 @@ class SemanticActionGraphBuilder {
                 )
         }
     }
-
-    private fun externalSideEffect(predicate: PredicateConcept): Boolean =
-        predicate in setOf(
-            PredicateConcept.COMMUNICATE,
-            PredicateConcept.SCHEDULE,
-            PredicateConcept.PAY,
-            PredicateConcept.UPLOAD,
-        )
 
     private fun readiness(
         frame: PredicateFrame,
