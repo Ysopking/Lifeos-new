@@ -27,6 +27,7 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.time.Instant
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -43,7 +44,9 @@ class EncryptedEvolutionStore(context: Context) :
     EvolutionCanaryOutcomeStore,
     NovelCapabilityPromotionStore {
     private val directory = context.filesDir.resolve("evolution-vault")
-    private val target = AtomicFile(directory.resolve(VAULT_FILE_NAME))
+    private val adoptionDirectory = directory.resolve("adoptions")
+    private val novelDirectory = directory.resolve("novel")
+    private val legacyTarget = AtomicFile(directory.resolve(VAULT_FILE_NAME))
     private val key: SecretKey by lazy { loadOrCreateKey() }
 
     override suspend fun reserve(
@@ -53,7 +56,7 @@ class EncryptedEvolutionStore(context: Context) :
         reservedAt: Instant,
     ): EvolutionCanaryReserveResult = ioLocked {
         require(adoptionEvidenceId.isNotBlank()); require(invocationId.isNotBlank()); require(maxInvocations > 0)
-        val snapshot = readSnapshotLocked(); val bucket = snapshot.bucket(adoptionEvidenceId)
+        val snapshot = readAdoptionSnapshotLocked(adoptionEvidenceId); val bucket = snapshot.bucket(adoptionEvidenceId)
         bucket.killSwitch?.let { return@ioLocked EvolutionCanaryReserveResult.Stopped(it) }
         bucket.promotionSeal?.let { return@ioLocked EvolutionCanaryReserveResult.Sealed(it) }
         bucket.reservations.firstOrNull { it.invocationId == invocationId }?.let {
@@ -73,15 +76,15 @@ class EncryptedEvolutionStore(context: Context) :
     }
 
     override suspend fun reservation(adoptionEvidenceId: String, invocationId: String): EvolutionCanaryReservation? = ioLocked {
-        readSnapshotLocked().bucket(adoptionEvidenceId).reservations.firstOrNull { it.invocationId == invocationId }
+        readAdoptionSnapshotLocked(adoptionEvidenceId).bucket(adoptionEvidenceId).reservations.firstOrNull { it.invocationId == invocationId }
     }
 
     override suspend fun usedInvocations(adoptionEvidenceId: String): Int = ioLocked {
-        readSnapshotLocked().bucket(adoptionEvidenceId).reservations.size
+        readAdoptionSnapshotLocked(adoptionEvidenceId).bucket(adoptionEvidenceId).reservations.size
     }
 
     override suspend fun trip(evidence: EvolutionCanaryKillSwitchEvidence): EvolutionCanaryKillSwitchEvidence = ioLocked {
-        val snapshot = readSnapshotLocked(); val bucket = snapshot.bucket(evidence.adoptionEvidenceId)
+        val snapshot = readAdoptionSnapshotLocked(evidence.adoptionEvidenceId); val bucket = snapshot.bucket(evidence.adoptionEvidenceId)
         bucket.killSwitch?.let { return@ioLocked it }
         bucket.promotionSeal?.let { seal ->
             require(seal.candidateToolId == evidence.candidateToolId) { "Kill switch candidate conflicts with sealed Canary" }
@@ -93,7 +96,7 @@ class EncryptedEvolutionStore(context: Context) :
     }
 
     override suspend fun killSwitch(adoptionEvidenceId: String): EvolutionCanaryKillSwitchEvidence? = ioLocked {
-        readSnapshotLocked().bucket(adoptionEvidenceId).killSwitch
+        readAdoptionSnapshotLocked(adoptionEvidenceId).bucket(adoptionEvidenceId).killSwitch
     }
 
     override suspend fun sealForPromotion(
@@ -105,7 +108,7 @@ class EncryptedEvolutionStore(context: Context) :
     ): EvolutionCanaryPromotionSealEvidence = ioLocked {
         require(adoptionEvidenceId.isNotBlank()); require(candidateToolId.isNotBlank()); require(readinessEvidenceId.isNotBlank())
         require(expectedReservedInvocations >= 0)
-        val snapshot = readSnapshotLocked(); val bucket = snapshot.bucket(adoptionEvidenceId)
+        val snapshot = readAdoptionSnapshotLocked(adoptionEvidenceId); val bucket = snapshot.bucket(adoptionEvidenceId)
         require(bucket.killSwitch == null) { "Stopped canary cannot be sealed for promotion" }
         require(bucket.reservations.size == expectedReservedInvocations)
         require(bucket.outcomes.size == expectedReservedInvocations)
@@ -129,11 +132,11 @@ class EncryptedEvolutionStore(context: Context) :
     }
 
     override suspend fun promotionSeal(adoptionEvidenceId: String): EvolutionCanaryPromotionSealEvidence? = ioLocked {
-        readSnapshotLocked().bucket(adoptionEvidenceId).promotionSeal
+        readAdoptionSnapshotLocked(adoptionEvidenceId).bucket(adoptionEvidenceId).promotionSeal
     }
 
     override suspend fun record(outcome: EvolutionCanaryOutcome): EvolutionCanaryOutcomeWriteResult = ioLocked {
-        val snapshot = readSnapshotLocked(); val bucket = snapshot.bucket(outcome.adoptionEvidenceId)
+        val snapshot = readAdoptionSnapshotLocked(outcome.adoptionEvidenceId); val bucket = snapshot.bucket(outcome.adoptionEvidenceId)
         bucket.outcomes.firstOrNull { it.invocationId == outcome.invocationId }?.let { existing ->
             return@ioLocked if (existing.inputFingerprint == outcome.inputFingerprint) {
                 EvolutionCanaryOutcomeWriteResult.Duplicate(existing)
@@ -160,15 +163,15 @@ class EncryptedEvolutionStore(context: Context) :
     }
 
     override suspend fun outcome(adoptionEvidenceId: String, invocationId: String): EvolutionCanaryOutcome? = ioLocked {
-        readSnapshotLocked().bucket(adoptionEvidenceId).outcomes.firstOrNull { it.invocationId == invocationId }
+        readAdoptionSnapshotLocked(adoptionEvidenceId).bucket(adoptionEvidenceId).outcomes.firstOrNull { it.invocationId == invocationId }
     }
 
     override suspend fun outcomes(adoptionEvidenceId: String): List<EvolutionCanaryOutcome> = ioLocked {
-        readSnapshotLocked().bucket(adoptionEvidenceId).outcomes.sortedBy { it.invocationId }
+        readAdoptionSnapshotLocked(adoptionEvidenceId).bucket(adoptionEvidenceId).outcomes.sortedBy { it.invocationId }
     }
 
     override suspend fun reserveNovel(request: NovelCapabilityCanaryReservationRequest): NovelCapabilityCanaryReserveResult = ioLocked {
-        val snapshot = readSnapshotLocked(); val bucket = snapshot.novelBucket(request.admissionEvidenceId)
+        val snapshot = readNovelSnapshotLocked(request.admissionEvidenceId); val bucket = snapshot.novelBucket(request.admissionEvidenceId)
         require(bucket.promotionSeal == null) { "Novel canary is sealed for promotion" }
         bucket.killSwitch?.let { return@ioLocked NovelCapabilityCanaryReserveResult.Stopped(it) }
         bucket.reservations.firstOrNull { it.invocationId == request.invocationId }?.let { existing ->
@@ -200,15 +203,15 @@ class EncryptedEvolutionStore(context: Context) :
     }
 
     override suspend fun novelReservation(admissionEvidenceId: String, invocationId: String): NovelCapabilityCanaryReservation? = ioLocked {
-        readSnapshotLocked().novelBucket(admissionEvidenceId).reservations.firstOrNull { it.invocationId == invocationId }
+        readNovelSnapshotLocked(admissionEvidenceId).novelBucket(admissionEvidenceId).reservations.firstOrNull { it.invocationId == invocationId }
     }
 
     override suspend fun novelReservations(admissionEvidenceId: String): List<NovelCapabilityCanaryReservation> = ioLocked {
-        readSnapshotLocked().novelBucket(admissionEvidenceId).reservations.sortedBy { it.sequence }
+        readNovelSnapshotLocked(admissionEvidenceId).novelBucket(admissionEvidenceId).reservations.sortedBy { it.sequence }
     }
 
     override suspend fun recordNovelOutcome(outcome: NovelCapabilityCanaryOutcome): NovelCapabilityCanaryOutcomeWriteResult = ioLocked {
-        val snapshot = readSnapshotLocked(); val bucket = snapshot.novelBucket(outcome.admissionEvidenceId)
+        val snapshot = readNovelSnapshotLocked(outcome.admissionEvidenceId); val bucket = snapshot.novelBucket(outcome.admissionEvidenceId)
         bucket.outcomes.firstOrNull { it.invocationId == outcome.invocationId }?.let { existing ->
             return@ioLocked if (existing == outcome) {
                 NovelCapabilityCanaryOutcomeWriteResult.Duplicate(existing, bucket.killSwitch)
@@ -234,15 +237,15 @@ class EncryptedEvolutionStore(context: Context) :
     }
 
     override suspend fun novelOutcome(admissionEvidenceId: String, invocationId: String): NovelCapabilityCanaryOutcome? = ioLocked {
-        readSnapshotLocked().novelBucket(admissionEvidenceId).outcomes.firstOrNull { it.invocationId == invocationId }
+        readNovelSnapshotLocked(admissionEvidenceId).novelBucket(admissionEvidenceId).outcomes.firstOrNull { it.invocationId == invocationId }
     }
 
     override suspend fun novelOutcomes(admissionEvidenceId: String): List<NovelCapabilityCanaryOutcome> = ioLocked {
-        readSnapshotLocked().novelBucket(admissionEvidenceId).outcomes.sortedBy { it.invocationId }
+        readNovelSnapshotLocked(admissionEvidenceId).novelBucket(admissionEvidenceId).outcomes.sortedBy { it.invocationId }
     }
 
     override suspend fun tripNovel(evidence: NovelCapabilityCanaryKillSwitchEvidence): NovelCapabilityCanaryKillSwitchEvidence = ioLocked {
-        val snapshot = readSnapshotLocked(); val bucket = snapshot.novelBucket(evidence.admissionEvidenceId)
+        val snapshot = readNovelSnapshotLocked(evidence.admissionEvidenceId); val bucket = snapshot.novelBucket(evidence.admissionEvidenceId)
         require(bucket.promotionSeal == null) { "Novel canary is sealed for promotion" }
         bucket.killSwitch?.let { existing -> require(existing.toolId == evidence.toolId); return@ioLocked existing }
         val known = buildSet {
@@ -254,7 +257,7 @@ class EncryptedEvolutionStore(context: Context) :
     }
 
     override suspend fun novelKillSwitch(admissionEvidenceId: String): NovelCapabilityCanaryKillSwitchEvidence? = ioLocked {
-        readSnapshotLocked().novelBucket(admissionEvidenceId).killSwitch
+        readNovelSnapshotLocked(admissionEvidenceId).novelBucket(admissionEvidenceId).killSwitch
     }
 
     override suspend fun sealNovelForPromotion(
@@ -267,7 +270,7 @@ class EncryptedEvolutionStore(context: Context) :
         expectedReservedInvocations: Int,
         sealedAt: Instant,
     ): NovelCapabilityPromotionSealEvidence = ioLocked {
-        val snapshot = readSnapshotLocked(); val bucket = snapshot.novelBucket(admissionEvidenceId)
+        val snapshot = readNovelSnapshotLocked(admissionEvidenceId); val bucket = snapshot.novelBucket(admissionEvidenceId)
         bucket.promotionSeal?.let { existing ->
             require(existing.subjectId == subjectId); require(existing.toolId == toolId)
             require(existing.candidateRecordFingerprint == candidateRecordFingerprint)
@@ -301,21 +304,73 @@ class EncryptedEvolutionStore(context: Context) :
     }
 
     override suspend fun novelPromotionSeal(admissionEvidenceId: String): NovelCapabilityPromotionSealEvidence? = ioLocked {
-        readSnapshotLocked().novelBucket(admissionEvidenceId).promotionSeal
+        readNovelSnapshotLocked(admissionEvidenceId).novelBucket(admissionEvidenceId).promotionSeal
     }
 
     private suspend fun <T> ioLocked(block: () -> T): T = withContext(Dispatchers.IO) {
         processMutex.withLock { block() }
     }
 
-    private fun readSnapshotLocked(): EvolutionVaultSnapshot {
+    private fun readAdoptionSnapshotLocked(adoptionEvidenceId: String): EvolutionVaultSnapshot {
+        require(adoptionEvidenceId.isNotBlank())
+        ensureMigrated()
+        val target = adoptionTarget(adoptionEvidenceId)
+        return if (exists(target)) readTarget(target) else EvolutionVaultSnapshot()
+    }
+
+    private fun readNovelSnapshotLocked(admissionEvidenceId: String): EvolutionVaultSnapshot {
+        require(admissionEvidenceId.isNotBlank())
+        ensureMigrated()
+        val target = novelTarget(admissionEvidenceId)
+        return if (exists(target)) readTarget(target) else EvolutionVaultSnapshot()
+    }
+
+    private fun writeSnapshotLocked(snapshot: EvolutionVaultSnapshot) {
         ensureDirectory()
-        if (!target.baseFile.exists() && !directory.resolve("$VAULT_FILE_NAME.bak").exists()) return EvolutionVaultSnapshot()
+        snapshot.buckets.forEach { bucket ->
+            writeTarget(
+                adoptionTarget(bucket.adoptionEvidenceId),
+                EvolutionVaultSnapshot(buckets = listOf(bucket)),
+            )
+        }
+        snapshot.novelBuckets.forEach { bucket ->
+            writeTarget(
+                novelTarget(bucket.admissionEvidenceId),
+                EvolutionVaultSnapshot(novelBuckets = listOf(bucket)),
+            )
+        }
+    }
+
+    private fun ensureMigrated() {
+        ensureDirectory()
+        if (recordFilesExist()) return
+        val backup = directory.resolve("$VAULT_FILE_NAME.bak")
+        if (!legacyTarget.baseFile.exists() && !backup.exists()) return
+        val legacy = readTarget(legacyTarget)
+        legacy.buckets.forEach { bucket ->
+            writeTarget(
+                adoptionTarget(bucket.adoptionEvidenceId),
+                EvolutionVaultSnapshot(buckets = listOf(bucket)),
+            )
+        }
+        legacy.novelBuckets.forEach { bucket ->
+            writeTarget(
+                novelTarget(bucket.admissionEvidenceId),
+                EvolutionVaultSnapshot(novelBuckets = listOf(bucket)),
+            )
+        }
+    }
+
+    private fun readTarget(target: AtomicFile): EvolutionVaultSnapshot {
         val container = target.openRead().use { input ->
-            val output = ByteArrayOutputStream(); val buffer = ByteArray(8192)
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
             while (true) {
-                val count = input.read(buffer); if (count < 0) break
-                require(output.size() + count <= MAX_CONTAINER_BYTES) { "Evolution vault file too large" }
+                val count = input.read(buffer)
+                if (count < 0) break
+                require(output.size() + count <= MAX_CONTAINER_BYTES) {
+                    "Evolution bucket file too large"
+                }
                 output.write(buffer, 0, count)
             }
             output.toByteArray()
@@ -323,22 +378,28 @@ class EncryptedEvolutionStore(context: Context) :
         return decrypt(container)
     }
 
-    private fun writeSnapshotLocked(snapshot: EvolutionVaultSnapshot) {
-        ensureDirectory()
+    private fun writeTarget(target: AtomicFile, snapshot: EvolutionVaultSnapshot) {
         val plaintext = EvolutionVaultCodec.encode(snapshot)
-        require(plaintext.size <= MAX_PLAINTEXT_BYTES) { "Evolution vault payload too large" }
+        require(plaintext.size <= MAX_PLAINTEXT_BYTES) { "Evolution bucket payload too large" }
         val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
         val encrypted = cipher.doFinal(plaintext)
         val container = ByteArrayOutputStream(encrypted.size + 64).also { output ->
             DataOutputStream(output).use { data ->
-                data.writeInt(CONTAINER_VERSION); data.writeInt(EvolutionVaultCodec.VERSION)
-                data.writeInt(cipher.iv.size); data.write(cipher.iv); data.write(encrypted)
+                data.writeInt(CONTAINER_VERSION)
+                data.writeInt(EvolutionVaultCodec.VERSION)
+                data.writeInt(cipher.iv.size)
+                data.write(cipher.iv)
+                data.write(encrypted)
             }
         }.toByteArray()
-        require(container.size <= MAX_CONTAINER_BYTES) { "Evolution vault container too large" }
+        require(container.size <= MAX_CONTAINER_BYTES) { "Evolution bucket container too large" }
         val stream = target.startWrite()
-        try { stream.write(container); target.finishWrite(stream) } catch (error: Exception) {
-            target.failWrite(stream); throw error
+        try {
+            stream.write(container)
+            target.finishWrite(stream)
+        } catch (error: Exception) {
+            target.failWrite(stream)
+            throw error
         }
     }
 
@@ -347,9 +408,13 @@ class EncryptedEvolutionStore(context: Context) :
         return DataInputStream(ByteArrayInputStream(container)).use { data ->
             require(data.readInt() == CONTAINER_VERSION) { "Unsupported evolution vault container" }
             val storedCodecVersion = data.readInt()
-            require(EvolutionVaultCodec.supportsVersion(storedCodecVersion)) { "Unsupported evolution vault codec" }
-            val ivSize = data.readInt(); require(ivSize in 12..32) { "Invalid evolution vault IV length" }
-            val iv = ByteArray(ivSize).also(data::readFully); val encrypted = data.readBytes()
+            require(EvolutionVaultCodec.supportsVersion(storedCodecVersion)) {
+                "Unsupported evolution vault codec"
+            }
+            val ivSize = data.readInt()
+            require(ivSize in 12..32) { "Invalid evolution vault IV length" }
+            val iv = ByteArray(ivSize).also(data::readFully)
+            val encrypted = data.readBytes()
             require(encrypted.isNotEmpty()) { "Missing evolution vault ciphertext" }
             val cipher = Cipher.getInstance(TRANSFORMATION).apply {
                 init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
@@ -358,8 +423,33 @@ class EncryptedEvolutionStore(context: Context) :
         }
     }
 
+    private fun adoptionTarget(id: String): AtomicFile =
+        AtomicFile(adoptionDirectory.resolve(sha256(id) + ADOPTION_SUFFIX))
+
+    private fun novelTarget(id: String): AtomicFile =
+        AtomicFile(novelDirectory.resolve(sha256(id) + NOVEL_SUFFIX))
+
+    private fun exists(target: AtomicFile): Boolean =
+        target.baseFile.exists() ||
+            target.baseFile.resolveSibling("${target.baseFile.name}.bak").exists()
+
+    private fun recordFilesExist(): Boolean =
+        adoptionDirectory.listFiles().orEmpty().any { it.name.endsWith(ADOPTION_SUFFIX) } ||
+            novelDirectory.listFiles().orEmpty().any { it.name.endsWith(NOVEL_SUFFIX) }
+
+    private fun sha256(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
     private fun ensureDirectory() {
         check(directory.isDirectory || directory.mkdirs()) { "Evolution vault unavailable" }
+        check(adoptionDirectory.isDirectory || adoptionDirectory.mkdirs()) {
+            "Evolution adoption directory unavailable"
+        }
+        check(novelDirectory.isDirectory || novelDirectory.mkdirs()) {
+            "Evolution novel directory unavailable"
+        }
     }
 
     private fun loadOrCreateKey(): SecretKey {
@@ -382,6 +472,8 @@ class EncryptedEvolutionStore(context: Context) :
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val CONTAINER_VERSION = 1
         const val VAULT_FILE_NAME = "state.evolution"
+        const val ADOPTION_SUFFIX = ".adoption"
+        const val NOVEL_SUFFIX = ".novel"
         const val MAX_PLAINTEXT_BYTES = 8 * 1024 * 1024
         const val MAX_CONTAINER_BYTES = MAX_PLAINTEXT_BYTES + 64 * 1024
     }
