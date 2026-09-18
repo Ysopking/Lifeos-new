@@ -5,6 +5,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.runtime.goal.LocalScheduleGoalEngine
 import app.lifeos.core.runtime.goal.LocalScheduleGoalResult
+import app.lifeos.core.runtime.trace.DecisionTraceId
 import java.time.ZoneId
 import kotlinx.coroutines.CancellationException
 
@@ -46,7 +47,11 @@ class LocalScheduleActionExecutor(
                 is LocalScheduleGoalResult.Scheduled -> {
                     val persisted = persistAndIngest(result.photon)
                     try {
-                        scheduler.schedule(result.photon.id, result.record)
+                        scheduler.schedule(
+                            reminderId = result.photon.id,
+                            record = result.record,
+                            traceId = DecisionTraceId.create("goal-photon", context.goalPhotonId.value),
+                        )
                         LocalScheduleExecutionResult.Scheduled(
                             output = persisted,
                             record = result.record,

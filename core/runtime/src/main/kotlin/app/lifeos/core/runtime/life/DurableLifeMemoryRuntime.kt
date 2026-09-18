@@ -1,12 +1,18 @@
 package app.lifeos.core.runtime.life
 
 import app.lifeos.core.model.CanonicalPhotonState
+import app.lifeos.core.model.GraphActivityClass
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRelation
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.CognitiveMemoryEntry
+import app.lifeos.core.runtime.CognitiveMemoryFabric
+import app.lifeos.core.runtime.CognitiveMemoryLayout
+import app.lifeos.core.runtime.PhotonResidencyController
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.Base64
@@ -58,6 +64,7 @@ data class DurableLifeMemorySnapshot(
     val accessLedger: MemoryAccessLedger,
     val authoritativePhotonCount: Int,
     val fingerprint: String,
+    val memoryLayout: CognitiveMemoryLayout = CognitiveMemoryLayout.empty(),
 )
 
 /** Photon-backed source cursor. Evidence is committed before this management Photon advances. */
@@ -209,8 +216,10 @@ class PhotonBackedMemoryAccessLedgerStore(
         return event
     }
 
-    suspend fun snapshot(): MemoryAccessLedger {
-        val events = photons.loadAll()
+    suspend fun snapshot(): MemoryAccessLedger = snapshot(photons.loadAll())
+
+    fun snapshot(allPhotons: Collection<Photon>): MemoryAccessLedger {
+        val events = allPhotons
             .filter { "memory-access-event" in it.tags }
             .map(::decodeEvent)
             .sortedWith(compareBy<AccessEvent> { it.at }.thenBy { it.id.value })
@@ -419,11 +428,26 @@ class DurableLifeMemoryRuntime(
     private val accessStore: PhotonBackedMemoryAccessLedgerStore = PhotonBackedMemoryAccessLedgerStore(photons),
     private val graphProjector: LifeGraphProjector = LifeGraphProjector(),
     private val memoryEngine: LongTermMemoryEngine = LongTermMemoryEngine(),
+    private val maxResidentPhotons: Int = DEFAULT_MAX_RESIDENT_PHOTONS,
+    private val residentBudgetProvider: (() -> Int)? = null,
 ) {
+    private val memoryFabric = CognitiveMemoryFabric(photons)
+
+    init {
+        require(maxResidentPhotons > 0)
+        require(residentBudgetProvider?.invoke()?.let { it > 0 } ?: true)
+    }
     @Volatile
     private var latest: DurableLifeMemorySnapshot? = null
 
     fun current(): DurableLifeMemorySnapshot? = latest
+
+    fun memoryLayout(): CognitiveMemoryLayout = memoryFabric.layout()
+
+    fun hotContext(limit: Int = DEFAULT_HOT_CONTEXT_LIMIT): List<Photon> =
+        memoryFabric.hotContext(limit)
+
+    suspend fun hydrate(ref: PhotonRevisionRef): Photon? = memoryFabric.hydrate(ref)
 
     suspend fun rebuild(now: Instant): DurableLifeMemorySnapshot {
         val all = photons.loadAll()
@@ -431,7 +455,7 @@ class DurableLifeMemoryRuntime(
         val authoritative = ActiveLifeSourceProjection.filter(storedAuthoritative, all)
         val graphEvidence = authoritative.filterNot { "causal-ledger" in it.tags }
         val memoryEvidence = graphEvidence.filterNot { "life-source-gap" in it.tags }
-        val durableAccess = accessStore.snapshot()
+        val durableAccess = accessStore.snapshot(all)
         val effectiveAccess = rebuildableRelevance(durableAccess, memoryEvidence, all)
         val graph = graphProjector.project(graphEvidence)
         val rawMemory = memoryEngine.project(memoryEvidence, effectiveAccess, now)
@@ -439,6 +463,36 @@ class DurableLifeMemoryRuntime(
         for (derived in memory.derivedPhotons) {
             saveIdempotent(derived)
         }
+
+        val decisionsById = memory.decisions.associateBy { it.photonId }
+        val memoryLayout = memoryFabric.rebuild(
+            entries = memoryEvidence.map { photon ->
+                val stage = decisionsById[photon.id]?.toStage ?: MemoryStage.HOT
+                val profile = effectiveAccess.profiles[photon.id]
+                CognitiveMemoryEntry(
+                    ref = PhotonRevisionRef(photon.id, photon.revision),
+                    activity = when (stage) {
+                        MemoryStage.HOT -> GraphActivityClass.HOT
+                        MemoryStage.WARM -> GraphActivityClass.WARM
+                        MemoryStage.COLD,
+                        MemoryStage.CRYSTALLIZED -> GraphActivityClass.COLD
+                    },
+                    lastAccessRevision = saturatingAccessRevision(
+                        photonRevision = photon.revision,
+                        accessCount = profile?.accessCount ?: 0L,
+                    ),
+                    activeMatter = photon.tags.any {
+                        it == "matter" || it.startsWith("matter:") || it.startsWith("life-matter:")
+                    },
+                    activeConversation = photon.tags.any {
+                        it == "chat" || it.startsWith("conversation:")
+                    },
+                )
+            },
+            availablePhotons = memoryEvidence,
+            maxResidentPhotons = effectiveResidentLimit(),
+        )
+
         val snapshot = DurableLifeMemorySnapshot(
             graph = graph,
             memory = memory,
@@ -460,7 +514,13 @@ class DurableLifeMemoryRuntime(
                     )
                 }.toTypedArray(),
             ),
+            memoryLayout = memoryLayout,
         )
+        (photons as? PhotonResidencyController)?.retainResident(
+            memoryLayout.l0.mapTo(linkedSetOf()) { it.photonId } +
+                memoryLayout.l1.mapTo(linkedSetOf()) { it.photonId }
+        )
+
         latest = snapshot
         return snapshot
     }
@@ -503,6 +563,23 @@ class DurableLifeMemoryRuntime(
             seinRelevance = seinRelevance,
         )
         return rebuild(at)
+    }
+
+    private fun effectiveResidentLimit(): Int =
+        (residentBudgetProvider?.invoke() ?: maxResidentPhotons)
+            .coerceIn(1, MAX_RESIDENT_PHOTONS_HARD_LIMIT)
+
+    private fun saturatingAccessRevision(
+        photonRevision: Long,
+        accessCount: Long,
+    ): Long {
+        require(photonRevision > 0L)
+        require(accessCount >= 0L)
+        return if (Long.MAX_VALUE - photonRevision < accessCount) {
+            Long.MAX_VALUE
+        } else {
+            photonRevision + accessCount
+        }
     }
 
     private fun stabilize(
@@ -668,6 +745,9 @@ private fun decode(value: String): String = String(
 private fun number(value: Double?): String = value?.let(java.lang.Double::toHexString) ?: "~"
 private fun optionalNumber(value: String): Double? = value.takeIf { it != "~" }?.let(java.lang.Double::valueOf)
 
+private const val DEFAULT_MAX_RESIDENT_PHOTONS = 4_096
+private const val MAX_RESIDENT_PHOTONS_HARD_LIMIT = 32_768
+private const val DEFAULT_HOT_CONTEXT_LIMIT = 256
 private const val MAX_LINEAGE_DEPTH = 16
 private const val MAX_MANAGEMENT_CONTENT_CHARS = 64 * 1024
 private const val MAX_MANAGEMENT_FIELDS = 32

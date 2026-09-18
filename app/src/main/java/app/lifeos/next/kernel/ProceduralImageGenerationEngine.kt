@@ -5,6 +5,7 @@ import app.lifeos.core.image.MmsiTile
 import app.lifeos.core.image.ProceduralMmsiProfile
 import app.lifeos.core.image.Rgba8Image
 import app.lifeos.core.image.nativebackend.HardwareBufferMmsiInterop
+import app.lifeos.core.image.nativebackend.MmsiHardwareHealthGuard
 import app.lifeos.core.image.nativebackend.MmsiProceduralSpectralHardwarePipeline
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.image.nativebackend.VulkanMmsiRenderer
@@ -19,6 +20,7 @@ import app.lifeos.core.scene.SceneRasterSize
 import app.lifeos.core.scene.SceneRasterizer
 import app.lifeos.core.scene.toDirectMmsiInputs
 import app.lifeos.core.scene.toMmsiViewSpace
+import app.lifeos.core.runtime.CognitiveBudget
 import java.time.Instant
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
@@ -45,6 +47,8 @@ class ProceduralImageGenerationEngine(
     private val baseProfile: ProceduralMmsiProfile = ProceduralMmsiProfile(),
     private val sceneLightingResolver: SceneLightingResolver = SceneLightingResolver(),
     private val outputSize: SceneRasterSize = SceneRasterSize(512, 288),
+    private val hardwareHealth: MmsiHardwareHealthGuard = MmsiHardwareHealthGuard(),
+    private val creativeBudgetProvider: (() -> CognitiveBudget)? = null,
 ) {
     private val appContext = context.applicationContext
 
@@ -71,7 +75,18 @@ class ProceduralImageGenerationEngine(
             is SceneRasterResult.Blocked -> return@withContext ProceduralImageRenderResult.Blocked(raster.reasons)
         }
 
-        val hardware = renderHardware(rasterized.buffers, renderProfile)
+        val creativeBudget = creativeBudgetProvider?.invoke()
+        val hardware = if (
+            creativeBudget == null ||
+            (
+                creativeBudget.recomputeBudgetMicros >= MIN_HARDWARE_RECOMPUTE_BUDGET_MICROS &&
+                    creativeBudget.maxParallelism > 1
+            )
+        ) {
+            renderHardware(rasterized.buffers, renderProfile)
+        } else {
+            null
+        }
         if (hardware != null) {
             return@withContext ProceduralImageRenderResult.Rendered(
                 graph = graph,
@@ -92,8 +107,13 @@ class ProceduralImageGenerationEngine(
         profile: ProceduralMmsiProfile,
     ): Rgba8Image? {
         if (!runtimeProbe.snapshot().capabilities.spectralAhbSyncFd) return null
-        return runCatching {
-            val pipeline = MmsiProceduralSpectralHardwarePipeline.create(appContext) ?: return@runCatching null
+        if (!hardwareHealth.canAttemptHardware()) return null
+        return try {
+            val pipeline = MmsiProceduralSpectralHardwarePipeline.create(appContext)
+            if (pipeline == null) {
+                hardwareHealth.recordRejected()
+                return null
+            }
             pipeline.use { renderer ->
                 val interop = HardwareBufferMmsiInterop()
                 interop.allocateSpectralForTile(MmsiTile(0, 0, buffers.size.width, buffers.size.height)).use { storage ->
@@ -116,13 +136,24 @@ class ProceduralImageGenerationEngine(
                         ),
                         rgbProjection = profile.rgbProjection,
                     )
-                    if (result.accepted) result.image else null
+                    if (result.accepted && result.image != null) {
+                        hardwareHealth.recordSuccess()
+                        result.image
+                    } else {
+                        hardwareHealth.recordRejected()
+                        null
+                    }
                 }
             }
-        }.getOrNull()
+        } catch (error: Throwable) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            hardwareHealth.recordFailure(error)
+            null
+        }
     }
 
     companion object {
         const val HARDWARE_RENDERER_ID = "mmsi-vulkan-spectral-procedural-v1"
+        const val MIN_HARDWARE_RECOMPUTE_BUDGET_MICROS = 300_000L
     }
 }

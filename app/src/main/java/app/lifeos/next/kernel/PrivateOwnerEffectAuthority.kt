@@ -2,11 +2,18 @@ package app.lifeos.next.kernel
 
 import android.content.Context
 import app.lifeos.core.data.policy.EncryptedOwnerPolicyRepository
+import app.lifeos.core.runtime.agency.ActionContract
+import app.lifeos.core.runtime.agency.ActionEffectExecutor
+import app.lifeos.core.runtime.agency.ActionEffectResult
+import app.lifeos.core.runtime.agency.ActionEffectTransactionCoordinator
+import app.lifeos.core.runtime.agency.ActionEffectVerifier
 import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
 import app.lifeos.core.runtime.policy.OwnerEffectRequest
 import app.lifeos.core.runtime.policy.OwnerEffectType
 import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
+import app.lifeos.core.runtime.trace.DecisionTraceId
+import java.time.Instant
 
 /**
  * Process/receiver-safe bridge from Android host effects to the single durable V14 owner ledger.
@@ -34,6 +41,35 @@ object PrivateOwnerEffectAuthority {
         return OwnerPolicyEffectGate(ledger).expose(
             request = request,
             effect = effect,
+        )
+    }
+
+    suspend fun <T> transact(
+        context: Context,
+        traceId: DecisionTraceId,
+        intentId: String,
+        request: OwnerEffectRequest,
+        expectedEffectFingerprint: String,
+        effect: suspend () -> T,
+        verify: suspend (T) -> app.lifeos.core.runtime.agency.ActionEffectVerification,
+    ): ActionEffectResult<T> {
+        val ledger = OwnerPolicyLedger(
+            EncryptedOwnerPolicyRepository(context.applicationContext)
+        )
+        PrivateOwnerPolicyBaseline.ensure(ledger)
+        val contract = ActionContract.create(
+            traceId = traceId,
+            intentId = intentId,
+            request = request,
+            expectedEffectFingerprint = expectedEffectFingerprint,
+            frozenAt = Instant.now(),
+        )
+        return ActionEffectTransactionCoordinator(
+            effectGate = OwnerPolicyEffectGate(ledger),
+        ).execute(
+            contract = contract,
+            executor = ActionEffectExecutor { effect() },
+            verifier = ActionEffectVerifier { _, output -> verify(output) },
         )
     }
 

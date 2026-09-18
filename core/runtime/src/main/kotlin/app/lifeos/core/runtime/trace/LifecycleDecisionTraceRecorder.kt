@@ -1,6 +1,10 @@
 package app.lifeos.core.runtime.trace
 
 import app.lifeos.core.runtime.artifact.ArtifactFinalizationResult
+import app.lifeos.core.runtime.artifact.ArtifactGenerationResult
+import app.lifeos.core.runtime.agency.ActionContract
+import app.lifeos.core.runtime.agency.ActionEffectReceipt
+import app.lifeos.core.runtime.agency.ActionEffectStatus
 import app.lifeos.core.runtime.evolution.EvolutionCanaryKillSwitchEvidence
 import app.lifeos.core.runtime.evolution.EvolutionCanaryOutcome
 import app.lifeos.core.runtime.health.DurableSelfHealingResult
@@ -277,6 +281,154 @@ class LifecycleDecisionTraceRecorder(
             traceId,
             nodes = listOf(requestNode) + contributionNodes + parentNodes + artifactNode + reentryNode,
             links = links,
+        )
+    }
+
+    suspend fun recordArtifactGeneration(
+        result: ArtifactGenerationResult,
+    ): DecisionTraceRecordResult = record("artifact-generation") {
+        val artifact = result.finalization.artifact
+        val artifactPhoton = artifact.photon
+        val generationPhoton = result.generationPhoton
+        val traceId = DecisionTraceId.create("artifact", artifact.request.id.value)
+
+        val artifactNode = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.EXECUTION_OUTCOME,
+            sourceType = "artifact-photon",
+            sourceId = artifactPhoton.id.value,
+            sourceRevision = artifactPhoton.revision,
+            reasonCodes = listOf("CONVERGED", "MIME_${artifactPhoton.mimeType}"),
+            recordedAt = artifactPhoton.provenance.createdAt,
+        )
+        val generationNode = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.EXECUTION_OUTCOME,
+            sourceType = "artifact-generation-photon",
+            sourceId = generationPhoton.id.value,
+            sourceRevision = generationPhoton.revision,
+            reasonCodes = buildList {
+                add("MIME_${generationPhoton.mimeType}")
+                add(if (result.generationReentry.accepted) "REENTRY_ACCEPTED" else "REENTRY_DEDUPLICATED_OR_REJECTED")
+            },
+            recordedAt = generationPhoton.provenance.createdAt,
+        )
+
+        val plan = result.semanticPlan
+        val evidenceNodes = plan?.evidence.orEmpty()
+            .sortedBy { it.stableKey }
+            .map { evidence ->
+                DecisionTraceNode.create(
+                    type = DecisionTraceNodeType.OBSERVED_FACT,
+                    sourceType = "photon-revision",
+                    sourceId = evidence.photonId.value,
+                    sourceRevision = evidence.revision,
+                    reasonCodes = listOf("SEMANTIC_ARTIFACT_EVIDENCE"),
+                    recordedAt = generationPhoton.provenance.createdAt,
+                )
+            }
+        val evidenceByKey = evidenceNodes.associateBy { "${it.sourceId}@${it.sourceRevision}" }
+
+        val claimNodes = plan?.claims.orEmpty()
+            .sortedBy { it.claimId }
+            .map { claim ->
+                DecisionTraceNode.create(
+                    type = if (claim.claimId in plan!!.unresolvedClaimIds) {
+                        DecisionTraceNodeType.UNRESOLVED_UNCERTAINTY
+                    } else {
+                        DecisionTraceNodeType.SELECTION
+                    },
+                    sourceType = "semantic-artifact-claim",
+                    sourceId = claim.claimId,
+                    sourceRevision = plan.sourceWorldRevision,
+                    reasonCodes = listOf("CONFIDENCE_MICROS_${claim.confidenceMicros}"),
+                    recordedAt = generationPhoton.provenance.createdAt,
+                )
+            }
+        val claimById = claimNodes.associateBy { it.sourceId }
+
+        val links = buildList {
+            add(DecisionTraceLink(artifactNode.id, generationNode.id, DecisionTraceLinkType.PRODUCED))
+            plan?.claims.orEmpty().forEach { claim ->
+                val claimNode = claimById.getValue(claim.claimId)
+                add(
+                    DecisionTraceLink(
+                        claimNode.id,
+                        generationNode.id,
+                        if (claim.claimId in plan!!.unresolvedClaimIds) {
+                            DecisionTraceLinkType.CONSTRAINS
+                        } else {
+                            DecisionTraceLinkType.SUPPORTS
+                        },
+                    )
+                )
+                claim.evidence.forEach { evidence ->
+                    val evidenceNode = evidenceByKey.getValue(evidence.stableKey)
+                    add(DecisionTraceLink(evidenceNode.id, claimNode.id, DecisionTraceLinkType.SUPPORTS))
+                }
+            }
+        }
+
+        ledger.append(
+            traceId,
+            nodes = listOf(artifactNode, generationNode) + evidenceNodes + claimNodes,
+            links = links,
+        )
+    }
+
+    suspend fun recordActionEffect(
+        contract: ActionContract,
+        receipt: ActionEffectReceipt,
+    ): DecisionTraceRecordResult = record("action-effect") {
+        require(receipt.contractId == contract.id)
+        require(receipt.traceId == contract.traceId)
+
+        val contractNode = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.SELECTION,
+            sourceType = "action-contract",
+            sourceId = contract.id.value,
+            sourceRevision = 1L,
+            reasonCodes = listOf(
+                "EFFECT_${contract.request.effect.name}",
+                "EXPECTED_${contract.expectedEffectFingerprint}",
+                "SCOPE_${contract.request.scope}",
+            ),
+            recordedAt = contract.frozenAt,
+        )
+        val assessment = receipt.policyAssessment
+        val policyNode = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.POLICY_CONSTRAINT,
+            sourceType = "owner-policy-decision",
+            sourceId = assessment.decisionId.value,
+            sourceRevision = assessment.policyRevision,
+            reasonCodes = buildList {
+                add(if (assessment.allowed) "AUTHORIZED" else "DENIED")
+                assessment.grantId?.let { add("GRANT_${it.value}") }
+                assessment.reasonCodes.forEach { add("REASON_${it.name}") }
+            },
+            recordedAt = receipt.recordedAt,
+        )
+        val receiptNode = DecisionTraceNode.create(
+            type = when (receipt.status) {
+                ActionEffectStatus.SUCCEEDED -> DecisionTraceNodeType.EXECUTION_OUTCOME
+                ActionEffectStatus.DENIED -> DecisionTraceNodeType.REJECTION
+                ActionEffectStatus.UNKNOWN_OUTCOME -> DecisionTraceNodeType.UNRESOLVED_UNCERTAINTY
+            },
+            sourceType = "action-effect-receipt",
+            sourceId = receipt.contractId.value,
+            sourceRevision = assessment.policyRevision,
+            reasonCodes = buildList {
+                add(receipt.status.name)
+                receipt.observedEffectId?.let { add("OBSERVED_$it") }
+                receipt.detail?.let { add("DETAIL_$it") }
+            },
+            recordedAt = receipt.recordedAt,
+        )
+        ledger.append(
+            id = contract.traceId,
+            nodes = listOf(contractNode, policyNode, receiptNode),
+            links = listOf(
+                DecisionTraceLink(policyNode.id, contractNode.id, DecisionTraceLinkType.CONSTRAINS),
+                DecisionTraceLink(contractNode.id, receiptNode.id, DecisionTraceLinkType.PRODUCED),
+            ),
         )
     }
 

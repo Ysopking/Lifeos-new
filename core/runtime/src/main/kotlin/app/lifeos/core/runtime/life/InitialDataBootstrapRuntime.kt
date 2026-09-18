@@ -5,6 +5,7 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.CognitiveBudget
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -80,6 +81,7 @@ class InitialDataBootstrapRuntime(
     private val memory: DurableLifeMemoryRuntime,
     sources: Collection<InitialDataSourceAdapter>,
     private val pageSize: Int = DEFAULT_PAGE_SIZE,
+    private val budgetProvider: (() -> CognitiveBudget)? = null,
     private val now: () -> Instant = Instant::now,
 ) {
     private val mutex = Mutex()
@@ -124,15 +126,19 @@ class InitialDataBootstrapRuntime(
         val preexistingReportId = reportId(sourceSetFingerprint, stateFingerprint)
         photons.load(preexistingReportId)?.let { existing ->
             validateReport(existing, sourceSetFingerprint, stateFingerprint)
-            return@withLock snapshot(
-                sourceSetFingerprint = sourceSetFingerprint,
-                sourceStateFingerprint = stateFingerprint,
-                states = states,
-                reportPhotonId = preexistingReportId,
-            )
+            if ("initial-data-bootstrap:complete" in existing.tags) {
+                return@withLock snapshot(
+                    sourceSetFingerprint = sourceSetFingerprint,
+                    sourceStateFingerprint = stateFingerprint,
+                    states = states,
+                    reportPhotonId = preexistingReportId,
+                )
+            }
+            // PARTIAL reports are observations, not seals. Resume from durable source checkpoints.
         }
 
         val gapIds = linkedSetOf<PhotonId>()
+        val executionBudget = currentExecutionBudget()
         for (source in sources) {
             val descriptor = source.descriptor
             when (states.getValue(source)) {
@@ -152,7 +158,7 @@ class InitialDataBootstrapRuntime(
                     gapIds += ingestor.recordUnavailable(descriptor, now()).id
                 }
 
-                InitialDataSourceStatus.AVAILABLE -> ingestAvailable(source)
+                InitialDataSourceStatus.AVAILABLE -> ingestAvailable(source, executionBudget)
             }
         }
 
@@ -184,15 +190,18 @@ class InitialDataBootstrapRuntime(
         provisional
     }
 
-    private suspend fun ingestAvailable(source: InitialDataSourceAdapter) {
+    private suspend fun ingestAvailable(
+        source: InitialDataSourceAdapter,
+        budget: BootstrapExecutionBudget,
+    ) {
         val descriptor = source.descriptor
         var checkpoint = checkpoints.load(descriptor)
         if (checkpoint.isComplete()) return
         var position = checkpoint.position
         var pages = 0
-        while (true) {
-            check(++pages <= MAX_PAGES_PER_RUN) { "Initial-data source exceeded bounded page count" }
-            val page = source.readPage(position, pageSize)
+        while (pages < budget.maxPagesPerSource) {
+            pages += 1
+            val page = source.readPage(position, budget.pageSize)
             require(page.records.all { it.sourceId == descriptor.sourceId }) {
                 "Initial-data adapter emitted a record for another source"
             }
@@ -211,6 +220,37 @@ class InitialDataBootstrapRuntime(
             checkpoint = commit.checkpoint
             position = checkpoint.position
             if (page.complete) break
+        }
+    }
+
+    private fun currentExecutionBudget(): BootstrapExecutionBudget {
+        val cognitive = budgetProvider?.invoke()
+        if (cognitive == null) {
+            return BootstrapExecutionBudget(pageSize, MAX_PAGES_PER_RUN)
+        }
+        val scaledPageSize = (pageSize.toLong() * cognitive.maxParallelism.toLong())
+            .coerceIn(1L, MAX_PAGE_SIZE.toLong())
+            .toInt()
+        val pageAllowance = when {
+            cognitive.allowBackgroundEnrichment ->
+                4 + (cognitive.enrichmentBudgetMicros / 100_000L).toInt()
+            cognitive.enrichmentBudgetMicros > 0L ->
+                1 + (cognitive.enrichmentBudgetMicros / 250_000L).toInt()
+            else -> 1
+        }.coerceIn(1, MAX_PAGES_PER_RUN)
+        return BootstrapExecutionBudget(
+            pageSize = scaledPageSize,
+            maxPagesPerSource = pageAllowance,
+        )
+    }
+
+    private data class BootstrapExecutionBudget(
+        val pageSize: Int,
+        val maxPagesPerSource: Int,
+    ) {
+        init {
+            require(pageSize in 1..MAX_PAGE_SIZE)
+            require(maxPagesPerSource in 1..MAX_PAGES_PER_RUN)
         }
     }
 

@@ -28,10 +28,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.core.image.ImagePhotonFactory
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.agency.ActionEffectStatus
+import app.lifeos.core.runtime.agency.ActionEffectVerification
 import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.goal.LocalReminderRecord
 import app.lifeos.core.runtime.goal.LocalScheduleGoalEngine
-import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
+import app.lifeos.core.runtime.trace.DecisionTraceId
 import app.lifeos.next.kernel.PrivateOwnerEffectAuthority
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -70,16 +73,33 @@ private fun LifeOsApp(model: LifeOsViewModel) {
         if (pendingShare != null) {
             try {
                 val shareIntent = model.createShareIntent(pendingShare)
-                when (
-                    val exposure = PrivateOwnerEffectAuthority.expose(
-                        context = context,
-                        request = PrivateOwnerEffectAuthority.shareHandoffRequest(),
-                    ) {
+                val result = PrivateOwnerEffectAuthority.transact(
+                    context = context,
+                    traceId = DecisionTraceId.create("goal-photon", pendingShare.requestGoalId.value),
+                    intentId = "share-handoff:${pendingShare.target.id.value}",
+                    request = PrivateOwnerEffectAuthority.shareHandoffRequest(),
+                    expectedEffectFingerprint = StableCognitiveIds.fingerprint(
+                        "share-handoff-effect/v1",
+                        pendingShare.target.id.value,
+                        pendingShare.target.revision.toString(),
+                        pendingShare.mediaType,
+                    ),
+                    effect = {
                         context.startActivity(Intent.createChooser(shareIntent, "Mit App teilen"))
-                    }
-                ) {
-                    is OwnerEffectExposureResult.Exposed -> model.communicationShareOpened(pendingShare)
-                    is OwnerEffectExposureResult.Blocked -> model.communicationShareFailed(pendingShare)
+                        "android-share-chooser:${pendingShare.target.id.value}"
+                    },
+                    verify = { observedId ->
+                        ActionEffectVerification(
+                            confirmed = true,
+                            observedEffectId = observedId,
+                            detail = "chooser-launched-delivery-unverified",
+                        )
+                    },
+                )
+                when (result.receipt.status) {
+                    ActionEffectStatus.SUCCEEDED -> model.communicationShareOpened(pendingShare)
+                    ActionEffectStatus.DENIED,
+                    ActionEffectStatus.UNKNOWN_OUTCOME -> model.communicationShareFailed(pendingShare)
                 }
             } catch (_: Exception) {
                 model.communicationShareFailed(pendingShare)

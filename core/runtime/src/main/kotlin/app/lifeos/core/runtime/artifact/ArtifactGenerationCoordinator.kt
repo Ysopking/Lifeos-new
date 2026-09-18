@@ -7,6 +7,11 @@ import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
+import app.lifeos.core.model.SemanticArtifactKind
+import app.lifeos.core.model.SemanticArtifactPlan
+import app.lifeos.core.runtime.LifeOsGoldLoopProjectionRuntimeRegistry
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRecorder
+import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRuntimeRegistry
 import java.time.Instant
 
 object ArtifactGenerationContract {
@@ -23,11 +28,22 @@ data class ArtifactGenerationRequest(
     val finalizedAt: Instant,
     val materializedAsset: AssetRef,
     val parentRevision: ArtifactRevisionRef? = null,
+    val semanticPlan: SemanticArtifactPlan? = null,
 ) {
     init {
         profile.requireCompatible(request.kind)
         require(materializedAsset.mediaType == request.targetMimeType) {
             "Materialized asset MIME type ${materializedAsset.mediaType} does not match requested ${request.targetMimeType}"
+        }
+        semanticPlan?.let { plan ->
+            requireSemanticKindCompatible(plan, request.kind)
+            val contributionParents = contributions
+                .flatMapTo(linkedSetOf()) { it.provenance.parentIds }
+            val missingEvidence = plan.evidence.filter { it.photonId !in contributionParents }
+            require(missingEvidence.isEmpty()) {
+                "Semantic artifact evidence must be present in contribution provenance: " +
+                    missingEvidence.joinToString(",") { it.stableKey }
+            }
         }
     }
 }
@@ -36,7 +52,20 @@ data class ArtifactGenerationResult(
     val finalization: ArtifactFinalizationResult,
     val generationPhoton: Photon,
     val generationReentry: ArtifactReentryReceipt,
+    val semanticPlan: SemanticArtifactPlan? = null,
 )
+
+private fun requireSemanticKindCompatible(plan: SemanticArtifactPlan, artifactKind: ArtifactKind) {
+    val compatible = when (plan.kind) {
+        SemanticArtifactKind.TEXT -> artifactKind in setOf(ArtifactKind.DOCUMENT, ArtifactKind.REPORT, ArtifactKind.OTHER)
+        SemanticArtifactKind.PDF -> artifactKind in setOf(ArtifactKind.DOCUMENT, ArtifactKind.REPORT)
+        SemanticArtifactKind.IMAGE -> artifactKind == ArtifactKind.IMAGE
+        SemanticArtifactKind.TASK -> artifactKind == ArtifactKind.OTHER
+    }
+    require(compatible) {
+        "Semantic artifact kind ${plan.kind} is incompatible with artifact kind $artifactKind"
+    }
+}
 
 /**
  * Adds deterministic generation provenance around the immutable artifact revision lifecycle.
@@ -48,6 +77,8 @@ data class ArtifactGenerationResult(
 class ArtifactGenerationCoordinator(
     private val artifacts: ArtifactCoordinator,
     private val ingress: ArtifactPhotonIngress,
+    private val lifecycleTraceRecorder: LifecycleDecisionTraceRecorder? =
+        LifecycleDecisionTraceRuntimeRegistry.currentOrNull(),
 ) {
     suspend fun finalize(generation: ArtifactGenerationRequest): ArtifactGenerationResult {
         val finalization = artifacts.finalize(
@@ -72,7 +103,11 @@ class ArtifactGenerationCoordinator(
             finalization = finalization,
             generationPhoton = generationPhoton,
             generationReentry = receipt,
-        )
+            semanticPlan = generation.semanticPlan,
+        ).also { result ->
+            lifecycleTraceRecorder?.recordArtifactGeneration(result)
+            LifeOsGoldLoopProjectionRuntimeRegistry.currentOrNull()?.observeArtifact(result)
+        }
     }
 
     private fun createGenerationPhoton(
@@ -88,6 +123,7 @@ class ArtifactGenerationCoordinator(
             artifactPhoton.id.value,
             generation.materializedAsset.sha256,
             *generation.profile.fingerprintParts().toTypedArray(),
+            *semanticPlanFingerprintParts(generation.semanticPlan).toTypedArray(),
         )
         val photonId = PhotonId("artifact_generation_$fingerprint")
         val inputPhotonIds = revision.inputPhotonIds.toSortedSet(compareBy { it.value })
@@ -123,6 +159,11 @@ class ArtifactGenerationCoordinator(
                 add("artifact-revision:${revision.id.value}")
                 add("artifact-generation-profile:${generation.profile.type}")
                 add("artifact-output-sha256:${generation.materializedAsset.sha256}")
+                generation.semanticPlan?.let { plan ->
+                    add("artifact-semantic-world-revision:${plan.sourceWorldRevision}")
+                    add("artifact-semantic-kind:${plan.kind.name.lowercase()}")
+                    add("artifact-semantic-claims:${plan.claims.size}")
+                }
                 when (val profile = generation.profile) {
                     is DocumentArtifactProfile -> add("artifact-document-format:${profile.format}")
                     is CodeArtifactProfile -> add("artifact-code-language:${profile.language}")
@@ -164,9 +205,36 @@ class ArtifactGenerationCoordinator(
             if (index > 0) append(',')
             appendJson(module)
         }
-        append("],\"profile\":")
+        append("],\"semanticPlan\":")
+        appendSemanticPlan(generation.semanticPlan)
+        append(",\"profile\":")
         appendProfile(generation.profile)
         append('}')
+    }
+
+    private fun StringBuilder.appendSemanticPlan(plan: SemanticArtifactPlan?) {
+        if (plan == null) {
+            append("null")
+            return
+        }
+        append('{')
+        append("\"kind\":"); appendJson(plan.kind.name); append(',')
+        append("\"sourceWorldRevision\":"); append(plan.sourceWorldRevision); append(',')
+        append("\"claims\":[")
+        plan.claims.sortedBy { it.claimId }.forEachIndexed { index, claim ->
+            if (index > 0) append(',')
+            append('{')
+            append("\"id\":"); appendJson(claim.claimId); append(',')
+            append("\"confidenceMicros\":"); append(claim.confidenceMicros); append(',')
+            append("\"unresolved\":"); append(claim.claimId in plan.unresolvedClaimIds); append(',')
+            append("\"evidence\":[")
+            claim.evidence.sortedBy { it.stableKey }.forEachIndexed { evidenceIndex, evidence ->
+                if (evidenceIndex > 0) append(',')
+                appendJson(evidence.stableKey)
+            }
+            append("]}")
+        }
+        append("]}")
     }
 
     private fun StringBuilder.appendProfile(profile: ArtifactGenerationProfile) {
@@ -198,6 +266,21 @@ class ArtifactGenerationCoordinator(
             }
         }
         append('}')
+    }
+
+    private fun semanticPlanFingerprintParts(plan: SemanticArtifactPlan?): List<String> {
+        if (plan == null) return listOf("semantic-plan:none")
+        return buildList {
+            add("semantic-plan/v1")
+            add(plan.kind.name)
+            add(plan.sourceWorldRevision.toString())
+            plan.claims.sortedBy { it.claimId }.forEach { claim ->
+                add(claim.claimId)
+                add(claim.confidenceMicros.toString())
+                add(if (claim.claimId in plan.unresolvedClaimIds) "unresolved" else "resolved")
+                claim.evidence.sortedBy { it.stableKey }.forEach { add(it.stableKey) }
+            }
+        }
     }
 
     private fun StringBuilder.appendJson(value: String) {

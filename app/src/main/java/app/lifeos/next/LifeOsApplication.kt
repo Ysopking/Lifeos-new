@@ -5,6 +5,9 @@ import android.app.Application
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import app.lifeos.core.data.EncryptedLiveSourceCursorRepository
+import app.lifeos.core.data.LiveSourceDeltaRuntime
+import app.lifeos.core.data.LiveSourcePhotonIngress
 import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
@@ -17,6 +20,9 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.CausalCognitionEngine
+import app.lifeos.core.runtime.CognitiveWorkload
+import app.lifeos.core.runtime.LifeOsGoldLoopProjection
+import app.lifeos.core.runtime.LifeOsGoldLoopProjectionRuntimeRegistry
 import app.lifeos.core.runtime.CausalDerivedPhotonPersistence
 import app.lifeos.core.runtime.PhotonBackedCausalLedgerStore
 import app.lifeos.core.runtime.PhotonIngressMode
@@ -45,6 +51,7 @@ import app.lifeos.core.runtime.life.FuturePlanningCoordinator
 import app.lifeos.core.runtime.life.FuturePlanningPersistence
 import app.lifeos.core.runtime.life.InitialDataBootstrapRuntime
 import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
+import app.lifeos.core.runtime.life.InitialDataSourceStatus
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
@@ -77,6 +84,7 @@ import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -116,6 +124,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         private set
 
     @Volatile
+    var liveSourceDeltaRuntime: LiveSourceDeltaRuntime? = null
+        private set
+
+    @Volatile
     var latestInitialDataBootstrap: InitialDataBootstrapSnapshot? = null
         private set
 
@@ -128,6 +140,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
     private lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
     private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
+    private var liveSourceObservers: AndroidLiveSourceObserverRegistry? = null
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -157,6 +170,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             EncryptedGeneratedToolStateRepository(this),
         )
         hardwareResourceIntelligence = HardwareResourceIntelligenceRuntime(this)
+        LifeOsGoldLoopProjectionRuntimeRegistry.install(LifeOsGoldLoopProjection())
         LifeOsIntegratedCognitionSuiteRegistry.install(LifeOsIntegratedCognitionSuite())
 
         LifeOsStartupComposition.start(
@@ -192,14 +206,24 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     )
                 },
                 createKernel = {
-                    kernel = LifeOsKernelFactory(this).create()
+                    kernel = LifeOsKernelFactory(
+                        context = this,
+                        cognitiveBudgetProvider = hardwareResourceIntelligence::cognitiveBudget,
+                    ).create()
                     val ownerAssetReviews = EncryptedOwnerAssetReviewRepository(this)
                     photonIngress = CanonicalPhotonIngress(kernel, ownerAssetReviews)
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
                         productiveIngress = photonIngress::ingest,
                     )
-                    lifeMemoryRuntime = DurableLifeMemoryRuntime(lifePhotonRepository)
+                    lifeMemoryRuntime = DurableLifeMemoryRuntime(
+                        photons = lifePhotonRepository,
+                        residentBudgetProvider = {
+                            hardwareResourceIntelligence
+                                .cognitiveBudget(CognitiveWorkload.FIELD)
+                                .maxHotPhotons
+                        },
+                    )
                     DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
                     multimodalPerception = MultimodalPerceptionRuntime(kernel)
                     runBlocking { multimodalPerception.install() }
@@ -367,6 +391,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             photons = lifePhotonRepository,
             memory = lifeMemoryRuntime,
             sources = initialDataSources.sources + AndroidSharedFilesInitialDataSource(this),
+            budgetProvider = {
+                hardwareResourceIntelligence.cognitiveBudget(CognitiveWorkload.INGEST)
+            },
         )
         refreshInitialDataBootstrap()
     }
@@ -442,12 +469,70 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         if (!startupState.value.ready && !::initialDataBootstrap.isInitialized) return
         initialDataScope.launch {
             try {
-                latestInitialDataBootstrap = initialDataBootstrap.run()
-                initialDataBootstrapFailure = null
+                while (true) {
+                    val snapshot = initialDataBootstrap.run()
+                    latestInitialDataBootstrap = snapshot
+                    refreshLiveSourceRuntime()
+                    initialDataBootstrapFailure = null
+
+                    val deferredAuthorizedWork = snapshot.sources.any { source ->
+                        source.status == InitialDataSourceStatus.AVAILABLE && !source.completed
+                    }
+                    if (!deferredAuthorizedWork) break
+
+                    val budget = hardwareResourceIntelligence.cognitiveBudget(CognitiveWorkload.INGEST)
+                    delay(
+                        if (budget.allowBackgroundEnrichment) {
+                            INITIAL_DATA_FAST_RESUME_MILLIS
+                        } else {
+                            INITIAL_DATA_CONSTRAINED_RESUME_MILLIS
+                        }
+                    )
+                }
             } catch (error: Exception) {
                 initialDataBootstrapFailure = error.message ?: error::class.simpleName ?: "initial-data-bootstrap-failed"
             }
         }
+    }
+
+    /**
+     * Converts the completed/partial bootstrap into steady-state delta ingestion. Only currently
+     * authorized providers are installed; a later permission refresh recreates this runtime and
+     * preserves already durable per-source cursors.
+     */
+    private suspend fun refreshLiveSourceRuntime() {
+        val completedSourceIds = latestInitialDataBootstrap
+            ?.sources
+            ?.asSequence()
+            ?.filter { it.completed }
+            ?.map { it.descriptor.sourceId }
+            ?.toSet()
+            .orEmpty()
+        val adapters = AndroidLiveSourceCatalog(this).authorizedAdapters()
+            .filter { it.sourceId.value in completedSourceIds }
+        liveSourceObservers?.stop()
+        liveSourceObservers = null
+        liveSourceDeltaRuntime = null
+        if (adapters.isEmpty()) return
+
+        val runtime = LiveSourceDeltaRuntime(
+            adapters = adapters,
+            cursors = EncryptedLiveSourceCursorRepository(this),
+            ingress = LiveSourcePhotonIngress { photon ->
+                photonIngress.ingest(photon, PhotonIngressMode.ORIGIN)
+            },
+        )
+        // First call only establishes each provider cursor after bootstrap. Subsequent observer
+        // callbacks read changesAfter(cursor) and never perform the initial full import again.
+        runtime.syncAll()
+
+        liveSourceDeltaRuntime = runtime
+        liveSourceObservers = AndroidLiveSourceObserverRegistry(
+            context = this,
+            scope = initialDataScope,
+            runtime = runtime,
+            sourceIds = adapters.mapTo(linkedSetOf()) { it.sourceId },
+        ).also { it.start() }
     }
 
     private fun allRuntimePermissionSchema(): String = buildString {
@@ -462,5 +547,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"
         const val ALL_RUNTIME_PERMISSION_SCHEMA = "all-runtime-permission-schema"
         const val BROAD_FILE_ACCESS_REQUESTED = "broad-file-access-requested"
+        const val INITIAL_DATA_FAST_RESUME_MILLIS = 250L
+        const val INITIAL_DATA_CONSTRAINED_RESUME_MILLIS = 5_000L
     }
 }

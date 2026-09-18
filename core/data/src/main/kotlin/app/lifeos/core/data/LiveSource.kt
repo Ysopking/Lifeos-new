@@ -25,11 +25,20 @@ data class SourceDelta(
     val newFingerprint: String?,
     val observationRevision: Long,
     val privacyZone: SourcePrivacyZone = SourcePrivacyZone.PRIVATE,
+    val payload: String? = null,
+    val mimeType: String? = null,
+    val observedAtEpochMillis: Long? = null,
 ) {
     init {
         require(deltaId.isNotBlank() && externalKey.isNotBlank())
         require(previousFingerprint?.isNotBlank() != false && newFingerprint?.isNotBlank() != false)
         require(observationRevision > 0)
+        require(payload == null || payload.isNotBlank())
+        require(mimeType == null || mimeType.isNotBlank())
+        require(observedAtEpochMillis == null || observedAtEpochMillis >= 0L)
+        if (kind == SourceDeltaKind.DELETED) {
+            require(newFingerprint == null) { "Deleted source delta cannot retain a new fingerprint" }
+        }
     }
 }
 
@@ -41,12 +50,47 @@ interface LiveSourceAdapter {
     suspend fun changesAfter(cursor: SourceCursor): SourceChangeSet
 }
 
-/** Coalescing boundary: repeated changes for one external object collapse to its newest observed delta. */
+/**
+ * State-machine coalescing boundary. A burst collapses to the net lifecycle transition instead of
+ * merely selecting the newest row:
+ * CREATED->UPDATED remains CREATED, UPDATED->DELETED becomes DELETED, DELETE->CREATE becomes
+ * UPDATED, and CREATE->DELETE disappears when no durable object remains.
+ */
 class SourceDeltaCoalescer(private val capacity: Int) {
     init { require(capacity > 0) }
+
     fun coalesce(deltas: Collection<SourceDelta>): List<SourceDelta> =
         deltas.groupBy { it.sourceId to it.externalKey }
-            .values.map { group -> group.maxBy { it.observationRevision } }
+            .values
+            .mapNotNull(::collapse)
             .sortedWith(compareBy<SourceDelta> { it.observationRevision }.thenBy { it.deltaId })
             .takeLast(capacity)
+
+    private fun collapse(group: List<SourceDelta>): SourceDelta? {
+        val ordered = group.sortedWith(compareBy<SourceDelta> { it.observationRevision }.thenBy { it.deltaId })
+        require(ordered.map { it.observationRevision }.distinct().size == ordered.size) {
+            "Source delta revisions must be unique per external object"
+        }
+        val first = ordered.first()
+        val last = ordered.last()
+        require(ordered.all { it.sourceId == first.sourceId && it.externalKey == first.externalKey })
+
+        if (first.kind == SourceDeltaKind.CREATED && last.kind == SourceDeltaKind.DELETED) {
+            return null
+        }
+
+        val netKind = when {
+            last.kind == SourceDeltaKind.DELETED -> SourceDeltaKind.DELETED
+            first.kind == SourceDeltaKind.CREATED -> SourceDeltaKind.CREATED
+            first.kind == SourceDeltaKind.DELETED -> SourceDeltaKind.UPDATED
+            ordered.any { it.kind == SourceDeltaKind.MOVED } -> SourceDeltaKind.MOVED
+            ordered.all { it.kind == SourceDeltaKind.OBSERVED } -> SourceDeltaKind.OBSERVED
+            else -> SourceDeltaKind.UPDATED
+        }
+
+        return last.copy(
+            kind = netKind,
+            previousFingerprint = first.previousFingerprint,
+        )
+    }
 }

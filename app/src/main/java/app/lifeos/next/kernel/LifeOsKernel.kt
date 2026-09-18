@@ -263,6 +263,39 @@ class LifeOsKernel internal constructor(
     }
 
     /**
+     * Fast conversational persistence boundary. It durably stores one chat Photon and refreshes the
+     * live chat projection, but deliberately does not enqueue ContinuousCognition/world convergence.
+     * Non-conversational turns must use persistUserUtterance().
+     */
+    suspend fun persistFastChatPhoton(
+        photon: Photon,
+        mode: PhotonIngressMode = PhotonIngressMode.ORIGIN,
+    ): Photon {
+        require("chat" in photon.tags) { "Fast chat persistence requires a chat Photon" }
+        ProductivePhotonIngressClassification.requireOrMark(photonStore, photon, mode)
+        val previous = photonStore.load(photon.id)
+        if (previous != null) {
+            require(previous.revision <= photon.revision) {
+                "Fast chat Photon revision regressed for ${photon.id.value}"
+            }
+            if (previous.revision == photon.revision) {
+                require(previous == photon) {
+                    "Conflicting fast chat Photon state for ${photon.id.value}@${photon.revision}"
+                }
+                return previous
+            }
+        }
+        photonStore.save(photon)
+        mutableBootstrapState.update { current ->
+            current.copy(
+                photons = (current.photons.filterNot { it.id == photon.id } + photon)
+                    .sortedBy { it.provenance.createdAt }
+            )
+        }
+        return photon
+    }
+
+    /**
      * Explicit private-user action for one blocking gap. It persists a typed request and a separate
      * exact approval before bounded Genesis runs. The result can only become TRIAL or REJECTED here.
      */

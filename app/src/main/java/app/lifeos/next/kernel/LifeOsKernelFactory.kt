@@ -23,8 +23,11 @@ import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.health.ProtectionMode
 import app.lifeos.core.model.health.ProtectionStateLoadResult
 import app.lifeos.core.model.worker.WorkerId
+import app.lifeos.core.runtime.CognitiveBudget
+import app.lifeos.core.runtime.CognitiveWorkload
 import app.lifeos.core.runtime.DurableLifeOsRuntime
 import app.lifeos.core.runtime.DurableRuntimeStateBridge
+import app.lifeos.core.runtime.IndexedPhotonRepository
 import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.RuntimeExecutionGuard
 import app.lifeos.core.runtime.RuntimeSupervisor
@@ -124,11 +127,13 @@ import kotlinx.coroutines.SupervisorJob
 class LifeOsKernelFactory(
     private val context: Context,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val cognitiveBudgetProvider: ((CognitiveWorkload) -> CognitiveBudget)? = null,
 ) {
     fun create(): LifeOsKernel {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val appContext = context.applicationContext
-        val store = EncryptedPhotonStore(appContext)
+        val encryptedPhotonStore = EncryptedPhotonStore(appContext)
+        val store = IndexedPhotonRepository(encryptedPhotonStore)
         val learningAdaptationRepository = EncryptedLearningAdaptationRepository(appContext)
         val learningAdaptations = DurableLearningAdaptationLedger(learningAdaptationRepository)
         val goalPlanRepository = EncryptedGoalPlanRepository(appContext)
@@ -169,6 +174,9 @@ class LifeOsKernelFactory(
             sceneCompiler = sceneCompiler,
             sceneRasterizer = sceneRasterizer,
             computeDispatcher = dispatcher,
+            creativeBudgetProvider = cognitiveBudgetProvider?.let { provider ->
+                { provider(CognitiveWorkload.CREATIVE) }
+            },
         )
         val capabilityRegistry = CapabilityRegistry(
             listOf(
