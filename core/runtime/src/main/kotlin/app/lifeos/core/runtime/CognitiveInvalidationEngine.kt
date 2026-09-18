@@ -11,6 +11,8 @@ data class CognitiveDelta(
 data class InvalidationResult(
     val affected: Map<String, ProjectionValidity>,
     val recomputationPhotonIds: Set<PhotonId>,
+    val affectedByRef: Map<PhotonRevisionRef, ProjectionValidity> = emptyMap(),
+    val recomputationPhotonRefs: Set<PhotonRevisionRef> = emptySet(),
 )
 
 /** Uses the same revision-aware dependency index as recompute; no second BFS topology exists. */
@@ -28,19 +30,34 @@ class CognitiveInvalidationEngine {
             source = PhotonRevisionRef(delta.changedPhotonId, delta.fromRevision),
             magnitudeMicros = 1_000_000L,
         )
-        val affected = linkedMapOf<String, ProjectionValidity>()
+        val affectedByRef = linkedMapOf<PhotonRevisionRef, ProjectionValidity>()
         propagated.forEach { value ->
             val next = dependencyIndex.validity(value.reason)
-            val key = value.target.photonId.value
-            affected[key] = when {
-                affected[key] == ProjectionValidity.INVALID -> ProjectionValidity.INVALID
-                next == ProjectionValidity.INVALID -> ProjectionValidity.INVALID
-                else -> ProjectionValidity.STALE
+            affectedByRef[value.target] = when {
+                affectedByRef[value.target] == ProjectionValidity.INVALID ->
+                    ProjectionValidity.INVALID
+                next == ProjectionValidity.INVALID ->
+                    ProjectionValidity.INVALID
+                else ->
+                    ProjectionValidity.STALE
             }
         }
+        val affected = affectedByRef.entries
+            .groupBy { it.key.photonId.value }
+            .mapValues { (_, entries) ->
+                if (entries.any { it.value == ProjectionValidity.INVALID }) {
+                    ProjectionValidity.INVALID
+                } else {
+                    ProjectionValidity.STALE
+                }
+            }
+            .toSortedMap()
+        val refs = affectedByRef.keys.toCollection(linkedSetOf())
         return InvalidationResult(
             affected = affected,
-            recomputationPhotonIds = propagated.mapTo(linkedSetOf()) { it.target.photonId },
+            recomputationPhotonIds = refs.mapTo(linkedSetOf()) { it.photonId },
+            affectedByRef = affectedByRef.toMap(),
+            recomputationPhotonRefs = refs,
         )
     }
 }
