@@ -223,6 +223,146 @@ class LongTermMemoryEngine(
         return LongTermMemoryProjection(decisions, episodes, atoms, crystals, derived, now, fingerprint)
     }
 
+    /**
+     * Incremental projection for hot-path memory changes. Unchanged decisions and episode material
+     * are preserved; only changed source ids and their affected episode/crystal are recomputed.
+     */
+    fun projectDelta(
+        current: LongTermMemoryProjection,
+        changed: Collection<Photon>,
+        accessChanges: MemoryAccessLedger,
+        now: Instant,
+    ): LongTermMemoryProjection {
+        if (changed.isEmpty()) return current
+
+        val latestChanged = changed
+            .groupBy { it.id }
+            .mapValues { (_, revisions) -> revisions.maxBy { it.revision } }
+            .values
+            .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+        val changedIds = latestChanged.mapTo(linkedSetOf()) { it.id }
+        val replacementDecisions = latestChanged.associate { photon ->
+            photon.id to decide(photon, accessChanges.profileFor(photon), now)
+        }
+        val decisions = (
+            current.decisions.filterNot { it.photonId in changedIds } +
+                replacementDecisions.values
+            ).sortedBy { it.photonId.value }
+        val decisionsById = decisions.associateBy { it.photonId }
+
+        val episodes = current.episodes.toMutableList()
+        val episodeIdRemap = linkedMapOf<String, String?>()
+        latestChanged.forEach { photon ->
+            val decision = replacementDecisions.getValue(photon.id)
+            val existingIndex = episodes.indexOfFirst { photon.id in it.sourcePhotonIds }
+            val existing = episodes.getOrNull(existingIndex)
+
+            if (decision.toStage < MemoryStage.WARM) {
+                if (existing != null) {
+                    val remaining = existing.sourcePhotonIds - photon.id
+                    if (remaining.isEmpty()) {
+                        episodes.removeAt(existingIndex)
+                        episodeIdRemap[existing.episodeId] = null
+                    } else {
+                        val stage = remaining.mapNotNull { decisionsById[it]?.toStage }
+                            .maxOrNull() ?: MemoryStage.WARM
+                        val newId = StableCognitiveIds.fingerprint(
+                            "memory-episode/v1",
+                            episodeKey(existing),
+                            *remaining.map { it.value }.sorted().toTypedArray(),
+                        )
+                        episodes[existingIndex] = existing.copy(
+                            episodeId = newId,
+                            sourcePhotonIds = remaining,
+                            stage = stage,
+                        )
+                        episodeIdRemap[existing.episodeId] = newId
+                    }
+                }
+            } else if (existing != null) {
+                episodes[existingIndex] = existing.copy(
+                    stage = maxOf(existing.stage, decision.toStage),
+                    startedAt = minOf(existing.startedAt, photon.provenance.createdAt),
+                    endedAt = maxOf(existing.endedAt, photon.provenance.createdAt),
+                    semanticKeys = (existing.semanticKeys + semanticKeys(photon)).toSortedSet(),
+                )
+            } else {
+                val created = buildEpisodes(
+                    listOf(photon),
+                    mapOf(photon.id to decision),
+                ).single()
+                episodes += created
+            }
+        }
+
+        val canonicalEpisodes = episodes.sortedBy { it.episodeId }
+        val episodeBySource = canonicalEpisodes.flatMap { episode ->
+            episode.sourcePhotonIds.map { it to episode }
+        }.toMap()
+
+        val retainedAtoms = current.atoms
+            .filterNot { atom -> atom.sourcePhotonIds.any { it in changedIds } }
+            .mapNotNull { atom ->
+                when (val remap = episodeIdRemap[atom.episodeId]) {
+                    null -> if (atom.episodeId in episodeIdRemap) null else atom
+                    else -> atom.copy(episodeId = remap)
+                }
+            }
+        val changedAtoms = latestChanged.flatMap { photon ->
+            val stage = replacementDecisions.getValue(photon.id).toStage
+            val episode = episodeBySource[photon.id]
+            if (stage < MemoryStage.COLD || episode == null) emptyList()
+            else atomize(photon, episode, stage)
+        }
+        val atoms = (retainedAtoms + changedAtoms).sortedBy { it.atomId }
+
+        val affectedEpisodeIds = buildSet {
+            current.episodes
+                .filter { episode -> episode.sourcePhotonIds.any { it in changedIds } }
+                .forEach { add(it.episodeId) }
+            canonicalEpisodes
+                .filter { episode -> episode.sourcePhotonIds.any { it in changedIds } }
+                .forEach { add(it.episodeId) }
+            addAll(episodeIdRemap.keys)
+            addAll(episodeIdRemap.values.filterNotNull())
+        }
+        val retainedCrystals = current.crystals.filterNot { crystal ->
+            crystal.sourcePhotonIds.any { it in changedIds } ||
+                crystal.atomIds.any { atomId -> current.atoms.any { it.atomId == atomId && it.episodeId in affectedEpisodeIds } }
+        }
+        val changedCrystals = canonicalEpisodes
+            .filter { it.stage == MemoryStage.CRYSTALLIZED && it.episodeId in affectedEpisodeIds }
+            .mapNotNull { episode ->
+                crystallize(episode, atoms.filter { it.episodeId == episode.episodeId })
+            }
+        val crystals = (retainedCrystals + changedCrystals).sortedBy { it.crystalId }
+        val derived = buildDerivedPhotons(atoms, crystals, now)
+        val fingerprint = StableCognitiveIds.fingerprint(
+            "long-term-memory-projection/v2-delta",
+            now.toString(),
+            *decisions.flatMap {
+                listOf(it.decisionId, it.photonId.value, it.toStage.name, it.reason)
+            }.toTypedArray(),
+            *atoms.map { it.atomId }.toTypedArray(),
+            *crystals.map { it.crystalId }.toTypedArray(),
+        )
+        return LongTermMemoryProjection(
+            decisions = decisions,
+            episodes = canonicalEpisodes,
+            atoms = atoms,
+            crystals = crystals,
+            derivedPhotons = derived,
+            evaluatedAt = now,
+            fingerprint = fingerprint,
+        )
+    }
+
+    private fun episodeKey(episode: MemoryEpisode): String {
+        val date = episode.startedAt.atZone(ZoneOffset.UTC).toLocalDate().toString()
+        val domain = episode.semanticKeys.firstOrNull() ?: "general"
+        return "$date:$domain"
+    }
+
     /** Promote a compacted item when new present relevance exceeds the configured threshold. */
     fun rehydrateTarget(current: MemoryStage, relevanceScore: Double): MemoryStage {
         require(relevanceScore.isFinite() && relevanceScore in 0.0..1.0)
