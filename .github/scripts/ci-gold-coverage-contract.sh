@@ -109,6 +109,16 @@ grep -Fq 'field_snapshot_atomic_recovery=PASS' "$product_gold_workflow" || {
   echo "product-gold-field-snapshot-recovery-not-sealed" >&2
   exit 1
 }
+for seal in \
+  'semantic_action_recovery=PASS' \
+  'semantic_reference_revision_recovery=PASS' \
+  'external_effect_no_duplicate=PASS' \
+  'language_gold_device=PASS'; do
+  grep -Fq "$seal" "$product_gold_workflow" || {
+    echo "product-gold-semantic-device-seal-missing:$seal" >&2
+    exit 1
+  }
+done
 
 product_gold_script=".github/scripts/ci-product-gold.sh"
 grep -Fq 'candidate-sha-checkout-mismatch' "$product_gold_script" || {
@@ -117,6 +127,31 @@ grep -Fq 'candidate-sha-checkout-mismatch' "$product_gold_script" || {
 }
 grep -Fq 'source_head_sha=' "$product_gold_script" || {
   echo "product-gold-source-head-evidence-missing" >&2
+  exit 1
+}
+for seal in \
+  'language_semantic_gold=PASS' \
+  'semantic_action_router=PASS' \
+  'semantic_execution_gate=PASS' \
+  'revision_reference_binding=PASS' \
+  'bounded_language_retrieval=PASS' \
+  'goal_v4_restart_parity=PASS' \
+  'linguistic_index_bounded=PASS' \
+  'domain_semantic_packs=PASS' \
+  'no_external_side_effect_without_executable_semantic_action=PASS'; do
+  grep -Fq "$seal" "$product_gold_script" || {
+    echo "product-gold-semantic-pre-emulator-seal-missing:$seal" >&2
+    exit 1
+  }
+done
+
+semantic_contract=".github/scripts/ci-language-semantic-contract.sh"
+test -s "$semantic_contract" || {
+  echo "language-semantic-architecture-contract-missing" >&2
+  exit 1
+}
+grep -Fq 'ci-language-semantic-contract.sh' .github/scripts/ci-core-fast.sh || {
+  echo "language-semantic-architecture-contract-not-enforced" >&2
   exit 1
 }
 
