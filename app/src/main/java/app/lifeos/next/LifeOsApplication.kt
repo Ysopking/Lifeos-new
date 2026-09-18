@@ -5,6 +5,9 @@ import android.app.Application
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import app.lifeos.core.data.EncryptedLiveSourceCursorRepository
+import app.lifeos.core.data.LiveSourceDeltaRuntime
+import app.lifeos.core.data.LiveSourcePhotonIngress
 import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
@@ -116,6 +119,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         private set
 
     @Volatile
+    var liveSourceDeltaRuntime: LiveSourceDeltaRuntime? = null
+        private set
+
+    @Volatile
     var latestInitialDataBootstrap: InitialDataBootstrapSnapshot? = null
         private set
 
@@ -128,6 +135,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
     private lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
     private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
+    private var liveSourceObservers: AndroidLiveSourceObserverRegistry? = null
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -443,11 +451,44 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         initialDataScope.launch {
             try {
                 latestInitialDataBootstrap = initialDataBootstrap.run()
+                refreshLiveSourceRuntime()
                 initialDataBootstrapFailure = null
             } catch (error: Exception) {
                 initialDataBootstrapFailure = error.message ?: error::class.simpleName ?: "initial-data-bootstrap-failed"
             }
         }
+    }
+
+    /**
+     * Converts the completed/partial bootstrap into steady-state delta ingestion. Only currently
+     * authorized providers are installed; a later permission refresh recreates this runtime and
+     * preserves already durable per-source cursors.
+     */
+    private suspend fun refreshLiveSourceRuntime() {
+        val adapters = AndroidLiveSourceCatalog(this).authorizedAdapters()
+        liveSourceObservers?.stop()
+        liveSourceObservers = null
+        liveSourceDeltaRuntime = null
+        if (adapters.isEmpty()) return
+
+        val runtime = LiveSourceDeltaRuntime(
+            adapters = adapters,
+            cursors = EncryptedLiveSourceCursorRepository(this),
+            ingress = LiveSourcePhotonIngress { photon ->
+                photonIngress.ingest(photon, PhotonIngressMode.ORIGIN)
+            },
+        )
+        // First call only establishes each provider cursor after bootstrap. Subsequent observer
+        // callbacks read changesAfter(cursor) and never perform the initial full import again.
+        runtime.syncAll()
+
+        liveSourceDeltaRuntime = runtime
+        liveSourceObservers = AndroidLiveSourceObserverRegistry(
+            context = this,
+            scope = initialDataScope,
+            runtime = runtime,
+            sourceIds = adapters.mapTo(linkedSetOf()) { it.sourceId },
+        ).also { it.start() }
     }
 
     private fun allRuntimePermissionSchema(): String = buildString {
