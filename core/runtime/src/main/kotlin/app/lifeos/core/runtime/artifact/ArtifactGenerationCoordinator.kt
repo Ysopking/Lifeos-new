@@ -7,6 +7,8 @@ import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
+import app.lifeos.core.model.SemanticArtifactKind
+import app.lifeos.core.model.SemanticArtifactPlan
 import java.time.Instant
 
 object ArtifactGenerationContract {
@@ -20,6 +22,7 @@ data class ArtifactGenerationRequest(
     val request: CollaborativeArtifactRequest,
     val profile: ArtifactGenerationProfile,
     val contributions: List<ArtifactContribution>,
+    val semanticPlan: SemanticArtifactPlan,
     val finalizedAt: Instant,
     val materializedAsset: AssetRef,
     val parentRevision: ArtifactRevisionRef? = null,
@@ -29,7 +32,23 @@ data class ArtifactGenerationRequest(
         require(materializedAsset.mediaType == request.targetMimeType) {
             "Materialized asset MIME type ${materializedAsset.mediaType} does not match requested ${request.targetMimeType}"
         }
+        require(semanticPlan.kind == expectedSemanticKind(request)) {
+            "Semantic artifact plan kind ${semanticPlan.kind} is incompatible with ${request.kind}"
+        }
     }
+
+    private fun expectedSemanticKind(request: CollaborativeArtifactRequest): SemanticArtifactKind =
+        when (request.kind) {
+            ArtifactKind.IMAGE -> SemanticArtifactKind.IMAGE
+            ArtifactKind.CODE -> SemanticArtifactKind.TASK
+            ArtifactKind.DOCUMENT,
+            ArtifactKind.REPORT -> if (request.targetMimeType == "application/pdf") {
+                SemanticArtifactKind.PDF
+            } else {
+                SemanticArtifactKind.TEXT
+            }
+            ArtifactKind.OTHER -> SemanticArtifactKind.TEXT
+        }
 }
 
 data class ArtifactGenerationResult(
@@ -56,6 +75,7 @@ class ArtifactGenerationCoordinator(
             finalizedAt = generation.finalizedAt,
             parentRevision = generation.parentRevision,
             materializedAsset = generation.materializedAsset,
+            semanticPlan = generation.semanticPlan,
         )
         val artifact = finalization.artifact
         val revision = requireNotNull(artifact.revision) {
@@ -87,6 +107,7 @@ class ArtifactGenerationCoordinator(
             revision.id.value,
             artifactPhoton.id.value,
             generation.materializedAsset.sha256,
+            generation.semanticPlan.fingerprint,
             *generation.profile.fingerprintParts().toTypedArray(),
         )
         val photonId = PhotonId("artifact_generation_$fingerprint")
@@ -123,6 +144,7 @@ class ArtifactGenerationCoordinator(
                 add("artifact-revision:${revision.id.value}")
                 add("artifact-generation-profile:${generation.profile.type}")
                 add("artifact-output-sha256:${generation.materializedAsset.sha256}")
+                add("artifact-semantic-plan:${generation.semanticPlan.fingerprint}")
                 when (val profile = generation.profile) {
                     is DocumentArtifactProfile -> add("artifact-document-format:${profile.format}")
                     is CodeArtifactProfile -> add("artifact-code-language:${profile.language}")
@@ -149,6 +171,7 @@ class ArtifactGenerationCoordinator(
         append("\"kind\":"); appendJson(generation.request.kind.name); append(',')
         append("\"targetMimeType\":"); appendJson(generation.request.targetMimeType); append(',')
         append("\"finalizedAt\":"); appendJson(effectiveFinalizedAt.toString()); append(',')
+        append("\"semanticPlanFingerprint\":"); appendJson(generation.semanticPlan.fingerprint); append(',')
         append("\"asset\":{")
         append("\"id\":"); appendJson(generation.materializedAsset.id.value); append(',')
         append("\"mediaType\":"); appendJson(generation.materializedAsset.mediaType); append(',')
