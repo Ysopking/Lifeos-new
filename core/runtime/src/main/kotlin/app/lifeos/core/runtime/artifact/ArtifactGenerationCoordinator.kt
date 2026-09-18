@@ -9,6 +9,7 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.model.SemanticArtifactKind
 import app.lifeos.core.model.SemanticArtifactPlan
+import app.lifeos.core.runtime.LifeOsGoldLoopProjectionRuntimeRegistry
 import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRecorder
 import app.lifeos.core.runtime.trace.LifecycleDecisionTraceRuntimeRegistry
 import java.time.Instant
@@ -105,6 +106,7 @@ class ArtifactGenerationCoordinator(
             semanticPlan = generation.semanticPlan,
         ).also { result ->
             lifecycleTraceRecorder?.recordArtifactGeneration(result)
+            LifeOsGoldLoopProjectionRuntimeRegistry.currentOrNull()?.observeArtifact(result)
         }
     }
 
