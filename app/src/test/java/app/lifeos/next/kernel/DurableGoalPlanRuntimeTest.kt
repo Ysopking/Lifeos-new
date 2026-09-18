@@ -159,6 +159,11 @@ class DurableGoalPlanRuntimeTest {
         assertTrue("share-preparation" in preparation.tags)
         assertTrue("status=prepared" in preparation.content)
         assertTrue("delivered" !in preparation.content)
+        assertTrue(
+            preparation.id.value.matches(Regex("[A-Za-z0-9_-]{1,128}")),
+            "Communication preparation Photon id must be accepted by EncryptedPhotonStore",
+        )
+        assertTrue(preparation.id.value.startsWith("communication-preparation-"))
         assertTrue(ledger.states.value.values.single().stepStates.values.all {
             it == GoalStepState.COMPLETED
         })
