@@ -44,7 +44,7 @@ import java.time.Instant
  * DurableConvergenceDecisionCoordinator remain authoritative, including all score, freshness,
  * conflict and capability gates. The resulting decision checkpoint is persisted before exposure.
  */
-fun interface GoalConvergenceDecisionSource {
+interface GoalConvergenceDecisionSource {
     suspend fun decide(
         goal: GoalFrame,
         routing: GoalCapabilityResolution,
