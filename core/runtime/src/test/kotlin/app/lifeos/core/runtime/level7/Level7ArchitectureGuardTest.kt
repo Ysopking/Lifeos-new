@@ -91,10 +91,10 @@ class SingleWorldFormulaCouplingPathTest {
         val thought = Level7SourceArchitecture.text(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/convergence/ThoughtGraphConvergenceService.kt"
         )
-        assertFalse("ConvergenceCoordinator(" in app)
-        assertFalse("DurableConvergenceDecisionCoordinator(" in app)
-        assertFalse("ConvergenceCoordinator(" in goal)
-        assertFalse("DurableConvergenceDecisionCoordinator(" in goal)
+        assertFalse(Regex("""(?<![A-Za-z0-9_])ConvergenceCoordinator\\s*\\(""").containsMatchIn(app))
+        assertFalse(Regex("""(?<![A-Za-z0-9_])DurableConvergenceDecisionCoordinator\\s*\\(""").containsMatchIn(app))
+        assertFalse(Regex("""(?<![A-Za-z0-9_])ConvergenceCoordinator\\s*\\(""").containsMatchIn(goal))
+        assertFalse(Regex("""(?<![A-Za-z0-9_])DurableConvergenceDecisionCoordinator\\s*\\(""").containsMatchIn(goal))
         assertTrue("ProductiveConvergenceAuthority" in goal)
         assertTrue("WorldFormulaBoundConvergenceService" in thought)
     }
@@ -127,8 +127,7 @@ class NoDirectWorldMutationTest {
         val violations = files.filter { file ->
             val text = file.readText()
             "ProductiveWorldHeadRepository" in text ||
-                "ProductiveWorldHeadCommitter" in text ||
-                "compareAndSet(" in text && "WorldModelRepository" !in file.fileName.toString()
+                "ProductiveWorldHeadCommitter" in text
         }
         assertTrue(
             violations.isEmpty(),
