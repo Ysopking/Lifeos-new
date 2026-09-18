@@ -14,7 +14,12 @@ class PredicateFrameParser {
         references: List<ResolvedReference>,
     ): List<PredicateFrame> = graph.clauses.mapNotNull { clause ->
         val tokens = utterance.tokens.subList(clause.tokenStart, clause.tokenEndExclusive)
-        val predicate = predicate(tokens) ?: conditionPredicate(tokens)
+        val speechAct = requireNotNull(speechActs[clause.id]) {
+            "Every semantic clause requires a speech act"
+        }
+        val predicate = predicate(tokens)
+            ?: conditionPredicate(tokens)
+            ?: PredicateConcept.QUERY.takeIf { speechAct.type == SpeechActType.QUESTION }
         if (predicate == null) return@mapNotNull null
 
         val predicateLocalIndex = tokens.indexOfFirst { token ->
@@ -28,9 +33,6 @@ class PredicateFrameParser {
             predicate.name,
             predicateTokenIndex.toString(),
         )
-        val speechAct = requireNotNull(speechActs[clause.id]) {
-            "Every semantic clause requires a speech act"
-        }
         val scopeTypes = scopeTypes(
             utterance = utterance,
             graph = graph,
