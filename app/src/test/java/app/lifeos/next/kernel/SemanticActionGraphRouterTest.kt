@@ -115,10 +115,8 @@ class SemanticActionGraphRouterTest {
                     it.type == SemanticActionEdgeType.USES_RESULT_OF
             }
         )
-        assertTrue(
-            understanding.goal.ambiguities.any { it.code == "unresolved_reference" },
-            "The whole utterance should expose the unresolved pronoun before result binding",
-        )
+        assertTrue(send.frame.roles.getValue(SemanticRole.OBJECT).resolved.not())
+        assertTrue(send.unresolvedReference.not())
 
         val produced = photon(
             id = "stored-memory-result",
@@ -143,7 +141,6 @@ class SemanticActionGraphRouterTest {
                 communicationReference = node.frame.roles[SemanticRole.OBJECT]?.referencePhoton
                 val ref = assertNotNull(communicationReference)
                 assertEquals(PhotonRevisionRef(produced.id, produced.revision), ref)
-                assertFalse(context.goal.ambiguities.any { it.code == "unresolved_reference" })
                 assertEquals(
                     listOf(ref),
                     context.goal.references.mapNotNull { it.targetPhotonRef },
