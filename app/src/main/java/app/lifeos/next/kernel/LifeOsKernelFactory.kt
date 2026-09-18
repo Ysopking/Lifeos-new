@@ -33,6 +33,15 @@ import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.StaticFieldRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootSnapshotSource
+import app.lifeos.core.runtime.boot.TaskRepositoryBootSource
+import app.lifeos.core.runtime.boot.PhotonRepositoryBootSource
+import app.lifeos.core.runtime.boot.GeneratedToolRegistryBootSource
+import app.lifeos.core.runtime.boot.FieldSnapshotRepositoryBootSource
+import app.lifeos.core.runtime.boot.CheckpointRepositoryBootSource
+import app.lifeos.core.runtime.boot.CapabilityRegistryBootSource
+import app.lifeos.core.runtime.boot.BootSnapshotLoader
+import app.lifeos.core.runtime.boot.BootReadSession
 import app.lifeos.core.runtime.boot.CapabilityWarmup
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
 import app.lifeos.core.runtime.boot.ChainedStateRehydrator
@@ -324,6 +333,16 @@ class LifeOsKernelFactory(
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
         val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
+        val bootReadSession = BootReadSession(
+            BootSnapshotLoader(
+                photons = PhotonRepositoryBootSource(store),
+                tasks = TaskRepositoryBootSource(taskRepository),
+                checkpoints = CheckpointRepositoryBootSource(checkpointRepository),
+                capabilities = CapabilityRegistryBootSource(capabilityRegistry),
+                tools = GeneratedToolRegistryBootSource(generatedTools),
+                fieldSnapshots = FieldSnapshotRepositoryBootSource(fieldSnapshotRepository),
+            )
+        )
         val fieldThoughtGraphProjectionOutbox =
             EncryptedFieldThoughtGraphProjectionOutboxRepository(appContext)
         val fieldThoughtGraphProjection = FieldThoughtGraphProjectionCoordinator(
@@ -640,6 +659,7 @@ class LifeOsKernelFactory(
             photonRehydrator = PhotonRehydrator(
                 repository = store,
                 journalIndex = cognitionJournalIndex,
+                bootReadSession = bootReadSession,
             ),
             moduleRehydrator = object : ModuleRehydrator {
                 override suspend fun rehydrate(): ModuleRestoreSummary {
