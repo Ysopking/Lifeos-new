@@ -74,9 +74,13 @@ class BootEngineRuntimeTest {
             config = WorldFormulaConfig(requiredStableRounds = 1),
         )
 
-        assertFailsWith<IllegalArgumentException> {
+        var rejected = false
+        try {
             runtime.evaluate(cycle.cycleId, request)
+        } catch (_: IllegalArgumentException) {
+            rejected = true
         }
+        kotlin.test.assertTrue(rejected)
         assertEquals(BootEngineCycleState.PREPARED, fixture.cycles.load(cycle.cycleId)?.state)
         assertNull(fixture.heads.load())
     }
