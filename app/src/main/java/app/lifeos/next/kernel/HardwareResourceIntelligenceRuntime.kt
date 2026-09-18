@@ -2,6 +2,10 @@ package app.lifeos.next.kernel
 
 import android.content.Context
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
+import app.lifeos.core.runtime.CognitiveBudget
+import app.lifeos.core.runtime.CognitiveBudgetCompiler
+import app.lifeos.core.runtime.CognitiveWorkload
+import app.lifeos.core.runtime.HardwareState
 import app.lifeos.core.runtime.resource.HardwareAdaptiveBudgetPlan
 import app.lifeos.core.runtime.resource.HardwareAdaptiveResourceOptimizer
 import app.lifeos.core.runtime.resource.HardwareBudgetMode
@@ -49,6 +53,7 @@ class HardwareResourceIntelligenceRuntime internal constructor(
     private val optimizer: HardwareAdaptiveResourceOptimizer = HardwareAdaptiveResourceOptimizer(),
     private val profile: HardwareWorldEquationProfile = HardwareWorldEquationProfile(),
     private val allocationProfile: ResourceAllocationWorldEquationProfile = ResourceAllocationWorldEquationProfile(),
+    private val cognitiveBudgetCompiler: CognitiveBudgetCompiler = CognitiveBudgetCompiler(),
 ) : HardwareExecutionBudgetGate, SharedResourceBudgetGate {
     private val worldFormula = WorldFormulaCoordinator(
         equations = InMemoryWorldEquationRegistry(
@@ -146,6 +151,30 @@ class HardwareResourceIntelligenceRuntime internal constructor(
                     allocation = allocation.plan,
                 )
         }
+    }
+
+    /**
+     * Workload-specific compute envelope. This path may change parallelism/residency/depth only;
+     * it cannot alter evidence, confidence, owner policy or any completed semantic result.
+     */
+    fun cognitiveBudget(workload: CognitiveWorkload): CognitiveBudget {
+        val snapshot = reader.read()
+        val memoryHeadroom = snapshot.memoryHeadroom() ?: 0.70
+        val thermalPressure = 1.0 - snapshot.thermalHeadroom()
+        return cognitiveBudgetCompiler.compile(
+            state = HardwareState(
+                availableCores = snapshot.availableProcessors,
+                availableRamBytes = snapshot.availableMemoryBytes ?: 0L,
+                memoryPressureMicros = ((1.0 - memoryHeadroom).coerceIn(0.0, 1.0) * 1_000_000.0).toLong(),
+                batteryMicros = ((snapshot.batteryFraction ?: 0.70) * 1_000_000.0).toLong(),
+                charging = snapshot.charging == true,
+                thermalPressureMicros = (thermalPressure.coerceIn(0.0, 1.0) * 1_000_000.0).toLong(),
+                storageAvailableBytes = snapshot.availableStorageBytes ?: 0L,
+                acceleratorAvailable = false,
+                idle = reader.isDeviceIdle(),
+            ),
+            workload = workload,
+        )
     }
 
     /** Read-only diagnostics path; it does not reserve or spend a resource budget. */
