@@ -57,6 +57,7 @@ class LanguageUnderstandingEngine(
             frames = predicateFrames,
             references = references,
         )
+        val operationalIntent = deriveOperationalIntent(topIntent, semanticActionGraph)
         val ambiguities = buildAmbiguities(
             evidence = evidence,
             references = references,
@@ -67,8 +68,8 @@ class LanguageUnderstandingEngine(
         val constraints = buildConstraints(utterance, entities, references, linguisticField)
         val confidence = calculateConfidence(evidence.first().score, entities, references, ambiguities, linguisticField)
         val goal = GoalFrame(
-            intent = topIntent,
-            objective = canonicalObjective(utterance, topIntent),
+            intent = operationalIntent,
+            objective = canonicalObjective(utterance, operationalIntent),
             entities = entities,
             references = references,
             constraints = constraints,
@@ -85,6 +86,28 @@ class LanguageUnderstandingEngine(
             linguisticField = linguisticField,
             context = context.takeIf { retainContext },
         )
+    }
+
+    private fun deriveOperationalIntent(
+        topicIntent: IntentType,
+        actionGraph: SemanticActionGraph,
+    ): IntentType {
+        val nodes = actionGraph.nodes
+        if (nodes.any { it.type == SemanticActionNodeType.QUERY } &&
+            nodes.none { it.executable }
+        ) {
+            return IntentType.QUERY
+        }
+        if (topicIntent.toPredicateConcept() != PredicateConcept.UNKNOWN &&
+            actionGraph.executableNodeFor(topicIntent) != null
+        ) {
+            return topicIntent
+        }
+        return when {
+            topicIntent == IntentType.CONVERSATION -> IntentType.CONVERSATION
+            topicIntent == IntentType.UNKNOWN -> IntentType.UNKNOWN
+            else -> topicIntent
+        }
     }
 
     private fun canonicalObjective(utterance: NormalizedUtterance, intent: IntentType): String =
