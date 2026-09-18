@@ -77,7 +77,7 @@ object SemanticExecutionGate {
         val nodeId = decision.nodeId ?: return false
         return goal.semanticActionGraph.nodes
             .singleOrNull { it.id == nodeId }
-            ?.let { it.executable && it.externalSideEffect }
+            ?.externalEffectExecutable
             ?: false
     }
 }
