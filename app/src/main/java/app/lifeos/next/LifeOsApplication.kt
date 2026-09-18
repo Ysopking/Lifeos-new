@@ -21,6 +21,8 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.CausalCognitionEngine
 import app.lifeos.core.runtime.CognitiveWorkload
+import app.lifeos.core.runtime.LifeOsGoldLoopProjection
+import app.lifeos.core.runtime.LifeOsGoldLoopProjectionRuntimeRegistry
 import app.lifeos.core.runtime.CausalDerivedPhotonPersistence
 import app.lifeos.core.runtime.PhotonBackedCausalLedgerStore
 import app.lifeos.core.runtime.PhotonIngressMode
@@ -168,6 +170,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             EncryptedGeneratedToolStateRepository(this),
         )
         hardwareResourceIntelligence = HardwareResourceIntelligenceRuntime(this)
+        LifeOsGoldLoopProjectionRuntimeRegistry.install(LifeOsGoldLoopProjection())
         LifeOsIntegratedCognitionSuiteRegistry.install(LifeOsIntegratedCognitionSuite())
 
         LifeOsStartupComposition.start(
