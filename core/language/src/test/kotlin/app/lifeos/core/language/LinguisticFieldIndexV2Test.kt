@@ -39,6 +39,27 @@ class LinguisticFieldIndexV2Test {
     }
 
     @Test
+    fun `lexicon input order cannot change candidate ordering`() {
+        val forward = LinguisticFieldIndexV2(lexicon)
+        val reversed = LinguisticFieldIndexV2(
+            DeterministicLinguisticFieldLexicon(lexicon.concepts.reversed())
+        )
+
+        listOf(
+            "erstelle",
+            "gesendet",
+            "Jobcenterbescheid",
+            "Widerspruchsfrist",
+            "Ratenzahlungsvereinbarung",
+        ).forEach { token ->
+            assertTrue(
+                forward.candidateConceptIds(token) == reversed.candidateConceptIds(token),
+                token,
+            )
+        }
+    }
+
+    @Test
     fun `morphology binds inflected communication verbs`() {
         val morphology = GermanMorphologyEngine()
 
