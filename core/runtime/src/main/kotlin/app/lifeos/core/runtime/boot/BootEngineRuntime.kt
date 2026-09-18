@@ -424,7 +424,15 @@ class BootEngineRuntime(
     }
 
     suspend fun recover(): BootEngineRecoveryResult = mutex.withLock {
-        val cycle = cycles.loadActive()
+        val worldReport = worldHeads.loadReport()
+        require(!worldReport.corrupted) {
+            "Productive world head recovery required: ${worldReport.message}"
+        }
+        val cycleReport = cycles.loadReport()
+        require(!cycleReport.corrupted) {
+            "BootEngine cycle recovery required: ${cycleReport.message}"
+        }
+        val cycle = cycleReport.activeCycle
             ?: return@withLock BootEngineRecoveryResult.NoActiveCycle
 
         when (cycle.state) {
@@ -432,7 +440,7 @@ class BootEngineRuntime(
                 BootEngineRecoveryResult.ResumePrepared(cycle)
 
             BootEngineCycleState.WORLD_EVALUATED -> {
-                val head = worldHeads.load()
+                val head = worldReport.head
                 val alreadyCommitted =
                     head?.cycleId == cycle.cycleId &&
                         head.activeSnapshot.snapshotId == cycle.worldSnapshotId &&
