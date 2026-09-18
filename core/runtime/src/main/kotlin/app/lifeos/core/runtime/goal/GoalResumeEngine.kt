@@ -454,6 +454,39 @@ private object PersistedGoalFrameDecoder {
         val fingerprint = unescape(required(lines, "action.fingerprint"))
             .also { require(it.isNotBlank()) }
 
+        fun decodeEvidence(
+            prefix: String,
+            nodeIndex: Int,
+            fallback: SemanticEvidence,
+        ): List<SemanticEvidence> {
+            val marker = "$prefix.$nodeIndex."
+            val parsed = lines
+                .filter { it.startsWith(marker) }
+                .map { line ->
+                    val assignment = requireNotNull(splitUnescaped(line.removePrefix(marker), '='))
+                    val evidenceIndex = assignment.first.toInt().also { require(it >= 0) }
+                    val fields = splitAllUnescaped(assignment.second, '|')
+                    require(fields.size == 5) { "Malformed semantic evidence" }
+                    val spanStart = fields[3].toInt()
+                    val spanEnd = fields[4].toInt()
+                    val span = if (spanStart < 0 && spanEnd < 0) {
+                        null
+                    } else {
+                        TextSpan(spanStart, spanEnd)
+                    }
+                    evidenceIndex to SemanticEvidence(
+                        source = unescape(fields[0]),
+                        detail = unescape(fields[1]),
+                        strength = fields[2].toDouble().also { require(it in 0.0..1.0) },
+                        span = span,
+                    )
+                }
+            require(parsed.map { it.first }.distinct().size == parsed.size) {
+                "Persisted goal must not duplicate semantic evidence"
+            }
+            return parsed.sortedBy { it.first }.map { it.second }.ifEmpty { listOf(fallback) }
+        }
+
         val parsedRoles = lines
             .filter { it.startsWith("action.role.") }
             .map { line ->
@@ -463,7 +496,9 @@ private object PersistedGoalFrameDecoder {
                 val nodeIndex = key[0].toInt().also { require(it >= 0) }
                 val role = SemanticRole.valueOf(key[1])
                 val fields = splitAllUnescaped(assignment.second, '|')
-                require(fields.size == 5 || fields.size == 7) { "Malformed action role" }
+                require(fields.size == 5 || fields.size == 7 || fields.size == 13) {
+                    "Malformed action role"
+                }
                 val refId = fields.getOrNull(5)?.let(::unescape).orEmpty()
                 val refRevision = fields.getOrNull(6)?.toLong()?.also { require(it >= 0L) } ?: 0L
                 require((refId.isBlank() && refRevision == 0L) || (refId.isNotBlank() && refRevision > 0L)) {
@@ -474,10 +509,23 @@ private object PersistedGoalFrameDecoder {
                 } else {
                     null
                 }
+                val quantity = if (fields.size == 13 && unescape(fields[7]).isNotBlank()) {
+                    SemanticQuantity(
+                        value = unescape(fields[7]),
+                        unit = unescape(fields[8]).ifBlank { null },
+                        comparator = unescape(fields[9]).ifBlank { null },
+                        tokenStart = fields[10].toInt().also { require(it >= 0) },
+                        tokenEndExclusive = fields[11].toInt(),
+                        confidence = fields[12].toDouble().also { require(it in 0.0..1.0) },
+                    )
+                } else {
+                    null
+                }
                 (nodeIndex to role) to SemanticValue(
                     rawText = unescape(fields[0]),
                     normalized = unescape(fields[1]),
                     entityType = unescape(fields[2]).takeIf { it.isNotBlank() }?.let(EntityType::valueOf),
+                    quantity = quantity,
                     referencePhoton = referencePhoton,
                     resolved = fields[3].toBooleanStrict(),
                     confidence = fields[4].toDouble().also { require(it in 0.0..1.0) },
@@ -515,16 +563,25 @@ private object PersistedGoalFrameDecoder {
                     .filterKeys { it.first == index }
                     .mapKeys { it.key.second }
 
+                val speechFallback = SemanticEvidence(
+                    source = "persisted-goal-v4",
+                    detail = "persisted speech act",
+                    strength = speechConfidence,
+                    span = speechSpan,
+                )
+                val frameFallback = SemanticEvidence(
+                    source = "persisted-goal-v4",
+                    detail = "persisted predicate frame",
+                    strength = frameConfidence,
+                    span = speechSpan,
+                )
                 val speechAct = SpeechAct(
                     type = speechType,
                     confidence = speechConfidence,
-                    evidence = listOf(
-                        SemanticEvidence(
-                            source = "persisted-goal-v4",
-                            detail = "persisted speech act",
-                            strength = speechConfidence,
-                            span = speechSpan,
-                        )
+                    evidence = decodeEvidence(
+                        prefix = "action.speech.evidence",
+                        nodeIndex = index,
+                        fallback = speechFallback,
                     ),
                     span = speechSpan,
                 )
@@ -536,13 +593,10 @@ private object PersistedGoalFrameDecoder {
                     scopeTypes = scopeTypes,
                     speechAct = speechAct,
                     confidence = frameConfidence,
-                    evidence = listOf(
-                        SemanticEvidence(
-                            source = "persisted-goal-v4",
-                            detail = "persisted predicate frame",
-                            strength = frameConfidence,
-                            span = speechSpan,
-                        )
+                    evidence = decodeEvidence(
+                        prefix = "action.frame.evidence",
+                        nodeIndex = index,
+                        fallback = frameFallback,
                     ),
                 )
                 SemanticActionNode(
@@ -557,7 +611,6 @@ private object PersistedGoalFrameDecoder {
                     executionReadiness = executionReadiness,
                 )
             }
-            .sortedBy { it.id.value }
 
         val edges = lines
             .filter { it.startsWith("action.edge.") }
