@@ -29,6 +29,7 @@ import app.lifeos.core.runtime.goal.GoalTransitionId
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalKind
 import app.lifeos.core.runtime.goal.LocalShareKind
 import app.lifeos.core.runtime.goal.LocalSharePreparation
+import app.lifeos.core.runtime.query.GoalOutcomeLookup
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -177,11 +178,13 @@ class DurableGoalPlanRuntimeTest {
         loadPersistedPhotons: suspend () -> List<Photon> = { emptyList() },
     ) = DurableGoalPlanRuntime(
         ledger = ledger,
-        convergence = GoalConvergenceDecisionProvider(
-            DurableConvergenceDecisionCoordinator(checkpoints)
-        ),
+        convergence = testGoalConvergenceDecisionSource(checkpoints),
         persistDerivedOutcome = persistDerivedOutcome,
-        loadPersistedPhotons = loadPersistedPhotons,
+        outcomeLookup = GoalOutcomeLookup { goalPhotonId, limit ->
+            loadPersistedPhotons()
+                .filter { goalPhotonId in it.provenance.parentIds }
+                .take(limit)
+        },
         now = { at },
     )
 
