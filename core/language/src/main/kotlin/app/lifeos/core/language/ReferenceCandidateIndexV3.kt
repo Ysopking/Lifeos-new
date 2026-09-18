@@ -91,9 +91,9 @@ class ReferenceCandidateIndexV3(
             ReferenceKind.PREVIOUS,
             ReferenceKind.THIS,
             ReferenceKind.THAT ->
-                add(items.asSequence().filter { it.active }.take(ACTIVE_FALLBACK), 0.08)
+                add(items.asSequence().filter { it.active }.take(ACTIVE_FALLBACK).toList(), 0.08)
             ReferenceKind.OTHER ->
-                add(items.asSequence().filterNot { it.active }.take(RECENT_FALLBACK), 0.05)
+                add(items.asSequence().filterNot { it.active }.take(RECENT_FALLBACK).toList(), 0.05)
             ReferenceKind.YESTERDAY,
             ReferenceKind.EXPLICIT_ID -> Unit
         }
