@@ -10,8 +10,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import kotlin.test.assertEquals
-import kotlin.test.assertIs
+import org.junit.Assert.assertEquals
 
 @RunWith(AndroidJUnit4::class)
 class PhotonRevisionConflictTest {
@@ -29,11 +28,12 @@ class PhotonRevisionConflictTest {
 
         assertIs<PhotonRevisionWriteResult.Created>(store.saveRevision(first, null))
         assertIs<PhotonRevisionWriteResult.Idempotent>(store.saveRevision(first, null))
-        assertIs<PhotonRevisionWriteResult.Conflict>(
-            store.saveRevision(first.copy(content = "different"), null)
+        assertTrue(
+            store.saveRevision(first.copy(content = "different"), null) is
+                PhotonRevisionWriteResult.Conflict
         )
         assertIs<PhotonRevisionWriteResult.Advanced>(store.saveRevision(second, 1))
-        assertIs<PhotonRevisionWriteResult.Conflict>(store.saveRevision(first, null))
+        assertTrue(store.saveRevision(first, null) is PhotonRevisionWriteResult.Conflict)
 
         assertEquals(second, store.load(id))
     }
