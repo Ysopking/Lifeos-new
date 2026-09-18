@@ -192,7 +192,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     )
                 },
                 createKernel = {
-                    kernel = LifeOsKernelFactory(this).create()
+                    kernel = LifeOsKernelFactory(
+                        context = this,
+                        hardwareResourceIntelligence = hardwareResourceIntelligence,
+                    ).create()
                     val ownerAssetReviews = EncryptedOwnerAssetReviewRepository(this)
                     photonIngress = CanonicalPhotonIngress(kernel, ownerAssetReviews)
                     lifePhotonRepository = CanonicalLifePhotonRepository(
