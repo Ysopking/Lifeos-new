@@ -85,14 +85,22 @@ class PhotonRehydrator(
     private val hydrationPolicy: PhotonHydrationPolicy = DefaultPhotonHydrationPolicy,
     private val validator: PhotonIntegrityValidator = PhotonIntegrityValidator(),
     private val journalIndex: CognitionJournalIndex? = null,
+    private val bootReadSession: BootReadSession? = null,
 ) {
     suspend fun rehydrate(): PhotonRehydrationResult {
-        // Internal cognition journals share the encrypted Photon repository. Validate their
-        // schema and deterministic identities before any journal Photon can participate in boot.
-        CognitionJournalIntegrityVerifier(repository, journalIndex).verify()
+        val sessionSnapshot = bootReadSession?.snapshot()
+        val photons = sessionSnapshot?.photons ?: repository.loadReport().photons
+        val unreadable = sessionSnapshot?.readFailures
+            ?.filter { it.source == BootSnapshotSource.PHOTON }
+            ?.mapNotNull { it.entry }
+            ?: repository.loadReport().unreadableFiles
 
-        val report = repository.loadReport()
-        val assessments = validator.assess(report.photons)
+        // Internal cognition journals share the encrypted Photon repository. When a shared boot
+        // session exists, validate the already decrypted snapshot instead of loading journal refs.
+        val verifier = CognitionJournalIntegrityVerifier(repository, journalIndex)
+        if (sessionSnapshot != null) verifier.verify(photons) else verifier.verify()
+
+        val assessments = validator.assess(photons)
         val quarantined = assessments
             .asSequence()
             .filter { it.state == PhotonIntegrityState.QUARANTINED }
@@ -103,7 +111,7 @@ class PhotonRehydrator(
         val warm = mutableListOf<Photon>()
         val cold = mutableListOf<PhotonId>()
 
-        report.photons.forEach { photon ->
+        photons.forEach { photon ->
             if (photon.id in quarantined) return@forEach
             when (hydrationPolicy.tier(photon)) {
                 PhotonHydrationTier.HOT -> hot += photon
@@ -117,7 +125,7 @@ class PhotonRehydrator(
             warm = warm,
             cold = cold,
             assessments = assessments,
-            unreadableFiles = report.unreadableFiles,
+            unreadableFiles = unreadable,
         )
     }
 }
