@@ -42,9 +42,19 @@ class SemanticActionRecoveryDeviceTest {
 
         val submission = app.kernel.persistUserUtterance(user)
         val execution = requireNotNull(submission.actionGraphExecution)
-        assertTrue("Semantic action graph must complete", execution.completed)
+        val executionDiagnostic = execution.executions.joinToString(";") { node ->
+            node.intent.name + ":" + node.state.name + ":" + node.reason.orEmpty()
+        }
+        assertTrue(
+            "Semantic action graph must complete; blocked=${execution.blockedReason}; " +
+                "executions=$executionDiagnostic",
+            execution.completed,
+        )
         assertEquals(2, execution.executions.size)
-        assertTrue(execution.executions.all { it.state == SemanticNodeExecutionState.EXECUTED })
+        assertTrue(
+            "Every semantic node must execute; executions=$executionDiagnostic",
+            execution.executions.all { it.state == SemanticNodeExecutionState.EXECUTED },
+        )
 
         val upstreamRef = requireNotNull(execution.executions.first().outputRef)
         val communication = execution.executions.last().dispatch?.localCommunication
