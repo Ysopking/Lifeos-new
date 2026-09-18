@@ -3,7 +3,15 @@ package app.lifeos.next
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
+import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
+import app.lifeos.core.data.learning.EncryptedLearningWatermarkRepository
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
+import app.lifeos.core.field.StableFieldIds
+import app.lifeos.core.runtime.convergence.ConvergenceDecisionCheckpointId
+import app.lifeos.core.runtime.learning.LearningSourceId
+import app.lifeos.core.runtime.learning.LearningWatermarkLoadResult
+import app.lifeos.core.runtime.learning.LearningWatermarkState
+import app.lifeos.core.runtime.learning.LearningWatermarkWriteResult
 import app.lifeos.core.runtime.level7.ProcessDeathSemanticCheckpoint
 import java.io.File
 import kotlinx.coroutines.runBlocking
@@ -48,12 +56,44 @@ class Level7ProcessDeathGoldDeviceTest {
         val committed = evaluated.committed(head.revision)
         assertTrue(cycleRepo.compareAndSet(evaluated.fingerprint, committed))
 
+        val decisionReport = EncryptedConvergenceDecisionCheckpointRepository(
+            instrumentation.targetContext
+        ).loadReport()
+        assertTrue(decisionReport.unreadableEntries.isEmpty())
+        val decision = requireNotNull(
+            decisionReport.checkpoints.firstOrNull {
+                it.workingSetFingerprint == "v5-android-working-set-v1"
+            }
+        ) {
+            "Level-7 ProcessDeath GOLD requires the real seeded convergence checkpoint"
+        }
+
+        val learningSource = LearningSourceId("level7-device-learning")
+        val learningEventFingerprint = StableFieldIds.fingerprint(
+            "level7-device-learning-event/v1",
+            "event-1",
+        )
+        val learningState = LearningWatermarkState.empty().advance(
+            sourceId = learningSource,
+            sequence = 1L,
+            eventId = "level7-device-event-1",
+            eventFingerprint = learningEventFingerprint,
+        )
+        val learningRepo = EncryptedLearningWatermarkRepository(context)
+        val learningWrite = learningRepo.compareAndSet(null, learningState)
+        assertTrue(learningWrite is LearningWatermarkWriteResult.Saved)
+        val learningFingerprint = StableFieldIds.fingerprint(
+            "level7-learning-watermark-head/v1",
+            learningState.revision.toString(),
+            learningState.sources.single().logicalKey.value,
+        )
+
         val checkpoint = ProcessDeathSemanticCheckpoint(
             worldHeadFingerprint = head.fingerprint,
             equationVersion = head.equationVersion,
             cycleFingerprint = committed.fingerprint,
-            decisionSemanticFingerprint = "decision-semantic-v1",
-            learningLedgerHeadFingerprint = "learning-watermark-v1",
+            decisionSemanticFingerprint = decision.contentFingerprint(),
+            learningLedgerHeadFingerprint = learningFingerprint,
         )
         marker.writeText(
             listOf(
@@ -62,7 +102,8 @@ class Level7ProcessDeathGoldDeviceTest {
                 checkpoint.cycleFingerprint,
                 checkpoint.decisionSemanticFingerprint,
                 checkpoint.learningLedgerHeadFingerprint,
-                "learning-key-v1",
+                learningState.sources.single().logicalKey.value,
+                decision.id.value,
             ).joinToString("\n")
         )
         assertTrue(marker.isFile)
@@ -72,19 +113,37 @@ class Level7ProcessDeathGoldDeviceTest {
     fun recoverExactHeadsAndDoNotApplyLearningTwice() = runBlocking {
         assertTrue(marker.isFile)
         val expected = marker.readLines()
-        assertEquals(6, expected.size)
+        assertEquals(7, expected.size)
         val context = Level7DeviceFixtures.context(instrumentation.targetContext, root)
 
         val head = requireNotNull(EncryptedProductiveWorldHeadRepository(context).load())
         val committed = requireNotNull(
             EncryptedBootEngineCycleRepository(context).loadLatestCommitted()
         )
+
+        val decision = requireNotNull(
+            EncryptedConvergenceDecisionCheckpointRepository(instrumentation.targetContext)
+                .load(ConvergenceDecisionCheckpointId(expected[6]))
+        )
+        assertEquals(expected[3], decision.contentFingerprint())
+
+        val learningLoaded = EncryptedLearningWatermarkRepository(context).load()
+        assertTrue(learningLoaded is LearningWatermarkLoadResult.Loaded)
+        val learningState = (learningLoaded as LearningWatermarkLoadResult.Loaded).state
+        val learningSource = learningState.sources.single()
+        assertEquals(expected[5], learningSource.logicalKey.value)
+        val learningFingerprint = StableFieldIds.fingerprint(
+            "level7-learning-watermark-head/v1",
+            learningState.revision.toString(),
+            learningSource.logicalKey.value,
+        )
+
         val recovered = ProcessDeathSemanticCheckpoint(
             worldHeadFingerprint = head.fingerprint,
             equationVersion = head.equationVersion,
             cycleFingerprint = committed.fingerprint,
-            decisionSemanticFingerprint = expected[3],
-            learningLedgerHeadFingerprint = expected[4],
+            decisionSemanticFingerprint = decision.contentFingerprint(),
+            learningLedgerHeadFingerprint = learningFingerprint,
         )
 
         assertEquals(expected[0], recovered.worldHeadFingerprint)
@@ -93,8 +152,17 @@ class Level7ProcessDeathGoldDeviceTest {
         assertEquals(expected[3], recovered.decisionSemanticFingerprint)
         assertEquals(expected[4], recovered.learningLedgerHeadFingerprint)
 
-        val before = linkedSetOf(expected[5])
-        val afterReplay = before + expected[5]
-        assertEquals(before, afterReplay)
+        var duplicateLearningRejected = false
+        try {
+            learningState.advance(
+                sourceId = learningSource.sourceId,
+                sequence = learningSource.sequence,
+                eventId = learningSource.eventId,
+                eventFingerprint = learningSource.eventFingerprint,
+            )
+        } catch (_: IllegalArgumentException) {
+            duplicateLearningRejected = true
+        }
+        assertTrue("same logical learning event must not advance the watermark twice", duplicateLearningRejected)
     }
 }
