@@ -25,6 +25,7 @@ class EncryptedHotSwapRepository(context: Context) : HotSwapRepository {
     override suspend fun loadReport(): HotSwapRepositoryLoadReport = withContext(Dispatchers.IO) {
         processMutex.withLock {
             ensureMigrated()
+            readHeadOrRecover()
             val unreadable = mutableListOf<String>()
             val events = eventFiles().mapNotNull { file ->
                 runCatching { readEvent(file) }
@@ -92,12 +93,21 @@ class EncryptedHotSwapRepository(context: Context) : HotSwapRepository {
     }
 
     private fun readHeadOrRecover(): Long {
-        if (exists(headFile)) runCatching { return readHead() }
-        val recovered = eventFiles().mapNotNull { file ->
-            file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
-        }.maxOrNull() ?: 0L
-        if (recovered > 0) require((1L..recovered).all { exists(eventFile(it)) })
-        writeHead(recovered)
+        val revisions = eventFiles().map { file ->
+            requireNotNull(
+                file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
+            ) { "Invalid hot-swap event segment name: ${file.name}" }
+        }.sorted()
+        val recovered = revisions.lastOrNull() ?: 0L
+        require(revisions == if (recovered == 0L) emptyList() else (1L..recovered).toList()) {
+            "Hot-swap event segments are not contiguous"
+        }
+
+        val storedHead = if (exists(headFile)) runCatching(::readHead).getOrNull() else null
+        require(storedHead == null || storedHead <= recovered) {
+            "Hot-swap head points past durable event tail"
+        }
+        if (storedHead != recovered) writeHead(recovered)
         return recovered
     }
 
