@@ -23,6 +23,7 @@ gradle :core:runtime:test --stacktrace \
   --tests 'app.lifeos.core.runtime.level7.Level7ContractInvariantTest' \
   --tests 'app.lifeos.core.runtime.level7.Level7ArchitectureGuardTest' \
   --tests 'app.lifeos.core.runtime.level7.Level7FunctionalGoldTest' \
+  --tests 'app.lifeos.core.runtime.escalation.EscalationFunctionalGoldTest' \
   --tests 'app.lifeos.core.runtime.level7.Level7NovelDomainGoldTest' \
   --tests 'app.lifeos.core.runtime.level7.Level7TransferGoldTest'
 

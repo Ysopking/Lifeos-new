@@ -32,6 +32,9 @@ import kotlinx.coroutines.CoroutineScope
 internal data class PrivateSelfHealingRuntime(
     val repository: SelfHealingRepository,
     val ledger: SelfHealingLedger,
+    val coordinator: DurableSelfHealingCoordinator,
+    val plans: AutomaticSelfHealingPlanRegistry,
+    val generations: SelfHealingIncidentGenerationResolver,
     val orchestrator: AutomaticSelfHealingOrchestrator,
 ) {
     suspend fun verifyLedgerIntegrity() {
@@ -129,15 +132,23 @@ internal data class PrivateSelfHealingRuntime(
                     )
                 )
             )
+            val generations = SelfHealingIncidentGenerationResolver(ledger)
             val orchestrator = AutomaticSelfHealingOrchestrator(
                 scope = scope,
                 graph = graph,
                 plans = plans,
-                generations = SelfHealingIncidentGenerationResolver(ledger),
+                generations = generations,
                 coordinator = coordinator,
                 quarantineRegistry = quarantineRegistry,
             )
-            return PrivateSelfHealingRuntime(repository, ledger, orchestrator)
+            return PrivateSelfHealingRuntime(
+                repository = repository,
+                ledger = ledger,
+                coordinator = coordinator,
+                plans = plans,
+                generations = generations,
+                orchestrator = orchestrator,
+            )
         }
     }
 }

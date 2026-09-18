@@ -48,6 +48,17 @@ sealed interface ProtectionResumeResult {
 
 class ProtectionStateCorruptedException(message: String) : IllegalStateException(message)
 
+object ProtectionCoordinatorProcessRegistry {
+    @Volatile
+    private var installed: ProtectionCoordinator? = null
+
+    fun install(coordinator: ProtectionCoordinator) {
+        installed = coordinator
+    }
+
+    fun current(): ProtectionCoordinator? = installed
+}
+
 /**
  * Durable protection authority. Process-local HealthGraph and QuarantineRegistry are projections;
  * the encrypted repository remains the restart truth for quarantine and safe mode.
@@ -59,6 +70,10 @@ class ProtectionCoordinator(
     private val healthGraph: HealthGraph? = null,
     private val now: () -> Instant = Instant::now,
 ) : ProtectionAdmission {
+    init {
+        ProtectionCoordinatorProcessRegistry.install(this)
+    }
+
     private val mutex = Mutex()
 
     @Volatile

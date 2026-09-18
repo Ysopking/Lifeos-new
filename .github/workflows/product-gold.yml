@@ -67,7 +67,8 @@ jobs:
             'level7_productive_world_persistence=PASS' \
             'level7_process_death_semantics=PASS' \
             'level7_world_equation_rollback=PASS' \
-            'level7_functional_gold=PASS' >> product-gold-evidence/gates.txt
+            'level7_functional_gold=PASS' \
+            'escalation_functional_gold=PASS' >> product-gold-evidence/gates.txt
           printf 'product_gold=PASS\n' >> product-gold-evidence/gates.txt
       - name: Upload Product Gold debug APK
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
