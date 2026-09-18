@@ -97,6 +97,42 @@ class GoalActionExecutionGuardTest {
     }
 
     @Test
+    fun localMemoryFitsTwoCoreUnknownThermalEnvelope() = runTest {
+        val ownerRepository = MemoryOwnerPolicyRepository()
+        val budgetRepository = MemoryResourceBudgetRepository()
+        val lowHeadroomGuard = PrivateGoalActionExecutionGuard(
+            ownerPolicy = OwnerPolicyLedger(ownerRepository),
+            budgets = ResourceBudgetCoordinator(budgetRepository),
+            hardware = HardwareExecutionBudgetGate { hardQuota, requested, priority ->
+                val hardware = HardwareStateSnapshot(
+                    observedAt = Instant.parse("2026-09-11T10:00:00Z"),
+                    availableProcessors = 2,
+                    batteryFraction = 1.0,
+                    charging = true,
+                    thermalState = HardwareThermalState.UNKNOWN,
+                )
+                HardwareExecutionBudgetDecision.Ready(
+                    HardwareAdaptiveResourceOptimizer().plan(
+                        hardQuota = hardQuota,
+                        requested = requested,
+                        hardware = hardware,
+                        priority = priority,
+                    )
+                )
+            },
+        )
+
+        val permit = assertIs<GoalActionExecutionPermit.Reserved>(
+            lowHeadroomGuard.prepare(context(IntentType.STORE_OR_REMEMBER, "goal-memory-low-headroom"))
+        )
+
+        assertEquals(2L, permit.reservation.reserved.workUnits)
+        assertEquals(1L, permit.reservation.reserved.candidates)
+        assertTrue(permit.reservation.reserved.memoryBytes <= 8L * MIB)
+        assertTrue(permit.reservation.reserved.ioBytes <= 1L * MIB)
+    }
+
+    @Test
     fun revokedOwnerGrantRemainsRevokedAfterGuardReconstruction() = runTest {
         val ownerRepository = MemoryOwnerPolicyRepository()
         val budgetRepository = MemoryResourceBudgetRepository()
@@ -230,6 +266,7 @@ class GoalActionExecutionGuardTest {
     private fun context(intent: IntentType, goalPhotonId: String): GoalActionContext {
         val text = when (intent) {
             IntentType.QUERY -> "What is LIFEOS?"
+            IntentType.STORE_OR_REMEMBER -> "Remember this."
             IntentType.SCHEDULE -> "Schedule image."
             else -> error("Unsupported test intent: " + intent)
         }
@@ -328,6 +365,7 @@ class GoalActionExecutionGuardTest {
     }
 
     private companion object {
-        const val GIB = 1024L * 1024L * 1024L
+        const val MIB = 1024L * 1024L
+        const val GIB = 1024L * MIB
     }
 }
