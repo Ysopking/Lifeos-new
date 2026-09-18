@@ -167,7 +167,6 @@ data class GoalFrame(
     val intent: IntentType,
     val objective: String,
     val entities: List<SemanticEntity>,
-    val semanticEntitiesV2: List<SemanticEntityV2> = emptyList(),
     val references: List<ResolvedReference>,
     val constraints: List<GoalConstraint>,
     val ambiguities: List<Ambiguity>,
@@ -175,6 +174,7 @@ data class GoalFrame(
     val language: LanguageCode,
     val semanticGraph: LanguageSemanticGraph = LanguageSemanticGraph.empty(language),
     val semanticActionGraph: SemanticActionGraph = SemanticActionGraph.empty(),
+    val semanticEntitiesV2: List<SemanticEntityV2> = emptyList(),
 ) {
     init {
         require(objective.isNotBlank())
