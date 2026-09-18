@@ -8,6 +8,7 @@ import app.lifeos.core.data.capability.EncryptedGeneratedToolArtifactRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.capability.EncryptedToolWorkshopJobRepository
 import app.lifeos.core.data.capability.EncryptedToolWorkshopStageArtifactRepository
+import app.lifeos.core.data.escalation.EncryptedEscalationRepository
 import app.lifeos.core.data.health.EncryptedSelfHealingRepository
 import app.lifeos.core.data.trace.EncryptedDecisionTraceRepository
 import app.lifeos.core.field.StableFieldIds
@@ -29,6 +30,9 @@ import app.lifeos.core.runtime.capability.ToolWorkshopJobEvent
 import app.lifeos.core.runtime.capability.ToolWorkshopJobId
 import app.lifeos.core.runtime.capability.ToolWorkshopJobState
 import app.lifeos.core.runtime.capability.ToolWorkshopStageArtifact
+import app.lifeos.core.runtime.escalation.EscalationId
+import app.lifeos.core.runtime.escalation.EscalationRecord
+import app.lifeos.core.runtime.escalation.EscalationRecordType
 import app.lifeos.core.runtime.health.HealthNodeId
 import app.lifeos.core.runtime.health.SelfHealingEvent
 import app.lifeos.core.runtime.health.SelfHealingEventType
@@ -236,6 +240,44 @@ class SegmentedRepositoryPathBindingDeviceTest {
             assertTrue(
                 runCatching {
                     repository.append(1L, event.copy(revision = 2L, recordedAt = now.plusSeconds(1)))
+                }.isFailure
+            )
+        }
+    }
+
+    @Test
+    fun escalationLedgerRejectsValidCiphertextInWrongEscalationDirectory() = runBlocking {
+        withIsolatedFiles("escalation-ledger") { context, root ->
+            val repository = EncryptedEscalationRepository(context)
+            val record = EscalationRecord(
+                revision = 1L,
+                escalationId = EscalationId("escalation:" + "c".repeat(64)),
+                nodeId = HealthNodeId("path-bound-escalation-node"),
+                triggerFingerprint = "path-bound-escalation-trigger",
+                type = EscalationRecordType.OPENED,
+                recordedAt = now,
+            )
+            assertTrue(repository.append(0L, record))
+
+            val rootDirectory = root.resolve("escalation-ledger")
+            val original = rootDirectory.resolve("records").walkTopDown()
+                .single { it.isFile && it.name.endsWith(".escalation") }
+            val wrongDirectory = rootDirectory.resolve("records")
+                .resolve("0000000000000000000000000000000000000000000000000000000000000000")
+            assertTrue(wrongDirectory.mkdirs())
+            val relocated = wrongDirectory.resolve(original.name)
+            original.copyTo(relocated)
+            assertTrue(original.delete())
+
+            val report = repository.loadReport()
+            assertTrue(report.records.isEmpty())
+            assertEquals(listOf(relocated.relativeTo(rootDirectory).path), report.unreadableEntries)
+            assertTrue(
+                runCatching {
+                    repository.append(
+                        1L,
+                        record.copy(revision = 2L, recordedAt = now.plusSeconds(1))
+                    )
                 }.isFailure
             )
         }

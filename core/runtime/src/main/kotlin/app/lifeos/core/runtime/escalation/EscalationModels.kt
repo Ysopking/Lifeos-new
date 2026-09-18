@@ -162,3 +162,45 @@ interface EscalationRepository {
     suspend fun loadReport(): EscalationRepositoryLoadReport
     suspend fun append(expectedRevision: Long, record: EscalationRecord): Boolean
 }
+
+enum class EscalationState {
+    OPEN,
+    DECIDED,
+    ACTION_IN_FLIGHT,
+    ACTION_SUCCEEDED,
+    ACTION_FAILED,
+    BLOCKED,
+    CLOSED,
+}
+
+data class EscalationSnapshot(
+    val escalationId: EscalationId,
+    val nodeId: HealthNodeId,
+    val triggerFingerprint: String,
+    val state: EscalationState,
+    val level: EscalationLevel? = null,
+    val lastDetail: String? = null,
+    val evidenceRefs: Set<String> = emptySet(),
+    val ledgerRevision: Long,
+    val lastRecordedAt: Instant,
+) {
+    init {
+        require(triggerFingerprint.isNotBlank())
+        require(lastDetail == null || lastDetail.isNotBlank())
+        require(evidenceRefs.none { it.isBlank() })
+        require(ledgerRevision > 0L)
+        if (state != EscalationState.OPEN) {
+            require(level != null || state == EscalationState.CLOSED) {
+                "Non-open escalation state requires a level"
+            }
+        }
+    }
+
+    val terminal: Boolean
+        get() = state in setOf(
+            EscalationState.ACTION_SUCCEEDED,
+            EscalationState.ACTION_FAILED,
+            EscalationState.BLOCKED,
+            EscalationState.CLOSED,
+        )
+}
