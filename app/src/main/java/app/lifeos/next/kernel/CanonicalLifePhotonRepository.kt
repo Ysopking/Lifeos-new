@@ -5,6 +5,7 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.PhotonIngressMode
+import app.lifeos.core.runtime.PhotonResidencyController
 
 /**
  * Repository boundary for the productive life-memory subsystem.
@@ -16,7 +17,7 @@ import app.lifeos.core.runtime.PhotonIngressMode
 internal class CanonicalLifePhotonRepository(
     private val delegate: PhotonRepository,
     private val productiveIngress: suspend (Photon, PhotonIngressMode) -> Unit,
-) : PhotonRepository {
+) : PhotonRepository, PhotonResidencyController {
     override suspend fun save(photon: Photon) {
         val mode = productiveMode(photon)
         if (mode == null) {
@@ -33,6 +34,10 @@ internal class CanonicalLifePhotonRepository(
     override suspend fun loadAll(): List<Photon> = delegate.loadAll()
 
     override suspend fun delete(id: PhotonId) = delegate.delete(id)
+
+    override suspend fun retainResident(ids: Set<PhotonId>) {
+        (delegate as? PhotonResidencyController)?.retainResident(ids)
+    }
 
     /**
      * Reconciles productive life Photons that may have been persisted by an older build or by a
