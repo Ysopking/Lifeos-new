@@ -661,6 +661,7 @@ class LifeOsKernelFactory(
         return LifeOsKernel(
             runtime = durableRuntime,
             matrix = matrix,
+            thoughtGraph = thoughtGraph,
             photonStore = store,
             supervisor = supervisor,
             scope = scope,
