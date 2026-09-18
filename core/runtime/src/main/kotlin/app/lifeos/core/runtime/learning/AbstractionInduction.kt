@@ -193,7 +193,7 @@ data class AbstractionCandidate private constructor(
             )
         }
     }
-}}
+}
 
 data class AbstractionValidationEvidence(
     val candidateId: String,
