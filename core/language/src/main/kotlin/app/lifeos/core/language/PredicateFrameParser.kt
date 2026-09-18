@@ -70,7 +70,6 @@ class PredicateFrameParser(
             confidence = minOf(
                 speechAct.confidence,
                 if (predicate == PredicateConcept.CONDITION_CHECK) 0.82 else 0.96,
-                roles.values.minOfOrNull { it.confidence } ?: 1.0,
             ),
             evidence = evidence,
         )
@@ -145,7 +144,7 @@ class PredicateFrameParser(
             normalized[index] in NEGATION_MARKERS &&
                 !negationBelongsToComparator(normalized, index) &&
                 !negationBelongsToContrastObject(normalized, index) &&
-                !linkedContrast &&
+                !(linkedContrast && negationTargetsScopedArgument(clause, clause.tokenStart + index)) &&
                 (
                     index <= predicateLocal + ACTION_NEGATION_WINDOW ||
                         index > predicateLocal
@@ -309,10 +308,15 @@ class PredicateFrameParser(
         predicateTokenIndex: Int,
     ): SemanticValue? {
         val tokens = utterance.tokens
-        val words = (predicateTokenIndex + 1 until clause.tokenEndExclusive)
-            .filter { tokens[it].kind != TokenKind.PUNCTUATION }
-            .filterNot { tokens[it].normalized in OBJECT_STOP_WORDS }
-            .take(8)
+        val words = mutableListOf<Int>()
+        for (index in predicateTokenIndex + 1 until clause.tokenEndExclusive) {
+            val token = tokens[index]
+            if (token.kind == TokenKind.PUNCTUATION) continue
+            if (token.normalized in RECIPIENT_PREPOSITIONS && words.isNotEmpty()) break
+            if (token.normalized in OBJECT_STOP_WORDS) continue
+            words += index
+            if (words.size >= 8) break
+        }
         if (words.isEmpty()) return null
         val raw = words.joinToString(" ") { tokens[it].original }
         val normalized = words.joinToString(" ") { tokens[it].normalized }
@@ -353,6 +357,15 @@ class PredicateFrameParser(
     private fun negationBelongsToContrastObject(words: List<String>, index: Int): Boolean =
         words.drop(index + 1).take(8).any { it in CONTRAST_MARKERS }
 
+    private fun negationTargetsScopedArgument(
+        clause: SemanticClause,
+        negationTokenIndex: Int,
+    ): Boolean = clause.entities.any { entity ->
+        entity.tokenStart > negationTokenIndex &&
+            entity.tokenStart <= negationTokenIndex + ARGUMENT_SCOPE_WINDOW &&
+            entity.type in SCOPED_ARGUMENT_ENTITY_TYPES
+    }
+
     private fun SemanticEntity.asValue(): SemanticValue = SemanticValue(
         rawText = rawText,
         normalized = normalizedValue,
@@ -372,6 +385,7 @@ class PredicateFrameParser(
 
     companion object {
         private const val ACTION_NEGATION_WINDOW = 4
+        private const val ARGUMENT_SCOPE_WINDOW = 4
 
         val PREDICATE_FORMS: Map<PredicateConcept, Set<String>> = mapOf(
             PredicateConcept.CREATE_IMAGE to setOf("erstelle", "erzeuge", "generiere", "zeichne", "rendere", "create", "generate", "draw", "render"),
@@ -432,6 +446,13 @@ class PredicateFrameParser(
             "not", "never", "no",
         )
         private val CONTRAST_MARKERS = setOf("sondern", "aber", "stattdessen", "but", "rather", "instead")
+        private val SCOPED_ARGUMENT_ENTITY_TYPES = setOf(
+            EntityType.DATE,
+            EntityType.TIME,
+            EntityType.COLOR,
+            EntityType.OBJECT,
+            EntityType.IMAGE,
+        )
         private val USER_RECIPIENT_MARKERS = setOf("mir", "mich", "me", "myself")
         private val RECIPIENT_PREPOSITIONS = setOf("an", "to")
         private val CURRENCY_UNITS = setOf("€", "eur", "euro", "euros", "$", "usd", "dollar", "£", "gbp", "pound", "pounds")
