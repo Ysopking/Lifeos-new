@@ -109,6 +109,15 @@ class GoalResumeEngineTest {
                 .flatMap { it.quantities }
                 .any { it.value == "10" && it.unit == "mb" }
         )
+        assertEquals(originalUnderstanding.goal.semanticActionGraph, result.frame.semanticActionGraph)
+        assertEquals(originalUnderstanding.goal.semanticEntitiesV2, result.frame.semanticEntitiesV2)
+        assertEquals(originalUnderstanding.goal.quantityTemporal, result.frame.quantityTemporal)
+        assertEquals(originalUnderstanding.goal.domainSemanticGraph, result.frame.domainSemanticGraph)
+        assertEquals(originalUnderstanding.goal.interpretationQuality, result.frame.interpretationQuality)
+        assertEquals(
+            originalUnderstanding.goal.references.map { it.targetPhotonRef },
+            result.frame.references.map { it.targetPhotonRef },
+        )
     }
 
     @Test
@@ -223,6 +232,79 @@ class GoalResumeEngineTest {
                 request = continueGoal(target.id),
                 requestSource = source("continue-source", "Weiter", now),
                 requestGoalPhotonId = PhotonId("continue-goal"),
+                photons = listOf(source, target),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(GoalResumeBlockReason.TARGET_UNDECODABLE, result.reason)
+    }
+
+    @Test
+    fun `partial persisted action revision binding is fail closed`() {
+        val source = source("source-partial-ref", "Erstelle ein Bild.")
+        val valid = goalPhoton(source)
+        val roleLine = requireNotNull(valid.content.lines().firstOrNull { it.startsWith("action.role.") })
+        val corruptRole = roleLine.substringBeforeLast('|') + "|5"
+        val target = valid.copy(
+            id = PhotonId("goal-partial-ref"),
+            content = valid.content.replace(roleLine, corruptRole),
+        )
+
+        val result = assertIs<GoalResumeResult.Blocked>(
+            engine.resume(
+                request = continueGoal(target.id),
+                requestSource = source("continue-partial-ref", "Weiter", now),
+                requestGoalPhotonId = PhotonId("continue-goal-partial-ref"),
+                photons = listOf(source, target),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(GoalResumeBlockReason.TARGET_UNDECODABLE, result.reason)
+    }
+
+    @Test
+    fun `duplicate persisted action role is fail closed`() {
+        val source = source("source-duplicate-role", "Erstelle ein Bild.")
+        val valid = goalPhoton(source)
+        val roleLine = requireNotNull(valid.content.lines().firstOrNull { it.startsWith("action.role.") })
+        val target = valid.copy(
+            id = PhotonId("goal-duplicate-role"),
+            content = valid.content + "\n" + roleLine,
+        )
+
+        val result = assertIs<GoalResumeResult.Blocked>(
+            engine.resume(
+                request = continueGoal(target.id),
+                requestSource = source("continue-duplicate-role", "Weiter", now),
+                requestGoalPhotonId = PhotonId("continue-goal-duplicate-role"),
+                photons = listOf(source, target),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(GoalResumeBlockReason.TARGET_UNDECODABLE, result.reason)
+    }
+
+    @Test
+    fun `dangling persisted scope target is fail closed`() {
+        val source = source("source-dangling-scope", "Sende diese Mail nicht.")
+        val valid = goalPhoton(source)
+        val scopeLine = requireNotNull(valid.content.lines().firstOrNull { it.startsWith("action.scope.") })
+        val fields = scopeLine.substringAfter('=').split('|').toMutableList()
+        fields[1] = "semantic-node:" + "0".repeat(64)
+        val corruptScope = scopeLine.substringBefore('=') + "=" + fields.joinToString("|")
+        val target = valid.copy(
+            id = PhotonId("goal-dangling-scope"),
+            content = valid.content.replace(scopeLine, corruptScope),
+        )
+
+        val result = assertIs<GoalResumeResult.Blocked>(
+            engine.resume(
+                request = continueGoal(target.id),
+                requestSource = source("continue-dangling-scope", "Weiter", now),
+                requestGoalPhotonId = PhotonId("continue-goal-dangling-scope"),
                 photons = listOf(source, target),
                 createdAt = now,
             )
