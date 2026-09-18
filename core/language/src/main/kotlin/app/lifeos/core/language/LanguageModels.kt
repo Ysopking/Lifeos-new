@@ -1,6 +1,7 @@
 package app.lifeos.core.language
 
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
 import java.time.Instant
 
 enum class LanguageCode { DE, EN, UNKNOWN }
@@ -114,6 +115,7 @@ data class LanguageContextItem(
     val active: Boolean,
     val contentTerms: Set<String>,
     val confidence: Double = 1.0,
+    val revisionRef: PhotonRevisionRef? = null,
 ) {
     init {
         require(kind.isNotBlank())
@@ -132,6 +134,8 @@ data class ResolvedReference(
     val targetPhotonId: PhotonId?,
     val score: Double,
     val alternatives: List<Pair<PhotonId, Double>> = emptyList(),
+    val targetPhotonRef: PhotonRevisionRef? = null,
+    val revisionAlternatives: List<Pair<PhotonRevisionRef, Double>> = emptyList(),
 ) {
     init { require(score in 0.0..1.0) }
 }
