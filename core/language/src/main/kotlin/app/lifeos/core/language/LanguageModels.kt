@@ -127,6 +127,7 @@ data class LanguageContext(
     val items: List<LanguageContextItem> = emptyList(),
     val activeGoalId: PhotonId? = null,
     val now: Instant = Instant.now(),
+    val zoneId: String = "Europe/Berlin",
 )
 
 data class ResolvedReference(
@@ -179,6 +180,7 @@ data class GoalFrame(
     val semanticGraph: LanguageSemanticGraph = LanguageSemanticGraph.empty(language),
     val semanticActionGraph: SemanticActionGraph = SemanticActionGraph.empty(),
     val semanticEntitiesV2: List<SemanticEntityV2> = emptyList(),
+    val quantityTemporal: QuantityTemporalResult = QuantityTemporalResult(emptyList(), emptyList()),
 ) {
     init {
         require(objective.isNotBlank())
