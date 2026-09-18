@@ -76,7 +76,7 @@ class AutomaticSelfHealingEscalationPlanner(
             )
         ) {
             is SelfHealingGenerationResolution.Ready -> SelfHealingEscalationContext(
-                plan = resolved.plan,
+                plan = resolved.plan.copy(quarantineOnFailure = false),
                 resources = resolved.resources,
                 incidentFingerprint = generation.incidentFingerprint,
             )
@@ -146,21 +146,35 @@ class AutomaticHealthEscalationOrchestrator(
                     false
                 }
 
-                coordinator.coordinate(
-                    EscalationTrigger(
-                        nodeId = node.id,
-                        scope = node.scope,
-                        category = observation.classification?.category
-                            ?: HealthFailureCategory.UNKNOWN,
-                        recoverable = recoverable,
-                        consecutiveFailures = node.consecutiveFailures,
-                        retryBudgetRemaining = false,
-                        componentRecoveryAvailable = recoveryAvailable,
-                        protectionCritical = protectionCritical(node, observation.classification),
-                        evidenceRefs = setOf(healthObservationRef(node, observation)),
-                        observedAt = observation.observedAt,
-                    )
+                val trigger = EscalationTrigger(
+                    nodeId = node.id,
+                    scope = node.scope,
+                    category = observation.classification?.category
+                        ?: HealthFailureCategory.UNKNOWN,
+                    recoverable = recoverable,
+                    consecutiveFailures = node.consecutiveFailures,
+                    retryBudgetRemaining = false,
+                    componentRecoveryAvailable = recoveryAvailable,
+                    protectionCritical = protectionCritical(node, observation.classification),
+                    evidenceRefs = setOf(healthObservationRef(node, observation)),
+                    observedAt = observation.observedAt,
                 )
+                val result = coordinator.coordinate(trigger)
+                if (
+                    result is EscalationCoordinationResult.Completed &&
+                    result.snapshot.level == EscalationLevel.L2_RECOVER_COMPONENT &&
+                    result.execution is EscalationExecutionResult.Failed
+                ) {
+                    coordinator.coordinate(
+                        trigger.copy(
+                            componentRecoveryAvailable = false,
+                            priorLevels = listOf(EscalationLevel.L2_RECOVER_COMPONENT),
+                            evidenceRefs = trigger.evidenceRefs + setOf(
+                                "escalation:" + result.snapshot.escalationId.value
+                            ),
+                        )
+                    )
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
