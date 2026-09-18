@@ -217,13 +217,23 @@ class ReferenceResolver {
         context: LanguageContext,
     ): List<Pair<PhotonId, Double>> {
         if (context.items.isEmpty()) return emptyList()
-        val candidates = context.items.filterNot { item ->
-            expression.kind == ReferenceKind.PREVIOUS &&
-                "goal" in expression.preferredKinds &&
-                ("intent:continue" in item.tags || "goal-resumed" in item.tags)
-        }
+        val candidates = ReferenceCandidateIndexV3(context)
+            .candidates(expression, MAX_REFERENCE_CANDIDATES)
+            .filterNot { candidate ->
+                val item = candidate.item
+                expression.kind == ReferenceKind.PREVIOUS &&
+                    "goal" in expression.preferredKinds &&
+                    ("intent:continue" in item.tags || "goal-resumed" in item.tags)
+            }
         return candidates
-            .map { item -> item.photonId to score(item, expression, context) }
+            .map { candidate ->
+                candidate.item.photonId to score(
+                    item = candidate.item,
+                    expression = expression,
+                    context = context,
+                    indexScore = candidate.indexScore,
+                )
+            }
             .filter { it.second > 0.0 }
             .groupBy { it.first }
             .map { (id, scored) -> id to scored.maxOf { it.second } }
@@ -231,32 +241,34 @@ class ReferenceResolver {
                 compareByDescending<Pair<PhotonId, Double>> { it.second }
                     .thenBy { it.first.value }
             )
+            .take(MAX_RANKED_REFERENCES)
     }
 
     fun rankRevisionRefs(
         expression: ReferenceExpression,
         context: LanguageContext,
     ): List<Pair<PhotonRevisionRef, Double>> {
-        if (expression.kind == ReferenceKind.EXPLICIT_ID) {
-            val id = PhotonId(expression.rawText)
-            val found = context.items
-                .filter { it.photonId == id }
-                .mapNotNull { item -> item.revisionRef?.let { it to 1.0 } }
-                .maxByOrNull { it.first.revision }
-            return found?.let(::listOf).orEmpty()
-        }
         if (context.items.isEmpty()) return emptyList()
 
-        val candidates = context.items.filterNot { item ->
-            expression.kind == ReferenceKind.PREVIOUS &&
-                "goal" in expression.preferredKinds &&
-                ("intent:continue" in item.tags || "goal-resumed" in item.tags)
-        }
+        val candidates = ReferenceCandidateIndexV3(context)
+            .candidates(expression, MAX_REFERENCE_CANDIDATES)
+            .filterNot { candidate ->
+                val item = candidate.item
+                expression.kind == ReferenceKind.PREVIOUS &&
+                    "goal" in expression.preferredKinds &&
+                    ("intent:continue" in item.tags || "goal-resumed" in item.tags)
+            }
 
         return candidates
-            .mapNotNull { item ->
+            .mapNotNull { candidate ->
+                val item = candidate.item
                 val ref = item.revisionRef ?: return@mapNotNull null
-                ref to score(item, expression, context)
+                ref to score(
+                    item = item,
+                    expression = expression,
+                    context = context,
+                    indexScore = candidate.indexScore,
+                )
             }
             .filter { it.second > 0.0 }
             .groupBy { it.first }
@@ -266,10 +278,16 @@ class ReferenceResolver {
                     .thenByDescending { it.first.revision }
                     .thenBy { it.first.photonId.value }
             )
+            .take(MAX_RANKED_REFERENCES)
     }
 
-    private fun score(item: LanguageContextItem, expression: ReferenceExpression, context: LanguageContext): Double {
-        var score = 0.05
+    private fun score(
+        item: LanguageContextItem,
+        expression: ReferenceExpression,
+        context: LanguageContext,
+        indexScore: Double,
+    ): Double {
+        var score = 0.05 + indexScore * 0.10
         val expressionTerms = referenceTerms(expression.rawText)
         val semanticKindMatch =
             expression.preferredKinds.isEmpty() ||
@@ -353,6 +371,8 @@ class ReferenceResolver {
             .toSet()
 
     private companion object {
+        const val MAX_REFERENCE_CANDIDATES = 32
+        const val MAX_RANKED_REFERENCES = 12
         val TERM_REGEX = Regex("[\\p{L}\\p{N}]+")
         val REFERENCE_STOP_WORDS = setOf(
             "das", "die", "der", "den", "dem", "dies", "diese", "dieses", "diesen",
