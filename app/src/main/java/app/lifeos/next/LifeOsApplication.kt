@@ -28,7 +28,6 @@ import app.lifeos.core.runtime.PhotonBackedCausalLedgerStore
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RecursiveCausalCognitionCoordinator
 import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
-import app.lifeos.core.runtime.StaticCognitiveModuleRegistry
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
@@ -253,8 +252,13 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                             photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
                         }
                     }
+                    val frozenCognitiveModules = runBlocking {
+                        kernel.freezeCognitiveModulesForCurrentCycle(
+                            integratedCognition.domainModules
+                        )
+                    }
                     val causalCoordinator = RecursiveCausalCognitionCoordinator(
-                        modules = StaticCognitiveModuleRegistry(integratedCognition.domainModules),
+                        modules = frozenCognitiveModules,
                         engine = CausalCognitionEngine(
                             ledger = PhotonBackedCausalLedgerStore(kernel.photonStore),
                         ),
