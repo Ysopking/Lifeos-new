@@ -142,6 +142,8 @@ class WorldFieldEquation(
         graph: WorldFieldGraph,
         state: WorldFieldState,
     ): WorldEquationResult {
+        val stableNodes = graph.stableNodes()
+        val stableEdges = graph.stableEdges()
         val graphFingerprint = graph.fingerprint()
         val equationFingerprint = spec.fingerprint()
         require(state.graphFingerprint == graphFingerprint) {
@@ -150,11 +152,11 @@ class WorldFieldEquation(
         require(state.equationFingerprint == equationFingerprint) {
             "World state belongs to a different equation version"
         }
-        require(state.vectors.keys == graph.stableNodes().mapTo(mutableSetOf()) { it.id }) {
+        require(state.vectors.keys == stableNodes.mapTo(mutableSetOf()) { it.id }) {
             "World state must contain exactly the graph nodes"
         }
 
-        val contributions = graph.stableEdges().mapNotNull { edge ->
+        val contributions = stableEdges.mapNotNull { edge ->
             val coefficient = spec.coefficient(edge.coefficientId)
                 ?: error("Missing world coefficient ${edge.coefficientId.value}")
             require(coefficient.sourceDimension == edge.sourceDimension) {
@@ -198,24 +200,40 @@ class WorldFieldEquation(
             )
         }
 
-        val contributionsByTarget = contributions.groupBy { it.targetNodeId }
-        val nextVectors = graph.stableNodes().associate { node ->
-            val incoming = contributionsByTarget[node.id].orEmpty()
+        val contributionsByTarget = mutableMapOf<
+            WorldFieldNodeId,
+            MutableMap<WorldSignalDimension, MutableList<WorldEquationContribution>>
+        >()
+        contributions.forEach { contribution ->
+            contributionsByTarget
+                .getOrPut(contribution.targetNodeId) { mutableMapOf() }
+                .getOrPut(contribution.targetDimension) { mutableListOf() }
+                .add(contribution)
+        }
+        val nextVectors = stableNodes.associate { node ->
+            val incomingByDimension = contributionsByTarget[node.id].orEmpty()
             val dimensions = (
-                node.intrinsic.dimensions() + incoming.map { it.targetDimension }
+                node.intrinsic.dimensions() + incomingByDimension.keys
                 ).toSortedSet(compareBy { it.name })
             val values = dimensions.map { dimension ->
                 val intrinsic = node.intrinsic[dimension]
-                val typedIncoming = incoming.filter { it.targetDimension == dimension }
-                val delta = typedIncoming.sumOf { it.signedDelta }
+                val typedIncoming = incomingByDimension[dimension].orEmpty()
+                var delta = 0.0
+                var incomingConfidence = 0.0
+                val incomingProvenance = linkedSetOf<String>()
+                typedIncoming.forEach { contribution ->
+                    delta += contribution.signedDelta
+                    incomingConfidence = maxOf(incomingConfidence, contribution.confidence)
+                    incomingProvenance += contribution.provenanceFingerprint
+                }
                 val nextValue = ((intrinsic?.value ?: 0.0) + delta).coerceIn(0.0, 1.0)
                 val nextConfidence = maxOf(
                     intrinsic?.confidence ?: 0.0,
-                    typedIncoming.maxOfOrNull { it.confidence } ?: 0.0,
+                    incomingConfidence,
                 ).coerceIn(0.0, 1.0)
                 val provenance = buildSet {
                     intrinsic?.provenanceFingerprints?.let(::addAll)
-                    typedIncoming.mapTo(this) { it.provenanceFingerprint }
+                    addAll(incomingProvenance)
                 }
                 WorldDimensionValue(
                     dimension = dimension,
