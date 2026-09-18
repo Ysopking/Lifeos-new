@@ -2,6 +2,9 @@ name: Core Fast Gate
 
 on:
   push:
+    # Pull-request updates already run this gate through pull_request below.
+    # Restrict push execution to main so the same branch SHA is not tested twice.
+    branches: [main]
     paths:
       - "core/**"
       - "app/src/main/**"
