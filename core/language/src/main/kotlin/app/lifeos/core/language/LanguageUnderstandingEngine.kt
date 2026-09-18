@@ -98,6 +98,12 @@ class LanguageUnderstandingEngine(
         ) {
             return IntentType.QUERY
         }
+
+        val executableIntents = actionGraph.executableNodes
+            .mapNotNull { it.frame.predicate.toIntentTypeOrNull() }
+            .distinct()
+        if (executableIntents.size == 1) return executableIntents.single()
+
         if (topicIntent.toPredicateConcept() != PredicateConcept.UNKNOWN &&
             actionGraph.executableNodeFor(topicIntent) != null
         ) {
@@ -105,8 +111,7 @@ class LanguageUnderstandingEngine(
         }
         return when {
             topicIntent == IntentType.CONVERSATION -> IntentType.CONVERSATION
-            topicIntent == IntentType.UNKNOWN -> IntentType.UNKNOWN
-            else -> topicIntent
+            else -> IntentType.UNKNOWN
         }
     }
 
