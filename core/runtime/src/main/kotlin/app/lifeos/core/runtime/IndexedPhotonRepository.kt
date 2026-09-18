@@ -21,21 +21,34 @@ class IndexedPhotonRepository(
     private var snapshot: Snapshot? = null
 
     override suspend fun save(photon: Photon) = mutex.withLock {
+        val current = snapshot
+        current?.takeIf { it.unreadableFiles.isEmpty() }?.byId?.get(photon.id)?.let { previous ->
+            require(previous.revision <= photon.revision) {
+                "Indexed Photon revision regressed for ${photon.id.value}"
+            }
+            if (previous.revision == photon.revision) {
+                require(previous == photon) {
+                    "Conflicting Photon state for ${photon.id.value}@${photon.revision}"
+                }
+                return@withLock
+            }
+        }
+
         delegate.save(photon)
-        val current = snapshot ?: return@withLock
-        if (current.unreadableFiles.isNotEmpty()) {
+        val after = snapshot ?: return@withLock
+        if (after.unreadableFiles.isNotEmpty()) {
             snapshot = null
             return@withLock
         }
-        val previous = current.byId[photon.id]
-        require(previous == null || previous.revision <= photon.revision) {
-            "Indexed Photon revision regressed for ${photon.id.value}"
-        }
-        snapshot = current.copy(byId = current.byId + (photon.id to photon))
+        snapshot = after.copy(byId = after.byId + (photon.id to photon))
     }
 
     override suspend fun load(id: PhotonId): Photon? = mutex.withLock {
-        snapshot?.byId?.get(id) ?: delegate.load(id)
+        val current = snapshot
+        if (current != null && current.unreadableFiles.isEmpty()) {
+            return@withLock current.byId[id]
+        }
+        delegate.load(id)
     }
 
     override suspend fun loadAll(): List<Photon> = loadReport().also { report ->
