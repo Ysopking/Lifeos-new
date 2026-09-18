@@ -193,6 +193,6 @@ class SpeechActParser {
             "und", "oder", "aber", "danach", "anschließend", "anschliessend",
             "and", "or", "but", "then",
         )
-        private val QUOTE_MARKERS = setOf(""", "„", "“", "”", "«", "»")
+        private val QUOTE_MARKERS = setOf("\"", "„", "“", "”", "«", "»")
     }
 }
