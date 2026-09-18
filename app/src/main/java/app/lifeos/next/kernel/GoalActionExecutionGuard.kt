@@ -403,8 +403,13 @@ class PrivateGoalActionExecutionGuard(
             )
         }
         return when (context.goal.intent) {
-        IntentType.QUERY,
         IntentType.STORE_OR_REMEMBER -> GoalActionResourceProfile(
+            hardQuota = quota(5_000, 12, 32, 4, 0, 2),
+            requested = usage(1_500, 2, 8, 1, 0, 1),
+            domain = ResourceBudgetDomain.GOAL_EXECUTION,
+            expectedUtility = 0.85,
+        )
+        IntentType.QUERY -> GoalActionResourceProfile(
             hardQuota = quota(5_000, 24, 64, 8, 0, 4),
             requested = usage(3_000, 8, 24, 2, 0, 2),
             domain = ResourceBudgetDomain.GOAL_EXECUTION,
