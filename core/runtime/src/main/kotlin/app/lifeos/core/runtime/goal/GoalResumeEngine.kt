@@ -7,6 +7,22 @@ import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
 import app.lifeos.core.language.LanguageSemanticGraph
+import app.lifeos.core.language.PredicateConcept
+import app.lifeos.core.language.PredicateFrame
+import app.lifeos.core.language.ScopeType
+import app.lifeos.core.language.SemanticActionEdge
+import app.lifeos.core.language.SemanticActionEdgeType
+import app.lifeos.core.language.SemanticActionGraph
+import app.lifeos.core.language.SemanticActionNode
+import app.lifeos.core.language.SemanticActionNodeType
+import app.lifeos.core.language.SemanticEvidence
+import app.lifeos.core.language.SemanticNodeId
+import app.lifeos.core.language.SemanticRole
+import app.lifeos.core.language.SemanticScope
+import app.lifeos.core.language.SemanticValue
+import app.lifeos.core.language.SpeechAct
+import app.lifeos.core.language.SpeechActType
+import app.lifeos.core.language.TextSpan
 import app.lifeos.core.language.ReferenceExpression
 import app.lifeos.core.language.ReferenceKind
 import app.lifeos.core.language.ResolvedReference
@@ -195,12 +211,14 @@ class GoalResumeEngine {
     }
 }
 
-/** Strict decoder for the persisted goal/v2 and goal/v3 contracts emitted by GoalPhotonFactory. */
+/** Strict decoder for persisted goal/v2-v4 contracts emitted by GoalPhotonFactory. */
 private object PersistedGoalFrameDecoder {
     fun decode(photon: Photon): GoalFrame? = runCatching {
         val lines = photon.content.lines()
         val version = lines.firstOrNull()
-        require(version == GOAL_V2 || version == GOAL_V3) { "Unsupported persisted goal version" }
+        require(version == GOAL_V2 || version == GOAL_V3 || version == GOAL_V4) {
+            "Unsupported persisted goal version"
+        }
         val intent = IntentType.valueOf(required(lines, "intent"))
         val language = LanguageCode.valueOf(required(lines, "language"))
         val confidence = required(lines, "confidence").toDouble().also { require(it in 0.0..1.0) }
@@ -268,10 +286,15 @@ private object PersistedGoalFrameDecoder {
                 )
             }
 
-        val semanticGraph = if (version == GOAL_V3) {
+        val semanticGraph = if (version == GOAL_V3 || version == GOAL_V4) {
             decodeSemanticGraph(lines, language)
         } else {
             LanguageSemanticGraph.empty(language)
+        }
+        val semanticActionGraph = if (version == GOAL_V4) {
+            decodeSemanticActionGraph(lines)
+        } else {
+            SemanticActionGraph.empty()
         }
 
         GoalFrame(
@@ -284,8 +307,154 @@ private object PersistedGoalFrameDecoder {
             confidence = confidence,
             language = language,
             semanticGraph = semanticGraph,
+            semanticActionGraph = semanticActionGraph,
         )
     }.getOrNull()
+
+    private fun decodeSemanticActionGraph(lines: List<String>): SemanticActionGraph {
+        val fingerprint = unescape(required(lines, "action.fingerprint"))
+            .also { require(it.isNotBlank()) }
+
+        val roleLines = lines
+            .filter { it.startsWith("action.role.") }
+            .associate { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("action.role."), '='))
+                val key = assignment.first.split('.')
+                require(key.size == 2) { "Malformed action role key" }
+                val nodeIndex = key[0].toInt().also { require(it >= 0) }
+                val role = SemanticRole.valueOf(key[1])
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 5) { "Malformed action role" }
+                (nodeIndex to role) to SemanticValue(
+                    rawText = unescape(fields[0]),
+                    normalized = unescape(fields[1]),
+                    entityType = unescape(fields[2]).takeIf { it.isNotBlank() }?.let(EntityType::valueOf),
+                    resolved = fields[3].toBooleanStrict(),
+                    confidence = fields[4].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+
+        val nodes = lines
+            .filter { it.startsWith("action.node.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("action.node."), '='))
+                val index = assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 16) { "Malformed semantic action node" }
+
+                val nodeId = SemanticNodeId(unescape(fields[0]))
+                val type = SemanticActionNodeType.valueOf(fields[1])
+                val clauseId = fields[2].toInt().also { require(it >= 0) }
+                val predicate = PredicateConcept.valueOf(fields[3])
+                val speechType = SpeechActType.valueOf(fields[4])
+                val speechConfidence = fields[5].toDouble().also { require(it in 0.0..1.0) }
+                val speechSpan = TextSpan(fields[6].toInt(), fields[7].toInt())
+                val frameConfidence = fields[8].toDouble().also { require(it in 0.0..1.0) }
+                val scopeTypes = enumSet(fields[9], ScopeType::valueOf)
+                val requiredRoles = enumSet(fields[10], SemanticRole::valueOf)
+                val unresolvedRoles = enumSet(fields[11], SemanticRole::valueOf)
+                val unresolvedReference = fields[12].toBooleanStrict()
+                val unresolvedCondition = fields[13].toBooleanStrict()
+                val externalSideEffect = fields[14].toBooleanStrict()
+                val executionReadiness = fields[15].toDouble().also { require(it in 0.0..1.0) }
+                val roles = roleLines
+                    .filterKeys { it.first == index }
+                    .mapKeys { it.key.second }
+
+                val speechAct = SpeechAct(
+                    type = speechType,
+                    confidence = speechConfidence,
+                    evidence = listOf(
+                        SemanticEvidence(
+                            source = "persisted-goal-v4",
+                            detail = "persisted speech act",
+                            strength = speechConfidence,
+                            span = speechSpan,
+                        )
+                    ),
+                    span = speechSpan,
+                )
+                val frame = PredicateFrame(
+                    nodeId = nodeId,
+                    clauseId = clauseId,
+                    predicate = predicate,
+                    roles = roles,
+                    scopeTypes = scopeTypes,
+                    speechAct = speechAct,
+                    confidence = frameConfidence,
+                    evidence = listOf(
+                        SemanticEvidence(
+                            source = "persisted-goal-v4",
+                            detail = "persisted predicate frame",
+                            strength = frameConfidence,
+                            span = speechSpan,
+                        )
+                    ),
+                )
+                SemanticActionNode(
+                    id = nodeId,
+                    type = type,
+                    frame = frame,
+                    requiredRoles = requiredRoles,
+                    unresolvedRoles = unresolvedRoles,
+                    unresolvedReference = unresolvedReference,
+                    unresolvedCondition = unresolvedCondition,
+                    externalSideEffect = externalSideEffect,
+                    executionReadiness = executionReadiness,
+                )
+            }
+            .sortedBy { it.id.value }
+
+        val edges = lines
+            .filter { it.startsWith("action.edge.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("action.edge."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 4) { "Malformed semantic action edge" }
+                SemanticActionEdge(
+                    from = SemanticNodeId(unescape(fields[0])),
+                    to = SemanticNodeId(unescape(fields[1])),
+                    type = SemanticActionEdgeType.valueOf(fields[2]),
+                    confidence = fields[3].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+
+        val scopes = lines
+            .filter { it.startsWith("action.scope.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("action.scope."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 6) { "Malformed semantic action scope" }
+                val targets = unescape(fields[1])
+                    .split(',')
+                    .filter { it.isNotBlank() }
+                    .mapTo(linkedSetOf(), ::SemanticNodeId)
+                SemanticScope(
+                    type = ScopeType.valueOf(fields[0]),
+                    targetNodeIds = targets,
+                    span = TextSpan(fields[2].toInt(), fields[3].toInt()),
+                    cue = unescape(fields[4]),
+                    confidence = fields[5].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+
+        return SemanticActionGraph(
+            nodes = nodes,
+            edges = edges,
+            scopes = scopes,
+            fingerprint = fingerprint,
+        )
+    }
+
+    private fun <T> enumSet(
+        encoded: String,
+        parser: (String) -> T,
+    ): Set<T> = encoded
+        .split(',')
+        .filter { it.isNotBlank() }
+        .mapTo(linkedSetOf(), parser)
 
     private fun decodeSemanticGraph(
         lines: List<String>,
@@ -469,4 +638,5 @@ private object PersistedGoalFrameDecoder {
 
     private const val GOAL_V2 = "goal/v2"
     private const val GOAL_V3 = "goal/v3"
+    private const val GOAL_V4 = "goal/v4"
 }
