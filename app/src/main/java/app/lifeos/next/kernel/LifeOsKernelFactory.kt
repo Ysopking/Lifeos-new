@@ -4,6 +4,7 @@ import android.content.Context
 import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.extension.ExtensionRegistryRehydrator
 import app.lifeos.core.runtime.convergence.WorldFormulaBoundConvergenceService
 import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
 import app.lifeos.core.runtime.convergence.DefaultProductiveConvergenceAuthority
@@ -26,6 +27,9 @@ import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
 import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
+import app.lifeos.core.data.extension.EncryptedExtensionRegistryHeadRepository
+import app.lifeos.core.data.extension.EncryptedExtensionRegistrySnapshotRepository
+import app.lifeos.core.data.worldmodel.EncryptedWorldModelRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.LanguageUnderstandingEngine
@@ -377,6 +381,15 @@ class LifeOsKernelFactory(
         val worldFormulaSnapshotRepository = EncryptedWorldFormulaSnapshotRepository(appContext)
         val productiveWorldHeadRepository = EncryptedProductiveWorldHeadRepository(appContext)
         val bootEngineCycleRepository = EncryptedBootEngineCycleRepository(appContext)
+        val extensionRegistrySnapshotRepository =
+            EncryptedExtensionRegistrySnapshotRepository(appContext)
+        val extensionRegistryHeadRepository =
+            EncryptedExtensionRegistryHeadRepository(appContext)
+        val extensionRegistryRehydrator = ExtensionRegistryRehydrator(
+            heads = extensionRegistryHeadRepository,
+            snapshots = extensionRegistrySnapshotRepository,
+        )
+        val worldModelRepository = EncryptedWorldModelRepository(appContext)
         val cognitiveWorldEquationProfile = CognitiveWorldEquationProfile()
         val worldFormulaCoordinator = WorldFormulaCoordinator(
             equations = InMemoryWorldEquationRegistry(listOf(cognitiveWorldEquationProfile.spec)),
@@ -590,6 +603,21 @@ class LifeOsKernelFactory(
             primary = primaryStateRehydrator,
             additionalSteps = listOf(
                 RuntimeStateRehydrationStep {
+                    extensionRegistryRehydrator.rehydrate()
+                },
+                RuntimeStateRehydrationStep {
+                    val head = worldModelRepository.loadHead()
+                    if (head != null) {
+                        val snapshot = requireNotNull(
+                            worldModelRepository.loadSnapshot(head.activeSnapshotId)
+                        ) { "WorldModel head points to missing snapshot" }
+                        require(snapshot.revision == head.revision) {
+                            "WorldModel head/snapshot revision mismatch"
+                        }
+                        require(snapshot.predecessorSnapshotId == head.predecessorSnapshotId)
+                    }
+                },
+                RuntimeStateRehydrationStep {
                     goalPlans.rehydrate()
                 },
                 RuntimeStateRehydrationStep {
@@ -781,6 +809,35 @@ class LifeOsKernelFactory(
                                     StoreState.HEALTHY
                                 },
                                 message = report.message,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "extension-registry-store"
+                        override suspend fun probe(): StoreStatus = try {
+                            extensionRegistryRehydrator.rehydrate()
+                            StoreStatus(storeId, StoreState.HEALTHY)
+                        } catch (error: Exception) {
+                            StoreStatus(
+                                storeId = storeId,
+                                state = StoreState.CORRUPTED,
+                                message = error.message ?: error::class.simpleName,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "world-model-store"
+                        override suspend fun probe(): StoreStatus = try {
+                            val head = worldModelRepository.loadHead()
+                            if (head != null) {
+                                requireNotNull(worldModelRepository.loadSnapshot(head.activeSnapshotId))
+                            }
+                            StoreStatus(storeId, StoreState.HEALTHY)
+                        } catch (error: Exception) {
+                            StoreStatus(
+                                storeId = storeId,
+                                state = StoreState.CORRUPTED,
+                                message = error.message ?: error::class.simpleName,
                             )
                         }
                     },
