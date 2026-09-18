@@ -1,9 +1,11 @@
 package app.lifeos.core.language
 
 /** Deterministic utterance/clause speech-act classification. Intent evidence is deliberately absent. */
-class SpeechActParser(
-    private val syntaxAnalyzer: ClauseSyntaxAnalyzer = ClauseSyntaxAnalyzer(),
+class SpeechActParser private constructor(
+    private val syntaxAnalyzer: ClauseSyntaxAnalyzer,
 ) {
+    constructor() : this(ClauseSyntaxAnalyzer())
+
     fun parse(
         utterance: NormalizedUtterance,
         graph: LanguageSemanticGraph,
