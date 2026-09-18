@@ -2,6 +2,7 @@ package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskDraft
+import app.lifeos.core.model.task.TaskPriority
 import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskType
@@ -13,6 +14,7 @@ import app.lifeos.core.runtime.resource.SharedResourceBudgetDecision
 import app.lifeos.core.runtime.resource.SharedResourceBudgetGate
 import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
+import java.time.Instant
 import kotlinx.coroutines.sync.withLock
 
 /**
@@ -28,12 +30,16 @@ class DurableCognitionAdmissionController(
     private val tasks: TaskSnapshotRepository,
     private val taskEngine: DurableTaskEngine,
     private val maxActiveTasks: Int = DEFAULT_MAX_ACTIVE_TASKS,
+    private val foregroundReserve: Int = DEFAULT_FOREGROUND_RESERVE,
     private val sharedBudgets: SharedResourceBudgetGate? = SharedResourceBudgetRuntimeRegistry.current(),
 ) {
     private val mutex = taskEngine.cognitionAdmissionMutex
 
     init {
         require(maxActiveTasks > 0) { "Durable cognition capacity must be positive" }
+        require(foregroundReserve in 1 until maxActiveTasks) {
+            "Foreground cognition reserve must be within durable capacity"
+        }
     }
 
     suspend fun submit(draft: TaskDraft): LifeTask? = mutex.withLock {
@@ -52,10 +58,46 @@ class DurableCognitionAdmissionController(
             return@withLock taskEngine.submit(draft)
         }
 
-        val active = report.tasks.count { task ->
+        var active = report.tasks.count { task ->
             task.type.isCognitionTask() && !task.state.isTerminal()
         }
-        if (active >= maxActiveTasks) return@withLock null
+        val foreground = draft.priority == TaskPriority.INTERACTIVE || draft.priority == TaskPriority.CRITICAL
+        val backgroundCeiling = maxActiveTasks - foregroundReserve
+
+        if (!foreground && active >= backgroundCeiling) {
+            return@withLock null
+        }
+
+        if (foreground && active >= maxActiveTasks) {
+            val victim = report.tasks.asSequence()
+                .filter { task ->
+                    task.type.isCognitionTask() &&
+                        task.priority == TaskPriority.BACKGROUND &&
+                        task.state in setOf(TaskState.QUEUED, TaskState.RETRY_WAIT)
+                }
+                .sortedWith(
+                    compareBy<LifeTask> { it.priority.weight }
+                        .thenByDescending { it.createdAt }
+                        .thenByDescending { it.id.value }
+                )
+                .firstOrNull()
+                ?: return@withLock null
+
+            val cancelled = tasks.transition(
+                id = victim.id,
+                expected = victim.state,
+                next = TaskState.CANCELLED,
+                at = Instant.now(),
+            ) ?: return@withLock null
+            check(cancelled.state == TaskState.CANCELLED) {
+                "Foreground preemption did not cancel background task"
+            }
+            active -= 1
+        }
+
+        check(active < maxActiveTasks) {
+            "Foreground cognition admission exceeded hard durable capacity"
+        }
 
         sharedBudgets?.let { broker ->
             val priority = (draft.priority.weight.toDouble() / 100.0).coerceIn(0.0, 1.0)
@@ -107,6 +149,7 @@ class DurableCognitionAdmissionController(
 
     private companion object {
         const val DEFAULT_MAX_ACTIVE_TASKS = 100
+        const val DEFAULT_FOREGROUND_RESERVE = 8
         val COGNITION_HARD_QUOTA = ResourceBudgetQuota(
             elapsedMillis = 5_000,
             workUnits = 32,
