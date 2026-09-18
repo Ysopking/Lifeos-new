@@ -13,11 +13,16 @@ class SemanticActionGraphBuilder {
 
         val preliminary = frames.map { frame ->
             val required = requiredRoles(frame.predicate)
+            val referenceRequired = requiresReference(frame)
+            val boundReference = hasBoundReference(frame, references)
+            val unresolvedReference = referenceRequired && !boundReference
             val unresolved = required.filterTo(linkedSetOf()) { role ->
-                frame.roles[role]?.resolved != true
+                if (role == SemanticRole.OBJECT && boundReference) {
+                    false
+                } else {
+                    frame.roles[role]?.resolved != true
+                }
             }
-            val unresolvedReference = requiresReference(frame) &&
-                references.any { it.targetPhotonId == null }
             val type = nodeType(frame)
             val readiness = readiness(
                 frame = frame,
@@ -70,22 +75,68 @@ class SemanticActionGraphBuilder {
             .sortedWith(compareBy<SemanticActionEdge> { it.from.value }.thenBy { it.to.value }.thenBy { it.type.name })
             .toMutableList()
 
+        val ordered = preliminary.sortedBy { it.frame.clauseId }
+        val resultResolvedNodeIds = linkedSetOf<SemanticNodeId>()
+        ordered.forEachIndexed { index, node ->
+            if (!node.unresolvedReference || index == 0) return@forEachIndexed
+            val previous = ordered.subList(0, index)
+                .lastOrNull { it.type == SemanticActionNodeType.ACTION }
+                ?: return@forEachIndexed
+            val compositionalEdge = edges.any { edge ->
+                edge.from == previous.id &&
+                    edge.to == node.id &&
+                    edge.type in setOf(SemanticActionEdgeType.AND, SemanticActionEdgeType.THEN)
+            }
+            if (!compositionalEdge) return@forEachIndexed
+            edges += SemanticActionEdge(
+                from = previous.id,
+                to = node.id,
+                type = SemanticActionEdgeType.USES_RESULT_OF,
+                confidence = 0.94,
+            )
+            resultResolvedNodeIds += node.id
+        }
+        edges = edges
+            .distinctBy { Triple(it.from, it.to, it.type) }
+            .sortedWith(compareBy<SemanticActionEdge> { it.from.value }.thenBy { it.to.value }.thenBy { it.type.name })
+            .toMutableList()
+
         val incomingConditions = edges
             .filter { it.type == SemanticActionEdgeType.IF }
             .mapTo(linkedSetOf()) { it.to }
 
-        val nodes = preliminary.map { node ->
-            if (node.id !in incomingConditions) node
-            else node.copy(
-                unresolvedCondition = true,
-                executionReadiness = readiness(
-                    frame = node.frame,
-                    required = node.requiredRoles,
-                    unresolved = node.unresolvedRoles,
-                    unresolvedReference = node.unresolvedReference,
+        val nodes = preliminary.map { original ->
+            val referenceResolvedByResult = original.id in resultResolvedNodeIds
+            val node = if (!referenceResolvedByResult) {
+                original
+            } else {
+                original.copy(
+                    unresolvedRoles = original.unresolvedRoles - SemanticRole.OBJECT,
+                    unresolvedReference = false,
+                )
+            }
+            if (node.id !in incomingConditions) {
+                node.copy(
+                    executionReadiness = readiness(
+                        frame = node.frame,
+                        required = node.requiredRoles,
+                        unresolved = node.unresolvedRoles,
+                        unresolvedReference = node.unresolvedReference,
+                        unresolvedCondition = false,
+                    ),
+                )
+            } else {
+                node.copy(
                     unresolvedCondition = true,
-                ),
-            )
+                    executionReadiness = readiness(
+                        frame = node.frame,
+                        required = node.requiredRoles,
+                        unresolved = node.unresolvedRoles,
+                        unresolvedReference = node.unresolvedReference,
+                        unresolvedCondition = true,
+                    ),
+                )
+            }
         }
 
         val scopes = nodes.flatMap { node ->
@@ -169,16 +220,35 @@ class SemanticActionGraphBuilder {
         PredicateConcept.UNKNOWN -> emptySet()
     }
 
-    private fun requiresReference(frame: PredicateFrame): Boolean =
-        frame.predicate in setOf(
-            PredicateConcept.TRANSFORM_IMAGE,
-            PredicateConcept.COMMUNICATE,
-            PredicateConcept.DELETE,
-            PredicateConcept.UPLOAD,
-            PredicateConcept.SELECT,
-        ) && frame.roles[SemanticRole.OBJECT]?.normalized?.let { normalized ->
-            normalized in REFERENCE_WORDS
-        } == true
+    private fun requiresReference(frame: PredicateFrame): Boolean {
+        if (frame.predicate == PredicateConcept.TRANSFORM_IMAGE) return true
+        if (frame.predicate !in setOf(
+                PredicateConcept.COMMUNICATE,
+                PredicateConcept.DELETE,
+                PredicateConcept.UPLOAD,
+                PredicateConcept.SELECT,
+            )
+        ) return false
+        val value = frame.roles[SemanticRole.OBJECT] ?: return false
+        return !value.resolved || value.normalized in REFERENCE_WORDS
+    }
+
+    private fun hasBoundReference(
+        frame: PredicateFrame,
+        references: List<ResolvedReference>,
+    ): Boolean {
+        if (!requiresReference(frame)) return false
+        val objectValue = frame.roles[SemanticRole.OBJECT]
+        return references.any { reference ->
+            reference.targetPhotonId != null &&
+                (
+                    objectValue == null ||
+                        reference.expression.rawText.equals(objectValue.rawText, ignoreCase = true) ||
+                        objectValue.rawText.lowercase().contains(reference.expression.rawText.lowercase()) ||
+                        reference.expression.rawText.lowercase().contains(objectValue.rawText.lowercase())
+                )
+        }
+    }
 
     private fun externalSideEffect(predicate: PredicateConcept): Boolean =
         predicate in setOf(
@@ -253,7 +323,8 @@ class SemanticActionGraphBuilder {
     private companion object {
         val REFERENCE_WORDS = setOf(
             "das", "dies", "diese", "diesen", "dieses", "jenes", "andere", "anderen",
-            "it", "this", "that", "other",
+            "ihn", "sie", "es", "ihm", "ihr",
+            "it", "this", "that", "other", "him", "her", "them",
         )
     }
 }
