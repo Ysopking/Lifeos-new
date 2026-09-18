@@ -279,6 +279,11 @@ class SemanticActionGraphBuilder {
         if (unresolvedReference) score *= 0.20
         if (required.isNotEmpty()) {
             score *= (required.size - unresolved.size).toDouble() / required.size.toDouble()
+            val requiredRoleConfidence = required
+                .mapNotNull { frame.roles[it]?.confidence }
+                .minOrNull()
+                ?: 0.0
+            score *= requiredRoleConfidence
         }
         return score.coerceIn(0.0, 1.0)
     }
