@@ -91,6 +91,16 @@ class SemanticActionRecoveryDeviceTest {
     }
 
     private suspend fun awaitBoot(): KernelBootstrapState = withTimeout(BOOT_TIMEOUT_MS) {
+        val processStartup = app.startupState.first { state ->
+            state.phase == LifeOsProcessStartupPhase.READY ||
+                state.phase == LifeOsProcessStartupPhase.FAILED
+        }
+        if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
+            error(
+                "Process startup failed during semantic action recovery: " +
+                    (processStartup.failure ?: "unknown")
+            )
+        }
         app.kernel.bootstrapState.first { state ->
             state.status == KernelBootstrapStatus.READY ||
                 state.status == KernelBootstrapStatus.DEGRADED ||
