@@ -3,6 +3,11 @@ package app.lifeos.next.kernel
 import android.content.Context
 import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
+import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.convergence.WorldFormulaBoundConvergenceService
+import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
+import app.lifeos.core.runtime.convergence.DefaultProductiveConvergenceAuthority
+import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.cognition.EncryptedCognitionCoverageRepository
 import app.lifeos.core.data.cognition.EncryptedCognitionJournalIndexRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
@@ -389,6 +394,20 @@ class LifeOsKernelFactory(
                 CognitiveCycleId("cycle:${java.util.UUID.randomUUID()}")
             },
         )
+        val productiveDecisionCoordinator = DurableConvergenceDecisionCoordinator(
+            EncryptedConvergenceDecisionCheckpointRepository(appContext),
+        )
+        val productiveWorldConvergence = WorldFormulaBoundConvergenceService(
+            bootEngine = bootEngineRuntime,
+            worldSnapshots = worldFormulaSnapshotRepository,
+            decisions = productiveDecisionCoordinator,
+        )
+        val productiveGoalConvergence = GoalConvergenceDecisionProvider(
+            productiveConvergence = DefaultProductiveConvergenceAuthority(productiveWorldConvergence),
+            bootEngine = bootEngineRuntime,
+            photons = store,
+        )
+
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
             snapshotRepository = fieldSnapshotRepository,
             requestEnricher = DurableContextFieldEnricher(store),
@@ -856,6 +875,7 @@ class LifeOsKernelFactory(
             languageUnderstanding = languageUnderstanding,
             goalPhotonFactory = goalPhotonFactory,
             goalPlans = goalPlans,
+            productiveGoalConvergence = productiveGoalConvergence,
             languageContextBuilder = languageContextBuilder,
             goalCapabilityRouter = goalCapabilityRouter,
             privateGeneratedToolRuntime = privateGeneratedToolRuntime,
