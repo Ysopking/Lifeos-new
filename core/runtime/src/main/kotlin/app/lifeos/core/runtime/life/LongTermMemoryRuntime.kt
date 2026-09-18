@@ -245,10 +245,15 @@ class LongTermMemoryEngine(
         val replacementDecisions = latestChanged.associate { photon ->
             photon.id to decide(photon, accessChanges.profileFor(photon), now)
         }
-        val decisions = (
+        val decisionMap = (
             current.decisions.filterNot { it.photonId in changedIds } +
                 replacementDecisions.values
-            ).sortedBy { it.photonId.value }
+            ).associateBy { it.photonId }
+        val decisions = latestAll.map { photon ->
+            requireNotNull(decisionMap[photon.id]) {
+                "Incremental memory projection lost decision for " + photon.id.value
+            }
+        }
         val decisionsById = decisions.associateBy { it.photonId }
 
         val oldAffectedEpisodes = current.episodes.filter { episode ->
