@@ -19,25 +19,13 @@ internal class ClauseSyntaxAnalyzer {
         val semanticWords = words.dropWhile { it in CLAUSE_LEADING_CUES }
         val first = semanticWords.firstOrNull()
         val second = semanticWords.getOrNull(1)
-        val prefix = semanticWords.take(4).toSet()
-
         val explicitQuestionMark = terminalPunctuation(utterance, clause) == "?"
         val interrogativeLead = first in QUESTION_WORDS
         val politeImperative =
             first in POLITENESS_MARKERS &&
                 semanticWords.drop(1).firstOrNull() in SpeechActParser.DIRECT_COMMAND_VERBS
         val addressedRequest =
-            politeImperative ||
-                (
-                    first in REQUEST_AUXILIARIES &&
-                        prefix.any { it in SECOND_PERSON_PRONOUNS } &&
-                        semanticWords.any { it in SpeechActParser.DIRECT_COMMAND_VERBS }
-                    ) ||
-                (
-                    first in ADDRESSABLE_QUESTION_AUXILIARIES &&
-                        second in SECOND_PERSON_PRONOUNS &&
-                        semanticWords.any { it in SpeechActParser.DIRECT_COMMAND_VERBS }
-                    )
+            politeImperative || addressedModalRequest(first, second)
         val auxiliaryQuestion =
             !addressedRequest &&
                 first in QUESTION_AUXILIARIES &&
@@ -61,6 +49,17 @@ internal class ClauseSyntaxAnalyzer {
             politeImperative = politeImperative,
             imperativeLead = imperativeLead,
         )
+    }
+
+    private fun addressedModalRequest(
+        first: String?,
+        second: String?,
+    ): Boolean = when {
+        first in INFORMAL_REQUEST_AUXILIARIES && second == "du" -> true
+        first in PLURAL_REQUEST_AUXILIARIES && second == "ihr" -> true
+        first in FORMAL_REQUEST_AUXILIARIES && second == "sie" -> true
+        first in ENGLISH_REQUEST_AUXILIARIES && second == "you" -> true
+        else -> false
     }
 
     private fun terminalPunctuation(
@@ -90,16 +89,16 @@ internal class ClauseSyntaxAnalyzer {
             "ist", "sind", "hat", "haben", "kann", "können", "koennen", "darf", "soll",
             "is", "are", "do", "does", "did", "can", "could", "would", "should",
         )
-        val ADDRESSABLE_QUESTION_AUXILIARIES = setOf(
-            "kann", "kannst", "können", "koennen", "könntest", "koenntest",
-            "würdest", "wuerdest",
-            "can", "could", "would",
-        )
-        val REQUEST_AUXILIARIES = setOf(
+        val INFORMAL_REQUEST_AUXILIARIES = setOf(
             "kannst", "könntest", "koenntest", "würdest", "wuerdest",
-            "could", "would",
         )
-        val SECOND_PERSON_PRONOUNS = setOf("du", "ihr", "sie", "you")
+        val PLURAL_REQUEST_AUXILIARIES = setOf(
+            "könnt", "koennt", "würdet", "wuerdet",
+        )
+        val FORMAL_REQUEST_AUXILIARIES = setOf(
+            "können", "koennen", "könnten", "koennten", "würden", "wuerden",
+        )
+        val ENGLISH_REQUEST_AUXILIARIES = setOf("can", "could", "would")
         val QUESTION_SUBJECTS = setOf(
             "ich", "du", "er", "sie", "es", "wir", "ihr",
             "i", "you", "he", "she", "it", "we", "they",
