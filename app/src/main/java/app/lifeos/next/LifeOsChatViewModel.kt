@@ -3,12 +3,24 @@ package app.lifeos.next
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.lifeos.core.language.ConversationLifeContext
+import app.lifeos.core.language.LanguageCode
 import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.LanguageContextItem
+import app.lifeos.core.language.LanguageResponseAct
+import app.lifeos.core.language.LanguageResponseFact
+import app.lifeos.core.language.LanguageResponseGenerationEngine
+import app.lifeos.core.language.LanguageResponseTarget
+import app.lifeos.core.language.LanguageUnderstandingEngine
+import app.lifeos.core.language.LanguageUnderstandingResult
+import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
+import app.lifeos.core.runtime.ConversationFastPath
+import app.lifeos.core.runtime.ConversationPath
+import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.chat.ChatEvent
 import app.lifeos.core.runtime.chat.ConversationProjector
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
@@ -67,6 +79,10 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     private val voiceStopRequested = AtomicBoolean(false)
     private val imagePreviewLoader = ChatImagePreviewLoader(kernel)
     private val stableChatProjection = StableChatProjection()
+    private val fastUnderstanding = LanguageUnderstandingEngine()
+    private val fastContextBuilder = PhotonLanguageContextBuilder()
+    private val conversationFastPath = ConversationFastPath()
+    private val fastResponseGeneration = LanguageResponseGenerationEngine()
     private val mutableState = MutableStateFlow(LifeOsChatUiState())
 
     private var latestPhotons: List<Photon> = emptyList()
@@ -250,6 +266,48 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             var userTurnPersisted = false
             try {
+                val fastFrame = runCatching { buildFastRouteFrame(text) }.getOrNull()
+                if (fastFrame?.path == ConversationPath.FAST_CHAT) {
+                    kernel.persistFastChatPhoton(userPhoton, PhotonIngressMode.ORIGIN)
+                    userTurnPersisted = true
+                    mutableState.update {
+                        it.copy(
+                            turnProcessing = ChatTurnProcessingState.persistingResponse(turnId),
+                        )
+                    }
+
+                    val response = composeFastConversation(fastFrame)
+                    val assistantPhoton = Photon(
+                        content = response,
+                        provenance = Provenance(
+                            source = "lifeos-chat:fast",
+                            actor = "lifeos",
+                            parentIds = setOf(userPhoton.id),
+                        ),
+                        relations = setOf(
+                            PhotonRelation(
+                                target = userPhoton.id,
+                                type = RelationType.DERIVED_FROM,
+                            )
+                        ),
+                        tags = setOf(
+                            "chat",
+                            "chat:assistant",
+                            conversationTag,
+                            turnTag,
+                            "chat-path:fast",
+                        ),
+                    )
+                    kernel.persistFastChatPhoton(assistantPhoton, PhotonIngressMode.DERIVED)
+                    mutableState.update {
+                        it.copy(
+                            turnProcessing = ChatTurnProcessingState.idle(),
+                            error = null,
+                        )
+                    }
+                    return@launch
+                }
+
                 val result = kernel.persistUserUtterance(userPhoton)
                 userTurnPersisted = true
                 mutableState.update {
@@ -310,6 +368,80 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
 
     suspend fun loadChatImagePreview(photon: Photon): ChatImagePreviewState =
         imagePreviewLoader.load(photon)
+
+    private data class FastRouteFrame(
+        val path: ConversationPath,
+        val understanding: LanguageUnderstandingResult,
+        val languageContext: LanguageContext,
+    )
+
+    private fun buildFastRouteFrame(text: String): FastRouteFrame {
+        val hot = owner.lifeMemoryRuntime.hotContext(FAST_CONTEXT_PHOTONS)
+        val recentChat = latestPhotons
+            .asSequence()
+            .filter { "chat" in it.tags }
+            .sortedByDescending { it.provenance.createdAt }
+            .take(RECENT_CHAT_CONTEXT_PHOTONS)
+            .toList()
+        val contextPhotons = (hot + recentChat)
+            .distinctBy { it.id to it.revision }
+            .sortedBy { it.provenance.createdAt }
+        val languageContext = fastContextBuilder.build(contextPhotons)
+        val understanding = fastUnderstanding.understand(text, languageContext)
+        val lifeContext = ConversationLifeContext(
+            activeThread = ConversationProjector.DEFAULT_CONVERSATION_ID,
+            activeDomains = contextPhotons.flatMapTo(linkedSetOf()) { photon ->
+                photon.tags.filter { it.startsWith("domain:") }
+                    .map { it.substringAfter("domain:") }
+            },
+            activeMatters = contextPhotons.flatMapTo(linkedSetOf()) { photon ->
+                photon.tags.filter {
+                    it.startsWith("matter:") || it.startsWith("life-matter:")
+                }.map { it.substringAfter(':') }
+            },
+            activeEntities = contextPhotons
+                .filter { photon -> photon.tags.any { it.startsWith("entity:") } }
+                .mapTo(linkedSetOf()) { it.id },
+            activeArtifacts = contextPhotons
+                .filter { photon -> "artifact" in photon.tags || photon.tags.any { it.startsWith("artifact-") } }
+                .mapTo(linkedSetOf()) { it.id },
+        )
+        val decision = conversationFastPath.route(understanding, lifeContext)
+        return FastRouteFrame(
+            path = decision.path,
+            understanding = understanding,
+            languageContext = languageContext,
+        )
+    }
+
+    private fun composeFastConversation(frame: FastRouteFrame): String {
+        val goal = frame.understanding.goal
+        val prompt = frame.understanding.utterance.original.trim()
+        val statement = when (goal.language) {
+            LanguageCode.EN -> "Captured semantically: $prompt"
+            else -> "Semantisch erfasst: $prompt"
+        }
+        return runCatching {
+            fastResponseGeneration.generate(
+                target = LanguageResponseTarget(
+                    act = LanguageResponseAct.ASSERT,
+                    language = goal.language,
+                    facts = listOf(
+                        LanguageResponseFact(
+                            statement = statement,
+                            semanticTags = setOf("CONVERSATION"),
+                            confidence = goal.confidence,
+                            semanticGraph = goal.semanticGraph,
+                        )
+                    ),
+                    confidence = goal.confidence,
+                ),
+                context = frame.languageContext,
+            ).text
+        }.getOrElse {
+            if (goal.language == LanguageCode.EN) "I'm listening." else "Ich höre zu."
+        }
+    }
 
     private fun startVoiceCapture(current: LifeOsChatUiState) {
         voiceStopRequested.set(false)
@@ -548,6 +680,8 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private companion object {
+        const val FAST_CONTEXT_PHOTONS = 96
+        const val RECENT_CHAT_CONTEXT_PHOTONS = 32
         const val MAX_VOICE_CONTEXT_PHOTONS = 24
         const val ACTIVE_VOICE_CONTEXT_PHOTONS = 6
         const val MAX_TERMS_PER_PHOTON = 32
