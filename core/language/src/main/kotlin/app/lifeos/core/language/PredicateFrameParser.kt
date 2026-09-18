@@ -245,7 +245,7 @@ class PredicateFrameParser {
             val token = utterance.tokens[index]
             if (token.kind != TokenKind.WORD) return@mapNotNull null
             val original = token.original
-            if (!original.firstOrNull().isUpperCase()) return@mapNotNull null
+            if (original.firstOrNull()?.isUpperCase() != true) return@mapNotNull null
             if (index == clause.tokenStart && token.normalized in SENTENCE_INITIAL_NON_NAMES) {
                 return@mapNotNull null
             }
@@ -423,7 +423,7 @@ class PredicateFrameParser {
             "das", "dies", "diese", "diesen", "dieses", "ihn", "sie", "es", "andere", "anderen",
             "it", "this", "that", "him", "her", "them", "other",
         )
-        private val QUOTE_MARKERS = setOf(""", "„", "“", "”", "«", "»")
+        private val QUOTE_MARKERS = setOf("\"", "„", "“", "”", "«", "»")
         private val OBJECT_STOP_WORDS = setOf(
             "bitte", "please", "mir", "mich", "me", "an", "to", "nicht", "not",
             "anschließend", "anschliessend", "danach", "then", "und", "and", "oder", "or",
