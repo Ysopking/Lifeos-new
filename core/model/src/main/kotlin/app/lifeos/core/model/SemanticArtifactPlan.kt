@@ -16,4 +16,16 @@ data class SemanticArtifactPlan(
     val claims: List<SemanticArtifactClaim>,
     val unresolvedClaimIds: Set<String> = emptySet(),
     val sourceWorldRevision: Long,
-) { init { require(sourceWorldRevision >= 0) } }
+) {
+    init {
+        require(sourceWorldRevision >= 0)
+        val claimIds = claims.map { it.claimId }
+        require(claimIds.distinct().size == claimIds.size) { "Semantic artifact claim ids must be unique" }
+        require(unresolvedClaimIds.all { it in claimIds }) {
+            "Unresolved semantic artifact claims must refer to claims in the plan"
+        }
+    }
+
+    val evidence: Set<PhotonRevisionRef>
+        get() = claims.flatMapTo(linkedSetOf()) { it.evidence }
+}
