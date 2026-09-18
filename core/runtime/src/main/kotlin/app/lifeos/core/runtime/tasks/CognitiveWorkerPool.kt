@@ -9,9 +9,10 @@ import app.lifeos.core.model.worker.WorkerId
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 
 enum class CognitiveWorkerLane {
@@ -90,9 +91,13 @@ class CognitiveWorkerPool(
 class PooledTaskScheduler(
     private val tasks: TaskRepository,
     private val workers: CognitiveWorkerPool,
+    private val scope: CoroutineScope,
+    private val workerAvailableSignal: TaskSchedulerSignal? = null,
     private val leaseDuration: Duration = Duration.ofSeconds(30),
     private val now: () -> Instant = Instant::now,
 ) : TaskSchedulingEngine {
+    private val busyWorkers = ConcurrentHashMap.newKeySet<WorkerId>()
+    private val completedDispatchFailures = ConcurrentLinkedQueue<TaskId>()
     init {
         require(!leaseDuration.isZero && !leaseDuration.isNegative)
     }
@@ -101,47 +106,63 @@ class PooledTaskScheduler(
         require(limit > 0)
         val scanTime = now()
         val runnable = tasks.listRunnable(scanTime, limit)
-        val claimed = mutableListOf<Pair<CognitiveWorkerSlot, LifeTask>>()
-        val usedWorkers = linkedSetOf<WorkerId>()
+        var claimedCount = 0
+        var dispatchedCount = 0
 
         for (candidate in runnable) {
             val queued = normalizeRunnable(candidate, scanTime) ?: continue
-            val slot = workers.select(queued.priority, usedWorkers) ?: continue
+            val slot = workers.select(queued.priority, busyWorkers) ?: continue
+            if (!busyWorkers.add(slot.workerId)) continue
+
             val acquiredAt = now()
             val owned = tasks.claim(
                 id = queued.id,
                 workerId = slot.workerId,
                 acquiredAt = acquiredAt,
                 leaseUntil = acquiredAt.plus(leaseDuration),
-            ) ?: continue
-            usedWorkers += slot.workerId
-            claimed += slot to owned
-            if (claimed.size >= workers.slots.size) break
-        }
+            )
+            if (owned == null) {
+                busyWorkers.remove(slot.workerId)
+                continue
+            }
 
-        val results = coroutineScope {
-            claimed.map { (slot, task) ->
-                async {
+            claimedCount += 1
+            dispatchedCount += 1
+            scope.launch {
+                try {
+                    slot.dispatcher.dispatch(owned)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    completedDispatchFailures.add(owned.id)
+                } finally {
+                    busyWorkers.remove(slot.workerId)
                     try {
-                        slot.dispatcher.dispatch(task)
-                        task.id to true
+                        workerAvailableSignal?.wake()
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
-                        task.id to false
+                        // Periodic rescan remains the recovery path if the wake signal is unavailable.
                     }
                 }
-            }.awaitAll()
+            }
         }
-        val failures = results.filterNot { it.second }.map { it.first }
 
+        val failures = buildList {
+            while (true) {
+                val failure = completedDispatchFailures.poll() ?: break
+                add(failure)
+            }
+        }
         return TaskScheduleResult(
             scanned = runnable.size,
-            claimed = claimed.size,
-            dispatched = results.count { it.second },
+            claimed = claimedCount,
+            dispatched = dispatchedCount,
             dispatchFailures = failures,
         )
     }
+
+    fun busyWorkerIds(): Set<WorkerId> = busyWorkers.toSet()
 
     private suspend fun normalizeRunnable(
         task: LifeTask,
