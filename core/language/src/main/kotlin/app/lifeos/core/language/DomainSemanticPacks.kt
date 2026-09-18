@@ -201,6 +201,81 @@ class DomainSemanticInterpreter {
             }
         }
 
+        val appointment = entityNodes.entries
+            .firstOrNull { it.key.typeId == EntityTypeRegistry.APPOINTMENT.id }
+            ?.value
+        if (appointment != null) {
+            temporalNodes.forEach { temporal ->
+                if (appointment.id != temporal.id) {
+                    relations += relation(appointment, temporal, DomainSemanticRelationType.RELATES_TO)
+                }
+            }
+        }
+
+        val contract = entityNodes.entries
+            .firstOrNull { it.key.typeId == EntityTypeRegistry.CONTRACT.id }
+            ?.value
+        if (contract != null) {
+            entityNodes.entries
+                .filter { it.key.typeId == EntityTypeRegistry.DURATION.id }
+                .map { it.value }
+                .forEach { duration ->
+                    relations += relation(contract, duration, DomainSemanticRelationType.HAS_DURATION)
+                }
+            val contractDeadline = entityNodes.entries
+                .firstOrNull { it.key.typeId == EntityTypeRegistry.DEADLINE.id }
+                ?.value
+            if (contractDeadline != null && contractDeadline.id != contract.id) {
+                relations += relation(contract, contractDeadline, DomainSemanticRelationType.HAS_DEADLINE)
+            }
+        }
+
+        val medication = entityNodes.entries
+            .firstOrNull { it.key.typeId == EntityTypeRegistry.MEDICATION.id }
+            ?.value
+        if (medication != null) {
+            val dosageNodes = entityNodes.entries
+                .filter { it.key.typeId == EntityTypeRegistry.DOSAGE.id }
+                .map { it.value }
+                .ifEmpty {
+                    quantityNodes.filter { quantity ->
+                        quantity.type == "quantity.value"
+                    }
+                }
+            dosageNodes.forEach { dosage ->
+                if (dosage.id != medication.id) {
+                    relations += relation(medication, dosage, DomainSemanticRelationType.HAS_DOSAGE)
+                }
+            }
+        }
+
+        val documentNodes = entityNodes.entries
+            .filter {
+                it.key.typeId in setOf(
+                    EntityTypeRegistry.DOCUMENT.id,
+                    EntityTypeRegistry.NOTICE.id,
+                    EntityTypeRegistry.INVOICE.id,
+                    EntityTypeRegistry.APPLICATION.id,
+                    EntityTypeRegistry.CONTRACT.id,
+                )
+            }
+            .map { it.value }
+        val claimNodes = entityNodes.entries
+            .filter {
+                it.key.typeId in setOf(
+                    EntityTypeRegistry.CLAIM.id,
+                    EntityTypeRegistry.DEBT.id,
+                )
+            }
+            .map { it.value }
+        documentNodes.forEach { document ->
+            claimNodes.forEach { claim ->
+                if (document.id != claim.id) {
+                    relations += relation(document, claim, DomainSemanticRelationType.CONTAINS)
+                }
+            }
+        }
+
         actionGraph.nodes.forEach { action ->
             when (action.frame.predicate) {
                 PredicateConcept.OWE -> {
