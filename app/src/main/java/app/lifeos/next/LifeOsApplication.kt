@@ -44,6 +44,7 @@ import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
 import app.lifeos.core.runtime.life.DomainEvidenceConvergenceCoordinator
 import app.lifeos.core.runtime.life.DomainEvidenceConvergingPersistence
+import app.lifeos.core.runtime.CognitiveSnapshotRuntimeRegistry
 import app.lifeos.core.runtime.life.DurableLifeMemoryRuntime
 import app.lifeos.core.runtime.life.DurableLifeMemoryRuntimeRegistry
 import app.lifeos.core.runtime.life.FuturePlanningCoordinator
@@ -245,6 +246,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     runBlocking {
                         lifePhotonRepository.reconcilePersisted()
                         lifeMemoryRuntime.rebuild(Instant.now())
+                        CognitiveSnapshotRuntimeRegistry.captureLatest()
                         futurePlanning.reconsiderAll().forEach { planned ->
                             photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
                         }
