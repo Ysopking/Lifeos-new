@@ -52,12 +52,16 @@ class ExtensionRegistryRehydratorTest {
             predecessorSnapshotId = null,
         )
 
-        assertFailsWith<IllegalArgumentException> {
+        var failedClosed = false
+        try {
             ExtensionRegistryRehydrator(
                 heads = StaticHeadRepository(head),
                 snapshots = RecordingSnapshotRepository(emptyMap()),
             ).rehydrate()
+        } catch (_: IllegalArgumentException) {
+            failedClosed = true
         }
+        assertTrue(failedClosed)
     }
 
     @Test
