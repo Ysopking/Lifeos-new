@@ -8,86 +8,123 @@ package app.lifeos.core.language
  */
 class PredicateFrameParser(
     private val morphology: GermanMorphologyEngine = GermanMorphologyEngine(),
+    private val roleBinder: SemanticRoleBinder = SemanticRoleBinder(),
+    private val contracts: PredicateContractRegistry = PredicateContractRegistry(),
 ) {
     fun parse(
         utterance: NormalizedUtterance,
         graph: LanguageSemanticGraph,
         speechActs: Map<Int, SpeechAct>,
         references: List<ResolvedReference>,
-    ): List<PredicateFrame> = graph.clauses.mapNotNull { clause ->
+    ): List<PredicateFrame> = graph.clauses.flatMap { clause ->
         val tokens = utterance.tokens.subList(clause.tokenStart, clause.tokenEndExclusive)
         val speechAct = requireNotNull(speechActs[clause.id]) {
             "Every semantic clause requires a speech act"
         }
-        val predicate = predicate(tokens)
-            ?: conditionPredicate(tokens)
-            ?: PredicateConcept.QUERY.takeIf { speechAct.type == SpeechActType.QUESTION }
-        if (predicate == null) return@mapNotNull null
-
-        val predicateLocalIndex = tokens.indexOfFirst { token ->
-            matchesPredicate(token.normalized, predicate)
-        }.takeIf { it >= 0 } ?: 0
-        val predicateTokenIndex = clause.tokenStart + predicateLocalIndex
-        val nodeId = SemanticNodeId.create(
-            "predicate-frame/v1",
-            graph.fingerprint,
-            clause.id.toString(),
-            predicate.name,
-            predicateTokenIndex.toString(),
-        )
-        val scopeTypes = scopeTypes(
-            utterance = utterance,
-            graph = graph,
-            clause = clause,
-            predicateTokenIndex = predicateTokenIndex,
-            speechAct = speechAct,
-        )
-        val roles = roles(
-            utterance = utterance,
-            clause = clause,
-            predicate = predicate,
-            predicateTokenIndex = predicateTokenIndex,
-            references = references,
-        )
-        val evidence = buildList {
-            add(
-                SemanticEvidence(
-                    source = "predicate-lexicon",
-                    detail = "predicate=" + predicate.name + ";token=" + utterance.tokens[predicateTokenIndex].original,
-                    strength = if (predicate == PredicateConcept.CONDITION_CHECK) 0.82 else 0.96,
-                    span = tokenSpan(utterance.tokens[predicateTokenIndex]),
-                )
+        val occurrences = predicateOccurrences(tokens, speechAct)
+        occurrences.mapIndexed { occurrenceIndex, occurrence ->
+            val predicate = occurrence.predicate
+            val predicateTokenIndex = clause.tokenStart + occurrence.localTokenIndex
+            val nextPredicateTokenIndex = occurrences
+                .getOrNull(occurrenceIndex + 1)
+                ?.let { clause.tokenStart + it.localTokenIndex }
+                ?: clause.tokenEndExclusive
+            val nodeId = SemanticNodeId.create(
+                "predicate-frame/v2",
+                graph.fingerprint,
+                clause.id.toString(),
+                predicate.name,
+                predicateTokenIndex.toString(),
             )
-            addAll(speechAct.evidence)
+            val scopeTypes = scopeTypes(
+                utterance = utterance,
+                graph = graph,
+                clause = clause,
+                predicateTokenIndex = predicateTokenIndex,
+                speechAct = speechAct,
+            )
+            val roles = roles(
+                utterance = utterance,
+                clause = clause,
+                predicate = predicate,
+                predicateTokenIndex = predicateTokenIndex,
+                argumentEndExclusive = nextPredicateTokenIndex,
+                references = references,
+            )
+            val evidence = buildList {
+                add(
+                    SemanticEvidence(
+                        source = "predicate-syntax-v2",
+                        detail = "predicate=" + predicate.name +
+                            ";token=" + utterance.tokens[predicateTokenIndex].original +
+                            ";index=" + predicateTokenIndex,
+                        strength = if (predicate == PredicateConcept.CONDITION_CHECK) 0.82 else 0.96,
+                        span = tokenSpan(utterance.tokens[predicateTokenIndex]),
+                    )
+                )
+                addAll(speechAct.evidence)
+            }
+            PredicateFrame(
+                nodeId = nodeId,
+                clauseId = clause.id,
+                predicate = predicate,
+                roles = roles,
+                scopeTypes = scopeTypes,
+                speechAct = speechAct,
+                confidence = minOf(
+                    speechAct.confidence,
+                    if (predicate == PredicateConcept.CONDITION_CHECK) 0.82 else 0.96,
+                ),
+                evidence = evidence,
+            )
         }
-        PredicateFrame(
-            nodeId = nodeId,
-            clauseId = clause.id,
-            predicate = predicate,
-            roles = roles,
-            scopeTypes = scopeTypes,
-            speechAct = speechAct,
-            confidence = minOf(
-                speechAct.confidence,
-                if (predicate == PredicateConcept.CONDITION_CHECK) 0.82 else 0.96,
-            ),
-            evidence = evidence,
-        )
     }
 
-    private fun predicate(tokens: List<LanguageToken>): PredicateConcept? {
-        val words = tokens.filter { it.kind == TokenKind.WORD }.map { it.normalized }
-        if (words.any { it in MAKE_FORMS } && words.any { it in IMAGE_WORDS }) {
-            return if (words.any { it in IMAGE_TRANSFORM_MODIFIERS }) {
+    private fun predicateOccurrences(
+        tokens: List<LanguageToken>,
+        speechAct: SpeechAct,
+    ): List<PredicateOccurrence> {
+        val result = mutableListOf<PredicateOccurrence>()
+        val words = tokens.withIndex().filter { it.value.kind == TokenKind.WORD }
+
+        val make = words.firstOrNull { it.value.normalized in MAKE_FORMS }
+        if (make != null && words.any { it.value.normalized in IMAGE_WORDS }) {
+            val concept = if (words.any { it.value.normalized in IMAGE_TRANSFORM_MODIFIERS }) {
                 PredicateConcept.TRANSFORM_IMAGE
             } else {
                 PredicateConcept.CREATE_IMAGE
             }
+            result += PredicateOccurrence(concept, make.index)
         }
-        return PREDICATE_ORDER.firstOrNull { concept ->
-            words.any { matchesPredicate(it, concept) }
+
+        words.forEach { indexed ->
+            val concept = PREDICATE_ORDER.firstOrNull { candidate ->
+                matchesPredicate(indexed.value.normalized, candidate)
+            } ?: return@forEach
+            result += PredicateOccurrence(concept, indexed.index)
         }
+
+        val firstWord = words.firstOrNull()
+        if (firstWord?.value?.normalized in CONDITION_MARKERS) {
+            result += PredicateOccurrence(PredicateConcept.CONDITION_CHECK, firstWord!!.index)
+        }
+
+        if (result.isEmpty() && speechAct.type == SpeechActType.QUESTION) {
+            result += PredicateOccurrence(
+                PredicateConcept.QUERY,
+                firstWord?.index ?: 0,
+            )
+        }
+
+        return result
+            .distinctBy { it.predicate to it.localTokenIndex }
+            .sortedWith(compareBy<PredicateOccurrence> { it.localTokenIndex }.thenBy { it.predicate.name })
     }
+
+    private data class PredicateOccurrence(
+        val predicate: PredicateConcept,
+        val localTokenIndex: Int,
+    )
 
     private fun matchesPredicate(
         token: String,
