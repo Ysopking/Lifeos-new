@@ -3,12 +3,20 @@ package app.lifeos.core.runtime.level7
 import app.lifeos.core.field.StableFieldIds
 
 enum class RehydrationStepKind {
+    EXTENSION_REGISTRY_HEAD,
+    ACTIVE_EXTENSION_SNAPSHOT,
+    DYNAMIC_MODULE_HEAD,
+    REPRESENTATION_HEAD,
+    WORLD_EQUATION_HEAD,
     PRODUCTIVE_WORLD_HEAD,
     PRODUCTIVE_WORLD_SNAPSHOT,
     ACTIVE_BOOTENGINE_CYCLE,
-    EXTENSION_REGISTRY_HEAD,
-    ACTIVE_EXTENSION_SNAPSHOT,
     MEMORY_HEAD,
+    WORLD_MODEL_HEAD,
+    STRATEGY_HEAD,
+    CALIBRATION_HEAD,
+    GOAL_HIERARCHY_HEAD,
+    LEARNING_WATERMARK,
     GOAL_HEAD,
     LEARNING_HEAD,
 }
@@ -43,7 +51,7 @@ data class BoundedRehydrationPlan private constructor(
     private fun expectedId(): String = "rehydration-plan:${fingerprint()}"
 
     companion object {
-        const val MAX_STEPS: Int = 8
+        const val MAX_STEPS: Int = 16
 
         fun create(steps: List<RehydrationStep>): BoundedRehydrationPlan {
             require(steps.isNotEmpty() && steps.size <= MAX_STEPS)

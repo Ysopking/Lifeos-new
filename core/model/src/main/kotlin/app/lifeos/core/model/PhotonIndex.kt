@@ -31,6 +31,11 @@ enum class PhotonIndexOrder {
     HIGHEST_CONFIDENCE,
 }
 
+data class PhotonIndexCursor(
+    val order: PhotonIndexOrder,
+    val lastRef: PhotonRevisionRef,
+)
+
 data class PhotonIndexQuery(
     val ids: Set<PhotonId> = emptySet(),
     val phases: Set<PhotonPhase> = emptySet(),
@@ -39,12 +44,23 @@ data class PhotonIndexQuery(
     val latestOnly: Boolean = true,
     val includeTombstoned: Boolean = false,
     val order: PhotonIndexOrder = PhotonIndexOrder.IDENTITY,
-    val limit: Int = 1_024,
+    val after: PhotonIndexCursor? = null,
+    val limit: Int = DEFAULT_PAGE_LIMIT,
 ) {
     init {
-        require(limit > 0)
+        require(limit in 1..HARD_PAGE_LIMIT) {
+            "Photon index page limit must be in 1..$HARD_PAGE_LIMIT"
+        }
+        require(after == null || after.order == order) {
+            "Photon index cursor order must match query order"
+        }
         require(mimeTypes.none { it.isBlank() })
         require(allTags.none { it.isBlank() })
+    }
+
+    companion object {
+        const val DEFAULT_PAGE_LIMIT: Int = 64
+        const val HARD_PAGE_LIMIT: Int = 256
     }
 }
 

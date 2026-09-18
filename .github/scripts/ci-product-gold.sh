@@ -18,6 +18,14 @@ bash .github/scripts/ci-gold-coverage-contract.sh
 step "Product Gold 03: complete core regression set"
 bash .github/scripts/ci-core-fast.sh
 
+step "Product Gold 03b: functional Level-7 JVM GOLD"
+gradle :core:runtime:test --stacktrace \
+  --tests 'app.lifeos.core.runtime.level7.Level7ContractInvariantTest' \
+  --tests 'app.lifeos.core.runtime.level7.Level7ArchitectureGuardTest' \
+  --tests 'app.lifeos.core.runtime.level7.Level7FunctionalGoldTest' \
+  --tests 'app.lifeos.core.runtime.level7.Level7NovelDomainGoldTest' \
+  --tests 'app.lifeos.core.runtime.level7.Level7TransferGoldTest'
+
 step "Product Gold 04: unit tests, lint and debug APK"
 bash .github/scripts/ci-android-debug.sh
 
@@ -28,8 +36,16 @@ step "Product Gold 06: integration contract presence"
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeBindings.kt
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeTopology.kt
 test -f app/src/androidTest/java/app/lifeos/next/ProductGoldenChatDeviceTest.kt
+test -f app/src/androidTest/java/app/lifeos/next/ProductiveWorldPersistenceDeviceTest.kt
+test -f app/src/androidTest/java/app/lifeos/next/Level7ProcessDeathGoldDeviceTest.kt
+test -f app/src/androidTest/java/app/lifeos/next/Level7WorldEquationRollbackDeviceTest.kt
 grep -q 'ProductGoldenChatDeviceTest#seedProductGoldChatRoundTrip' .github/scripts/android-emulator-recovery.sh
 grep -q 'ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' .github/scripts/android-emulator-recovery.sh
+grep -q 'ProductiveWorldPersistenceDeviceTest' .github/scripts/android-emulator-recovery.sh
+grep -q 'Level7ProcessDeathGoldDeviceTest#seedLevel7SemanticCheckpoint' .github/scripts/android-emulator-recovery.sh
+grep -q 'Level7ProcessDeathGoldDeviceTest#recoverExactHeadsAndDoNotApplyLearningTwice' .github/scripts/android-emulator-recovery.sh
+grep -q 'Level7WorldEquationRollbackDeviceTest#seedDegradedTrialHead' .github/scripts/android-emulator-recovery.sh
+grep -q 'Level7WorldEquationRollbackDeviceTest#rollbackAfterProcessDeathRestoresExactV17WorldHead' .github/scripts/android-emulator-recovery.sh
 grep -q 'ChatMainActivity' app/src/main/AndroidManifest.xml
 
 step "Product Gold 07: immutable candidate evidence"
@@ -60,6 +76,11 @@ printf '%s\n' \
   'security_static=PASS' \
   'coverage_contract=PASS' \
   'core_fast=PASS' \
+  'level7_contract_invariants=PASS' \
+  'level7_architecture_guards=PASS' \
+  'level7_functional_gold_jvm=PASS' \
+  'level7_novel_domain_gold=PASS' \
+  'level7_transfer_gold=PASS' \
   'unit_tests=PASS' \
   'lint_debug=PASS' \
   'assemble_debug=PASS' \

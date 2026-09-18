@@ -15,6 +15,8 @@ internal enum class LifeOsStartupStage(
     SHARED_RESOURCES(SubsystemStartupOwner.SHARED_RESOURCES),
     GOAL_EXECUTION,
     KERNEL_GRAPH(SubsystemStartupOwner.KERNEL_GRAPH),
+    KERNEL_BOOT,
+    COGNITIVE_STATE_READY,
     DEEP_SEARCH(SubsystemStartupOwner.DEEP_SEARCH),
     SELF_HEALING(SubsystemStartupOwner.SELF_HEALING),
     DURABLE_GOALS(SubsystemStartupOwner.DURABLE_GOALS),
@@ -59,18 +61,28 @@ internal object LifeOsStartupStageGraph {
             parallelSafe = false,
         ),
         LifeOsStartupStageSpec(
-            LifeOsStartupStage.DEEP_SEARCH,
+            LifeOsStartupStage.KERNEL_BOOT,
             setOf(LifeOsStartupStage.KERNEL_GRAPH),
+            parallelSafe = false,
+        ),
+        LifeOsStartupStageSpec(
+            LifeOsStartupStage.COGNITIVE_STATE_READY,
+            setOf(LifeOsStartupStage.KERNEL_BOOT),
+            parallelSafe = false,
+        ),
+        LifeOsStartupStageSpec(
+            LifeOsStartupStage.DEEP_SEARCH,
+            setOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
             parallelSafe = true,
         ),
         LifeOsStartupStageSpec(
             LifeOsStartupStage.SELF_HEALING,
-            setOf(LifeOsStartupStage.KERNEL_GRAPH),
+            setOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
             parallelSafe = true,
         ),
         LifeOsStartupStageSpec(
             LifeOsStartupStage.DURABLE_GOALS,
-            setOf(LifeOsStartupStage.KERNEL_GRAPH),
+            setOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
             parallelSafe = true,
         ),
         LifeOsStartupStageSpec(
@@ -118,13 +130,14 @@ internal object LifeOsStartupStageGraph {
  * parallel, while successful completion evidence is always emitted in canonical stage order.
  */
 internal data class LifeOsStartupHooks(
-    val installSharedResourceRuntime: () -> Unit,
-    val installGoalExecutionRuntime: () -> Unit,
-    val createKernel: () -> Unit,
-    val installDeepSearchRuntime: () -> Unit,
-    val startSelfHealingRuntime: () -> Unit,
-    val installDurableGoalPlanRuntime: () -> Unit,
-    val startKernel: () -> Unit,
+    val installSharedResourceRuntime: suspend () -> Unit,
+    val installGoalExecutionRuntime: suspend () -> Unit,
+    val createKernel: suspend () -> Unit,
+    val startKernel: suspend () -> Unit,
+    val requireCognitiveStateReady: suspend () -> Unit,
+    val installDeepSearchRuntime: suspend () -> Unit,
+    val startSelfHealingRuntime: suspend () -> Unit,
+    val installDurableGoalPlanRuntime: suspend () -> Unit,
     val stageObserver: (LifeOsStartupStageEvidence) -> Unit = {},
 )
 
@@ -160,14 +173,19 @@ internal object LifeOsStartupComposition {
         }
     }
 
-    private fun actionFor(stage: LifeOsStartupStage, hooks: LifeOsStartupHooks): () -> Unit = when (stage) {
+    private fun actionFor(
+        stage: LifeOsStartupStage,
+        hooks: LifeOsStartupHooks,
+    ): suspend () -> Unit = when (stage) {
         LifeOsStartupStage.SHARED_RESOURCES -> hooks.installSharedResourceRuntime
         LifeOsStartupStage.GOAL_EXECUTION -> hooks.installGoalExecutionRuntime
         LifeOsStartupStage.KERNEL_GRAPH -> hooks.createKernel
+        LifeOsStartupStage.KERNEL_BOOT -> hooks.startKernel
+        LifeOsStartupStage.COGNITIVE_STATE_READY -> hooks.requireCognitiveStateReady
         LifeOsStartupStage.DEEP_SEARCH -> hooks.installDeepSearchRuntime
         LifeOsStartupStage.SELF_HEALING -> hooks.startSelfHealingRuntime
         LifeOsStartupStage.DURABLE_GOALS -> hooks.installDurableGoalPlanRuntime
-        LifeOsStartupStage.RUNTIME_STARTED -> hooks.startKernel
+        LifeOsStartupStage.RUNTIME_STARTED -> suspend { Unit }
     }
 
     private fun evidence(stage: LifeOsStartupStage, layerIndex: Int): LifeOsStartupStageEvidence {

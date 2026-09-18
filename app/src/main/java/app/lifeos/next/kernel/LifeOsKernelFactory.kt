@@ -3,8 +3,16 @@ package app.lifeos.next.kernel
 import android.content.Context
 import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
+import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.goal.GoalCycleFrozenInputSource
+import app.lifeos.core.runtime.extension.ExtensionRegistryRehydrator
+import app.lifeos.core.runtime.convergence.WorldFormulaBoundConvergenceService
+import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
+import app.lifeos.core.runtime.convergence.DefaultProductiveConvergenceAuthority
+import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.cognition.EncryptedCognitionCoverageRepository
 import app.lifeos.core.data.cognition.EncryptedCognitionJournalIndexRepository
+import app.lifeos.core.data.cognition.EncryptedCognitiveModuleSnapshotRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.evolution.EncryptedEvolutionStore
@@ -19,6 +27,12 @@ import app.lifeos.core.data.thought.EncryptedFieldThoughtGraphProjectionOutboxRe
 import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
 import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
+import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
+import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
+import app.lifeos.core.data.extension.EncryptedExtensionRegistryHeadRepository
+import app.lifeos.core.data.extension.EncryptedExtensionRegistrySnapshotRepository
+import app.lifeos.core.data.worldmodel.EncryptedWorldModelRepository
+import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.LanguageUnderstandingEngine
@@ -39,6 +53,8 @@ import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.StaticFieldRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootEngineFrozenInputs
+import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootSnapshotSource
 import app.lifeos.core.runtime.boot.TaskRepositoryBootSource
 import app.lifeos.core.runtime.boot.PhotonRepositoryBootSource
@@ -52,6 +68,7 @@ import app.lifeos.core.runtime.boot.CapabilityWarmup
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
 import app.lifeos.core.runtime.boot.ChainedStateRehydrator
 import app.lifeos.core.runtime.boot.CompositeBootDeltaDetector
+import app.lifeos.core.runtime.boot.CognitiveHeadConsistencyDeltaSource
 import app.lifeos.core.runtime.boot.CompositeStoreVerifier
 import app.lifeos.core.runtime.boot.DefaultBootValidator
 import app.lifeos.core.runtime.boot.ModuleRehydrator
@@ -129,6 +146,11 @@ import app.lifeos.core.runtime.tasks.CognitiveWorkerPool
 import app.lifeos.core.runtime.tasks.CognitiveWorkerLane
 import app.lifeos.core.runtime.tasks.TaskSchedulerLoop
 import app.lifeos.core.runtime.thought.DurableThoughtGraph
+import app.lifeos.core.runtime.world.CognitiveCycleId
+import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
+import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
+import app.lifeos.core.runtime.world.ProductiveWorldHeadCommitter
+import app.lifeos.core.runtime.world.WorldFormulaCoordinator
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
 import app.lifeos.core.runtime.workers.CognitiveWorkerFactory
 import app.lifeos.core.runtime.workers.ReportingCognitiveTaskDispatcher
@@ -151,6 +173,8 @@ class LifeOsKernelFactory(
     fun create(): LifeOsKernel {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val appContext = context.applicationContext
+        val cycleResourceIntelligence =
+            hardwareResourceIntelligence ?: HardwareResourceIntelligenceRuntime(appContext)
         val store = EncryptedPhotonStore(appContext)
         val cognitionJournalIndex = CognitionJournalIndex(
             repository = EncryptedCognitionJournalIndexRepository(appContext),
@@ -159,6 +183,8 @@ class LifeOsKernelFactory(
         val cognitionCoverageIndex = CognitionCoverageIndex(
             repository = EncryptedCognitionCoverageRepository(appContext),
         )
+        val cognitiveModuleSnapshotRepository =
+            EncryptedCognitiveModuleSnapshotRepository(appContext)
         val learningAdaptationRepository = EncryptedLearningAdaptationRepository(appContext)
         val learningAdaptations = DurableLearningAdaptationLedger(learningAdaptationRepository)
         val goalPlanRepository = EncryptedGoalPlanRepository(appContext)
@@ -361,6 +387,87 @@ class LifeOsKernelFactory(
             graph = thoughtGraph,
         )
         val worldFormulaSnapshotRepository = EncryptedWorldFormulaSnapshotRepository(appContext)
+        val productiveWorldHeadRepository = EncryptedProductiveWorldHeadRepository(appContext)
+        val bootEngineCycleRepository = EncryptedBootEngineCycleRepository(appContext)
+        val extensionRegistrySnapshotRepository =
+            EncryptedExtensionRegistrySnapshotRepository(appContext)
+        val extensionRegistryHeadRepository =
+            EncryptedExtensionRegistryHeadRepository(appContext)
+        val extensionRegistryRehydrator = ExtensionRegistryRehydrator(
+            heads = extensionRegistryHeadRepository,
+            snapshots = extensionRegistrySnapshotRepository,
+        )
+        val worldModelRepository = EncryptedWorldModelRepository(appContext)
+        val cognitiveWorldEquationProfile = CognitiveWorldEquationProfile()
+        val worldFormulaCoordinator = WorldFormulaCoordinator(
+            equations = InMemoryWorldEquationRegistry(listOf(cognitiveWorldEquationProfile.spec)),
+            snapshots = worldFormulaSnapshotRepository,
+        )
+        val productiveWorldHeadCommitter = ProductiveWorldHeadCommitter(
+            snapshots = worldFormulaSnapshotRepository,
+            heads = productiveWorldHeadRepository,
+        )
+        val bootEngineRuntime = BootEngineRuntime(
+            cycles = bootEngineCycleRepository,
+            worldHeads = productiveWorldHeadRepository,
+            worldCoordinator = worldFormulaCoordinator,
+            worldCommitter = productiveWorldHeadCommitter,
+            newCycleId = {
+                CognitiveCycleId("cycle:${java.util.UUID.randomUUID()}")
+            },
+        )
+        val productiveDecisionCoordinator = DurableConvergenceDecisionCoordinator(
+            EncryptedConvergenceDecisionCheckpointRepository(appContext),
+        )
+        val productiveWorldConvergence = WorldFormulaBoundConvergenceService(
+            bootEngine = bootEngineRuntime,
+            worldSnapshots = worldFormulaSnapshotRepository,
+            decisions = productiveDecisionCoordinator,
+        )
+        val productiveGoalConvergence = GoalConvergenceDecisionProvider(
+            productiveConvergence = DefaultProductiveConvergenceAuthority(productiveWorldConvergence),
+            bootEngine = bootEngineRuntime,
+            photons = store,
+            cycleInputs = GoalCycleFrozenInputSource { workingSet, routing ->
+                val hardware = cycleResourceIntelligence.currentHardwareSnapshot()
+                val calibration = learnedFieldCalibration.profile()
+                val strategyFingerprint = StableFieldIds.fingerprint(
+                    "productive-goal-strategy-snapshot/v1",
+                    calibration.fingerprint,
+                    routing.plan.goal.intent.name,
+                    *buildList {
+                        routing.selectedProviders.entries
+                            .sortedBy { it.key.value }
+                            .forEach { (capabilityId, provider) ->
+                                add(
+                                    "provider:${capabilityId.value}:${provider.providerId}:" +
+                                        "${provider.state.name}:${provider.trustLevel.name}:" +
+                                        "${java.lang.Double.toHexString(provider.reliability)}:" +
+                                        java.lang.Double.toHexString(provider.cost)
+                                )
+                            }
+                        routing.blockingGaps
+                            .sortedBy { it.requirement.capabilityId.value }
+                            .forEach { gap ->
+                                add(
+                                    "gap:${gap.requirement.capabilityId.value}:${gap.type.name}:" +
+                                        gap.requirement.severity.name
+                                )
+                                gap.candidateProviderIds.sorted().forEach { candidate ->
+                                    add("gap-candidate:${gap.requirement.capabilityId.value}:$candidate")
+                                }
+                            }
+                    }.toTypedArray(),
+                )
+                BootEngineFrozenInputs(
+                    representationSnapshotId = workingSet.sourceSnapshotId,
+                    strategySnapshotId = "goal-strategy:$strategyFingerprint",
+                    equationVersion = cognitiveWorldEquationProfile.spec.version,
+                    resourceSnapshotId = "hardware-state:${hardware.fingerprint()}",
+                )
+            },
+        )
+
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
             snapshotRepository = fieldSnapshotRepository,
             requestEnricher = DurableContextFieldEnricher(store),
@@ -447,8 +554,8 @@ class LifeOsKernelFactory(
             ),
         )
         val durableStateBridge = DurableRuntimeStateBridge()
-        val hardware = hardwareResourceIntelligence?.currentHardwareSnapshot()
-        val availableCores = hardware?.availableProcessors ?: 1
+        val hardware = cycleResourceIntelligence.currentHardwareSnapshot()
+        val availableCores = hardware.availableProcessors
         val activeWorkers = (availableCores - 1).coerceIn(0, 3)
         val backgroundWorkers = if (availableCores >= 4) 1 else 0
         val maintenanceWorkers = if (availableCores >= 6) 1 else 0
@@ -541,6 +648,21 @@ class LifeOsKernelFactory(
         val stateRehydrator = ChainedStateRehydrator(
             primary = primaryStateRehydrator,
             additionalSteps = listOf(
+                RuntimeStateRehydrationStep {
+                    extensionRegistryRehydrator.rehydrate()
+                },
+                RuntimeStateRehydrationStep {
+                    val head = worldModelRepository.loadHead()
+                    if (head != null) {
+                        val snapshot = requireNotNull(
+                            worldModelRepository.loadSnapshot(head.activeSnapshotId)
+                        ) { "WorldModel head points to missing snapshot" }
+                        require(snapshot.revision == head.revision) {
+                            "WorldModel head/snapshot revision mismatch"
+                        }
+                        require(snapshot.predecessorSnapshotId == head.predecessorSnapshotId)
+                    }
+                },
                 RuntimeStateRehydrationStep {
                     goalPlans.rehydrate()
                 },
@@ -707,6 +829,83 @@ class LifeOsKernelFactory(
                         }
                     },
                     object : StoreProbe {
+                        override val storeId: String = "productive-world-head-store"
+                        override suspend fun probe(): StoreStatus {
+                            val report = bootReadSession.readOnce("productive-world-head-store") {
+                                productiveWorldHeadRepository.loadReport()
+                            }
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.corrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
+                                message = report.message,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "bootengine-cycle-store"
+                        override suspend fun probe(): StoreStatus {
+                            val report = bootReadSession.readOnce("bootengine-cycle-store") {
+                                bootEngineCycleRepository.loadReport()
+                            }
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.corrupted) {
+                                    StoreState.PARTIALLY_RECOVERABLE
+                                } else {
+                                    StoreState.HEALTHY
+                                },
+                                message = report.message,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "extension-registry-store"
+                        override suspend fun probe(): StoreStatus = try {
+                            extensionRegistryRehydrator.rehydrate()
+                            StoreStatus(storeId, StoreState.HEALTHY)
+                        } catch (error: Exception) {
+                            StoreStatus(
+                                storeId = storeId,
+                                state = StoreState.CORRUPTED,
+                                message = error.message ?: error::class.simpleName,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "world-model-store"
+                        override suspend fun probe(): StoreStatus = try {
+                            val head = worldModelRepository.loadHead()
+                            if (head != null) {
+                                requireNotNull(worldModelRepository.loadSnapshot(head.activeSnapshotId))
+                            }
+                            StoreStatus(storeId, StoreState.HEALTHY)
+                        } catch (error: Exception) {
+                            StoreStatus(
+                                storeId = storeId,
+                                state = StoreState.CORRUPTED,
+                                message = error.message ?: error::class.simpleName,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "cognitive-module-snapshot-store"
+                        override suspend fun probe(): StoreStatus = try {
+                            val head = cognitiveModuleSnapshotRepository.loadHead()
+                            if (head != null) {
+                                requireNotNull(
+                                    cognitiveModuleSnapshotRepository.load(head.activeSnapshotId)
+                                ) { "Cognitive module head points to missing snapshot" }
+                            }
+                            StoreStatus(storeId, StoreState.HEALTHY)
+                        } catch (error: Exception) {
+                            StoreStatus(
+                                storeId = storeId,
+                                state = StoreState.CORRUPTED,
+                                message = error.message ?: error::class.simpleName,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
                         override val storeId: String = "evolution-store"
                         override suspend fun probe(): StoreStatus {
                             bootReadSession.readOnce("evolution-store") {
@@ -778,7 +977,16 @@ class LifeOsKernelFactory(
                     )
                 }
             },
-            deltaDetector = CompositeBootDeltaDetector(emptyList()),
+            deltaDetector = CompositeBootDeltaDetector(
+                listOf(
+                    CognitiveHeadConsistencyDeltaSource(
+                        worldHeads = productiveWorldHeadRepository,
+                        activeCycleFingerprint = {
+                            bootEngineCycleRepository.loadActive()?.fingerprint
+                        },
+                    )
+                )
+            ),
             validator = DefaultBootValidator(),
         )
 
@@ -789,7 +997,12 @@ class LifeOsKernelFactory(
             supervisor = supervisor,
             scope = scope,
             bootCoordinator = bootCoordinator,
+            bootEngineRuntime = bootEngineRuntime,
             continuousCognition = continuousCognition,
+            cognitiveModuleSnapshotRepository = cognitiveModuleSnapshotRepository,
+            activeExtensionSnapshotId = {
+                extensionRegistryHeadRepository.load()?.activeSnapshotId
+            },
             photonTransactions = photonTransactions,
             cognitiveOutcomes = cognitiveOutcomes,
             cognitiveTriggers = cognitiveTriggers,
@@ -797,6 +1010,7 @@ class LifeOsKernelFactory(
             languageUnderstanding = languageUnderstanding,
             goalPhotonFactory = goalPhotonFactory,
             goalPlans = goalPlans,
+            productiveGoalConvergence = productiveGoalConvergence,
             languageContextBuilder = languageContextBuilder,
             goalCapabilityRouter = goalCapabilityRouter,
             privateGeneratedToolRuntime = privateGeneratedToolRuntime,

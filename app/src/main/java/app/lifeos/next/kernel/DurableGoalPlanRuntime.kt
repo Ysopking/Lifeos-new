@@ -10,7 +10,8 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionState
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
-import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.goal.GoalConvergenceDecisionSource
+import app.lifeos.core.runtime.goal.ProductiveConvergenceNotReadyException
 import app.lifeos.core.runtime.goal.GoalPlanBlueprint
 import app.lifeos.core.runtime.goal.GoalPlanBuildResult
 import app.lifeos.core.runtime.goal.GoalPlanBuilder
@@ -22,6 +23,7 @@ import app.lifeos.core.runtime.goal.GoalStepExecutionKind
 import app.lifeos.core.runtime.goal.GoalStepState
 import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
+import app.lifeos.core.runtime.query.GoalOutcomeLookup
 import java.time.Instant
 
 sealed interface DurableGoalPlanAdmission {
@@ -49,9 +51,9 @@ data class DurableGoalPlanPermit(
  */
 class DurableGoalPlanRuntime(
     private val ledger: DurableGoalPlanLedger,
-    private val convergence: GoalConvergenceDecisionProvider,
+    private val convergence: GoalConvergenceDecisionSource,
     private val persistDerivedOutcome: suspend (Photon) -> PhotonSubmissionResult? = { null },
-    private val loadPersistedPhotons: suspend () -> List<Photon> = { emptyList() },
+    private val outcomeLookup: GoalOutcomeLookup,
     private val builder: GoalPlanBuilder = GoalPlanBuilder(),
     private val coordinator: GoalPlanExecutionCoordinator = GoalPlanExecutionCoordinator(ledger),
     private val projector: GoalStepDecisionProjector = GoalStepDecisionProjector(),
@@ -102,13 +104,20 @@ class DurableGoalPlanRuntime(
             return normalizePreparation(blueprint, coordinator.prepareNext(blueprint, emptyMap(), now()))
         }
 
-        val checkpoint = convergence.decide(
-            goal = context.goal,
-            routing = context.routing,
-            sourcePhoton = context.sourcePhoton,
-            goalPhotonId = context.goalPhotonId,
-            at = now(),
-        )
+        val checkpoint = try {
+            convergence.decide(
+                goal = context.goal,
+                routing = context.routing,
+                sourcePhoton = context.sourcePhoton,
+                goalPhotonId = context.goalPhotonId,
+                goalPhotonRevision = context.goalPhotonRevision,
+                at = now(),
+            )
+        } catch (blocked: ProductiveConvergenceNotReadyException) {
+            return DurableGoalPlanAdmission.Blocked(
+                "productive-convergence:${blocked.reason}"
+            )
+        }
         traces?.recordConvergence(blueprint.definition, checkpoint)
         val decision = checkpoint.decision
         if (actionState in CONVERGENCE_MUTABLE_STATES) {
@@ -201,12 +210,19 @@ class DurableGoalPlanRuntime(
      * archived failed reminders cannot satisfy recovery.
      */
     private suspend fun recoverPersistedOutcome(context: GoalActionContext): Photon? =
-        loadPersistedPhotons()
+        outcomeLookup.candidates(
+            goalPhotonId = context.goalPhotonId,
+            limit = MAX_OUTCOME_RECOVERY_CANDIDATES,
+        )
             .asSequence()
             .filter { it.phase != PhotonPhase.ARCHIVED }
             .filter { context.goalPhotonId in it.provenance.parentIds }
             .filter { candidate -> isFinalOutcomeFor(context.goal.intent, candidate) }
-            .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+            .sortedWith(
+                compareBy<Photon> { it.provenance.createdAt }
+                    .thenBy { it.id.value }
+                    .thenBy { it.revision }
+            )
             .lastOrNull()
 
     private fun isFinalOutcomeFor(intent: IntentType, photon: Photon): Boolean = when (intent) {
@@ -274,6 +290,7 @@ class DurableGoalPlanRuntime(
     )
 
     private companion object {
+        const val MAX_OUTCOME_RECOVERY_CANDIDATES: Int = 64
         const val COMMUNICATION_PREPARATION_MIME =
             "application/vnd.lifeos.communication-preparation+text"
         val CONVERGENCE_MUTABLE_STATES = setOf(

@@ -1,6 +1,8 @@
 package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonIndexCursor
+import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.PhotonRevisionRef
@@ -130,13 +132,26 @@ class DurableCognitionReconciler(
 
     private suspend fun latestPhotonRefs(): List<PhotonRevisionRef> =
         if (photons is RevisionedPhotonRepository) {
-            photons.query(
-                PhotonIndexQuery(
-                    latestOnly = true,
-                    includeTombstoned = false,
-                    limit = MAX_INDEX_SCAN,
+            val refs = mutableListOf<PhotonRevisionRef>()
+            var cursor: PhotonIndexCursor? = null
+            while (true) {
+                val page = photons.query(
+                    PhotonIndexQuery(
+                        latestOnly = true,
+                        includeTombstoned = false,
+                        order = PhotonIndexOrder.IDENTITY,
+                        after = cursor,
+                        limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
+                    )
                 )
-            )
+                refs += page
+                if (page.size < PhotonIndexQuery.HARD_PAGE_LIMIT) break
+                cursor = PhotonIndexCursor(
+                    order = PhotonIndexOrder.IDENTITY,
+                    lastRef = page.last(),
+                )
+            }
+            refs
         } else {
             photons.loadReport().photons
                 .map { PhotonRevisionRef(it.id, it.revision) }
@@ -152,7 +167,6 @@ class DurableCognitionReconciler(
 
     private companion object {
         const val DEFAULT_MAX_SUBMISSIONS_PER_PASS = 100
-        const val MAX_INDEX_SCAN = 250_000
         const val RECONCILIATION_SOURCE = "boot-cognition-reconcile"
         const val THOUGHT_MATRIX_MODULE = "Gedankenmatrix"
         val RECONCILIATION_BUDGET = CognitiveWorkBudget(

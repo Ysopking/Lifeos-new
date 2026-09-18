@@ -106,6 +106,22 @@ run_test \
   'app.lifeos.next.SemanticActionRecoveryDeviceTest#seedSemanticActionDataflow' \
   "$report_dir/seed-semantic-action-dataflow.txt"
 
+# B181 durable productive World/Cycle persistence: real AndroidKeyStore + AtomicFile, including
+# CAS/reopen, stale predecessor, wrong physical ID and corruption fail-closed behavior.
+run_suite \
+  'app.lifeos.next.ProductiveWorldPersistenceDeviceTest' \
+  '3' \
+  "$report_dir/level7-productive-world-persistence.txt"
+
+# B192 functional GOLD seed phase. These fixtures must survive the exact process death below.
+run_test \
+  'app.lifeos.next.Level7ProcessDeathGoldDeviceTest#seedLevel7SemanticCheckpoint' \
+  "$report_dir/level7-process-death-seed.txt"
+
+run_test \
+  'app.lifeos.next.Level7WorldEquationRollbackDeviceTest#seedDegradedTrialHead' \
+  "$report_dir/level7-equation-rollback-seed.txt"
+
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
@@ -118,6 +134,16 @@ run_test \
 run_test \
   'app.lifeos.next.SemanticActionRecoveryDeviceTest#recoverSemanticActionDataflowAfterColdStart' \
   "$report_dir/recovered-semantic-action-dataflow.txt"
+
+# B192 functional GOLD recovery phase. Re-open encrypted heads after the same cold process restart,
+# preserve decision semantics / logical learning identity, and restore the exact predecessor equation/world head.
+run_test \
+  'app.lifeos.next.Level7ProcessDeathGoldDeviceTest#recoverExactHeadsAndDoNotApplyLearningTwice' \
+  "$report_dir/level7-process-death-recovered.txt"
+
+run_test \
+  'app.lifeos.next.Level7WorldEquationRollbackDeviceTest#rollbackAfterProcessDeathRestoresExactV17WorldHead' \
+  "$report_dir/level7-equation-rollback-recovered.txt"
 
 run_test \
   'app.lifeos.next.ThoughtGraphCompactionDeviceTest#recoverCompactedGraphHistory' \

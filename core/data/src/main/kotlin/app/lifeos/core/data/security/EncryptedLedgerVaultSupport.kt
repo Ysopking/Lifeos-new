@@ -43,12 +43,16 @@ internal object EncryptedLedgerVaultSupport {
         plaintext: ByteArray,
         key: SecretKey,
         maxPlaintextBytes: Int,
+        associatedData: ByteArray = ByteArray(0),
     ): ByteArray {
         require(maxPlaintextBytes > 0)
         require(plaintext.isNotEmpty() && plaintext.size <= maxPlaintextBytes) {
             "Invalid encrypted-ledger plaintext size"
         }
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply {
+            init(Cipher.ENCRYPT_MODE, key)
+            if (associatedData.isNotEmpty()) updateAAD(associatedData)
+        }
         val ciphertext = cipher.doFinal(plaintext)
         return ByteArrayOutputStream().let { output ->
             DataOutputStream(output).use { stream ->
@@ -70,6 +74,7 @@ internal object EncryptedLedgerVaultSupport {
         container: ByteArray,
         key: SecretKey,
         maxPlaintextBytes: Int,
+        associatedData: ByteArray = ByteArray(0),
     ): ByteArray {
         val maxContainerBytes = maxContainerBytes(maxPlaintextBytes)
         require(container.isNotEmpty() && container.size <= maxContainerBytes) {
@@ -87,6 +92,7 @@ internal object EncryptedLedgerVaultSupport {
         val ciphertext = ByteArray(ciphertextLength).also(input::readFully)
         return Cipher.getInstance(TRANSFORMATION).run {
             init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+            if (associatedData.isNotEmpty()) updateAAD(associatedData)
             doFinal(ciphertext)
         }.also { plaintext ->
             require(plaintext.isNotEmpty() && plaintext.size <= maxPlaintextBytes) {

@@ -8,7 +8,6 @@ import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRelation
-import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.model.StableCognitiveIds
@@ -133,7 +132,7 @@ data class FuturePlanningDecision(
  * replayable planning evidence plus a non-executing goal/opportunity candidate.
  */
 class FuturePlanningCoordinator(
-    private val photons: PhotonRepository,
+    private val photons: RevisionedPhotonRepository,
     private val authority: FuturePlanningAuthority,
     private val planner: LifePlanner = LifePlanner(),
     private val evaluator: SeinModeEvaluator = SeinModeEvaluator(),
@@ -158,19 +157,32 @@ class FuturePlanningCoordinator(
         return groups.toSortedMap().values.flatMap { planGroup(it) }
     }
 
-    private suspend fun futureEvidencePhotons(): List<Photon> =
-        if (photons is RevisionedPhotonRepository) {
-            photons.query(
+    private suspend fun futureEvidencePhotons(): List<Photon> {
+        val results = mutableListOf<Photon>()
+        var cursor: app.lifeos.core.model.PhotonIndexCursor? = null
+        repeat(MAX_FUTURE_EVIDENCE_PAGES) {
+            val refs = photons.query(
                 PhotonIndexQuery(
                     allTags = setOf("future-evidence"),
                     latestOnly = true,
                     order = PhotonIndexOrder.OLDEST_FIRST,
-                    limit = Int.MAX_VALUE,
+                    after = cursor,
+                    limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
                 )
-            ).mapNotNull { photons.load(it) }
-        } else {
-            photons.loadAll().filter { "future-evidence" in it.tags }
+            )
+            refs.forEach { ref ->
+                results += requireNotNull(photons.load(ref)) {
+                    "Future-planning index references missing Photon revision: ${ref.photonId.value}@${ref.revision}"
+                }
+            }
+            if (refs.size < PhotonIndexQuery.HARD_PAGE_LIMIT) return results
+            cursor = app.lifeos.core.model.PhotonIndexCursor(
+                order = PhotonIndexOrder.OLDEST_FIRST,
+                lastRef = refs.last(),
+            )
         }
+        return results
+    }
 
     private suspend fun planGroup(rawRecords: List<Record>): List<Photon> {
         require(rawRecords.isNotEmpty())
@@ -386,6 +398,10 @@ class FuturePlanningCoordinator(
         .map { it.value }
         .sorted()
         .joinToString("\u0000")
+
+    private companion object {
+        const val MAX_FUTURE_EVIDENCE_PAGES: Int = 16
+    }
 }
 
 /** Keeps K planning on the same encrypted persistence path without recursively executing outputs. */

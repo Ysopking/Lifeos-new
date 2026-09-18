@@ -22,13 +22,21 @@ import app.lifeos.core.field.TemporalContext
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
+import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.model.task.TaskId
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
+import app.lifeos.core.runtime.boot.BootEngineCycleState
+import app.lifeos.core.runtime.boot.BootEngineFrozenInputs
+import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionCheckpoint
-import app.lifeos.core.runtime.convergence.ConvergenceDecisionRequest
 import app.lifeos.core.runtime.convergence.ConvergenceDomainInput
-import app.lifeos.core.runtime.convergence.ConvergenceCoordinator
 import app.lifeos.core.runtime.convergence.CrossDomainConvergenceRequest
-import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
+import app.lifeos.core.runtime.convergence.ProductiveConvergenceAuthority
+import app.lifeos.core.runtime.convergence.ProductiveConvergenceInput
+import app.lifeos.core.runtime.convergence.ProductiveConvergenceResult
+import app.lifeos.core.runtime.convergence.ProductiveWorldPublicationNotReadyException
+import app.lifeos.core.runtime.thought.ThoughtGraphWorkingSet
 import java.time.Instant
 
 /**
@@ -40,17 +48,41 @@ import java.time.Instant
  * DurableConvergenceDecisionCoordinator remain authoritative, including all score, freshness,
  * conflict and capability gates. The resulting decision checkpoint is persisted before exposure.
  */
-class GoalConvergenceDecisionProvider(
-    private val decisions: DurableConvergenceDecisionCoordinator,
-    private val convergence: ConvergenceCoordinator = ConvergenceCoordinator(),
-) {
+interface GoalConvergenceDecisionSource {
     suspend fun decide(
         goal: GoalFrame,
         routing: GoalCapabilityResolution,
         sourcePhoton: Photon,
         goalPhotonId: PhotonId,
+        goalPhotonRevision: Long = 1L,
         at: Instant = sourcePhoton.provenance.createdAt,
+    ): ConvergenceDecisionCheckpoint
+}
+
+fun interface GoalCycleFrozenInputSource {
+    suspend fun freeze(
+        workingSet: ThoughtGraphWorkingSet,
+        routing: GoalCapabilityResolution,
+    ): BootEngineFrozenInputs
+}
+
+class GoalConvergenceDecisionProvider(
+    private val productiveConvergence: ProductiveConvergenceAuthority,
+    private val bootEngine: BootEngineRuntime,
+    private val photons: RevisionedPhotonRepository,
+    private val thoughtGraph: GoalThoughtGraphProjector = GoalThoughtGraphProjector(),
+    private val cycleInputs: GoalCycleFrozenInputSource? = null,
+) : GoalConvergenceDecisionSource {
+    override suspend fun decide(
+        goal: GoalFrame,
+        routing: GoalCapabilityResolution,
+        sourcePhoton: Photon,
+        goalPhotonId: PhotonId,
+        goalPhotonRevision: Long,
+        at: Instant,
     ): ConvergenceDecisionCheckpoint {
+        require(goalPhotonRevision > 0L)
+
         require(routing.plan.goal == goal) {
             "Goal convergence routing must describe the exact goal"
         }
@@ -147,14 +179,78 @@ class GoalConvergenceDecisionProvider(
         val source = CrossDomainConvergenceRequest(
             domains = listOf(ConvergenceDomainInput(fieldRequest)),
         )
-        val converged = convergence.coordinate(source)
-        return decisions.decide(
-            ConvergenceDecisionRequest(
-                source = source,
-                convergence = converged,
-                capabilityGaps = routing.blockingGaps,
-                workingSetFingerprint = null,
+        val goalPhoton = requireNotNull(
+            photons.load(PhotonRevisionRef(goalPhotonId, goalPhotonRevision))
+        ) {
+            "Persisted goal Photon revision is missing: ${goalPhotonId.value}@$goalPhotonRevision"
+        }
+        require(goalPhoton.id == goalPhotonId && goalPhoton.revision == goalPhotonRevision)
+
+        val workingSet = thoughtGraph.project(
+            goalPhoton = goalPhoton,
+            source = source,
+            at = at,
+        )
+        val cycle = bootEngine.activeCycle() ?: run {
+            val inputSource = cycleInputs
+                ?: throw ProductiveConvergenceNotReadyException(
+                    "active-bootengine-cycle-unavailable"
+                )
+            try {
+                bootEngine.startCycle(inputSource.freeze(workingSet, routing))
+            } catch (race: IllegalArgumentException) {
+                throw ProductiveConvergenceNotReadyException(
+                    "bootengine-cycle-start-unavailable:${race.message.orEmpty().take(160)}"
+                )
+            }
+        }
+        if (cycle.state != BootEngineCycleState.PREPARED) {
+            throw ProductiveConvergenceNotReadyException(
+                "active-bootengine-cycle-not-prepared:${cycle.state.name.lowercase()}"
+            )
+        }
+        val sourceTaskId = TaskId(
+            "goal-convergence:" + StableFieldIds.fingerprint(
+                "productive-goal-convergence-task/v1",
+                source.id,
+                goalPhotonId.value,
+                goalPhotonRevision.toString(),
+                sourcePhoton.id.value,
+                sourcePhoton.revision.toString(),
+                cycle.cycleId.value,
             )
         )
+        val result = try {
+            productiveConvergence.decide(
+                ProductiveConvergenceInput(
+                    cycle = cycle,
+                    workingSet = workingSet,
+                    source = source,
+                    domainPhotons = mapOf(domain to sourcePhoton),
+                    sourceTaskId = sourceTaskId,
+                    primaryPhotonId = sourcePhoton.id,
+                    observedAt = at,
+                    capabilityGaps = routing.blockingGaps,
+                )
+            )
+        } catch (blocked: ProductiveWorldPublicationNotReadyException) {
+            throw ProductiveConvergenceNotReadyException(
+                "world-publication:${blocked.reason}"
+            )
+        }
+        return when (result) {
+            is ProductiveConvergenceResult.Decided -> result.checkpoint
+            is ProductiveConvergenceResult.WorldNotStable -> throw ProductiveConvergenceNotReadyException(
+                "world-not-stable:${result.worldSnapshotId}"
+            )
+        }
+    }
+}
+
+class ProductiveConvergenceNotReadyException(
+    val reason: String,
+) : IllegalStateException(reason) {
+    init {
+        require(reason.isNotBlank())
     }
 }

@@ -63,7 +63,11 @@ jobs:
             'semantic_action_recovery=PASS' \
             'semantic_reference_revision_recovery=PASS' \
             'external_effect_no_duplicate=PASS' \
-            'language_gold_device=PASS' >> product-gold-evidence/gates.txt
+            'language_gold_device=PASS' \
+            'level7_productive_world_persistence=PASS' \
+            'level7_process_death_semantics=PASS' \
+            'level7_world_equation_rollback=PASS' \
+            'level7_functional_gold=PASS' >> product-gold-evidence/gates.txt
           printf 'product_gold=PASS\n' >> product-gold-evidence/gates.txt
       - name: Upload Product Gold debug APK
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

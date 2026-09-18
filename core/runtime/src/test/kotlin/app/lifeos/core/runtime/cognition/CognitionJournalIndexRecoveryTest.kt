@@ -2,6 +2,7 @@ package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonIndexReport
 import app.lifeos.core.model.PhotonLoadReport
@@ -85,6 +86,27 @@ class CognitionJournalIndexRecoveryTest {
         val integrity = CognitionJournalIntegrityVerifier(photons, index).verify()
         assertEquals(4, integrity.total)
         assertEquals(0, photons.loadReportCalls)
+    }
+
+    @Test
+    fun directJournalLoaderTraversesMultipleBoundedPages() = runTest {
+        val photons = CountingRevisionedPhotonRepository()
+        repeat(300) { index ->
+            photons.save(
+                cognitionJournalPhoton(
+                    kind = CognitionJournalKind.EVENT,
+                    stableId = "paged-event-$index",
+                    at = t0.plusSeconds(index.toLong()),
+                    content = "payload-$index",
+                )
+            )
+        }
+
+        val loaded = loadCognitionJournalPhotons(photons, CognitionJournalKind.EVENT)
+
+        assertEquals(300, loaded.size)
+        assertTrue(photons.queryCalls >= 2)
+        assertTrue(photons.maxRequestedLimit <= PhotonIndexQuery.HARD_PAGE_LIMIT)
     }
 
     @Test
@@ -265,6 +287,10 @@ class CognitionJournalIndexRecoveryTest {
         private val values = linkedMapOf<PhotonId, Photon>()
         var loadReportCalls: Int = 0
             private set
+        var queryCalls: Int = 0
+            private set
+        var maxRequestedLimit: Int = 0
+            private set
 
         val photonCount: Int
             get() = values.size
@@ -302,16 +328,25 @@ class CognitionJournalIndexRecoveryTest {
         override suspend fun latestRef(id: PhotonId): PhotonRevisionRef? =
             values[id]?.let { PhotonRevisionRef(it.id, it.revision) }
 
-        override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> =
-            values.values.asSequence()
+        override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> {
+            queryCalls += 1
+            maxRequestedLimit = maxOf(maxRequestedLimit, query.limit)
+            require(query.order == PhotonIndexOrder.IDENTITY)
+            val refs = values.values.asSequence()
                 .filter { query.ids.isEmpty() || it.id in query.ids }
                 .filter { query.phases.isEmpty() || it.phase in query.phases }
                 .filter { query.mimeTypes.isEmpty() || it.mimeType in query.mimeTypes }
                 .filter { it.tags.containsAll(query.allTags) }
                 .sortedBy { it.id.value }
-                .take(query.limit)
                 .map { PhotonRevisionRef(it.id, it.revision) }
                 .toList()
+            val start = query.after?.let { cursor ->
+                val index = refs.indexOf(cursor.lastRef)
+                require(index >= 0)
+                index + 1
+            } ?: 0
+            return refs.drop(start).take(query.limit)
+        }
 
         override suspend fun indexReport(): PhotonIndexReport = PhotonIndexReport(
             formatVersion = 1,

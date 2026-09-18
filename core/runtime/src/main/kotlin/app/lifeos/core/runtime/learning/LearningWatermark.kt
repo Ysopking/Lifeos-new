@@ -13,6 +13,20 @@ value class LearningSourceId(val value: String) {
     override fun toString(): String = value
 }
 
+data class LearningLogicalKey(
+    val sourceId: LearningSourceId,
+    val sourceSequence: Long,
+    val eventFingerprint: String,
+) {
+    init {
+        require(sourceSequence > 0L)
+        require(eventFingerprint.matches(Regex("[0-9a-f]{64}")))
+    }
+
+    val value: String =
+        "${sourceId.value}:$sourceSequence:$eventFingerprint"
+}
+
 data class LearningSourceWatermark(
     val sourceId: LearningSourceId,
     val sequence: Long,
@@ -27,6 +41,9 @@ data class LearningSourceWatermark(
             "Learning event fingerprint must be SHA-256 hex"
         }
     }
+
+    val logicalKey: LearningLogicalKey =
+        LearningLogicalKey(sourceId, sequence, eventFingerprint)
 }
 
 data class LearningWatermarkState(

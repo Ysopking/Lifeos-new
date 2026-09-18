@@ -163,6 +163,28 @@ data class BootEngineCycle private constructor(
             )
         }
 
+        fun restore(
+            cycleId: CognitiveCycleId,
+            context: WorldFormulaCycleContext,
+            frozenInputsFingerprint: String,
+            state: BootEngineCycleState,
+            productiveRequestId: String?,
+            worldSnapshotId: String?,
+            productiveHeadRevision: Long?,
+            failure: String?,
+            fingerprint: String,
+        ): BootEngineCycle = BootEngineCycle(
+            cycleId = cycleId,
+            context = context,
+            frozenInputsFingerprint = frozenInputsFingerprint,
+            state = state,
+            productiveRequestId = productiveRequestId,
+            worldSnapshotId = worldSnapshotId,
+            productiveHeadRevision = productiveHeadRevision,
+            failure = failure,
+            fingerprint = fingerprint,
+        )
+
         private fun create(
             cycleId: CognitiveCycleId,
             context: WorldFormulaCycleContext,
@@ -199,14 +221,43 @@ data class BootEngineCycle private constructor(
     }
 }
 
+data class BootEngineCycleLoadReport(
+    val activeCycle: BootEngineCycle?,
+    val latestCommitted: BootEngineCycle?,
+    val corrupted: Boolean,
+    val message: String?,
+) {
+    init {
+        require(message == null || message.isNotBlank())
+        require(!corrupted || message != null) {
+            "Corrupted BootEngine cycle report requires a message"
+        }
+        require(activeCycle == null || !activeCycle.terminal) {
+            "Active BootEngine cycle report cannot expose a terminal cycle"
+        }
+        require(latestCommitted == null || latestCommitted.state == BootEngineCycleState.COMMITTED) {
+            "Latest committed BootEngine cycle must be COMMITTED"
+        }
+    }
+}
+
 interface BootEngineCycleRepository {
     suspend fun create(cycle: BootEngineCycle): Boolean
     suspend fun load(cycleId: CognitiveCycleId): BootEngineCycle?
     suspend fun loadActive(): BootEngineCycle?
+    suspend fun loadLatestCommitted(): BootEngineCycle? = null
     suspend fun compareAndSet(
         expectedFingerprint: String,
         next: BootEngineCycle,
     ): Boolean
+
+    suspend fun loadReport(): BootEngineCycleLoadReport =
+        BootEngineCycleLoadReport(
+            activeCycle = loadActive(),
+            latestCommitted = loadLatestCommitted(),
+            corrupted = false,
+            message = null,
+        )
 }
 
 sealed interface BootEngineWorldEvaluation {
@@ -259,6 +310,14 @@ class BootEngineRuntime(
     private val newCycleId: () -> CognitiveCycleId,
 ) {
     private val mutex = Mutex()
+
+    suspend fun activeCycle(): BootEngineCycle? = mutex.withLock {
+        val report = cycles.loadReport()
+        require(!report.corrupted) {
+            "BootEngine cycle recovery required: ${report.message}"
+        }
+        report.activeCycle
+    }
 
     suspend fun startCycle(
         frozenInputs: BootEngineFrozenInputs,
@@ -372,8 +431,37 @@ class BootEngineRuntime(
         }
     }
 
+    suspend fun failEvaluation(
+        evaluation: BootEngineWorldEvaluation.Ready,
+        reason: String,
+    ): BootEngineCycle = mutex.withLock {
+        require(reason.isNotBlank())
+        val durableCycle = requireNotNull(cycles.load(evaluation.cycle.cycleId)) {
+            "BootEngine cycle disappeared before fail-closed terminalization"
+        }
+        require(durableCycle.fingerprint == evaluation.cycle.fingerprint) {
+            "BootEngine cycle changed before fail-closed terminalization"
+        }
+        require(durableCycle.state == BootEngineCycleState.WORLD_EVALUATED) {
+            "BootEngine can fail-close only a WORLD_EVALUATED cycle"
+        }
+        val failed = durableCycle.failed(reason)
+        check(cycles.compareAndSet(durableCycle.fingerprint, failed)) {
+            "BootEngine cycle changed while recording fail-closed terminalization"
+        }
+        failed
+    }
+
     suspend fun recover(): BootEngineRecoveryResult = mutex.withLock {
-        val cycle = cycles.loadActive()
+        val worldReport = worldHeads.loadReport()
+        require(!worldReport.corrupted) {
+            "Productive world head recovery required: ${worldReport.message}"
+        }
+        val cycleReport = cycles.loadReport()
+        require(!cycleReport.corrupted) {
+            "BootEngine cycle recovery required: ${cycleReport.message}"
+        }
+        val cycle = cycleReport.activeCycle
             ?: return@withLock BootEngineRecoveryResult.NoActiveCycle
 
         when (cycle.state) {
@@ -381,7 +469,7 @@ class BootEngineRuntime(
                 BootEngineRecoveryResult.ResumePrepared(cycle)
 
             BootEngineCycleState.WORLD_EVALUATED -> {
-                val head = worldHeads.load()
+                val head = worldReport.head
                 val alreadyCommitted =
                     head?.cycleId == cycle.cycleId &&
                         head.activeSnapshot.snapshotId == cycle.worldSnapshotId &&

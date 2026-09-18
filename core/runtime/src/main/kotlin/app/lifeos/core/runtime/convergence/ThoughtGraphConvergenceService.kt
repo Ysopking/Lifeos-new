@@ -61,28 +61,30 @@ class ThoughtGraphConvergenceBinder {
 }
 
 /**
- * V5 orchestration boundary: bounded Gedankenmatrix -> existing Field convergence -> durable decision.
- * Informational V4 WorldFormula output is deliberately absent from this API.
+ * Productive convergence boundary: bounded Gedankenmatrix -> Field -> persisted WorldFormula snapshot
+ * -> durable epistemic decision. No productive direct ConvergenceCoordinator exists here.
  */
 class ThoughtGraphConvergenceService(
-    private val decisions: DurableConvergenceDecisionCoordinator,
-    private val convergence: ConvergenceCoordinator = ConvergenceCoordinator(),
-    private val binder: ThoughtGraphConvergenceBinder = ThoughtGraphConvergenceBinder(),
+    private val worldBound: WorldFormulaBoundConvergenceService,
 ) {
     suspend fun convergeAndDecide(
+        cycle: app.lifeos.core.runtime.boot.BootEngineCycle,
         workingSet: ThoughtGraphWorkingSet,
         source: CrossDomainConvergenceRequest,
+        domainPhotons: Map<app.lifeos.core.field.FieldDomainId, app.lifeos.core.model.Photon>,
+        sourceTaskId: app.lifeos.core.model.task.TaskId,
+        primaryPhotonId: app.lifeos.core.model.PhotonId,
+        observedAt: java.time.Instant,
         capabilityGaps: List<CapabilityGap> = emptyList(),
-    ): ConvergenceDecisionCheckpoint {
-        val bound = binder.bind(workingSet, source)
-        val result = convergence.coordinate(bound.source)
-        return decisions.decide(
-            ConvergenceDecisionRequest(
-                source = bound.source,
-                convergence = result,
-                capabilityGaps = capabilityGaps,
-                workingSetFingerprint = bound.workingSetFingerprint,
-            )
+    ): WorldFormulaBoundConvergenceResult =
+        worldBound.convergeAndDecide(
+            cycle = cycle,
+            workingSet = workingSet,
+            source = source,
+            domainPhotons = domainPhotons,
+            sourceTaskId = sourceTaskId,
+            primaryPhotonId = primaryPhotonId,
+            observedAt = observedAt,
+            capabilityGaps = capabilityGaps,
         )
-    }
 }

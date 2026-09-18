@@ -108,7 +108,10 @@ class ProductGoldenChatDeviceTest {
 
         val submission = app.kernel.persistUserUtterance(user)
 
-        assertTrue(submission.languageUnderstood)
+        assertTrue(
+            submission.languageFailure ?: "Language pipeline did not produce a semantic goal",
+            submission.languageUnderstood,
+        )
         assertEquals(IntentType.QUERY, submission.effectiveGoal?.intent)
         assertTrue(submission.effectiveGoal?.semanticActionGraph?.executableNodes?.isEmpty() == true)
         assertNotNull(submission.goal)

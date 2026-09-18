@@ -15,7 +15,7 @@ class LifeOsStartupCompositionTest {
         val evidence = mutableListOf<LifeOsStartupStageEvidence>()
         val parallelOverlap = CountDownLatch(2)
 
-        fun parallelAction(name: String): () -> Unit = {
+        fun parallelAction(name: String): suspend () -> Unit = {
             parallelOverlap.countDown()
             check(parallelOverlap.await(2, TimeUnit.SECONDS)) {
                 "Independent post-kernel startup stages did not overlap"
@@ -28,10 +28,11 @@ class LifeOsStartupCompositionTest {
                 installSharedResourceRuntime = { actions += "shared-resources" },
                 installGoalExecutionRuntime = { actions += "goal-execution" },
                 createKernel = { actions += "kernel-created" },
+                startKernel = { actions += "kernel-start" },
+                requireCognitiveStateReady = { actions += "cognitive-ready" },
                 installDeepSearchRuntime = parallelAction("deepsearch"),
                 startSelfHealingRuntime = parallelAction("self-healing"),
                 installDurableGoalPlanRuntime = parallelAction("goal-plan"),
-                startKernel = { actions += "kernel-start" },
                 stageObserver = { evidence += it },
             )
         )
@@ -40,10 +41,13 @@ class LifeOsStartupCompositionTest {
             listOf("shared-resources", "goal-execution", "kernel-created"),
             actions.take(3),
         )
-        assertEquals("kernel-start", actions.last())
+        assertEquals(
+            listOf("kernel-start", "cognitive-ready"),
+            actions.subList(3, 5),
+        )
         assertEquals(
             listOf("deepsearch", "self-healing", "goal-plan").toSet(),
-            actions.subList(3, 6).toSet(),
+            actions.subList(5, 8).toSet(),
         )
         assertEquals(
             LifeOsStartupStage.entries.toList(),
@@ -59,6 +63,8 @@ class LifeOsStartupCompositionTest {
                 listOf(LifeOsStartupStage.SHARED_RESOURCES),
                 listOf(LifeOsStartupStage.GOAL_EXECUTION),
                 listOf(LifeOsStartupStage.KERNEL_GRAPH),
+                listOf(LifeOsStartupStage.KERNEL_BOOT),
+                listOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
                 listOf(
                     LifeOsStartupStage.DEEP_SEARCH,
                     LifeOsStartupStage.SELF_HEALING,
@@ -68,6 +74,6 @@ class LifeOsStartupCompositionTest {
             ),
             LifeOsStartupStageGraph.layers.map { layer -> layer.map { it.stage } },
         )
-        assertTrue(LifeOsStartupStageGraph.layers[3].all { it.parallelSafe })
+        assertTrue(LifeOsStartupStageGraph.layers[5].all { it.parallelSafe })
     }
 }

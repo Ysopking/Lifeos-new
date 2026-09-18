@@ -28,7 +28,6 @@ import app.lifeos.core.runtime.PhotonBackedCausalLedgerStore
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RecursiveCausalCognitionCoordinator
 import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
-import app.lifeos.core.runtime.StaticCognitiveModuleRegistry
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
@@ -253,8 +252,13 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                             photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
                         }
                     }
+                    val frozenCognitiveModules = runBlocking {
+                        kernel.freezeCognitiveModulesForCurrentCycle(
+                            integratedCognition.domainModules
+                        )
+                    }
                     val causalCoordinator = RecursiveCausalCognitionCoordinator(
-                        modules = StaticCognitiveModuleRegistry(integratedCognition.domainModules),
+                        modules = frozenCognitiveModules,
                         engine = CausalCognitionEngine(
                             ledger = PhotonBackedCausalLedgerStore(kernel.photonStore),
                         ),
@@ -311,7 +315,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
                                 override suspend fun findForMission(missionId: DeepSearchMissionId): Photon? {
                                     val tag = "deepsearch-mission:${missionId.value}"
-                                    val matches = kernel.photonStore.loadAll().filter { tag in it.tags }
+                                    val matches = kernel.productivePhotonQueries.tags(
+                                        allTags = setOf(tag),
+                                        limit = 2,
+                                    ).photons
                                     check(matches.size <= 1) {
                                         "DeepSearch mission resolved to multiple result Photons"
                                     }
@@ -354,24 +361,23 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     selfHealingRuntime.orchestrator.start()
                 },
                 installDurableGoalPlanRuntime = {
-                    val durableV5Decisions = DurableConvergenceDecisionCoordinator(
-                        EncryptedConvergenceDecisionCheckpointRepository(this),
-                    )
                     DurableGoalPlanRuntimeRegistry.install(
                         DurableGoalPlanRuntime(
                             ledger = kernel.goalPlans,
-                            convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
+                            convergence = kernel.productiveGoalConvergence,
                             persistDerivedOutcome = { photon ->
                                 photonIngress.ingestWithReceipt(photon, PhotonIngressMode.DERIVED)
                             },
-                            loadPersistedPhotons = kernel.photonStore::loadAll,
+                            outcomeLookup = kernel.productivePhotonQueries,
                             traces = goalDecisionTraceRecorder,
                         )
                     )
                 },
                 startKernel = {
-                    kernel.start()
-                    Unit
+                    kernel.start().join()
+                },
+                requireCognitiveStateReady = {
+                    kernel.requireCognitiveReady()
                 },
                 stageObserver = { evidence ->
                     LifeOsRuntimeWiring.onStageReady(evidence)

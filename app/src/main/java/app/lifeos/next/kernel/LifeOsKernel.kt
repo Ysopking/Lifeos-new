@@ -24,9 +24,15 @@ import app.lifeos.core.runtime.ConversationSignalClassifier
 import app.lifeos.core.runtime.ConversationPath
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RuntimeSupervisor
+import app.lifeos.core.runtime.CognitiveModule
+import app.lifeos.core.runtime.CognitiveModuleRegistry
+import app.lifeos.core.runtime.CognitiveModuleSnapshotRepository
+import app.lifeos.core.runtime.VersionedCognitiveModuleRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootContext
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootEngineRecoveryResult
+import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootRunResult
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
@@ -45,6 +51,7 @@ import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.goal.GoalResumeEngine
+import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
 import app.lifeos.core.runtime.goal.GoalResumeResult
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
@@ -54,6 +61,7 @@ import app.lifeos.core.runtime.goal.LocalDeepSearchGoalResult
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
 import app.lifeos.core.runtime.goal.LocalSharePreparation
+import app.lifeos.core.runtime.query.ProductivePhotonQueryService
 import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.SceneGraphPhotonFactory
 import app.lifeos.core.scene.SceneRasterizer
@@ -74,12 +82,14 @@ import kotlinx.coroutines.launch
 class LifeOsKernel internal constructor(
     val runtime: LifeOsRuntime,
     val matrix: ThoughtMatrix,
-    val photonStore: PhotonRepository,
+    val photonStore: RevisionedPhotonRepository,
     val photonTransactions: PhotonTransactionJournal,
     val cognitiveOutcomes: CognitiveOutcomeJournal,
     val cognitiveTriggers: CognitiveTriggerSink,
     /** Durable V7 state, verified and replayed before the runtime is started. */
     val goalPlans: DurableGoalPlanLedger,
+    /** Sole productive Goal -> ThoughtGraph -> WorldFormula -> Convergence authority. */
+    val productiveGoalConvergence: GoalConvergenceDecisionProvider,
     /** Lazily probes and selects the strongest offline MMSI execution path supported by this device. */
     val mmsiRuntime: MmsiRuntimeBackendProbe,
     /** Deterministic GoalFrame -> SceneGraph compiler used by image action execution. */
@@ -99,7 +109,10 @@ class LifeOsKernel internal constructor(
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
+    private val bootEngineRuntime: BootEngineRuntime,
     private val continuousCognition: ContinuousCognitionEngine,
+    private val cognitiveModuleSnapshotRepository: CognitiveModuleSnapshotRepository? = null,
+    private val activeExtensionSnapshotId: suspend () -> String? = { null },
     private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
     private val localDeepSearchGoalEngine: LocalDeepSearchGoalEngine = LocalDeepSearchGoalEngine(),
@@ -118,10 +131,29 @@ class LifeOsKernel internal constructor(
         photons = revisionedPhotonStore,
         builder = languageContextBuilder,
     )
+    val productivePhotonQueries: ProductivePhotonQueryService =
+        ProductivePhotonQueryService(revisionedPhotonStore)
     private var bootstrapJob: Job? = null
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
     val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
+
+    suspend fun freezeCognitiveModulesForCurrentCycle(
+        builtIns: Collection<CognitiveModule>,
+    ): CognitiveModuleRegistry {
+        require(builtIns.isNotEmpty()) {
+            "At least one built-in cognitive module is required"
+        }
+        val repository = requireNotNull(cognitiveModuleSnapshotRepository) {
+            "Versioned cognitive module repository is not installed"
+        }
+        val extensionSnapshotId =
+            activeExtensionSnapshotId() ?: BUILTIN_EXTENSION_SNAPSHOT_ID
+        return VersionedCognitiveModuleRegistry(
+            builtIns = builtIns,
+            snapshots = repository,
+        ).freezeForCycle(extensionSnapshotId)
+    }
 
     private val generatedToolUserActions = GeneratedToolUserActionCoordinator(
         requests = privateGeneratedToolRuntime.requests,
@@ -212,7 +244,27 @@ class LifeOsKernel internal constructor(
             bootstrapJob?.cancel()
             bootstrapJob = null
         }
+        bootEngineRuntime.recover()
         supervisor.stop()
+    }
+
+    fun requireCognitiveReady() {
+        val bootstrap = mutableBootstrapState.value
+        val state = bootstrap.status
+        require(
+            state == KernelBootstrapStatus.READY || state == KernelBootstrapStatus.DEGRADED
+        ) {
+            buildString {
+                append("Cognitive runtime is not ready: ")
+                append(state)
+                bootstrap.failureMessage
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let {
+                        append(" · ")
+                        append(it)
+                    }
+            }
+        }
     }
 
     /**
@@ -572,6 +624,16 @@ class LifeOsKernel internal constructor(
         }
     }
 
+    private suspend fun boundedContextPhotons(): List<Photon> =
+        productivePhotonQueries.latest(
+            limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
+            order = PhotonIndexOrder.NEWEST_FIRST,
+        ).photons.sortedWith(
+            compareBy<Photon> { it.provenance.createdAt }
+                .thenBy { it.id.value }
+                .thenBy { it.revision }
+        )
+
     private fun requireCompletedBoot(action: String) {
         require(
             mutableBootstrapState.value.status == KernelBootstrapStatus.READY ||
@@ -590,7 +652,7 @@ class LifeOsKernel internal constructor(
                     request = requestGoal,
                     requestSource = requestSource,
                     requestGoalPhotonId = requestGoalPhotonId,
-                    photons = photonStore.loadAll(),
+                    photons = boundedContextPhotons(),
                     createdAt = requestSource.provenance.createdAt,
                 )
             ) {
@@ -632,7 +694,7 @@ class LifeOsKernel internal constructor(
                 goal = goal,
                 sourcePhoton = sourcePhoton,
                 goalPhotonId = goalPhotonId,
-                photons = photonStore.loadAll(),
+                photons = boundedContextPhotons(),
                 createdAt = sourcePhoton.provenance.createdAt,
             )
             when (result) {
@@ -665,7 +727,7 @@ class LifeOsKernel internal constructor(
                     goal = goal,
                     sourcePhoton = sourcePhoton,
                     goalPhotonId = goalPhotonId,
-                    photons = photonStore.loadAll(),
+                    photons = boundedContextPhotons(),
                     createdAt = sourcePhoton.provenance.createdAt,
                 )
             ) {
@@ -699,7 +761,7 @@ class LifeOsKernel internal constructor(
                     goal = goal,
                     sourcePhoton = sourcePhoton,
                     goalPhotonId = goalPhotonId,
-                    photons = photonStore.loadAll(),
+                    photons = boundedContextPhotons(),
                 )
             ) {
                 is LocalCommunicationGoalResult.Prepared ->
@@ -867,6 +929,14 @@ class LifeOsKernel internal constructor(
         warnings: List<String>,
         degraded: Boolean,
     ) {
+        val cognitiveRecovery = bootEngineRuntime.recover()
+        when (cognitiveRecovery) {
+            BootEngineRecoveryResult.NoActiveCycle,
+            is BootEngineRecoveryResult.ResumePrepared,
+            is BootEngineRecoveryResult.ResumeCommit,
+            is BootEngineRecoveryResult.RecoveredCommitted -> Unit
+        }
+
         supervisor.start()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
@@ -883,6 +953,8 @@ class LifeOsKernel internal constructor(
     }
 
     private companion object {
+        const val BUILTIN_EXTENSION_SNAPSHOT_ID = "extension-registry:builtin-baseline"
+
         const val PRIVATE_OWNER_ACTOR_ID = "private-owner"
         const val OWNER_ASSET_REVIEW_PENDING = "awaiting-owner-review"
         val FAST_CHAT_BACKGROUND_BUDGET = CognitiveWorkBudget(

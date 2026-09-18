@@ -1,6 +1,8 @@
 package app.lifeos.core.runtime.level7
 
 import app.lifeos.core.field.StableFieldIds
+import app.lifeos.core.runtime.CognitiveModule
+import app.lifeos.core.runtime.extension.ExtensionRevisionRef
 
 enum class CognitiveModuleOutputKind {
     PHOTON,
@@ -77,4 +79,53 @@ data class CognitiveModuleEmission(
     }
 
     val directWorldCommitAllowed: Boolean get() = false
+}
+
+
+data class DynamicCognitiveModuleBinding(
+    val extensionSnapshotId: String,
+    val extensionRef: ExtensionRevisionRef,
+    val module: CognitiveModule,
+    val promotionEvidenceFingerprint: String,
+) {
+    init {
+        require(extensionSnapshotId.isNotBlank())
+        require(promotionEvidenceFingerprint.isNotBlank())
+    }
+
+    val moduleFingerprint: String
+        get() = module.descriptor.identity.stableFingerprint
+
+    val directInstallAllowed: Boolean
+        get() = false
+
+    fun fingerprint(): String = StableFieldIds.fingerprint(
+        "dynamic-cognitive-module-binding/v1",
+        extensionSnapshotId,
+        extensionRef.fingerprint(),
+        moduleFingerprint,
+        promotionEvidenceFingerprint,
+    )
+}
+
+object DynamicCognitiveModulePromotionGate {
+    fun verifiedModules(
+        extensionSnapshotId: String,
+        bindings: Collection<DynamicCognitiveModuleBinding>,
+    ): List<CognitiveModule> {
+        require(extensionSnapshotId.isNotBlank())
+        require(bindings.isNotEmpty())
+        require(bindings.all { it.extensionSnapshotId == extensionSnapshotId }) {
+            "Dynamic module binding belongs to another extension snapshot"
+        }
+        require(bindings.map { it.moduleFingerprint }.distinct().size == bindings.size) {
+            "Dynamic module fingerprints must be unique"
+        }
+        require(bindings.map { it.extensionRef }.distinct().size == bindings.size) {
+            "One extension revision may bind only one cognitive module in one snapshot"
+        }
+        return bindings
+            .sortedBy { it.moduleFingerprint }
+            .map { it.module }
+    }
 }

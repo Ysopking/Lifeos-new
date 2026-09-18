@@ -3,6 +3,8 @@ package app.lifeos.core.runtime.life
 import app.lifeos.core.model.CanonicalPhotonState
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexCursor
+import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonRelation
@@ -213,13 +215,30 @@ class PhotonBackedMemoryAccessLedgerStore(
 
     suspend fun snapshot(): MemoryAccessLedger {
         val events = if (photons is RevisionedPhotonRepository) {
-            photons.query(
-                PhotonIndexQuery(
-                    allTags = setOf("memory-access-event"),
-                    latestOnly = true,
-                    limit = 250_000,
+            val indexed = mutableListOf<Photon>()
+            var cursor: PhotonIndexCursor? = null
+            while (true) {
+                val refs = photons.query(
+                    PhotonIndexQuery(
+                        allTags = setOf("memory-access-event"),
+                        latestOnly = true,
+                        order = PhotonIndexOrder.IDENTITY,
+                        after = cursor,
+                        limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
+                    )
                 )
-            ).mapNotNull { photons.load(it) }
+                refs.forEach { ref ->
+                    indexed += requireNotNull(photons.load(ref)) {
+                        "Memory-access index references missing Photon revision: ${ref.photonId.value}@${ref.revision}"
+                    }
+                }
+                if (refs.size < PhotonIndexQuery.HARD_PAGE_LIMIT) break
+                cursor = PhotonIndexCursor(
+                    order = PhotonIndexOrder.IDENTITY,
+                    lastRef = refs.last(),
+                )
+            }
+            indexed
         } else {
             photons.loadAll().filter { "memory-access-event" in it.tags }
         }.map(::decodeEvent)

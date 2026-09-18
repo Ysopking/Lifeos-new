@@ -2,10 +2,15 @@ package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexOrder
+import app.lifeos.core.model.PhotonIndexQuery
+import app.lifeos.core.model.PhotonIndexReport
 import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.PhotonRevisionRef
+import app.lifeos.core.model.PhotonRevisionWriteResult
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.model.task.CreateTaskResult
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.IndexedTaskSnapshotRepository
@@ -110,6 +115,23 @@ class DurableCognitionReconcilerTest {
 
         assertEquals(1, result.alreadyCovered)
         assertEquals(0, result.submitted)
+    }
+
+    @Test
+    fun revisionedReconciliationPaginatesBeyondHardPageLimit() = runTest {
+        val photons = PagedRevisionedPhotonRepository(
+            (1..300).map { photon("paged-$it", revision = 1) }
+        )
+        val tasks = SnapshotTaskRepository()
+
+        val result = reconciler(photons, tasks, batchSize = 100).reconcile()
+
+        assertEquals(300, result.scannedPhotons)
+        assertEquals(100, result.submitted)
+        assertEquals(200, result.deferred)
+        assertEquals(2, photons.queryCount)
+        assertTrue(photons.maxRequestedLimit <= PhotonIndexQuery.HARD_PAGE_LIMIT)
+        assertEquals(100, tasks.snapshot().size)
     }
 
     @Test
@@ -303,6 +325,98 @@ class DurableCognitionReconcilerTest {
 
         override suspend fun delete(id: PhotonId) {
             values.remove(id)
+        }
+    }
+
+    private class PagedRevisionedPhotonRepository(
+        initial: List<Photon>,
+    ) : RevisionedPhotonRepository {
+        private val values = initial.associateByTo(linkedMapOf()) {
+            PhotonRevisionRef(it.id, it.revision)
+        }
+
+        var queryCount: Int = 0
+            private set
+
+        var maxRequestedLimit: Int = 0
+            private set
+
+        override suspend fun save(photon: Photon) {
+            values[PhotonRevisionRef(photon.id, photon.revision)] = photon
+        }
+
+        override suspend fun load(id: PhotonId): Photon? =
+            values.entries
+                .asSequence()
+                .filter { it.key.photonId == id }
+                .maxByOrNull { it.key.revision }
+                ?.value
+
+        override suspend fun load(ref: PhotonRevisionRef): Photon? = values[ref]
+
+        override suspend fun latestRef(id: PhotonId): PhotonRevisionRef? =
+            values.keys
+                .asSequence()
+                .filter { it.photonId == id }
+                .maxByOrNull { it.revision }
+
+        override suspend fun saveRevision(
+            photon: Photon,
+            expectedPreviousRevision: Long?,
+        ): PhotonRevisionWriteResult {
+            val previous = expectedPreviousRevision?.let { values[PhotonRevisionRef(photon.id, it)] }
+            values[PhotonRevisionRef(photon.id, photon.revision)] = photon
+            return if (previous == null) {
+                PhotonRevisionWriteResult.Created(photon)
+            } else {
+                PhotonRevisionWriteResult.Advanced(photon, previous)
+            }
+        }
+
+        override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> {
+            queryCount += 1
+            maxRequestedLimit = maxOf(maxRequestedLimit, query.limit)
+            require(query.order == PhotonIndexOrder.IDENTITY)
+
+            val refs = values.values
+                .asSequence()
+                .filter { query.ids.isEmpty() || it.id in query.ids }
+                .filter { query.phases.isEmpty() || it.phase in query.phases }
+                .filter { query.mimeTypes.isEmpty() || it.mimeType in query.mimeTypes }
+                .filter { it.tags.containsAll(query.allTags) }
+                .map { PhotonRevisionRef(it.id, it.revision) }
+                .sortedWith(compareBy<PhotonRevisionRef> { it.photonId.value }.thenBy { it.revision })
+                .toList()
+
+            val start = query.after?.let { cursor ->
+                val index = refs.indexOf(cursor.lastRef)
+                require(index >= 0)
+                index + 1
+            } ?: 0
+
+            return refs.drop(start).take(query.limit)
+        }
+
+        override suspend fun indexReport(): PhotonIndexReport {
+            val latest = values.keys
+                .groupBy { it.photonId }
+                .mapValues { (_, refs) -> refs.maxBy { it.revision } }
+            return PhotonIndexReport(
+                formatVersion = 1,
+                entryCount = values.size,
+                livePhotonCount = latest.size,
+                tombstonedPhotonCount = 0,
+                latestRefs = latest,
+            )
+        }
+
+        override suspend fun loadReport(): PhotonLoadReport =
+            PhotonLoadReport(values.values.toList(), emptyList())
+
+        override suspend fun loadAll(): List<Photon> = values.values.toList()
+
+        override suspend fun delete(id: PhotonId) {
+            values.keys.filter { it.photonId == id }.forEach(values::remove)
         }
     }
 
