@@ -2,6 +2,7 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
+import app.lifeos.core.language.SemanticExecutionGate
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
@@ -55,6 +56,22 @@ class GoalActionDispatcher(
         GenesisCapabilityExpansionRuntime::process,
 ) {
     suspend fun execute(context: GoalActionContext): GoalActionDispatchResult {
+        val semanticAdmission = SemanticExecutionGate.evaluate(context.goal)
+        if (!semanticAdmission.allowed) {
+            return blocked(
+                context.goal.intent,
+                "semantic-admission:${semanticAdmission.reason}",
+            )
+        }
+        if (context.externalActionContract != null &&
+            !SemanticExecutionGate.externalEffectAllowed(context.goal)
+        ) {
+            return blocked(
+                context.goal.intent,
+                "semantic-admission:NO_EXTERNAL_SIDE_EFFECT_WITHOUT_EXECUTABLE_SEMANTIC_ACTION",
+            )
+        }
+
         DecisionTraceRuntimeRegistry.currentOrNull()?.recordCapabilityRouting(
             goalPhotonId = context.goalPhotonId,
             goalPhotonRevision = context.goalPhotonRevision,
