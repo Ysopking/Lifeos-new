@@ -277,13 +277,54 @@ data class RecoveryProof(
         require(preDeath.decisionSemanticFingerprint == postRehydration.decisionSemanticFingerprint)
     }
     override val invariantIds = setOf(
-        "ROLLBACK_RESTORES_EXACT_EQUATION_AND_WORLD_HEAD",
         "PROCESS_DEATH_MUST_NOT_CHANGE_DECISION_SEMANTICS",
     )
     override fun fingerprint(): String = StableFieldIds.fingerprint(
         "level7-proof/recovery/v1", proofId, planId, preDeath.fingerprint(),
         postRehydration.fingerprint(), restoredExactEquationVersion,
         restoredExactWorldHeadFingerprint,
+    )
+}
+
+data class RollbackProof(
+    override val proofId: String,
+    val degradedEquationVersion: String,
+    val restoredEquationVersion: String,
+    val expectedPredecessorEquationVersion: String,
+    val degradedWorldHeadFingerprint: String,
+    val restoredWorldHeadFingerprint: String,
+    val expectedPredecessorWorldHeadFingerprint: String,
+    val rollbackDecisionId: String,
+    val processDeathCrossed: Boolean,
+) : Level7InvariantProof {
+    init {
+        require(proofId.isNotBlank())
+        require(degradedEquationVersion.isNotBlank())
+        require(restoredEquationVersion.isNotBlank())
+        require(expectedPredecessorEquationVersion.isNotBlank())
+        require(degradedWorldHeadFingerprint.isNotBlank())
+        require(restoredWorldHeadFingerprint.isNotBlank())
+        require(expectedPredecessorWorldHeadFingerprint.isNotBlank())
+        require(rollbackDecisionId.isNotBlank())
+        require(restoredEquationVersion == expectedPredecessorEquationVersion)
+        require(restoredWorldHeadFingerprint == expectedPredecessorWorldHeadFingerprint)
+        require(degradedWorldHeadFingerprint != restoredWorldHeadFingerprint)
+        require(processDeathCrossed)
+    }
+    override val invariantIds = setOf(
+        "ROLLBACK_RESTORES_EXACT_EQUATION_AND_WORLD_HEAD",
+    )
+    override fun fingerprint(): String = StableFieldIds.fingerprint(
+        "level7-proof/rollback/v1",
+        proofId,
+        degradedEquationVersion,
+        restoredEquationVersion,
+        expectedPredecessorEquationVersion,
+        degradedWorldHeadFingerprint,
+        restoredWorldHeadFingerprint,
+        expectedPredecessorWorldHeadFingerprint,
+        rollbackDecisionId,
+        processDeathCrossed.toString(),
     )
 }
 
@@ -375,6 +416,8 @@ data class Level7GoldEvidence(
         require(proofs.any { it is CausalDiscriminationProof }) { "Functional GOLD requires CausalDiscriminationProof" }
         require(proofs.any { it is StrategyReuseProof }) { "Functional GOLD requires StrategyReuseProof" }
         require(proofs.any { it is RecoveryProof }) { "Functional GOLD requires RecoveryProof" }
+        require(proofs.any { it is RollbackProof }) { "Functional GOLD requires RollbackProof" }
+        require(proofs.any { it is ProtectedRootProof }) { "Functional GOLD requires ProtectedRootProof" }
         require(proofs.any { it is ProvenanceTraceProof }) { "Functional GOLD requires ProvenanceTraceProof" }
     }
     fun fingerprint(): String = StableFieldIds.fingerprint(
