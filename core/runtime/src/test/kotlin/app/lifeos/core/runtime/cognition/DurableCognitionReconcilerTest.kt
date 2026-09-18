@@ -105,6 +105,21 @@ class DurableCognitionReconcilerTest {
     }
 
     @Test
+    fun internalPersistenceMetadataNeverCreatesCognitionWork() = runTest {
+        val internal = photon("runtime-index", revision = 1).copy(
+            tags = setOf("internal", "cognition-journal-index"),
+        )
+        val tasks = SnapshotTaskRepository()
+
+        val result = reconciler(TestPhotonRepository(listOf(internal)), tasks).reconcile()
+
+        assertEquals(0, result.scannedPhotons)
+        assertEquals(0, result.submitted)
+        assertEquals(0, result.deferred)
+        assertTrue(tasks.snapshot().isEmpty())
+    }
+
+    @Test
     fun stableDeltaIdentityDependsOnlyOnPhotonAndRevision() {
         val photonId = PhotonId("stable")
         assertEquals(
