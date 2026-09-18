@@ -168,6 +168,10 @@ class ThoughtGraphAttentionTest {
                 ThoughtGraphNodeKind.HYPOTHESIS -> ThoughtGraphSourceKind.HYPOTHESIS
                 ThoughtGraphNodeKind.GOAL -> ThoughtGraphSourceKind.GOAL
                 ThoughtGraphNodeKind.CONFLICT -> ThoughtGraphSourceKind.SYSTEM
+                ThoughtGraphNodeKind.ABSTRACTION -> ThoughtGraphSourceKind.ABSTRACTION
+                ThoughtGraphNodeKind.WORLD_MODEL -> ThoughtGraphSourceKind.WORLD_MODEL
+                ThoughtGraphNodeKind.STRATEGY -> ThoughtGraphSourceKind.STRATEGY
+                ThoughtGraphNodeKind.EXPERIMENT -> ThoughtGraphSourceKind.EXPERIMENT
             },
             sourceId = id,
             sourceRevision = 1,
