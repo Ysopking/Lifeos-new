@@ -71,35 +71,35 @@ class ReferenceCandidateIndexV3(
             .map(::normalize)
             .sorted()
             .forEach { preferred ->
-                add(byKind[preferred].orEmpty(), 0.30)
-                add(byTag[preferred].orEmpty(), 0.25)
-                add(bySemanticType[preferred].orEmpty(), 0.30)
+                add(byKind[preferred].orEmpty(), 0.12)
+                add(byTag[preferred].orEmpty(), 0.10)
+                add(bySemanticType[preferred].orEmpty(), 0.14)
                 bySemanticType.entries
                     .asSequence()
                     .filter { (type, _) -> type.endsWith(":$preferred") || type.endsWith(".$preferred") }
                     .take(MAX_SUFFIX_BUCKETS)
-                    .forEach { (_, values) -> add(values, 0.22) }
+                    .forEach { (_, values) -> add(values, 0.08) }
             }
 
         referenceTerms(expression.rawText).sorted().forEach { term ->
-            add(byTerm[term].orEmpty(), 0.45)
+            add(byTerm[term].orEmpty(), 0.20)
         }
 
         when (expression.kind) {
             ReferenceKind.LAST_RESULT ->
-                add(byTag["result"].orEmpty(), 0.35)
+                add(byTag["result"].orEmpty(), 0.20)
             ReferenceKind.PREVIOUS,
             ReferenceKind.THIS,
             ReferenceKind.THAT ->
-                add(items.asSequence().filter { it.active }.take(ACTIVE_FALLBACK), 0.15)
+                add(items.asSequence().filter { it.active }.take(ACTIVE_FALLBACK), 0.08)
             ReferenceKind.OTHER ->
-                add(items.asSequence().filterNot { it.active }.take(RECENT_FALLBACK), 0.10)
+                add(items.asSequence().filterNot { it.active }.take(RECENT_FALLBACK), 0.05)
             ReferenceKind.YESTERDAY,
             ReferenceKind.EXPLICIT_ID -> Unit
         }
 
         if (scored.size < limit) {
-            add(items.take(RECENT_FALLBACK), 0.05)
+            add(items.take(RECENT_FALLBACK), 0.03)
         }
 
         return scored.values
