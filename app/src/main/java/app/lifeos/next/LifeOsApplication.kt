@@ -7,6 +7,11 @@ import android.os.Build
 import android.os.Environment
 import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
+import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
+import app.lifeos.core.runtime.agency.PolicyGatedExternalEffectExecutor
+import app.lifeos.core.runtime.agency.ExternalTransportRuntimeRegistry
+import app.lifeos.core.runtime.agency.ExternalEffectRuntimeRegistry
+import app.lifeos.core.data.agency.EncryptedExternalEffectReceiptRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
@@ -164,6 +169,14 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                 installSharedResourceRuntime = {
                     SharedResourceBudgetRuntimeRegistry.install(hardwareResourceIntelligence)
                     ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(this))
+                    ExternalEffectRuntimeRegistry.install(
+                        PolicyGatedExternalEffectExecutor(
+                            policyGate = OwnerPolicyEffectGate(ownerPolicy),
+                            receipts = EncryptedExternalEffectReceiptRepository(this),
+                            transport = ExternalTransportRuntimeRegistry.transport(),
+                            observationReconciler = ExternalTransportRuntimeRegistry.reconciler(),
+                        )
+                    )
                     resourceBudgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(this))
                     decisionTraces = DecisionTraceLedger(EncryptedDecisionTraceRepository(this))
                     goalDecisionTraceRecorder = GoalDecisionTraceRecorder(decisionTraces)
