@@ -5,6 +5,11 @@ import app.lifeos.core.language.IntentType
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
+import app.lifeos.core.runtime.agency.ExternalResourceReservation
+import app.lifeos.core.runtime.agency.ExternalEffectRuntimeRegistry
+import app.lifeos.core.runtime.agency.ExternalEffectExecutor
+import app.lifeos.core.runtime.agency.ExternalActionContract
+import app.lifeos.core.runtime.agency.EffectReceipt
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import kotlinx.coroutines.CancellationException
 
@@ -15,6 +20,7 @@ data class GoalActionContext(
     val sourcePhoton: Photon,
     val goalPhotonId: PhotonId,
     val goalPhotonRevision: Long = 1L,
+    val externalActionContract: ExternalActionContract? = null,
 ) {
     init { require(goalPhotonRevision > 0L) }
 }
@@ -30,6 +36,7 @@ data class GoalActionDispatchResult(
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
     val localSchedule: LocalScheduleExecutionResult? = null,
     val localCommunication: LocalCommunicationExecutionResult? = null,
+    val externalEffect: EffectReceipt? = null,
 )
 
 class GoalActionDispatcher(
@@ -40,6 +47,8 @@ class GoalActionDispatcher(
     private val executeSchedule: suspend (GoalActionContext) -> LocalScheduleExecutionResult,
     private val prepareCommunication: suspend (GoalActionContext) -> LocalCommunicationExecutionResult,
     private val executionGuard: GoalActionExecutionGuard = GoalExecutionRuntimeRegistry.current(),
+    private val externalEffectExecutor: ExternalEffectExecutor? =
+        ExternalEffectRuntimeRegistry.currentOrNull(),
     private val durableRuntimeProvider: () -> DurableGoalPlanRuntime? =
         DurableGoalPlanRuntimeRegistry::currentOrNull,
     private val expandCapabilities: suspend (GoalActionContext) -> String =
@@ -107,13 +116,31 @@ class GoalActionDispatcher(
                 )
             }
 
-            IntentType.SCHEDULE -> GoalActionDispatchResult(
-                localSchedule = executeSchedule(context),
-            )
+            IntentType.SCHEDULE -> {
+                val contract = context.externalActionContract
+                if (contract == null) {
+                    GoalActionDispatchResult(localSchedule = executeSchedule(context))
+                } else {
+                    GoalActionDispatchResult(
+                        externalEffect = requireNotNull(externalEffectExecutor) {
+                            "External action contract requires an installed ExternalEffectExecutor"
+                        }.execute(bindReservation(contract, permit)),
+                    )
+                }
+            }
 
-            IntentType.COMMUNICATE -> GoalActionDispatchResult(
-                localCommunication = prepareCommunication(context),
-            )
+            IntentType.COMMUNICATE -> {
+                val contract = context.externalActionContract
+                if (contract == null) {
+                    GoalActionDispatchResult(localCommunication = prepareCommunication(context))
+                } else {
+                    GoalActionDispatchResult(
+                        externalEffect = requireNotNull(externalEffectExecutor) {
+                            "External action contract requires an installed ExternalEffectExecutor"
+                        }.execute(bindReservation(contract, permit)),
+                    )
+                }
+            }
 
             else -> GoalActionDispatchResult()
         }
@@ -123,6 +150,24 @@ class GoalActionDispatcher(
         }
         executionGuard.settle(permit, result)
         return result
+    }
+
+    private fun bindReservation(
+        contract: ExternalActionContract,
+        permit: GoalActionExecutionPermit,
+    ): ExternalActionContract {
+        val reserved = permit as? GoalActionExecutionPermit.Reserved ?: return contract
+        val reservation = ExternalResourceReservation(
+            accountId = reserved.accountId,
+            reservationId = reserved.reservation.id,
+        )
+        return contract.copy(
+            resourceReservation = reservation,
+            requiredOwnerPolicy = contract.requiredOwnerPolicy.copy(
+                budgetAccountId = reserved.accountId,
+                budgetReservationId = reserved.reservation.id,
+            ),
+        )
     }
 
     private fun blocked(intent: IntentType, reason: String): GoalActionDispatchResult = when (intent) {
