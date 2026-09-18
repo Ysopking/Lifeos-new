@@ -3,6 +3,9 @@ package app.lifeos.core.runtime.life
 import app.lifeos.core.model.CausalTraceId
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.model.PhotonIndexQuery
+import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.PhotonRepository
@@ -141,7 +144,7 @@ class FuturePlanningCoordinator(
     suspend fun planPersisted(trigger: Photon): List<Photon> {
         val current = FutureEvidencePhotonCodec.decode(trigger) ?: return emptyList()
         val key = lineageKey(current)
-        val records = photons.loadAll().mapNotNull { persisted ->
+        val records = futureEvidencePhotons().mapNotNull { persisted ->
             val scenario = FutureEvidencePhotonCodec.decode(persisted) ?: return@mapNotNull null
             if (lineageKey(scenario) == key) Record(persisted, scenario) else null
         }
@@ -149,11 +152,25 @@ class FuturePlanningCoordinator(
     }
 
     suspend fun reconsiderAll(): List<Photon> {
-        val groups = photons.loadAll().mapNotNull { persisted ->
+        val groups = futureEvidencePhotons().mapNotNull { persisted ->
             FutureEvidencePhotonCodec.decode(persisted)?.let { Record(persisted, it) }
         }.groupBy { lineageKey(it.scenario) }
         return groups.toSortedMap().values.flatMap { planGroup(it) }
     }
+
+    private suspend fun futureEvidencePhotons(): List<Photon> =
+        if (photons is RevisionedPhotonRepository) {
+            photons.query(
+                PhotonIndexQuery(
+                    allTags = setOf("future-evidence"),
+                    latestOnly = true,
+                    order = PhotonIndexOrder.OLDEST_FIRST,
+                    limit = Int.MAX_VALUE,
+                )
+            ).mapNotNull { photons.load(it) }
+        } else {
+            photons.loadAll().filter { "future-evidence" in it.tags }
+        }
 
     private suspend fun planGroup(rawRecords: List<Record>): List<Photon> {
         require(rawRecords.isNotEmpty())

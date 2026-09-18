@@ -1,6 +1,7 @@
 package app.lifeos.core.language
 
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
 import java.time.Instant
 
 enum class LanguageCode { DE, EN, UNKNOWN }
@@ -114,6 +115,14 @@ data class LanguageContextItem(
     val active: Boolean,
     val contentTerms: Set<String>,
     val confidence: Double = 1.0,
+    val revisionRef: PhotonRevisionRef? = null,
+    val semanticTypes: Set<String> = emptySet(),
+    val normalizedTerms: Set<String> = contentTerms,
+    val conceptIds: Set<String> = emptySet(),
+    val relationKeys: Set<String> = emptySet(),
+    val conversationId: String? = null,
+    val matterId: String? = null,
+    val goalId: PhotonId? = null,
 ) {
     init {
         require(kind.isNotBlank())
@@ -125,6 +134,7 @@ data class LanguageContext(
     val items: List<LanguageContextItem> = emptyList(),
     val activeGoalId: PhotonId? = null,
     val now: Instant = Instant.now(),
+    val zoneId: String = "Europe/Berlin",
 )
 
 data class ResolvedReference(
@@ -132,6 +142,8 @@ data class ResolvedReference(
     val targetPhotonId: PhotonId?,
     val score: Double,
     val alternatives: List<Pair<PhotonId, Double>> = emptyList(),
+    val targetPhotonRef: PhotonRevisionRef? = null,
+    val revisionAlternatives: List<Pair<PhotonRevisionRef, Double>> = emptyList(),
 ) {
     init { require(score in 0.0..1.0) }
 }
@@ -173,6 +185,11 @@ data class GoalFrame(
     val confidence: Double,
     val language: LanguageCode,
     val semanticGraph: LanguageSemanticGraph = LanguageSemanticGraph.empty(language),
+    val semanticActionGraph: SemanticActionGraph = SemanticActionGraph.empty(),
+    val semanticEntitiesV2: List<SemanticEntityV2> = emptyList(),
+    val quantityTemporal: QuantityTemporalResult = QuantityTemporalResult(emptyList(), emptyList()),
+    val domainSemanticGraph: DomainSemanticGraph = DomainSemanticGraph.empty(),
+    val interpretationQuality: SemanticInterpretationQuality = SemanticInterpretationQuality.unknown(),
 ) {
     init {
         require(objective.isNotBlank())

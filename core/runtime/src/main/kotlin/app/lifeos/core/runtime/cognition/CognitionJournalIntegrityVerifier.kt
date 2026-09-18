@@ -15,8 +15,22 @@ class CognitionJournalIntegrityVerifier(
     private val repository: PhotonRepository,
     private val journalIndex: CognitionJournalIndex? = null,
 ) {
-    suspend fun verify(): CognitionJournalIntegrityReport {
-        val photonsByKind = indexedPhotonsByKind()
+    suspend fun verify(): CognitionJournalIntegrityReport =
+        verifyIndexed(indexedPhotonsByKind())
+
+    suspend fun verify(photons: List<Photon>): CognitionJournalIntegrityReport {
+        val journalPhotons = photons.filter {
+            it.mimeType == COGNITION_JOURNAL_MIME && COGNITION_JOURNAL_ROOT_TAG in it.tags
+        }
+        val byKind = CognitionJournalKind.values().associateWith { kind ->
+            journalPhotons.filter { "cognition-journal-kind:${kind.tag}" in it.tags }
+        }
+        return verifyIndexed(byKind)
+    }
+
+    private fun verifyIndexed(
+        photonsByKind: Map<CognitionJournalKind, List<Photon>>,
+    ): CognitionJournalIntegrityReport {
 
         val eventCount = verifyKind(
             CognitionJournalKind.EVENT,

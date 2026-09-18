@@ -1,18 +1,21 @@
 package app.lifeos.core.runtime.tasks
 
 import app.lifeos.core.model.task.CreateTaskResult
+import app.lifeos.core.model.task.IndexedTaskSnapshotRepository
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskId
+import app.lifeos.core.model.task.TaskIndexReport
 import app.lifeos.core.model.task.TaskLoadReport
 import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskStateMachine
+import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.model.worker.WorkerId
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class InMemoryTaskRepository : TaskSnapshotRepository {
+class InMemoryTaskRepository : IndexedTaskSnapshotRepository {
     private val mutex = Mutex()
     private val tasks = linkedMapOf<TaskId, LifeTask>()
     private val idempotencyIndex = mutableMapOf<String, TaskId>()
@@ -43,6 +46,36 @@ class InMemoryTaskRepository : TaskSnapshotRepository {
 
     override suspend fun findByIdempotencyKey(key: String): LifeTask? = mutex.withLock {
         idempotencyIndex[key]?.let(tasks::get)
+    }
+
+    override suspend fun activeCount(types: Set<TaskType>): Int = mutex.withLock {
+        if (types.isEmpty()) return@withLock 0
+        tasks.values.count { task ->
+            task.type in types && task.state !in TERMINAL_STATES
+        }
+    }
+
+    override suspend fun listByStates(
+        types: Set<TaskType>,
+        states: Set<TaskState>,
+        limit: Int,
+    ): List<LifeTask> = mutex.withLock {
+        require(limit > 0)
+        if (types.isEmpty() || states.isEmpty()) return@withLock emptyList()
+        tasks.values.asSequence()
+            .filter { it.type in types && it.state in states }
+            .sortedWith(compareBy<LifeTask> { it.createdAt }.thenBy { it.id.value })
+            .take(limit)
+            .toList()
+    }
+
+    override suspend fun rebuildIndex(): TaskIndexReport = mutex.withLock {
+        TaskIndexReport(
+            formatVersion = 1,
+            taskCount = tasks.size,
+            activeTaskCount = tasks.values.count { it.state !in TERMINAL_STATES },
+            idempotencyKeyCount = idempotencyIndex.size,
+        )
     }
 
     override suspend fun listRunnable(now: Instant, limit: Int): List<LifeTask> = mutex.withLock {
@@ -298,5 +331,6 @@ class InMemoryTaskRepository : TaskSnapshotRepository {
             TaskState.SUPERSEDED,
             TaskState.FAILED,
         )
+        val TERMINAL_STATES = EXECUTION_TERMINAL_STATES + TaskState.CANCELLED
     }
 }

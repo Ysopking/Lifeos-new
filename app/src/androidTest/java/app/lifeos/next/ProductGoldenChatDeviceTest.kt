@@ -2,6 +2,7 @@ package app.lifeos.next
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lifeos.core.language.IntentType
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
@@ -89,6 +90,36 @@ class ProductGoldenChatDeviceTest {
     }
 
     @Test
+    fun seedSemanticGoalV4RoundTrip() = runBlocking {
+        assertTrue(awaitBoot().ready)
+        val user = Photon(
+            content = "Wie erstelle ich ein Bild?",
+            provenance = Provenance(
+                source = "product-gold-semantic-device-test",
+                actor = "user",
+            ),
+            tags = setOf(
+                "chat",
+                "chat:user",
+                "conversation:default",
+                SEMANTIC_USER_SENTINEL_TAG,
+            ),
+        )
+
+        val submission = app.kernel.persistUserUtterance(user)
+
+        assertTrue(submission.languageUnderstood)
+        assertEquals(IntentType.QUERY, submission.effectiveGoal?.intent)
+        assertTrue(submission.effectiveGoal?.semanticActionGraph?.executableNodes?.isEmpty() == true)
+        assertNotNull(submission.goal)
+        val persistedGoal = requireNotNull(submission.goal).photon
+        assertTrue(persistedGoal.content.startsWith("goal/v4\n"))
+        assertTrue(persistedGoal.content.contains("action.fingerprint="))
+        assertTrue(persistedGoal.provenance.parentIds.contains(user.id))
+        assertEquals(null, submission.externalEffect)
+    }
+
+    @Test
     fun recoverProductGoldChatRoundTrip() = runBlocking {
         assertTrue(awaitBoot().ready)
         assertProductTopology()
@@ -156,6 +187,7 @@ class ProductGoldenChatDeviceTest {
         private const val BOOT_TIMEOUT_MS = 20_000L
         private const val USER_SENTINEL_TAG = "product-gold-chat:user"
         private const val ASSISTANT_SENTINEL_TAG = "product-gold-chat:assistant"
+        private const val SEMANTIC_USER_SENTINEL_TAG = "product-gold-semantic:user"
         private val ADAPTIVE_ONLY_SUBSYSTEMS = setOf("build-studio")
     }
 }

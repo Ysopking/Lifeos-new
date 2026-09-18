@@ -3,6 +3,7 @@ package app.lifeos.next.kernel
 import android.content.Context
 import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
+import app.lifeos.core.data.cognition.EncryptedCognitionCoverageRepository
 import app.lifeos.core.data.cognition.EncryptedCognitionJournalIndexRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
@@ -10,6 +11,7 @@ import app.lifeos.core.data.evolution.EncryptedEvolutionStore
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.learning.EncryptedLearningAdaptationRepository
+import app.lifeos.core.data.snapshot.EncryptedCognitiveSnapshotRepository
 import app.lifeos.core.data.goal.EncryptedGoalPlanRepository
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
 import app.lifeos.core.data.task.EncryptedTaskRepository
@@ -24,6 +26,11 @@ import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.health.ProtectionMode
 import app.lifeos.core.model.health.ProtectionStateLoadResult
 import app.lifeos.core.model.worker.WorkerId
+import app.lifeos.core.runtime.CognitiveSnapshotManager
+import app.lifeos.core.runtime.life.DurableLifeMemoryRuntimeRegistry
+import app.lifeos.core.runtime.CognitiveSnapshotRuntimeRegistry
+import app.lifeos.core.runtime.CognitiveSnapshotProducer
+import app.lifeos.core.runtime.CognitiveSnapshotDependencyState
 import app.lifeos.core.runtime.DurableLifeOsRuntime
 import app.lifeos.core.runtime.DurableRuntimeStateBridge
 import app.lifeos.core.runtime.InfluenceExecutor
@@ -32,6 +39,15 @@ import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.StaticFieldRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootSnapshotSource
+import app.lifeos.core.runtime.boot.TaskRepositoryBootSource
+import app.lifeos.core.runtime.boot.PhotonRepositoryBootSource
+import app.lifeos.core.runtime.boot.GeneratedToolRegistryBootSource
+import app.lifeos.core.runtime.boot.FieldSnapshotRepositoryBootSource
+import app.lifeos.core.runtime.boot.CheckpointRepositoryBootSource
+import app.lifeos.core.runtime.boot.CapabilityRegistryBootSource
+import app.lifeos.core.runtime.boot.BootSnapshotLoader
+import app.lifeos.core.runtime.boot.BootReadSession
 import app.lifeos.core.runtime.boot.CapabilityWarmup
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
 import app.lifeos.core.runtime.boot.ChainedStateRehydrator
@@ -63,6 +79,7 @@ import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.capability.TrustLevel
+import app.lifeos.core.runtime.cognition.CognitionCoverageIndex
 import app.lifeos.core.runtime.cognition.CognitionJournalIndex
 import app.lifeos.core.runtime.cognition.CognitiveScheduler
 import app.lifeos.core.runtime.cognition.CompositeDurableTaskExecutionObserver
@@ -106,7 +123,10 @@ import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import app.lifeos.core.runtime.tasks.ConflatedTaskSchedulerSignal
 import app.lifeos.core.runtime.tasks.DurableCognitivePipeline
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
-import app.lifeos.core.runtime.tasks.TaskScheduler
+import app.lifeos.core.runtime.tasks.PooledTaskScheduler
+import app.lifeos.core.runtime.tasks.CognitiveWorkerSlot
+import app.lifeos.core.runtime.tasks.CognitiveWorkerPool
+import app.lifeos.core.runtime.tasks.CognitiveWorkerLane
 import app.lifeos.core.runtime.tasks.TaskSchedulerLoop
 import app.lifeos.core.runtime.thought.DurableThoughtGraph
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
@@ -126,6 +146,7 @@ import kotlinx.coroutines.SupervisorJob
 class LifeOsKernelFactory(
     private val context: Context,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime? = null,
 ) {
     fun create(): LifeOsKernel {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -134,6 +155,9 @@ class LifeOsKernelFactory(
         val cognitionJournalIndex = CognitionJournalIndex(
             repository = EncryptedCognitionJournalIndexRepository(appContext),
             photons = store,
+        )
+        val cognitionCoverageIndex = CognitionCoverageIndex(
+            repository = EncryptedCognitionCoverageRepository(appContext),
         )
         val learningAdaptationRepository = EncryptedLearningAdaptationRepository(appContext)
         val learningAdaptations = DurableLearningAdaptationLedger(learningAdaptationRepository)
@@ -319,6 +343,16 @@ class LifeOsKernelFactory(
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
         val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
+        val bootReadSession = BootReadSession(
+            BootSnapshotLoader(
+                photons = PhotonRepositoryBootSource(store),
+                tasks = TaskRepositoryBootSource(taskRepository),
+                checkpoints = CheckpointRepositoryBootSource(checkpointRepository),
+                capabilities = CapabilityRegistryBootSource(capabilityRegistry),
+                tools = GeneratedToolRegistryBootSource(generatedTools),
+                fieldSnapshots = FieldSnapshotRepositoryBootSource(fieldSnapshotRepository),
+            )
+        )
         val fieldThoughtGraphProjectionOutbox =
             EncryptedFieldThoughtGraphProjectionOutboxRepository(appContext)
         val fieldThoughtGraphProjection = FieldThoughtGraphProjectionCoordinator(
@@ -341,6 +375,27 @@ class LifeOsKernelFactory(
             store = store,
             journalIndex = cognitionJournalIndex,
         )
+        val cognitiveSnapshotManager = CognitiveSnapshotManager(
+            repository = EncryptedCognitiveSnapshotRepository(appContext),
+        )
+        CognitiveSnapshotRuntimeRegistry.install(
+            CognitiveSnapshotProducer(
+                manager = cognitiveSnapshotManager,
+                journal = cognitiveEventJournal,
+                worlds = worldFormulaSnapshotRepository,
+                dependencyState = {
+                    thoughtGraph.snapshot().let { snapshot ->
+                        CognitiveSnapshotDependencyState(
+                            revision = snapshot.revision,
+                            fingerprint = snapshot.contentFingerprint,
+                        )
+                    }
+                },
+                memoryFingerprint = {
+                    DurableLifeMemoryRuntimeRegistry.current()?.current()?.fingerprint
+                },
+            )
+        )
         val cognitiveScheduler = CognitiveScheduler()
         val cognitionAdmission = DurableCognitionAdmissionController(
             tasks = taskRepository,
@@ -352,6 +407,7 @@ class LifeOsKernelFactory(
             durableDispatcher = DurableCognitionDispatcher(
                 taskEngine = taskEngine,
                 admissionController = cognitionAdmission,
+                coverageIndex = cognitionCoverageIndex,
             ),
         )
         val cognitionReconciler = DurableCognitionReconciler(
@@ -359,6 +415,7 @@ class LifeOsKernelFactory(
             tasks = taskRepository,
             cognition = continuousCognition,
             taskEngine = taskEngine,
+            coverage = cognitionCoverageIndex,
         )
         val photonTransactions = PhotonBackedPhotonTransactionJournal(
             store = store,
@@ -377,7 +434,6 @@ class LifeOsKernelFactory(
             taskEngine = taskEngine,
         )
 
-        val durableWorkerId = WorkerId("cognitive-worker-0")
         val workerFactory = CognitiveWorkerFactory(
             tasks = taskRepository,
             photons = store,
@@ -390,15 +446,17 @@ class LifeOsKernelFactory(
                 heartbeatInterval = HEARTBEAT_INTERVAL,
             ),
         )
-        val cognitiveWorker = workerFactory.create(durableWorkerId)
         val durableStateBridge = DurableRuntimeStateBridge()
-        val healthTaskObserver = HealthTaskExecutionObserver(
-            workerNodeId = HealthNodeId("worker:${durableWorkerId.value}"),
-            graph = healthGraph,
-        )
-        val reportingDispatcher = ReportingCognitiveTaskDispatcher(
-            worker = cognitiveWorker,
-            observer = CompositeDurableTaskExecutionObserver(
+        val hardware = hardwareResourceIntelligence?.currentHardwareSnapshot()
+        val availableCores = hardware?.availableProcessors ?: 1
+        val activeWorkers = (availableCores - 1).coerceIn(0, 3)
+        val backgroundWorkers = if (availableCores >= 4) 1 else 0
+        val maintenanceWorkers = if (availableCores >= 6) 1 else 0
+
+        fun workerSlot(lane: CognitiveWorkerLane, ordinal: Int): CognitiveWorkerSlot {
+            val workerId = WorkerId("cognitive-${lane.name.lowercase()}-$ordinal")
+            val worker = workerFactory.create(workerId)
+            val observer = CompositeDurableTaskExecutionObserver(
                 listOf(
                     durableStateBridge,
                     PhotonTransactionObserver(photonTransactions),
@@ -406,15 +464,36 @@ class LifeOsKernelFactory(
                         outcomes = cognitiveOutcomes,
                         triggers = cognitiveTriggers,
                     ),
-                    healthTaskObserver,
+                    HealthTaskExecutionObserver(
+                        workerNodeId = HealthNodeId("worker:${workerId.value}"),
+                        graph = healthGraph,
+                    ),
                     DurableCognitionRecoveryObserver(cognitionReconciler),
                 )
-            ),
+            )
+            return CognitiveWorkerSlot(
+                lane = lane,
+                workerId = workerId,
+                dispatcher = ReportingCognitiveTaskDispatcher(
+                    worker = worker,
+                    observer = observer,
+                ),
+            )
+        }
+
+        val workerPool = CognitiveWorkerPool(
+            buildList {
+                add(workerSlot(CognitiveWorkerLane.INTERACTIVE, 0))
+                repeat(activeWorkers) { add(workerSlot(CognitiveWorkerLane.ACTIVE, it)) }
+                repeat(backgroundWorkers) { add(workerSlot(CognitiveWorkerLane.BACKGROUND, it)) }
+                repeat(maintenanceWorkers) { add(workerSlot(CognitiveWorkerLane.MAINTENANCE, it)) }
+            }
         )
-        val taskScheduler = TaskScheduler(
+        val taskScheduler = PooledTaskScheduler(
             tasks = taskRepository,
-            workerId = durableWorkerId,
-            dispatcher = reportingDispatcher,
+            workers = workerPool,
+            scope = scope,
+            workerAvailableSignal = schedulerSignal,
             leaseDuration = TASK_LEASE_DURATION,
         )
         val schedulerLoop = TaskSchedulerLoop(
@@ -478,6 +557,9 @@ class LifeOsKernelFactory(
                     cognitionJournalIndex.reconcile()
                 },
                 RuntimeStateRehydrationStep {
+                    cognitiveSnapshotManager.replay(cognitiveEventJournal)
+                },
+                RuntimeStateRehydrationStep {
                     cognitionReconciler.reconcile()
                 },
                 RuntimeStateRehydrationStep {
@@ -504,7 +586,9 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "goal-plan-ledger"
                         override suspend fun probe(): StoreStatus {
-                            val report = goalPlanRepository.loadReport()
+                            val report = bootReadSession.readOnce("goal-plan-ledger") {
+                                goalPlanRepository.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.isCorrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
@@ -515,18 +599,20 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "photon-store"
                         override suspend fun probe(): StoreStatus {
-                            val report = store.loadReport()
+                            val failures = bootReadSession.readFailures(BootSnapshotSource.PHOTON)
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableFiles.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
-                                message = if (report.unreadableFiles.isEmpty()) null else "unreadable:${report.unreadableFiles.size}",
+                                state = if (failures.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
+                                message = if (failures.isEmpty()) null else "unreadable:${failures.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "learning-adaptation-ledger"
                         override suspend fun probe(): StoreStatus {
-                            val report = learningAdaptationRepository.loadReport()
+                            val report = bootReadSession.readOnce("learning-adaptation-ledger") {
+                                learningAdaptationRepository.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
@@ -537,14 +623,18 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "thought-matrix-state-store"
                         override suspend fun probe(): StoreStatus {
-                            thoughtMatrixStateRepository.load()
+                            bootReadSession.readOnce("thought-matrix-state-store") {
+                                thoughtMatrixStateRepository.load()
+                            }
                             return StoreStatus(storeId, StoreState.HEALTHY)
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "thought-graph-delta-store"
                         override suspend fun probe(): StoreStatus {
-                            val report = thoughtGraphDeltaRepository.loadReport()
+                            val report = bootReadSession.readOnce("thought-graph-delta-store") {
+                                thoughtGraphDeltaRepository.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
@@ -555,7 +645,9 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "field-thought-graph-projection-outbox"
                         override suspend fun probe(): StoreStatus {
-                            val report = fieldThoughtGraphProjectionOutbox.loadReport()
+                            val report = bootReadSession.readOnce("field-thought-graph-projection-outbox") {
+                                fieldThoughtGraphProjectionOutbox.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
@@ -566,15 +658,21 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "task-store"
                         override suspend fun probe(): StoreStatus {
-                            val now = Instant.now()
-                            taskRepository.listRunnable(now, limit = 1)
-                            taskRepository.listExpiredLeases(now, limit = 1)
-                            return StoreStatus(storeId, StoreState.HEALTHY)
+                            val failures = bootReadSession.readFailures(BootSnapshotSource.TASK)
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (failures.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
+                                message = if (failures.isEmpty()) null else "unreadable:${failures.size}",
+                            )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "runtime-protection-store"
-                        override suspend fun probe(): StoreStatus = when (val protection = protectionRepository.load()) {
+                        override suspend fun probe(): StoreStatus = when (
+                            val protection = bootReadSession.readOnce("runtime-protection-store") {
+                                protectionRepository.load()
+                            }
+                        ) {
                             ProtectionStateLoadResult.Missing -> StoreStatus(storeId = storeId, state = StoreState.HEALTHY)
                             is ProtectionStateLoadResult.Loaded -> StoreStatus(
                                 storeId = storeId,
@@ -587,18 +685,20 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "field-snapshot-store"
                         override suspend fun probe(): StoreStatus {
-                            val report = fieldSnapshotRepository.loadReport()
+                            val failures = bootReadSession.readFailures(BootSnapshotSource.FIELD)
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
-                                message = if (report.unreadableEntries.isEmpty()) null else "unreadable:${report.unreadableEntries.size}",
+                                state = if (failures.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
+                                message = if (failures.isEmpty()) null else "unreadable:${failures.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "world-formula-snapshot-store"
                         override suspend fun probe(): StoreStatus {
-                            val report = worldFormulaSnapshotRepository.loadReport()
+                            val report = bootReadSession.readOnce("world-formula-snapshot-store") {
+                                worldFormulaSnapshotRepository.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
@@ -609,15 +709,22 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "evolution-store"
                         override suspend fun probe(): StoreStatus {
-                            evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
+                            bootReadSession.readOnce("evolution-store") {
+                                evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
+                            }
                             return StoreStatus(storeId, StoreState.HEALTHY)
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "generated-tool-state-store"
                         override suspend fun probe(): StoreStatus {
-                            generatedToolStateRepository.loadAll()
-                            return StoreStatus(storeId, StoreState.HEALTHY)
+                            bootReadSession.snapshot()
+                            val failures = bootReadSession.readFailures(BootSnapshotSource.TOOL)
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (failures.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
+                                message = if (failures.isEmpty()) null else "unreadable:${failures.size}",
+                            )
                         }
                     },
                     object : StoreProbe {
@@ -633,6 +740,7 @@ class LifeOsKernelFactory(
             photonRehydrator = PhotonRehydrator(
                 repository = store,
                 journalIndex = cognitionJournalIndex,
+                bootReadSession = bootReadSession,
             ),
             moduleRehydrator = object : ModuleRehydrator {
                 override suspend fun rehydrate(): ModuleRestoreSummary {

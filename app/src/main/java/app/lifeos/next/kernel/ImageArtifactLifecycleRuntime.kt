@@ -4,6 +4,10 @@ import app.lifeos.core.image.ImageAssetDescriptor
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.SemanticArtifactPlan
+import app.lifeos.core.model.SemanticArtifactKind
+import app.lifeos.core.model.SemanticArtifactClaim
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.StableCognitiveIds
 import app.lifeos.core.runtime.artifact.ArtifactContribution
 import app.lifeos.core.runtime.artifact.ArtifactCoordinator
@@ -55,6 +59,13 @@ internal class ImageArtifactLifecycleRuntime(
                 image.scene.photon.id,
                 image.image.photon.id,
             )
+            val sceneContent = buildString {
+                append("sceneId=")
+                append(image.descriptor.sceneId)
+                append(";scenePhotonId=")
+                append(image.scene.photon.id.value)
+            }
+            val renderContent = image.descriptor.encode()
             val contributions = listOf(
                 ArtifactContribution.create(
                     module = "scene-compiler",
@@ -67,12 +78,8 @@ internal class ImageArtifactLifecycleRuntime(
                         parentIds = sourceParents,
                     ),
                     confidence = image.scene.photon.confidence,
-                    content = buildString {
-                        append("sceneId=")
-                        append(image.descriptor.sceneId)
-                        append(";scenePhotonId=")
-                        append(image.scene.photon.id.value)
-                    },
+                    content = sceneContent,
+                    claimIds = setOf("scene"),
                 ),
                 ArtifactContribution.create(
                     module = "image-renderer",
@@ -85,8 +92,35 @@ internal class ImageArtifactLifecycleRuntime(
                         parentIds = renderParents,
                     ),
                     confidence = image.image.photon.confidence,
-                    content = image.descriptor.encode(),
+                    content = renderContent,
+                    claimIds = setOf("render"),
                 ),
+            )
+            val semanticPlan = SemanticArtifactPlan(
+                kind = SemanticArtifactKind.IMAGE,
+                claims = listOf(
+                    SemanticArtifactClaim(
+                        claimId = "scene",
+                        evidence = setOf(
+                            PhotonRevisionRef(context.sourcePhoton.id, context.sourcePhoton.revision),
+                            PhotonRevisionRef(image.scene.photon.id, image.scene.photon.revision),
+                        ),
+                        confidenceMicros = (image.scene.photon.confidence * 1_000_000.0).toLong()
+                            .coerceIn(0L, 1_000_000L),
+                        canonicalContent = sceneContent,
+                    ),
+                    SemanticArtifactClaim(
+                        claimId = "render",
+                        evidence = setOf(
+                            PhotonRevisionRef(image.scene.photon.id, image.scene.photon.revision),
+                            PhotonRevisionRef(image.image.photon.id, image.image.photon.revision),
+                        ),
+                        confidenceMicros = (image.image.photon.confidence * 1_000_000.0).toLong()
+                            .coerceIn(0L, 1_000_000L),
+                        canonicalContent = renderContent,
+                    ),
+                ),
+                sourceWorldRevision = 0L,
             )
 
             val stagedIngress = CapturingArtifactPhotonIngress()
@@ -114,6 +148,7 @@ internal class ImageArtifactLifecycleRuntime(
                         model = image.rendererId,
                     ),
                     contributions = contributions,
+                    semanticPlan = semanticPlan,
                     finalizedAt = finalizedAt,
                     materializedAsset = image.descriptor.asset,
                 )

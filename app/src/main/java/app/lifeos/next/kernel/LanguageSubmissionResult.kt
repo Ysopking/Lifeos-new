@@ -5,6 +5,7 @@ import app.lifeos.core.language.GoalPhoton
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingResult
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
+import app.lifeos.core.runtime.agency.EffectReceipt
 
 data class LanguageSubmissionResult(
     val source: PhotonSubmissionResult,
@@ -19,6 +20,8 @@ data class LanguageSubmissionResult(
     val localDeepSearch: LocalDeepSearchExecutionResult? = null,
     val localSchedule: LocalScheduleExecutionResult? = null,
     val localCommunication: LocalCommunicationExecutionResult? = null,
+    val externalEffect: EffectReceipt? = null,
+    val actionGraphExecution: SemanticActionGraphExecutionResult? = null,
     val languageFailure: String? = null,
 ) {
     init {
@@ -46,7 +49,8 @@ data class LanguageSubmissionResult(
             ((localDeepSearch as? LocalDeepSearchExecutionResult.Produced)?.output?.processingQueued != false) &&
             ((localImageTransform as? LocalImageTransformExecutionResult.Transformed)?.output?.processingQueued != false) &&
             ((localSchedule as? LocalScheduleExecutionResult.Scheduled)?.output?.processingQueued != false)
-    val actionReady: Boolean get() = effectiveRouting?.ready == true
+    val actionReady: Boolean get() =
+        actionGraphExecution?.completed == true || effectiveRouting?.ready == true
     val generatedImage: GeneratedImageResult? get() =
         (imageGeneration as? ImageGenerationResult.Generated)?.value
 }

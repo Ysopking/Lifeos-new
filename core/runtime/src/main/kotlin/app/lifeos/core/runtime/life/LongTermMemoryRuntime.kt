@@ -211,17 +211,151 @@ class LongTermMemoryEngine(
             .sortedBy { it.crystalId }
 
         val derived = buildDerivedPhotons(atoms, crystals, now)
-        val fingerprint = StableCognitiveIds.fingerprint(
-            "long-term-memory-projection/v1",
-            now.toString(),
-            *decisions.flatMap {
-                listOf(it.decisionId, it.photonId.value, it.toStage.name, it.reason)
-            }.toTypedArray(),
-            *atoms.map { it.atomId }.toTypedArray(),
-            *crystals.map { it.crystalId }.toTypedArray(),
-        )
+        val fingerprint = projectionFingerprint(decisions, atoms, crystals, now)
         return LongTermMemoryProjection(decisions, episodes, atoms, crystals, derived, now, fingerprint)
     }
+
+    /**
+     * Incremental projection for hot-path memory changes. Unchanged decisions and episode material
+     * are preserved; only changed source ids and their affected episode/crystal are recomputed.
+     */
+    fun projectDelta(
+        current: LongTermMemoryProjection,
+        allCurrentPhotons: Collection<Photon>,
+        changed: Collection<Photon>,
+        accessChanges: MemoryAccessLedger,
+        now: Instant,
+    ): LongTermMemoryProjection {
+        if (changed.isEmpty()) return current
+
+        val latestAll = allCurrentPhotons
+            .groupBy { it.id }
+            .mapValues { (_, revisions) -> revisions.maxBy { it.revision } }
+            .values
+            .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+        val latestById = latestAll.associateBy { it.id }
+        val latestChanged = changed
+            .groupBy { it.id }
+            .mapValues { (_, revisions) -> revisions.maxBy { it.revision } }
+            .values
+            .map { changedPhoton -> latestById[changedPhoton.id] ?: changedPhoton }
+            .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+        val changedIds = latestChanged.mapTo(linkedSetOf()) { it.id }
+
+        val replacementDecisions = latestChanged.associate { photon ->
+            photon.id to decide(photon, accessChanges.profileFor(photon), now)
+        }
+        val decisionMap = (
+            current.decisions.filterNot { it.photonId in changedIds } +
+                replacementDecisions.values
+            ).associateBy { it.photonId }
+        val decisions = latestAll.map { photon ->
+            requireNotNull(decisionMap[photon.id]) {
+                "Incremental memory projection lost decision for " + photon.id.value
+            }
+        }
+        val decisionsById = decisions.associateBy { it.photonId }
+
+        val oldAffectedEpisodes = current.episodes.filter { episode ->
+            episode.sourcePhotonIds.any { it in changedIds }
+        }
+        val oldAffectedEpisodeIds = oldAffectedEpisodes.mapTo(linkedSetOf()) { it.episodeId }
+        val oldAffectedSourceIds = oldAffectedEpisodes
+            .flatMapTo(linkedSetOf()) { it.sourcePhotonIds }
+
+        // Rebuild the complete old/new grouping neighborhoods. If a changed Photon leaves an
+        // episode, unchanged siblings reveal the old key. If it enters an existing episode, its
+        // new key pulls every current sibling of that group into the rebuild.
+        val affectedKeys = buildSet {
+            oldAffectedSourceIds.asSequence()
+                .filterNot { it in changedIds }
+                .mapNotNull(latestById::get)
+                .filter { photon ->
+                    decisionsById[photon.id]?.toStage?.let { it >= MemoryStage.WARM } == true
+                }
+                .forEach { add(episodeKey(it)) }
+            latestChanged
+                .filter { photon ->
+                    replacementDecisions.getValue(photon.id).toStage >= MemoryStage.WARM
+                }
+                .forEach { add(episodeKey(it)) }
+        }
+
+        val affectedCurrentPhotons = latestAll.filter { photon ->
+            decisionsById[photon.id]?.toStage?.let { it >= MemoryStage.WARM } == true &&
+                episodeKey(photon) in affectedKeys
+        }
+        val rebuiltEpisodes = if (affectedCurrentPhotons.isEmpty()) {
+            emptyList()
+        } else {
+            buildEpisodes(affectedCurrentPhotons, decisionsById)
+        }
+        val newAffectedSourceIds = rebuiltEpisodes
+            .flatMapTo(linkedSetOf()) { it.sourcePhotonIds }
+        val affectedSourceIds = linkedSetOf<PhotonId>().apply {
+            addAll(changedIds)
+            addAll(oldAffectedSourceIds)
+            addAll(newAffectedSourceIds)
+        }
+
+        val retainedEpisodes = current.episodes.filterNot { episode ->
+            episode.episodeId in oldAffectedEpisodeIds ||
+                episode.sourcePhotonIds.any { it in newAffectedSourceIds }
+        }
+        val episodes = (retainedEpisodes + rebuiltEpisodes).sortedBy { it.episodeId }
+        val episodeBySource = episodes.flatMap { episode ->
+            episode.sourcePhotonIds.map { it to episode }
+        }.toMap()
+
+        val retainedAtoms = current.atoms.filterNot { atom ->
+            atom.sourcePhotonIds.any { it in affectedSourceIds }
+        }
+        val rebuiltAtoms = latestAll
+            .filter { it.id in affectedSourceIds }
+            .flatMap { photon ->
+                val stage = decisionsById[photon.id]?.toStage ?: return@flatMap emptyList()
+                val episode = episodeBySource[photon.id]
+                if (stage < MemoryStage.COLD || episode == null) emptyList()
+                else atomize(photon, episode, stage)
+            }
+        val atoms = (retainedAtoms + rebuiltAtoms).sortedBy { it.atomId }
+
+        val retainedCrystals = current.crystals.filterNot { crystal ->
+            crystal.sourcePhotonIds.any { it in affectedSourceIds }
+        }
+        val rebuiltCrystals = rebuiltEpisodes
+            .filter { it.stage == MemoryStage.CRYSTALLIZED }
+            .mapNotNull { episode ->
+                crystallize(episode, atoms.filter { it.episodeId == episode.episodeId })
+            }
+        val crystals = (retainedCrystals + rebuiltCrystals).sortedBy { it.crystalId }
+
+        val derived = buildDerivedPhotons(atoms, crystals, now)
+        return LongTermMemoryProjection(
+            decisions = decisions,
+            episodes = episodes,
+            atoms = atoms,
+            crystals = crystals,
+            derivedPhotons = derived,
+            evaluatedAt = now,
+            fingerprint = projectionFingerprint(decisions, atoms, crystals, now),
+        )
+    }
+
+    private fun projectionFingerprint(
+        decisions: List<MemoryCompactionDecision>,
+        atoms: List<MemoryAtom>,
+        crystals: List<MemoryCrystal>,
+        now: Instant,
+    ): String = StableCognitiveIds.fingerprint(
+        "long-term-memory-projection/v1",
+        now.toString(),
+        *decisions.flatMap {
+            listOf(it.decisionId, it.photonId.value, it.toStage.name, it.reason)
+        }.toTypedArray(),
+        *atoms.map { it.atomId }.toTypedArray(),
+        *crystals.map { it.crystalId }.toTypedArray(),
+    )
 
     /** Promote a compacted item when new present relevance exceeds the configured threshold. */
     fun rehydrateTarget(current: MemoryStage, relevanceScore: Double): MemoryStage {

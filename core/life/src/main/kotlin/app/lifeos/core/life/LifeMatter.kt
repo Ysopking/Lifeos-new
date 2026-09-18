@@ -11,19 +11,19 @@ enum class LifeMatterState {
 }
 
 data class LifeMatter(
-    val matterId: String,
+    val matterId: LifeMatterId,
     val domainId: LifeDomainId,
     val title: String,
     val state: LifeMatterState,
     val revision: Long,
     val photonRevisions: Set<PhotonRevisionRef>,
-    val relationMatterIds: Set<String> = emptySet(),
+    val relationMatterIds: Set<LifeMatterId> = emptySet(),
 ) {
     init {
-        require(matterId.isNotBlank())
+        require(matterId.value.isNotBlank())
         require(title.isNotBlank())
         require(revision > 0)
-        require(relationMatterIds.none { it.isBlank() })
+        require(relationMatterIds.none { it.value.isBlank() })
         require(matterId !in relationMatterIds)
     }
 

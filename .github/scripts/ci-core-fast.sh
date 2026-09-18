@@ -21,6 +21,9 @@ printf 'ANDROID_SDK_ROOT=%s\n' "${ANDROID_SDK_ROOT:-}"
 step "gate 00: immutable CI action refs"
 bash .github/scripts/ci-action-pin-contract.sh
 
+step "gate 00b: language semantic architecture contract"
+bash .github/scripts/ci-language-semantic-contract.sh
+
 step "gate 01: core model tests"
 gradle :core:model:test --stacktrace
 

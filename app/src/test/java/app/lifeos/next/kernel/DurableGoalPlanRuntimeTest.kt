@@ -3,6 +3,7 @@ package app.lifeos.next.kernel
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
@@ -43,22 +44,33 @@ class DurableGoalPlanRuntimeTest {
         val goalRepository = MemoryGoalPlanRepository()
         val checkpointRepository = MemoryCheckpointRepository()
         val ledger = DurableGoalPlanLedger(goalRepository)
-        val durableRuntime = runtime(ledger, checkpointRepository)
+        val persisted = mutableListOf<Photon>()
+        val durableRuntime = runtime(
+            ledger = ledger,
+            checkpoints = checkpointRepository,
+            loadPersistedPhotons = { persisted.toList() },
+        )
         val goal = goal(IntentType.QUERY, "Resolve the local query")
         val routing = routing(goal)
+        val goalId = PhotonId("goal-e2e")
         val source = photon("source-e2e", tags = setOf("chat"))
-        val outcome = photon("outcome-e2e", tags = setOf("answer", "result"))
+        val outcome = photon(
+            id = "outcome-e2e",
+            tags = setOf("answer", "result", "local-query-answer"),
+            parentIds = setOf(goalId),
+        )
         val context = GoalActionContext(
             goal = goal,
             routing = routing,
             sourcePhoton = source,
-            goalPhotonId = PhotonId("goal-e2e"),
+            goalPhotonId = goalId,
             goalPhotonRevision = 1,
         )
         var executions = 0
         val dispatcher = GoalActionDispatcher(
             executeKnowledge = {
                 executions += 1
+                persisted += outcome
                 LocalKnowledgeExecutionResult.Produced(
                     kind = LocalKnowledgeGoalKind.QUERY_ANSWER,
                     output = PhotonSubmissionResult(outcome, processingQueued = true),
@@ -90,7 +102,7 @@ class DurableGoalPlanRuntimeTest {
         val replay = dispatcher.execute(context)
 
         assertEquals(1, executions)
-        assertEquals(GoalActionDispatchResult(), replay)
+        assertEquals(outcome, replay.recoveredOutcome)
         assertEquals(1, checkpointRepository.checkpoints.size)
         assertTrue(ledger.states.value.values.single().stepStates.values.all {
             it == GoalStepState.COMPLETED
@@ -147,6 +159,11 @@ class DurableGoalPlanRuntimeTest {
         assertTrue("share-preparation" in preparation.tags)
         assertTrue("status=prepared" in preparation.content)
         assertTrue("delivered" !in preparation.content)
+        assertTrue(
+            "Communication preparation Photon id must be accepted by EncryptedPhotonStore",
+            preparation.id.value.matches(Regex("[A-Za-z0-9_-]{1,128}")),
+        )
+        assertTrue(preparation.id.value.startsWith("communication-preparation-"))
         assertTrue(ledger.states.value.values.single().stepStates.values.all {
             it == GoalStepState.COMPLETED
         })
@@ -157,25 +174,31 @@ class DurableGoalPlanRuntimeTest {
         ledger: DurableGoalPlanLedger,
         checkpoints: MemoryCheckpointRepository,
         persistDerivedOutcome: suspend (Photon) -> PhotonSubmissionResult? = { null },
+        loadPersistedPhotons: suspend () -> List<Photon> = { emptyList() },
     ) = DurableGoalPlanRuntime(
         ledger = ledger,
         convergence = GoalConvergenceDecisionProvider(
             DurableConvergenceDecisionCoordinator(checkpoints)
         ),
         persistDerivedOutcome = persistDerivedOutcome,
+        loadPersistedPhotons = loadPersistedPhotons,
         now = { at },
     )
 
-    private fun goal(intent: IntentType, objective: String) = GoalFrame(
-        intent = intent,
-        objective = objective,
-        entities = emptyList(),
-        references = emptyList(),
-        constraints = emptyList(),
-        ambiguities = emptyList(),
-        confidence = 1.0,
-        language = LanguageCode.EN,
-    )
+    private fun goal(intent: IntentType, objective: String): GoalFrame {
+        val text = when (intent) {
+            IntentType.QUERY -> "What is LIFEOS?"
+            IntentType.COMMUNICATE -> "Send the report."
+            else -> error("Unsupported test intent: " + intent)
+        }
+        return LanguageUnderstandingEngine()
+            .understand(text)
+            .goal
+            .copy(
+                objective = objective,
+                confidence = 1.0,
+            )
+    }
 
     private fun routing(goal: GoalFrame) = GoalCapabilityResolution(
         plan = LanguageGoalCapabilityMapper().plan(goal),
@@ -183,7 +206,11 @@ class DurableGoalPlanRuntimeTest {
         gaps = emptyList(),
     )
 
-    private fun photon(id: String, tags: Set<String>) = Photon(
+    private fun photon(
+        id: String,
+        tags: Set<String>,
+        parentIds: Set<PhotonId> = emptySet(),
+    ) = Photon(
         id = PhotonId(id),
         content = "test content",
         semanticMass = 1.0,
@@ -193,6 +220,7 @@ class DurableGoalPlanRuntimeTest {
             source = "unit-test",
             actor = "test",
             createdAt = at,
+            parentIds = parentIds,
         ),
         tags = tags,
     )

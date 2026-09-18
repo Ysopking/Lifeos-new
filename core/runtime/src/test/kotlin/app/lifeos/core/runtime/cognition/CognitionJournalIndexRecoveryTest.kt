@@ -88,6 +88,68 @@ class CognitionJournalIndexRecoveryTest {
     }
 
     @Test
+    fun pendingReservationsAdvanceSequenceWithoutReuse() = runTest {
+        val photons = CountingRevisionedPhotonRepository()
+        val index = CognitionJournalIndex(InMemoryIndexRepository(), photons)
+
+        val first = index.reserveNext(CognitionJournalKind.EVENT, "event-pending-1")
+        val second = index.reserveNext(CognitionJournalKind.EVENT, "event-pending-2")
+
+        assertEquals(1L, first.sequence)
+        assertEquals(2L, second.sequence)
+        assertEquals(2L, index.snapshot().reservedHead(CognitionJournalKind.EVENT))
+    }
+
+    @Test
+    fun duplicateRecoveredEventOffsetsAreCanonicalizedDeterministically() = runTest {
+        val photons = CountingRevisionedPhotonRepository()
+        val first = CognitiveEvent(
+            eventId = "event-duplicate-a",
+            delta = PhotonDelta(
+                deltaId = "delta-duplicate-a",
+                source = "test",
+                photonId = PhotonId("source-duplicate-a"),
+                revisionAfter = 1,
+                type = PhotonDeltaType.CREATED,
+                timestamp = t0,
+            ),
+            recordedAt = t0,
+        )
+        val second = CognitiveEvent(
+            eventId = "event-duplicate-b",
+            delta = PhotonDelta(
+                deltaId = "delta-duplicate-b",
+                source = "test",
+                photonId = PhotonId("source-duplicate-b"),
+                revisionAfter = 1,
+                type = PhotonDeltaType.CREATED,
+                timestamp = t0.plusSeconds(1),
+            ),
+            recordedAt = t0.plusSeconds(1),
+        )
+        listOf(first, second).forEach { event ->
+            photons.save(
+                cognitionJournalPhoton(
+                    kind = CognitionJournalKind.EVENT,
+                    stableId = event.eventId,
+                    at = event.recordedAt,
+                    content = RuntimeEventJournalCodec.encode(RuntimeEventEnvelope(1L, event)),
+                )
+            )
+        }
+
+        val index = CognitionJournalIndex(InMemoryIndexRepository(), photons)
+        val report = index.reconcile()
+        val entries = index.entries(CognitionJournalKind.EVENT)
+        val journal = PhotonBackedRuntimeEventJournal(photons, index)
+
+        assertTrue(report.rebuilt)
+        assertEquals(listOf(1L, 2L), entries.map { it.sequence })
+        assertEquals(listOf(1L, 2L), journal.readFrom(0).map { it.offset })
+        assertEquals(listOf(first, second), journal.readFrom(0).map { it.event })
+    }
+
+    @Test
     fun legacyOutcomeRebuildUsesCanonicalDedupeKeyWithoutScanningVault() = runTest {
         val photons = CountingRevisionedPhotonRepository()
         val legacyOutcome = CognitiveOutcome(
@@ -119,6 +181,32 @@ class CognitionJournalIndexRecoveryTest {
         )
         assertEquals(1, photons.photonCount)
         assertEquals(0, photons.loadReportCalls)
+    }
+
+
+    @Test
+    fun overlappingPendingEventReservationsRemainMonotonic() = runTest {
+        val photons = CountingRevisionedPhotonRepository()
+        val durableIndex = InMemoryIndexRepository()
+        val index = CognitionJournalIndex(durableIndex, photons)
+
+        val first = index.reserveNext(CognitionJournalKind.EVENT, "event-pending-1")
+        val second = index.reserveNext(CognitionJournalKind.EVENT, "event-pending-2")
+        val batch = index.reserveBatch(
+            CognitionJournalKind.EVENT,
+            listOf("event-pending-3", "event-pending-4"),
+        )
+
+        assertEquals(1L, first.sequence)
+        assertEquals(2L, second.sequence)
+        assertEquals(listOf(3L, 4L), batch.map { it.sequence })
+        assertEquals(
+            listOf(1L, 2L, 3L, 4L),
+            index.snapshot().pendingReservations
+                .filter { it.kind == CognitionJournalKind.EVENT }
+                .map { it.sequence }
+                .sorted(),
+        )
     }
 
     @Test

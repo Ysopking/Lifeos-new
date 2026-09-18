@@ -1,7 +1,9 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.language.IntentType
+import app.lifeos.core.language.SemanticExecutionGate
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.runtime.agency.ExternalEffectState
 import app.lifeos.core.runtime.policy.OwnerEffectRequest
 import app.lifeos.core.runtime.policy.OwnerEffectType
 import app.lifeos.core.runtime.policy.OwnerPolicyAssessment
@@ -90,7 +92,21 @@ class PrivateGoalActionExecutionGuard(
     private val ownerPolicyGate: OwnerPolicyEffectGate = OwnerPolicyEffectGate(ownerPolicy),
 ) : GoalActionExecutionGuard {
     override suspend fun prepare(context: GoalActionContext): GoalActionExecutionPermit {
-        val profile = profile(context.goal.intent) ?: return GoalActionExecutionPermit.Unmetered
+        val semantic = SemanticExecutionGate.evaluate(context.goal)
+        if (!semantic.allowed) {
+            return GoalActionExecutionPermit.Blocked(
+                "semantic-admission:${semantic.reason}",
+            )
+        }
+        if (context.externalActionContract != null &&
+            !SemanticExecutionGate.externalEffectAllowed(context.goal)
+        ) {
+            return GoalActionExecutionPermit.Blocked(
+                "NO_EXTERNAL_SIDE_EFFECT_WITHOUT_EXECUTABLE_SEMANTIC_ACTION",
+            )
+        }
+
+        val profile = profile(context) ?: return GoalActionExecutionPermit.Unmetered
         val traceBinding = traceBinding(context)
         val policy = policyRequest(context)
         val firstPolicyAssessment = if (policy != null) {
@@ -181,15 +197,30 @@ class PrivateGoalActionExecutionGuard(
             ready.plan.recommendedReservation
         }
 
-        val accountId = ResourceBudgetAccountId("goal-action:${context.goalPhotonId.value}")
+        val semanticNodeIdentity = context.goal.semanticActionGraph.nodes
+            .singleOrNull()
+            ?.id
+            ?.value
+            ?: context.goal.intent.name.lowercase()
+        val accountId = ResourceBudgetAccountId(
+            "goal-action:${context.goalPhotonId.value}:$semanticNodeIdentity"
+        )
         budgets.createAccount(accountId, profile.hardQuota)
         val idempotencyKey = buildString {
             append("goal-action:")
             append(context.goalPhotonId.value)
             append(':')
+            append(semanticNodeIdentity)
+            append(':')
             append(context.goal.intent.name)
             append(":policy-")
             append(policyRevision?.toString() ?: "none")
+            context.externalActionContract?.let { contract ->
+                append(":endpoint-")
+                append(contract.endpoint.uri)
+                append(":payload-")
+                append(contract.payloadFingerprint)
+            }
         }
         val reservation = when (
             val reserved = budgets.reserve(
@@ -327,30 +358,58 @@ class PrivateGoalActionExecutionGuard(
         }
         result.localSchedule is LocalScheduleExecutionResult.Scheduled -> reservation.reserved
         result.localCommunication is LocalCommunicationExecutionResult.Prepared -> reservation.reserved
+        result.externalEffect?.state == ExternalEffectState.CONFIRMED -> reservation.reserved
         else -> null
     }
 
-    private fun policyRequest(context: GoalActionContext): OwnerEffectRequest? = when (context.goal.intent) {
-        IntentType.SCHEDULE -> OwnerEffectRequest(
-            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
-            effect = OwnerEffectType.REMINDER,
-            resource = REMINDER_RESOURCE,
-            scope = PrivateOwnerPolicyBaseline.GOAL_SCOPE,
-            capabilityId = context.routing.plan.requirements.firstOrNull()?.capabilityId,
-        )
-        IntentType.COMMUNICATE -> OwnerEffectRequest(
-            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
-            effect = OwnerEffectType.COMMUNICATION,
-            resource = COMMUNICATION_RESOURCE,
-            scope = PrivateOwnerPolicyBaseline.GOAL_SCOPE,
-            capabilityId = context.routing.plan.requirements.firstOrNull()?.capabilityId,
-        )
-        else -> null
+    private fun policyRequest(context: GoalActionContext): OwnerEffectRequest? {
+        context.externalActionContract?.let { contract ->
+            require(
+                context.goal.intent == IntentType.SCHEDULE ||
+                    context.goal.intent == IntentType.COMMUNICATE
+            ) { "External action contracts are only valid for effect-bearing goal intents" }
+            return contract.requiredOwnerPolicy.copy(
+                budgetAccountId = null,
+                budgetReservationId = null,
+            )
+        }
+        return when (context.goal.intent) {
+            IntentType.SCHEDULE -> OwnerEffectRequest(
+                actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+                effect = OwnerEffectType.REMINDER,
+                resource = REMINDER_RESOURCE,
+                scope = PrivateOwnerPolicyBaseline.GOAL_SCOPE,
+                capabilityId = context.routing.plan.requirements.firstOrNull()?.capabilityId,
+            )
+            IntentType.COMMUNICATE -> OwnerEffectRequest(
+                actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+                effect = OwnerEffectType.COMMUNICATION,
+                resource = COMMUNICATION_RESOURCE,
+                scope = PrivateOwnerPolicyBaseline.GOAL_SCOPE,
+                capabilityId = context.routing.plan.requirements.firstOrNull()?.capabilityId,
+            )
+            else -> null
+        }
     }
 
-    private fun profile(intent: IntentType): GoalActionResourceProfile? = when (intent) {
-        IntentType.QUERY,
+    private fun profile(context: GoalActionContext): GoalActionResourceProfile? {
+        if (context.externalActionContract != null) {
+            return GoalActionResourceProfile(
+                hardQuota = quota(10_000, 16, 64, 8, 8, 2),
+                requested = usage(5_000, 8, 32, 2, 2, 1),
+                priority = HardwareWorkPriority.HIGH,
+                domain = ResourceBudgetDomain.GOAL_EXECUTION,
+                expectedUtility = 0.95,
+            )
+        }
+        return when (context.goal.intent) {
         IntentType.STORE_OR_REMEMBER -> GoalActionResourceProfile(
+            hardQuota = quota(5_000, 12, 32, 4, 0, 2),
+            requested = usage(1_500, 2, 8, 1, 0, 1),
+            domain = ResourceBudgetDomain.GOAL_EXECUTION,
+            expectedUtility = 0.85,
+        )
+        IntentType.QUERY -> GoalActionResourceProfile(
             hardQuota = quota(5_000, 24, 64, 8, 0, 4),
             requested = usage(3_000, 8, 24, 2, 0, 2),
             domain = ResourceBudgetDomain.GOAL_EXECUTION,
@@ -376,15 +435,22 @@ class PrivateGoalActionExecutionGuard(
             domain = ResourceBudgetDomain.GOAL_EXECUTION,
             expectedUtility = 0.90,
         )
-        IntentType.SCHEDULE,
-        IntentType.COMMUNICATE -> GoalActionResourceProfile(
+        IntentType.SCHEDULE -> GoalActionResourceProfile(
             hardQuota = quota(3_000, 8, 32, 4, 0, 2),
             requested = usage(1_500, 4, 16, 1, 0, 1),
             priority = HardwareWorkPriority.HIGH,
             domain = ResourceBudgetDomain.GOAL_EXECUTION,
             expectedUtility = 0.95,
         )
+        IntentType.COMMUNICATE -> GoalActionResourceProfile(
+            hardQuota = quota(3_000, 8, 32, 4, 0, 2),
+            requested = usage(1_000, 1, 4, 1, 0, 1),
+            priority = HardwareWorkPriority.HIGH,
+            domain = ResourceBudgetDomain.GOAL_EXECUTION,
+            expectedUtility = 0.95,
+        )
         else -> null
+        }
     }
 
     private data class GoalActionResourceProfile(

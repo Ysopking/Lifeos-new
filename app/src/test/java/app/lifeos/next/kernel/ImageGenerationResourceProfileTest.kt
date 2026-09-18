@@ -3,6 +3,7 @@ package app.lifeos.next.kernel
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
@@ -67,16 +68,10 @@ class ImageGenerationResourceProfileTest {
     }
 
     private fun context(goalPhotonId: String): GoalActionContext {
-        val goal = GoalFrame(
-            intent = IntentType.CREATE_IMAGE,
-            objective = "create_image: render a deterministic 512x288 scene",
-            entities = emptyList(),
-            references = emptyList(),
-            constraints = emptyList(),
-            ambiguities = emptyList(),
-            confidence = 1.0,
-            language = LanguageCode.EN,
-        )
+        val goal = LanguageUnderstandingEngine()
+            .understand("Create an image.")
+            .goal
+            .copy(objective = "create_image: render a deterministic 512x288 scene")
         return GoalActionContext(
             goal = goal,
             routing = GoalCapabilityResolution(

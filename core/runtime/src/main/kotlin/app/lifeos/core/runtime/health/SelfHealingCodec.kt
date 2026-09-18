@@ -14,10 +14,17 @@ object SelfHealingEventLogCodec {
     const val MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 
     fun encode(events: List<SelfHealingEvent>): ByteArray {
-        require(events.size <= MAX_EVENTS) { "Self-healing event log too large" }
         require(events.map { it.revision } == (1L..events.size.toLong()).toList()) {
-            "Self-healing event revisions must be contiguous"
+            "SelfHealingEvent full-log revisions must be contiguous"
         }
+        return encodePayload(events)
+    }
+
+    /** Encodes one immutable segment while preserving its global ledger revision. */
+    fun encodeSegment(event: SelfHealingEvent): ByteArray = encodePayload(listOf(event))
+
+    private fun encodePayload(events: List<SelfHealingEvent>): ByteArray {
+        require(events.size <= MAX_EVENTS) { "Self-healing event log too large" }
         return ByteArrayOutputStream().let { output ->
             DataOutputStream(output).use { stream ->
                 stream.writeInt(MAGIC)
@@ -29,17 +36,28 @@ object SelfHealingEventLogCodec {
         }.also { require(it.size <= MAX_PAYLOAD_BYTES) { "Self-healing payload too large" } }
     }
 
-    fun decode(bytes: ByteArray): List<SelfHealingEvent> {
+    fun decode(bytes: ByteArray): List<SelfHealingEvent> =
+        decodePayload(bytes).also { events ->
+            require(events.map { it.revision } == (1L..events.size.toLong()).toList()) {
+                "SelfHealingEvent full-log revisions must be contiguous"
+            }
+        }
+
+    /** Decodes exactly one immutable segment without rebasing its global revision. */
+    fun decodeSegment(bytes: ByteArray): SelfHealingEvent =
+        decodePayload(bytes).also { events ->
+            require(events.size == 1) { "Self-healing segment must contain exactly one event" }
+        }.single()
+
+    private fun decodePayload(bytes: ByteArray): List<SelfHealingEvent> {
         require(bytes.isNotEmpty() && bytes.size <= MAX_PAYLOAD_BYTES) { "Invalid self-healing payload size" }
         val input = DataInputStream(ByteArrayInputStream(bytes))
         require(input.readInt() == MAGIC) { "Invalid self-healing payload magic" }
         require(input.readInt() == VERSION) { "Unsupported self-healing payload version" }
         val count = input.readInt()
         require(count in 0..MAX_EVENTS) { "Invalid self-healing event count" }
-        val events = List(count) { index ->
-            readEvent(input).also { event ->
-                require(event.revision == index + 1L) { "Self-healing event revisions must be contiguous" }
-            }
+        val events = List(count) {
+            readEvent(input)
         }
         require(input.available() == 0) { "Trailing self-healing payload bytes" }
         return events

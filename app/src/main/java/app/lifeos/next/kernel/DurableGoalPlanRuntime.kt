@@ -26,7 +26,10 @@ import java.time.Instant
 
 sealed interface DurableGoalPlanAdmission {
     data class Ready(val permit: DurableGoalPlanPermit) : DurableGoalPlanAdmission
-    data class Completed(val planId: String) : DurableGoalPlanAdmission
+    data class Completed(
+        val planId: String,
+        val outcome: Photon? = null,
+    ) : DurableGoalPlanAdmission
     data class Blocked(val reason: String) : DurableGoalPlanAdmission {
         init { require(reason.isNotBlank()) }
     }
@@ -80,12 +83,22 @@ class DurableGoalPlanRuntime(
                         DurableGoalPlanPermit(blueprint, recovered),
                         persistedOutcome,
                     )
-                    return DurableGoalPlanAdmission.Completed(blueprint.definition.id.value)
+                    return DurableGoalPlanAdmission.Completed(
+                        blueprint.definition.id.value,
+                        persistedOutcome,
+                    )
                 }
             }
             return normalizePreparation(blueprint, recovered)
         }
         if (actionState == GoalStepState.COMPLETED) {
+            val persistedOutcome = recoverPersistedOutcome(context)
+            if (persistedOutcome != null) {
+                return DurableGoalPlanAdmission.Completed(
+                    blueprint.definition.id.value,
+                    persistedOutcome,
+                )
+            }
             return normalizePreparation(blueprint, coordinator.prepareNext(blueprint, emptyMap(), now()))
         }
 
@@ -227,7 +240,7 @@ class DurableGoalPlanRuntime(
 
     private fun communicationPreparationOutcome(share: LocalSharePreparation): Photon = Photon(
         id = PhotonId(
-            "communication-preparation:" + StableFieldIds.fingerprint(
+            "communication-preparation-" + StableFieldIds.fingerprint(
                 "communication-preparation/v1",
                 share.requestSourceId.value,
                 share.requestGoalId.value,

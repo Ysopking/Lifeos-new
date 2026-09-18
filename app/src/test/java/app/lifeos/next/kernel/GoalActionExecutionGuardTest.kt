@@ -3,6 +3,7 @@ package app.lifeos.next.kernel
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
@@ -93,6 +94,78 @@ class GoalActionExecutionGuardTest {
         )
         assertEquals("thermal-suspended", permit.reason)
         assertTrue(budgetRepository.accounts.isEmpty())
+    }
+
+    @Test
+    fun localMemoryFitsTwoCoreUnknownThermalEnvelope() = runTest {
+        val ownerRepository = MemoryOwnerPolicyRepository()
+        val budgetRepository = MemoryResourceBudgetRepository()
+        val lowHeadroomGuard = PrivateGoalActionExecutionGuard(
+            ownerPolicy = OwnerPolicyLedger(ownerRepository),
+            budgets = ResourceBudgetCoordinator(budgetRepository),
+            hardware = HardwareExecutionBudgetGate { hardQuota, requested, priority ->
+                val hardware = HardwareStateSnapshot(
+                    observedAt = Instant.parse("2026-09-11T10:00:00Z"),
+                    availableProcessors = 2,
+                    batteryFraction = 1.0,
+                    charging = true,
+                    thermalState = HardwareThermalState.UNKNOWN,
+                )
+                HardwareExecutionBudgetDecision.Ready(
+                    HardwareAdaptiveResourceOptimizer().plan(
+                        hardQuota = hardQuota,
+                        requested = requested,
+                        hardware = hardware,
+                        priority = priority,
+                    )
+                )
+            },
+        )
+
+        val permit = assertIs<GoalActionExecutionPermit.Reserved>(
+            lowHeadroomGuard.prepare(context(IntentType.STORE_OR_REMEMBER, "goal-memory-low-headroom"))
+        )
+
+        assertEquals(2L, permit.reservation.reserved.workUnits)
+        assertEquals(1L, permit.reservation.reserved.candidates)
+        assertTrue(permit.reservation.reserved.memoryBytes <= 8L * MIB)
+        assertTrue(permit.reservation.reserved.ioBytes <= 1L * MIB)
+    }
+
+    @Test
+    fun localCommunicationPreparationFitsTwoCoreUnknownThermalEnvelope() = runTest {
+        val ownerRepository = MemoryOwnerPolicyRepository()
+        val budgetRepository = MemoryResourceBudgetRepository()
+        val lowHeadroomGuard = PrivateGoalActionExecutionGuard(
+            ownerPolicy = OwnerPolicyLedger(ownerRepository),
+            budgets = ResourceBudgetCoordinator(budgetRepository),
+            hardware = HardwareExecutionBudgetGate { hardQuota, requested, priority ->
+                val hardware = HardwareStateSnapshot(
+                    observedAt = Instant.parse("2026-09-11T10:00:00Z"),
+                    availableProcessors = 2,
+                    batteryFraction = 1.0,
+                    charging = true,
+                    thermalState = HardwareThermalState.UNKNOWN,
+                )
+                HardwareExecutionBudgetDecision.Ready(
+                    HardwareAdaptiveResourceOptimizer().plan(
+                        hardQuota = hardQuota,
+                        requested = requested,
+                        hardware = hardware,
+                        priority = priority,
+                    )
+                )
+            },
+        )
+
+        val permit = assertIs<GoalActionExecutionPermit.Reserved>(
+            lowHeadroomGuard.prepare(context(IntentType.COMMUNICATE, "goal-communication-low-headroom"))
+        )
+
+        assertEquals(1L, permit.reservation.reserved.workUnits)
+        assertEquals(1L, permit.reservation.reserved.candidates)
+        assertTrue(permit.reservation.reserved.memoryBytes <= 4L * MIB)
+        assertTrue(permit.reservation.reserved.ioBytes <= 1L * MIB)
     }
 
     @Test
@@ -227,16 +300,17 @@ class GoalActionExecutionGuardTest {
     )
 
     private fun context(intent: IntentType, goalPhotonId: String): GoalActionContext {
-        val goal = GoalFrame(
-            intent = intent,
-            objective = "test goal",
-            entities = emptyList(),
-            references = emptyList(),
-            constraints = emptyList(),
-            ambiguities = emptyList(),
-            confidence = 1.0,
-            language = LanguageCode.EN,
-        )
+        val text = when (intent) {
+            IntentType.QUERY -> "What is LIFEOS?"
+            IntentType.STORE_OR_REMEMBER -> "Merke dir die Semantic-Recovery-Notiz."
+            IntentType.COMMUNICATE -> "Sende diese Mail."
+            IntentType.SCHEDULE -> "Schedule image."
+            else -> error("Unsupported test intent: " + intent)
+        }
+        val goal = LanguageUnderstandingEngine()
+            .understand(text)
+            .goal
+            .copy(objective = "test goal")
         return GoalActionContext(
             goal = goal,
             routing = GoalCapabilityResolution(
@@ -328,6 +402,7 @@ class GoalActionExecutionGuardTest {
     }
 
     private companion object {
-        const val GIB = 1024L * 1024L * 1024L
+        const val MIB = 1024L * 1024L
+        const val GIB = 1024L * MIB
     }
 }

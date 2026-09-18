@@ -20,6 +20,7 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.security.KeyStore
+import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -32,7 +33,8 @@ import kotlinx.coroutines.withContext
 /** Encrypted atomic generated-tool lifecycle vault with legacy and bounded promotion receipts. */
 class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGeneratedToolStateRepository {
     private val directory = context.filesDir.resolve("generated-tool-state-vault")
-    private val target = AtomicFile(directory.resolve(VAULT_FILE_NAME))
+    private val recordsDirectory = directory.resolve("records")
+    private val legacyTarget = AtomicFile(directory.resolve(VAULT_FILE_NAME))
     private val key: SecretKey by lazy { loadOrCreateKey() }
 
     override suspend fun loadAll(): List<GeneratedToolPersistentState> = ioLocked { readStatesLocked() }
@@ -43,8 +45,7 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
         promotionEvidence: GeneratedToolPromotionEvidence?,
     ) = ioLocked {
         val toolId = record.manifest.toolId
-        val states = readStatesLocked()
-        val existing = states.firstOrNull { it.record.manifest.toolId == toolId }
+        val existing = readStateLocked(toolId)
         requireLifecycleAppend(existing, record, auditEntries)
 
         val existingLegacyReceipt = existing?.promotionReceipt
@@ -80,16 +81,13 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
             else -> error("Durable promoted generated tool lost its promotion receipt")
         }
         val trials = existing?.trialEvidence ?: GeneratedToolTrialEvidence(toolId, emptyList())
-        writeStatesLocked(
-            replace(
-                states,
-                GeneratedToolPersistentState(
-                    record = record,
-                    auditEntries = auditEntries,
-                    trialEvidence = trials,
-                    promotionReceipt = legacyReceipt,
-                    boundedPromotionReceipt = boundedReceipt,
-                ),
+        writeStateLocked(
+            GeneratedToolPersistentState(
+                record = record,
+                auditEntries = auditEntries,
+                trialEvidence = trials,
+                promotionReceipt = legacyReceipt,
+                boundedPromotionReceipt = boundedReceipt,
             )
         )
     }
@@ -99,10 +97,9 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
         auditEntries: List<GeneratedToolAuditEntry>,
         promotionEvidence: BoundedGeneratedToolPromotionEvidence,
     ) = ioLocked {
-        val states = readStatesLocked()
-        val existing = requireNotNull(
-            states.firstOrNull { it.record.manifest.toolId == record.manifest.toolId }
-        ) { "Bounded promotion requires an already durable generated tool" }
+        val existing = requireNotNull(readStateLocked(record.manifest.toolId)) {
+            "Bounded promotion requires an already durable generated tool"
+        }
         requireLifecycleAppend(existing, record, auditEntries)
         require(existing.promotionReceipt == null && existing.boundedPromotionReceipt == null) {
             "Bounded promotion cannot replace an existing promotion receipt"
@@ -127,22 +124,18 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
             activationActorEvidenceFingerprints = promotionEvidence.activationActorEvidenceFingerprints,
         )
         require(receipt.evidenceId == record.promotionEvidenceId)
-        writeStatesLocked(
-            replace(
-                states,
-                GeneratedToolPersistentState(
-                    record = record,
-                    auditEntries = auditEntries,
-                    trialEvidence = existing.trialEvidence,
-                    boundedPromotionReceipt = receipt,
-                ),
+        writeStateLocked(
+            GeneratedToolPersistentState(
+                record = record,
+                auditEntries = auditEntries,
+                trialEvidence = existing.trialEvidence,
+                boundedPromotionReceipt = receipt,
             )
         )
     }
 
     override suspend fun persistTrialEvidence(evidence: GeneratedToolTrialEvidence) = ioLocked {
-        val states = readStatesLocked()
-        val existing = requireNotNull(states.firstOrNull { it.record.manifest.toolId == evidence.toolId }) {
+        val existing = requireNotNull(readStateLocked(evidence.toolId)) {
             "Trial evidence requires a durably registered generated tool"
         }
         require(existing.promotionReceipt == null && existing.boundedPromotionReceipt == null) {
@@ -156,14 +149,11 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
         oldResults.forEach { (invocationId, old) ->
             require(newResults[invocationId] == old) { "Durable generated-tool trial history cannot be rewritten" }
         }
-        writeStatesLocked(
-            replace(
-                states,
-                GeneratedToolPersistentState(
-                    record = existing.record,
-                    auditEntries = existing.auditEntries,
-                    trialEvidence = evidence,
-                ),
+        writeStateLocked(
+            GeneratedToolPersistentState(
+                record = existing.record,
+                auditEntries = existing.auditEntries,
+                trialEvidence = evidence,
             )
         )
     }
@@ -190,26 +180,70 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
         }
     }
 
-    private fun replace(
-        states: List<GeneratedToolPersistentState>,
-        updated: GeneratedToolPersistentState,
-    ): List<GeneratedToolPersistentState> =
-        (states.filterNot { it.record.manifest.toolId == updated.record.manifest.toolId } + updated)
-            .sortedBy { it.record.manifest.toolId }
-
     private suspend fun <T> ioLocked(block: () -> T): T = withContext(Dispatchers.IO) {
         processMutex.withLock { block() }
     }
 
     private fun readStatesLocked(): List<GeneratedToolPersistentState> {
+        ensureMigrated()
+        return recordFiles().map(::readValidatedState)
+            .sortedBy { it.record.manifest.toolId }
+    }
+
+    private fun readStateLocked(toolId: String): GeneratedToolPersistentState? {
+        ensureMigrated()
+        val target = targetFor(toolId)
+        if (!exists(target)) return null
+        return readValidatedState(target).also {
+            require(it.record.manifest.toolId == toolId) { "Generated-tool state identity mismatch" }
+        }
+    }
+
+    private fun readValidatedState(target: AtomicFile): GeneratedToolPersistentState {
+        val values = readStates(target)
+        require(values.size == 1) { "Generated-tool state record must contain one tool" }
+        val state = values.single()
+        require(target.baseFile == targetFor(state.record.manifest.toolId).baseFile) {
+            "Generated-tool state payload does not match record path"
+        }
+        return state
+    }
+
+    private fun writeStateLocked(state: GeneratedToolPersistentState) {
         ensureDirectory()
-        val backup = directory.resolve("$VAULT_FILE_NAME.bak")
-        if (!target.baseFile.exists() && !backup.exists()) return emptyList()
+        val target = targetFor(state.record.manifest.toolId)
+        val plaintext = GeneratedToolStateCodec.encode(listOf(state))
+        require(plaintext.size <= MAX_PLAINTEXT_BYTES)
+        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
+        val encrypted = cipher.doFinal(plaintext)
+        val container = ByteArrayOutputStream(encrypted.size + 64).also { output ->
+            DataOutputStream(output).use { data ->
+                data.writeInt(CONTAINER_VERSION)
+                data.writeInt(GeneratedToolStateCodec.VERSION)
+                data.writeInt(cipher.iv.size)
+                data.write(cipher.iv)
+                data.write(encrypted)
+            }
+        }.toByteArray()
+        require(container.size <= MAX_CONTAINER_BYTES)
+        val stream = target.startWrite()
+        try {
+            stream.write(container)
+            target.finishWrite(stream)
+        } catch (error: Exception) {
+            target.failWrite(stream)
+            throw error
+        }
+    }
+
+    private fun readStates(target: AtomicFile): List<GeneratedToolPersistentState> {
         val container = target.openRead().use { input ->
-            val output = ByteArrayOutputStream(); val buffer = ByteArray(8192)
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
             while (true) {
-                val count = input.read(buffer); if (count < 0) break
-                require(output.size() + count <= MAX_CONTAINER_BYTES) { "Generated-tool state vault file too large" }
+                val count = input.read(buffer)
+                if (count < 0) break
+                require(output.size() + count <= MAX_CONTAINER_BYTES)
                 output.write(buffer, 0, count)
             }
             output.toByteArray()
@@ -217,24 +251,36 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
         return decrypt(container)
     }
 
-    private fun writeStatesLocked(states: List<GeneratedToolPersistentState>) {
+    private fun ensureMigrated() {
         ensureDirectory()
-        val plaintext = GeneratedToolStateCodec.encode(states)
-        require(plaintext.size <= MAX_PLAINTEXT_BYTES) { "Generated-tool state vault payload too large" }
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key) }
-        val encrypted = cipher.doFinal(plaintext)
-        val container = ByteArrayOutputStream(encrypted.size + 64).also { output ->
-            DataOutputStream(output).use { data ->
-                data.writeInt(CONTAINER_VERSION); data.writeInt(GeneratedToolStateCodec.VERSION)
-                data.writeInt(cipher.iv.size); data.write(cipher.iv); data.write(encrypted)
-            }
-        }.toByteArray()
-        require(container.size <= MAX_CONTAINER_BYTES) { "Generated-tool state vault container too large" }
-        val stream = target.startWrite()
-        try { stream.write(container); target.finishWrite(stream) } catch (error: Exception) {
-            target.failWrite(stream); throw error
-        }
+        if (recordFiles().isNotEmpty()) return
+        val backup = directory.resolve("$VAULT_FILE_NAME.bak")
+        if (!legacyTarget.baseFile.exists() && !backup.exists()) return
+        readStates(legacyTarget).forEach(::writeStateLocked)
     }
+
+    private fun targetFor(toolId: String): AtomicFile {
+        require(toolId.isNotBlank())
+        return AtomicFile(recordsDirectory.resolve(sha256(toolId) + RECORD_SUFFIX))
+    }
+
+    private fun recordFiles(): List<AtomicFile> {
+        ensureDirectory()
+        return recordsDirectory.listFiles()
+            .orEmpty()
+            .filter { it.name.endsWith(RECORD_SUFFIX) }
+            .sortedBy { it.name }
+            .map(::AtomicFile)
+    }
+
+    private fun exists(target: AtomicFile): Boolean =
+        target.baseFile.exists() ||
+            target.baseFile.resolveSibling("${target.baseFile.name}.bak").exists()
+
+    private fun sha256(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
     private fun decrypt(container: ByteArray): List<GeneratedToolPersistentState> {
         require(container.size <= MAX_CONTAINER_BYTES) { "Generated-tool state vault file too large" }
@@ -256,6 +302,9 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
 
     private fun ensureDirectory() {
         check(directory.isDirectory || directory.mkdirs()) { "Generated-tool state vault unavailable" }
+        check(recordsDirectory.isDirectory || recordsDirectory.mkdirs()) {
+            "Generated-tool state record directory unavailable"
+        }
     }
 
     private fun loadOrCreateKey(): SecretKey {
@@ -278,6 +327,7 @@ class EncryptedGeneratedToolStateRepository(context: Context) : BoundedGenerated
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val CONTAINER_VERSION = 1
         const val VAULT_FILE_NAME = "state.tools"
+        const val RECORD_SUFFIX = ".toolstate"
         const val MAX_PLAINTEXT_BYTES = 16 * 1024 * 1024
         const val MAX_CONTAINER_BYTES = MAX_PLAINTEXT_BYTES + 64 * 1024
     }

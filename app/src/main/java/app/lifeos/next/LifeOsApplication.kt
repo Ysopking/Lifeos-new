@@ -7,6 +7,12 @@ import android.os.Build
 import android.os.Environment
 import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
+import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
+import app.lifeos.core.runtime.agency.PolicyGatedExternalEffectExecutor
+import app.lifeos.core.runtime.agency.ExternalTransportRuntimeRegistry
+import app.lifeos.core.runtime.agency.ExternalEffectRuntimeRegistry
+import app.lifeos.core.data.agency.EncryptedExternalEffectReceiptRepository
+import app.lifeos.core.data.agency.EncryptedExternalPayloadRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
@@ -39,6 +45,7 @@ import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
 import app.lifeos.core.runtime.life.DomainEvidenceConvergenceCoordinator
 import app.lifeos.core.runtime.life.DomainEvidenceConvergingPersistence
+import app.lifeos.core.runtime.CognitiveSnapshotRuntimeRegistry
 import app.lifeos.core.runtime.life.DurableLifeMemoryRuntime
 import app.lifeos.core.runtime.life.DurableLifeMemoryRuntimeRegistry
 import app.lifeos.core.runtime.life.FuturePlanningCoordinator
@@ -164,6 +171,15 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                 installSharedResourceRuntime = {
                     SharedResourceBudgetRuntimeRegistry.install(hardwareResourceIntelligence)
                     ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(this))
+                    ExternalEffectRuntimeRegistry.install(
+                        PolicyGatedExternalEffectExecutor(
+                            policyGate = OwnerPolicyEffectGate(ownerPolicy),
+                            receipts = EncryptedExternalEffectReceiptRepository(this),
+                            payloads = EncryptedExternalPayloadRepository(this),
+                            transport = ExternalTransportRuntimeRegistry.transport(),
+                            observationReconciler = ExternalTransportRuntimeRegistry.reconciler(),
+                        )
+                    )
                     resourceBudgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(this))
                     decisionTraces = DecisionTraceLedger(EncryptedDecisionTraceRepository(this))
                     goalDecisionTraceRecorder = GoalDecisionTraceRecorder(decisionTraces)
@@ -192,7 +208,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     )
                 },
                 createKernel = {
-                    kernel = LifeOsKernelFactory(this).create()
+                    kernel = LifeOsKernelFactory(
+                        context = this,
+                        hardwareResourceIntelligence = hardwareResourceIntelligence,
+                    ).create()
                     val ownerAssetReviews = EncryptedOwnerAssetReviewRepository(this)
                     photonIngress = CanonicalPhotonIngress(kernel, ownerAssetReviews)
                     lifePhotonRepository = CanonicalLifePhotonRepository(
@@ -229,6 +248,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     runBlocking {
                         lifePhotonRepository.reconcilePersisted()
                         lifeMemoryRuntime.rebuild(Instant.now())
+                        CognitiveSnapshotRuntimeRegistry.captureLatest()
                         futurePlanning.reconsiderAll().forEach { planned ->
                             photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
                         }

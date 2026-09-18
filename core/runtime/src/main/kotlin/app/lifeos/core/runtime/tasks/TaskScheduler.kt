@@ -16,20 +16,26 @@ data class TaskScheduleResult(
     val dispatchFailures: List<TaskId>,
 )
 
+fun interface TaskSchedulingEngine {
+    suspend fun scheduleOnce(limit: Int): TaskScheduleResult
+}
+
+suspend fun TaskSchedulingEngine.scheduleOnce(): TaskScheduleResult = scheduleOnce(limit = 16)
+
 class TaskScheduler(
     private val tasks: TaskRepository,
     private val workerId: WorkerId,
     private val dispatcher: ClaimedTaskDispatcher,
     private val leaseDuration: Duration = Duration.ofSeconds(30),
     private val now: () -> Instant = Instant::now,
-) {
+) : TaskSchedulingEngine {
     init {
         require(!leaseDuration.isZero && !leaseDuration.isNegative) {
             "Task lease duration must be positive"
         }
     }
 
-    suspend fun scheduleOnce(limit: Int = 16): TaskScheduleResult {
+    override suspend fun scheduleOnce(limit: Int): TaskScheduleResult {
         require(limit > 0) { "Scheduler limit must be positive" }
 
         val scanTime = now()

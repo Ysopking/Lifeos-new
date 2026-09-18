@@ -17,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: buildstudio-host-code-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   host-code-gate:
     runs-on: ubuntu-24.04

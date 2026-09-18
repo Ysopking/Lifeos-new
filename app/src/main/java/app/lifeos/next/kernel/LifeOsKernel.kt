@@ -8,14 +8,20 @@ import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingEngine
+import app.lifeos.core.language.LanguageContextRetriever
 import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.BinaryAssetStore
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexOrder
+import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.PhotonRevisionWriteResult
 import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
+import app.lifeos.core.runtime.FastConversationContext
+import app.lifeos.core.runtime.ConversationSignalClassifier
+import app.lifeos.core.runtime.ConversationPath
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.ThoughtMatrix
@@ -103,6 +109,15 @@ class LifeOsKernel internal constructor(
     private val sceneGraphPhotonFactory: SceneGraphPhotonFactory = SceneGraphPhotonFactory(),
 ) {
     private val startLock = Any()
+    private val conversationClassifier = ConversationSignalClassifier()
+    private val revisionedPhotonStore: RevisionedPhotonRepository =
+        requireNotNull(photonStore as? RevisionedPhotonRepository) {
+            "LifeOsKernel requires RevisionedPhotonRepository for bounded language retrieval"
+        }
+    private val languageContextRetriever = LanguageContextRetriever(
+        photons = revisionedPhotonStore,
+        builder = languageContextBuilder,
+    )
     private var bootstrapJob: Job? = null
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
@@ -170,6 +185,11 @@ class LifeOsKernel internal constructor(
         },
     )
 
+    private val semanticActionGraphRouter = SemanticActionGraphRouter(
+        capabilities = goalCapabilityRouter,
+        dispatcher = goalActionDispatcher,
+    )
+
     fun start(): Job = synchronized(startLock) {
         bootstrapJob ?: scope.launch {
             bootstrap()
@@ -196,17 +216,154 @@ class LifeOsKernel internal constructor(
     }
 
     /**
+     * Single kernel-owned conversation entrypoint. FAST_CHAT persists the turn without scheduling
+     * cognition; all other routes execute the existing full semantic/action path.
+     */
+    suspend fun submitConversationTurn(photon: Photon): ConversationTurnResult {
+        require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
+        val route = conversationClassifier.classify(photon.content, photon.tags)
+        return if (route.path == ConversationPath.FAST_CHAT) {
+            val context = fastConversationContext(photon)
+            val source = persistWithoutCognition(photon, PhotonIngressMode.ORIGIN)
+            val response = fastConversationReply(photon.content, context)
+            val assistantPhoton = assistantPhotonFor(photon, response, fast = true)
+            val assistant = persistWithoutCognition(assistantPhoton, PhotonIngressMode.DERIVED)
+            enqueueFastConversationBackground(photon)
+            ConversationTurnResult(
+                route = route,
+                responseText = response,
+                source = source,
+                assistant = assistant,
+                language = null,
+            )
+        } else {
+            val language = persistUserUtterance(photon)
+            val response = LifeOsResponseComposer.compose(language)
+            val assistant = persistAndIngest(
+                assistantPhotonFor(photon, response, fast = false),
+                PhotonIngressMode.DERIVED,
+            )
+            ConversationTurnResult(
+                route = route,
+                responseText = response,
+                source = language.source,
+                assistant = assistant,
+                language = language,
+            )
+        }
+    }
+
+    private fun enqueueFastConversationBackground(photon: Photon) {
+        scope.launch {
+            try {
+                continuousCognition.submit(
+                    delta = PhotonDelta(
+                        deltaId = CognitiveDeltaIdentity.photonRevision(photon.id, photon.revision),
+                        source = "kernel-fast-chat-background",
+                        photonId = photon.id,
+                        revisionAfter = photon.revision,
+                        type = PhotonDeltaType.CREATED,
+                        importanceHint = photon.semanticMass,
+                        timestamp = photon.provenance.createdAt,
+                        correlationId = photon.id.value,
+                    ),
+                    priority = CognitivePriority.BACKGROUND,
+                    salience = SalienceVector(
+                        novelty = 0.35,
+                        relevance = 0.35,
+                        urgency = 0.0,
+                        semanticMass = photon.semanticMass,
+                        confidenceImpact = photon.confidence,
+                        goalAffinity = 0.15,
+                    ),
+                    targetModules = setOf("Gedankenmatrix"),
+                    budget = FAST_CHAT_BACKGROUND_BUDGET,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Fast response stays authoritative; durable cognition reconciliation can recover
+                // persisted conversation Photons if background admission is temporarily unavailable.
+            }
+        }
+    }
+
+    private suspend fun fastConversationContext(photon: Photon): FastConversationContext {
+        val conversationTag = photon.tags.firstOrNull { it.startsWith("conversation:") }
+            ?: "conversation:default"
+        val refs = revisionedPhotonStore.query(
+            PhotonIndexQuery(
+                allTags = setOf("chat", conversationTag),
+                latestOnly = true,
+                order = PhotonIndexOrder.NEWEST_FIRST,
+                limit = 8,
+            )
+        )
+        val recent = refs.mapNotNull { ref: app.lifeos.core.model.PhotonRevisionRef ->
+            revisionedPhotonStore.load(ref)
+        }
+        return FastConversationContext(
+            conversationId = conversationTag.substringAfter(':', "default"),
+            recentTurnCount = recent.size,
+            lastUserText = recent.firstOrNull { "chat:user" in it.tags }?.content,
+        )
+    }
+
+    private fun fastConversationReply(
+        text: String,
+        context: FastConversationContext,
+    ): String {
+        val normalized = text.trim().lowercase()
+        return when {
+            normalized.startsWith("danke") || normalized.startsWith("thanks") ||
+                normalized.startsWith("thank you") -> "Gern."
+            normalized.startsWith("wie geht") || normalized.startsWith("how are you") ->
+                "Mir geht es gut. Was möchtest du als Nächstes machen?"
+            normalized in setOf("ok", "okay", "alles klar", "verstanden", "passt", "gut") ->
+                "Alles klar."
+            else -> if (context.recentTurnCount > 0) "Hallo, ich bin da." else "Hallo."
+        }
+    }
+
+    private fun assistantPhotonFor(
+        source: Photon,
+        response: String,
+        fast: Boolean,
+    ): Photon = Photon(
+        content = response,
+        provenance = source.provenance.copy(
+            source = "lifeos-chat",
+            actor = "lifeos",
+            parentIds = setOf(source.id),
+        ),
+        relations = setOf(
+            app.lifeos.core.model.PhotonRelation(
+                target = source.id,
+                type = app.lifeos.core.model.RelationType.DERIVED_FROM,
+            )
+        ),
+        tags = buildSet {
+            add("chat")
+            add("chat:assistant")
+            if (fast) add("conversation-fast-path")
+            source.tags
+                .filter { it.startsWith("conversation:") || it.startsWith("turn:") }
+                .forEach(::add)
+        },
+    )
+
+    /**
      * Persists the user's exact utterance first, derives a GoalPhoton, resolves capabilities, and
      * executes supported action-ready goals entirely offline before returning to the caller.
      * CONTINUE first resumes the exact persisted substantive goal and then re-routes that goal.
      */
     suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
         require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
-        val context = languageContextBuilder.build(
-            photons = mutableBootstrapState.value.photons,
+        val context = languageContextRetriever.retrieve(
+            utterance = photon.content,
             now = photon.provenance.createdAt,
             excludeIds = setOf(photon.id),
-        )
+        ).context
         val source = persistAndIngest(photon)
         return try {
             val understanding = languageUnderstanding.understand(photon.content, context)
@@ -231,14 +388,13 @@ class LifeOsKernel internal constructor(
             val effectiveRouting = resumed?.routing ?: routing
             val effectiveSource = resumed?.sourcePhoton ?: photon
             val effectiveGoalPhotonId = resumed?.resumedGoal?.photon?.id ?: goalPhoton.photon.id
-            val actions = goalActionDispatcher.execute(
-                GoalActionContext(
-                    goal = effectiveGoal,
-                    routing = effectiveRouting,
-                    sourcePhoton = effectiveSource,
-                    goalPhotonId = effectiveGoalPhotonId,
-                )
+            val actionGraphExecution = semanticActionGraphRouter.execute(
+                goal = effectiveGoal,
+                sourcePhoton = effectiveSource,
+                goalPhotonId = effectiveGoalPhotonId,
+                goalPhotonRevision = resumed?.resumedGoal?.photon?.revision ?: goalPhoton.photon.revision,
             )
+            val actions = actionGraphExecution.primaryDispatch ?: GoalActionDispatchResult()
 
             LanguageSubmissionResult(
                 source = source,
@@ -253,6 +409,8 @@ class LifeOsKernel internal constructor(
                 localDeepSearch = actions.localDeepSearch,
                 localSchedule = actions.localSchedule,
                 localCommunication = actions.localCommunication,
+                externalEffect = actions.externalEffect,
+                actionGraphExecution = actionGraphExecution,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -297,6 +455,44 @@ class LifeOsKernel internal constructor(
         if (photon.mimeType != ImagePhotonFactory.IMAGE_REFERENCE_MIME) return null
         val descriptor = runCatching { ImageAssetDescriptor.decode(photon.content) }.getOrNull() ?: return null
         return imageAssets.load(descriptor.asset)
+    }
+
+    private suspend fun persistWithoutCognition(
+        photon: Photon,
+        mode: PhotonIngressMode,
+    ): PhotonSubmissionResult {
+        ProductivePhotonIngressClassification.requireOrMark(photonStore, photon, mode)
+        if (photonStore is RevisionedPhotonRepository) {
+            when (
+                val write = photonStore.saveRevision(
+                    photon = photon,
+                    expectedPreviousRevision = photon.revision
+                        .takeIf { it > 1L }
+                        ?.minus(1L),
+                )
+            ) {
+                is PhotonRevisionWriteResult.Created,
+                is PhotonRevisionWriteResult.Advanced,
+                is PhotonRevisionWriteResult.Idempotent -> Unit
+                is PhotonRevisionWriteResult.Conflict ->
+                    error("Photon revision conflict: ${write.reason}")
+            }
+        } else {
+            photonStore.load(photon.id)?.let { existing ->
+                check(existing == photon) { "Photon identity conflict on fast conversation path" }
+            } ?: photonStore.save(photon)
+        }
+        mutableBootstrapState.update { current ->
+            current.copy(
+                photons = (current.photons.filterNot { it.id == photon.id } + photon)
+                    .sortedBy { it.provenance.createdAt }
+            )
+        }
+        return PhotonSubmissionResult(
+            photon = photon,
+            processingQueued = false,
+            processingFailure = null,
+        )
     }
 
     /** Backward-compatible external boundary: direct submissions are ORIGIN. */
@@ -671,7 +867,6 @@ class LifeOsKernel internal constructor(
         warnings: List<String>,
         degraded: Boolean,
     ) {
-        val displayReport = photonStore.loadReport()
         supervisor.start()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
@@ -681,11 +876,8 @@ class LifeOsKernel internal constructor(
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = if (degraded) KernelBootstrapStatus.DEGRADED else KernelBootstrapStatus.READY,
-            photons = displayReport.photons,
-            unreadableFiles = maxOf(
-                displayReport.unreadableFiles.size,
-                context.photons.unreadableFiles.size,
-            ),
+            photons = context.photons.allPhotons,
+            unreadableFiles = context.photons.unreadableFiles.size,
             warnings = warnings,
         )
     }
@@ -693,6 +885,12 @@ class LifeOsKernel internal constructor(
     private companion object {
         const val PRIVATE_OWNER_ACTOR_ID = "private-owner"
         const val OWNER_ASSET_REVIEW_PENDING = "awaiting-owner-review"
+        val FAST_CHAT_BACKGROUND_BUDGET = CognitiveWorkBudget(
+            maxDurationMs = 5_000,
+            maxModuleInvocations = 4,
+            maxNewPhotons = 4,
+            maxNetworkCalls = 0,
+        )
         val LIVE_SUBMISSION_BUDGET = CognitiveWorkBudget(
             maxDurationMs = 30_000,
             maxModuleInvocations = 16,

@@ -61,6 +61,14 @@ class GoalResumeEngineTest {
             originalUnderstanding.goal.semanticGraph.fingerprint,
             result.frame.semanticGraph.fingerprint,
         )
+        assertEquals(
+            originalUnderstanding.goal.semanticActionGraph.fingerprint,
+            result.frame.semanticActionGraph.fingerprint,
+        )
+        assertEquals(
+            originalUnderstanding.goal.semanticActionGraph,
+            result.frame.semanticActionGraph,
+        )
         assertEquals(target.content, result.resumedPhoton.content)
         assertEquals(setOf(target.id, requestGoalId, requestSource.id), result.resumedPhoton.provenance.parentIds)
         assertTrue("goal-resumed" in result.resumedPhoton.tags)
@@ -70,7 +78,7 @@ class GoalResumeEngineTest {
     }
 
     @Test
-    fun `structured v3 semantics survive resume without reinterpreting source`() {
+    fun `structured v4 semantics survive resume without reinterpreting source`() {
         val source = source(
             "source-structured",
             "Suche die Datei, wenn sie größer als 10 MB ist, weil der Speicher voll ist.",
@@ -101,19 +109,28 @@ class GoalResumeEngineTest {
                 .flatMap { it.quantities }
                 .any { it.value == "10" && it.unit == "mb" }
         )
+        assertEquals(originalUnderstanding.goal.semanticActionGraph, result.frame.semanticActionGraph)
+        assertEquals(originalUnderstanding.goal.semanticEntitiesV2, result.frame.semanticEntitiesV2)
+        assertEquals(originalUnderstanding.goal.quantityTemporal, result.frame.quantityTemporal)
+        assertEquals(originalUnderstanding.goal.domainSemanticGraph, result.frame.domainSemanticGraph)
+        assertEquals(originalUnderstanding.goal.interpretationQuality, result.frame.interpretationQuality)
+        assertEquals(
+            originalUnderstanding.goal.references.map { it.targetPhotonRef },
+            result.frame.references.map { it.targetPhotonRef },
+        )
     }
 
     @Test
-    fun `legacy v2 goal remains resumable after v3 rollout`() {
+    fun `legacy v2 goal remains readable after v4 rollout`() {
         val source = source("source-legacy", "Was weißt du über Balkonbank?")
         val current = goalPhoton(source)
         val legacy = current.copy(
             id = PhotonId("goal-legacy-v2"),
             content = current.content
                 .lines()
-                .filterNot { it.startsWith("semantic.") }
+                .filterNot { it.startsWith("semantic.") || it.startsWith("action.") }
                 .joinToString("\n")
-                .replaceFirst("goal/v3", "goal/v2"),
+                .replaceFirst("goal/v4", "goal/v2"),
         )
         val requestSource = source("continue-legacy", "Weiter", now)
 
@@ -215,6 +232,83 @@ class GoalResumeEngineTest {
                 request = continueGoal(target.id),
                 requestSource = source("continue-source", "Weiter", now),
                 requestGoalPhotonId = PhotonId("continue-goal"),
+                photons = listOf(source, target),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(GoalResumeBlockReason.TARGET_UNDECODABLE, result.reason)
+    }
+
+    @Test
+    fun `partial persisted action revision binding is fail closed`() {
+        val source = source("source-partial-ref", "Erstelle ein Bild.")
+        val valid = goalPhoton(source)
+        val roleLine = requireNotNull(valid.content.lines().firstOrNull { it.startsWith("action.role.") })
+        val assignment = roleLine.substringAfter('=').split('|').toMutableList()
+        require(assignment.size >= 7)
+        assignment[5] = ""
+        assignment[6] = "5"
+        val corruptRole = roleLine.substringBefore('=') + "=" + assignment.joinToString("|")
+        val target = valid.copy(
+            id = PhotonId("goal-partial-ref"),
+            content = valid.content.replace(roleLine, corruptRole),
+        )
+
+        val result = assertIs<GoalResumeResult.Blocked>(
+            engine.resume(
+                request = continueGoal(target.id),
+                requestSource = source("continue-partial-ref", "Weiter", now),
+                requestGoalPhotonId = PhotonId("continue-goal-partial-ref"),
+                photons = listOf(source, target),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(GoalResumeBlockReason.TARGET_UNDECODABLE, result.reason)
+    }
+
+    @Test
+    fun `duplicate persisted action role is fail closed`() {
+        val source = source("source-duplicate-role", "Erstelle ein Bild.")
+        val valid = goalPhoton(source)
+        val roleLine = requireNotNull(valid.content.lines().firstOrNull { it.startsWith("action.role.") })
+        val target = valid.copy(
+            id = PhotonId("goal-duplicate-role"),
+            content = valid.content + "\n" + roleLine,
+        )
+
+        val result = assertIs<GoalResumeResult.Blocked>(
+            engine.resume(
+                request = continueGoal(target.id),
+                requestSource = source("continue-duplicate-role", "Weiter", now),
+                requestGoalPhotonId = PhotonId("continue-goal-duplicate-role"),
+                photons = listOf(source, target),
+                createdAt = now,
+            )
+        )
+
+        assertEquals(GoalResumeBlockReason.TARGET_UNDECODABLE, result.reason)
+    }
+
+    @Test
+    fun `dangling persisted scope target is fail closed`() {
+        val source = source("source-dangling-scope", "Sende diese Mail nicht.")
+        val valid = goalPhoton(source)
+        val scopeLine = requireNotNull(valid.content.lines().firstOrNull { it.startsWith("action.scope.") })
+        val fields = scopeLine.substringAfter('=').split('|').toMutableList()
+        fields[1] = "semantic-node:" + "0".repeat(64)
+        val corruptScope = scopeLine.substringBefore('=') + "=" + fields.joinToString("|")
+        val target = valid.copy(
+            id = PhotonId("goal-dangling-scope"),
+            content = valid.content.replace(scopeLine, corruptScope),
+        )
+
+        val result = assertIs<GoalResumeResult.Blocked>(
+            engine.resume(
+                request = continueGoal(target.id),
+                requestSource = source("continue-dangling-scope", "Weiter", now),
+                requestGoalPhotonId = PhotonId("continue-goal-dangling-scope"),
                 photons = listOf(source, target),
                 createdAt = now,
             )

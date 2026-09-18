@@ -26,6 +26,8 @@ data class JournalEntry(
 
 interface CognitiveEventJournal {
     suspend fun append(event: CognitiveEvent): Long
+    suspend fun appendBatch(events: List<CognitiveEvent>): List<Long> =
+        events.map { append(it) }
     suspend fun readFrom(offsetExclusive: Long, limit: Int = 256): List<JournalEntry>
     suspend fun size(): Long
 }
@@ -41,6 +43,21 @@ class InMemoryCognitiveEventJournal : CognitiveEventJournal {
         entries += JournalEntry(offset, event)
         offsetsByEventId[event.eventId] = offset
         offset
+    }
+
+    override suspend fun appendBatch(events: List<CognitiveEvent>): List<Long> = mutex.withLock {
+        if (events.isEmpty()) return@withLock emptyList()
+        require(events.map { it.eventId }.distinct().size == events.size) {
+            "Cognitive event batch contains duplicate ids"
+        }
+        events.map { event ->
+            offsetsByEventId[event.eventId] ?: run {
+                val offset = entries.size.toLong() + 1L
+                entries += JournalEntry(offset, event)
+                offsetsByEventId[event.eventId] = offset
+                offset
+            }
+        }
     }
 
     override suspend fun readFrom(offsetExclusive: Long, limit: Int): List<JournalEntry> = mutex.withLock {

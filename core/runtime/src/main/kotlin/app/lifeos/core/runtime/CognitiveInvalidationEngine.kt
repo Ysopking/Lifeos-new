@@ -11,24 +11,53 @@ data class CognitiveDelta(
 data class InvalidationResult(
     val affected: Map<String, ProjectionValidity>,
     val recomputationPhotonIds: Set<PhotonId>,
+    val affectedByRef: Map<PhotonRevisionRef, ProjectionValidity> = emptyMap(),
+    val recomputationPhotonRefs: Set<PhotonRevisionRef> = emptySet(),
 )
 
-/** Propagates revision deltas through dependency evidence without deleting historical state. */
+/** Uses the same revision-aware dependency index as recompute; no second BFS topology exists. */
 class CognitiveInvalidationEngine {
-    fun propagate(delta: CognitiveDelta, dependencies: Collection<CognitiveDependency>): InvalidationResult {
-        val queue = ArrayDeque<PhotonId>()
-        val visited = linkedSetOf<PhotonId>()
-        queue.add(delta.changedPhotonId)
-        while (queue.isNotEmpty()) {
-            val current = queue.removeFirst()
-            dependencies.asSequence()
-                .filter { it.sourcePhotonId == current }
-                .sortedBy { it.stableFingerprint }
-                .forEach { edge -> if (visited.add(edge.targetPhotonId)) queue.add(edge.targetPhotonId) }
+    fun propagate(
+        delta: CognitiveDelta,
+        dependencies: Collection<CognitiveDependency>,
+    ): InvalidationResult = propagate(delta, CognitiveDependencyIndex(dependencies))
+
+    fun propagate(
+        delta: CognitiveDelta,
+        dependencyIndex: CognitiveDependencyIndex,
+    ): InvalidationResult {
+        val propagated = dependencyIndex.propagate(
+            source = PhotonRevisionRef(delta.changedPhotonId, delta.fromRevision),
+            magnitudeMicros = 1_000_000L,
+        )
+        val affectedByRef = linkedMapOf<PhotonRevisionRef, ProjectionValidity>()
+        propagated.forEach { value ->
+            val next = dependencyIndex.validity(value.reason)
+            affectedByRef[value.target] = when {
+                affectedByRef[value.target] == ProjectionValidity.INVALID ->
+                    ProjectionValidity.INVALID
+                next == ProjectionValidity.INVALID ->
+                    ProjectionValidity.INVALID
+                else ->
+                    ProjectionValidity.STALE
+            }
         }
+        val affected = affectedByRef.entries
+            .groupBy { it.key.photonId.value }
+            .mapValues { (_, entries) ->
+                if (entries.any { it.value == ProjectionValidity.INVALID }) {
+                    ProjectionValidity.INVALID
+                } else {
+                    ProjectionValidity.STALE
+                }
+            }
+            .toSortedMap()
+        val refs = affectedByRef.keys.toCollection(linkedSetOf())
         return InvalidationResult(
-            affected = visited.associate { it.value to ProjectionValidity.STALE },
-            recomputationPhotonIds = visited,
+            affected = affected,
+            recomputationPhotonIds = refs.mapTo(linkedSetOf()) { it.photonId },
+            affectedByRef = affectedByRef.toMap(),
+            recomputationPhotonRefs = refs,
         )
     }
 }

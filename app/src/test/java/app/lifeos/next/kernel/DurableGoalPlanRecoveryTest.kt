@@ -30,6 +30,7 @@ import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class DurableGoalPlanRecoveryTest {
@@ -104,6 +105,9 @@ class DurableGoalPlanRecoveryTest {
         val resumed = restartedRuntime.prepare(context)
 
         assertTrue(resumed is DurableGoalPlanAdmission.Completed)
+        val completed = resumed as DurableGoalPlanAdmission.Completed
+        assertSame(alreadyPersistedOutcome, completed.outcome)
+        assertEquals(alreadyPersistedOutcome.revision, completed.outcome?.revision)
         assertEquals(1, checkpoints.checkpoints.size)
         val restored = restartedLedger.states.value.values.single()
         assertTrue(restored.stepStates.values.all { it == GoalStepState.COMPLETED })

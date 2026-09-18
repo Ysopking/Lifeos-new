@@ -2,6 +2,7 @@ package app.lifeos.core.runtime
 
 import app.lifeos.core.model.CognitiveDependency
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.ProjectionValidity
 
 /** A semantic/revision delta entering the incremental cognitive graph. */
@@ -21,6 +22,8 @@ data class CognitiveRecomputePlan(
     val projectionStates: Map<String, ProjectionValidity>,
     val escalateRegional: Boolean,
     val escalateGlobal: Boolean,
+    val affectedPhotonRefs: Set<PhotonRevisionRef> = emptySet(),
+    val projectionStatesByRef: Map<PhotonRevisionRef, ProjectionValidity> = emptyMap(),
 )
 
 /**
@@ -36,26 +39,49 @@ class IncrementalCognitiveRecomputePlanner(
         require(globalThresholdMicros in regionalThresholdMicros..1_000_000L)
     }
 
-    fun plan(delta: CognitiveRecomputeDelta, dependencies: Collection<CognitiveDependency>): CognitiveRecomputePlan {
-        val affected = linkedSetOf<PhotonId>()
-        val queue = ArrayDeque<PhotonId>()
-        queue.add(delta.sourcePhotonId)
+    fun plan(
+        delta: CognitiveRecomputeDelta,
+        dependencies: Collection<CognitiveDependency>,
+    ): CognitiveRecomputePlan = plan(delta, CognitiveDependencyIndex(dependencies))
 
-        while (queue.isNotEmpty()) {
-            val current = queue.removeFirst()
-            dependencies.asSequence()
-                .filter { it.sourcePhotonId == current }
-                .sortedBy { it.stableFingerprint }
-                .forEach { dependency ->
-                    if (affected.add(dependency.targetPhotonId)) queue.add(dependency.targetPhotonId)
-                }
+    fun plan(
+        delta: CognitiveRecomputeDelta,
+        dependencyIndex: CognitiveDependencyIndex,
+    ): CognitiveRecomputePlan {
+        val propagated = dependencyIndex.propagate(
+            source = PhotonRevisionRef(delta.sourcePhotonId, delta.sourceRevision),
+            magnitudeMicros = delta.magnitudeMicros,
+        )
+        val refs = propagated.mapTo(linkedSetOf()) { it.target }
+        val statesByRef = linkedMapOf<PhotonRevisionRef, ProjectionValidity>()
+        propagated.forEach { value ->
+            val validity = dependencyIndex.validity(value.reason)
+            val previous = statesByRef[value.target]
+            statesByRef[value.target] = when {
+                previous == ProjectionValidity.INVALID -> previous
+                validity == ProjectionValidity.INVALID -> validity
+                else -> ProjectionValidity.STALE
+            }
         }
+        val states = statesByRef.entries
+            .groupBy { it.key.photonId.value }
+            .mapValues { (_, entries) ->
+                if (entries.any { it.value == ProjectionValidity.INVALID }) {
+                    ProjectionValidity.INVALID
+                } else {
+                    ProjectionValidity.STALE
+                }
+            }
+            .toSortedMap()
+        val maxMagnitude = propagated.maxOfOrNull { it.magnitudeMicros } ?: 0L
 
         return CognitiveRecomputePlan(
-            affectedPhotonIds = affected,
-            projectionStates = affected.associate { it.value to ProjectionValidity.STALE },
-            escalateRegional = delta.magnitudeMicros >= regionalThresholdMicros,
-            escalateGlobal = delta.magnitudeMicros >= globalThresholdMicros,
+            affectedPhotonIds = refs.mapTo(linkedSetOf()) { it.photonId },
+            projectionStates = states,
+            escalateRegional = maxMagnitude >= regionalThresholdMicros,
+            escalateGlobal = maxMagnitude >= globalThresholdMicros,
+            affectedPhotonRefs = refs,
+            projectionStatesByRef = statesByRef.toMap(),
         )
     }
 }

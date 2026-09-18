@@ -59,7 +59,11 @@ jobs:
             'self_healing_recovery=PASS' \
             'controlled_evolution_recovery=PASS' \
             'offline_image_artifact_e2e=PASS' \
-            'field_snapshot_atomic_recovery=PASS' >> product-gold-evidence/gates.txt
+            'field_snapshot_atomic_recovery=PASS' \
+            'semantic_action_recovery=PASS' \
+            'semantic_reference_revision_recovery=PASS' \
+            'external_effect_no_duplicate=PASS' \
+            'language_gold_device=PASS' >> product-gold-evidence/gates.txt
           printf 'product_gold=PASS\n' >> product-gold-evidence/gates.txt
       - name: Upload Product Gold debug APK
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

@@ -3,6 +3,9 @@ package app.lifeos.next.kernel
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonLoadReport
+import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.model.PhotonIndexQuery
+import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.PhotonIngressMode
 
@@ -40,7 +43,24 @@ internal class CanonicalLifePhotonRepository(
      */
     suspend fun reconcilePersisted(): Int {
         var reconciled = 0
-        delegate.loadAll()
+        val candidates = if (delegate is RevisionedPhotonRepository) {
+            PRODUCTIVE_TAGS
+                .flatMap { tag ->
+                    delegate.query(
+                        PhotonIndexQuery(
+                            allTags = setOf(tag),
+                            latestOnly = true,
+                            order = PhotonIndexOrder.OLDEST_FIRST,
+                            limit = Int.MAX_VALUE,
+                        )
+                    )
+                }
+                .distinct()
+                .mapNotNull { delegate.load(it) }
+        } else {
+            delegate.loadAll()
+        }
+        candidates
             .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value }.thenBy { it.revision })
             .forEach { photon ->
                 val mode = productiveMode(photon) ?: return@forEach
@@ -51,6 +71,14 @@ internal class CanonicalLifePhotonRepository(
     }
 
     internal companion object {
+        private val PRODUCTIVE_TAGS = setOf(
+            "life-source-evidence",
+            "life-source-gap",
+            "memory-atom",
+            "memory-crystal",
+            "initial-data-bootstrap",
+        )
+
         fun productiveMode(photon: Photon): PhotonIngressMode? = when {
             "life-source-evidence" in photon.tags -> PhotonIngressMode.ORIGIN
             "life-source-gap" in photon.tags -> PhotonIngressMode.ORIGIN

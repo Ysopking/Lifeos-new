@@ -165,15 +165,19 @@ class FieldForceCalculator(
             val evidence = evidenceById[link.evidenceId] ?: return@forEach
             val score = evidenceForce(evidence, context).composite * link.weight
             when (link.relation) {
-                EvidenceRelationType.CONTRADICTS -> contradiction += score * weights.contradictionPenalty
+                EvidenceRelationType.CONTRADICTS ->
+                    contradiction += score * weights.contradictionPenalty
+
                 EvidenceRelationType.SUPPORTS,
                 EvidenceRelationType.REFINES,
                 EvidenceRelationType.DERIVED_FROM,
-                EvidenceRelationType.DUPLICATES,
                 -> {
                     supportSum += score
                     supportWeight += link.weight
                 }
+
+                // Duplicate evidence remains traceable but contributes no independent support mass.
+                EvidenceRelationType.DUPLICATES -> Unit
             }
         }
         val support = if (supportWeight > 0.0) (supportSum / supportWeight).coerceIn(0.0, 1.0) else 0.0

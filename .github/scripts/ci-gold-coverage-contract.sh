@@ -16,6 +16,21 @@ required_jvm_tests=(
   "app/src/test/java/app/lifeos/next/kernel/GenesisBuildStudioExpansionRuntimeTest.kt"
   "app/src/test/java/app/lifeos/next/kernel/AndroidWebDeepSearchSourceTest.kt"
   "app/src/test/java/app/lifeos/next/OutcomeOverviewTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/LanguageGoldCorpusTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/SemanticActionSafetyTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/EntitySystemV2Test.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/QuantityTemporalEngineTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/LinguisticFieldIndexV2Test.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/RevisionAwareReferenceResolverTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/LanguageContextRetrieverTest.kt"
+  "core/runtime/src/test/kotlin/app/lifeos/core/runtime/ConversationFastPathSafetyTest.kt"
+  "core/runtime/src/test/kotlin/app/lifeos/core/runtime/goal/GoalResumeEngineTest.kt"
+  "core/runtime/src/test/kotlin/app/lifeos/core/runtime/agency/ExternalEffectExecutorTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/DomainSemanticPackGoldTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/SemanticInterpretationQualityTest.kt"
+  "app/src/test/java/app/lifeos/next/kernel/SemanticActionGraphRouterTest.kt"
+  "app/src/test/java/app/lifeos/next/kernel/ExternalSemanticEffectSafetyTest.kt"
+  "app/src/test/java/app/lifeos/next/kernel/DurableGoalPlanRecoveryTest.kt"
 )
 
 required_device_tests=(
@@ -26,6 +41,8 @@ required_device_tests=(
   "app/src/androidTest/java/app/lifeos/next/DeepSearchEncryptedRepositoryCorruptionDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/OfflineImageArtifactDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/FieldSnapshotAtomicRecoveryDeviceTest.kt"
+  "app/src/androidTest/java/app/lifeos/next/ProductGoldenChatDeviceTest.kt"
+  "app/src/androidTest/java/app/lifeos/next/SemanticActionRecoveryDeviceTest.kt"
 )
 
 for path in "${required_jvm_tests[@]}" "${required_device_tests[@]}"; do
@@ -53,7 +70,9 @@ for suite in \
   'ConvergenceDecisionDeviceTest' \
   'DeepSearchEncryptedRepositoryCorruptionDeviceTest' \
   'OfflineImageArtifactDeviceTest' \
-  'FieldSnapshotAtomicRecoveryDeviceTest'; do
+  'FieldSnapshotAtomicRecoveryDeviceTest' \
+  'ProductGoldenChatDeviceTest' \
+  'SemanticActionRecoveryDeviceTest'; do
   grep -Fq "$suite" "$emulator_gate" || { echo "missing-emulator-gold-suite:$suite" >&2; exit 1; }
 done
 
@@ -90,6 +109,16 @@ grep -Fq 'field_snapshot_atomic_recovery=PASS' "$product_gold_workflow" || {
   echo "product-gold-field-snapshot-recovery-not-sealed" >&2
   exit 1
 }
+for seal in \
+  'semantic_action_recovery=PASS' \
+  'semantic_reference_revision_recovery=PASS' \
+  'external_effect_no_duplicate=PASS' \
+  'language_gold_device=PASS'; do
+  grep -Fq "$seal" "$product_gold_workflow" || {
+    echo "product-gold-semantic-device-seal-missing:$seal" >&2
+    exit 1
+  }
+done
 
 product_gold_script=".github/scripts/ci-product-gold.sh"
 grep -Fq 'candidate-sha-checkout-mismatch' "$product_gold_script" || {
@@ -98,6 +127,31 @@ grep -Fq 'candidate-sha-checkout-mismatch' "$product_gold_script" || {
 }
 grep -Fq 'source_head_sha=' "$product_gold_script" || {
   echo "product-gold-source-head-evidence-missing" >&2
+  exit 1
+}
+for seal in \
+  'language_semantic_gold=PASS' \
+  'semantic_action_router=PASS' \
+  'semantic_execution_gate=PASS' \
+  'revision_reference_binding=PASS' \
+  'bounded_language_retrieval=PASS' \
+  'goal_v4_restart_parity=PASS' \
+  'linguistic_index_bounded=PASS' \
+  'domain_semantic_packs=PASS' \
+  'no_external_side_effect_without_executable_semantic_action=PASS'; do
+  grep -Fq "$seal" "$product_gold_script" || {
+    echo "product-gold-semantic-pre-emulator-seal-missing:$seal" >&2
+    exit 1
+  }
+done
+
+semantic_contract=".github/scripts/ci-language-semantic-contract.sh"
+test -s "$semantic_contract" || {
+  echo "language-semantic-architecture-contract-missing" >&2
+  exit 1
+}
+grep -Fq 'ci-language-semantic-contract.sh' .github/scripts/ci-core-fast.sh || {
+  echo "language-semantic-architecture-contract-not-enforced" >&2
   exit 1
 }
 

@@ -127,7 +127,32 @@ data class LanguageSemanticGraph(
                 it.quantities.isNotEmpty()
         }
 
-    fun sourceSurface(): String = clauses.joinToString(" ") { it.text.trim() }.trim()
+    fun sourceSurface(): String {
+        if (clauses.isEmpty()) return ""
+        val ordered = clauses.sortedBy { it.id }
+        return buildString {
+            ordered.forEachIndexed { index, clause ->
+                if (index > 0) {
+                    val previous = ordered[index - 1]
+                    val relation = links.firstOrNull {
+                        it.fromClauseId == previous.id && it.toClauseId == clause.id
+                    }
+                    append(
+                        if (relation?.type in setOf(
+                                SemanticLinkType.CONDITION,
+                                SemanticLinkType.CONTRAST,
+                            )
+                        ) {
+                            ", "
+                        } else {
+                            " "
+                        }
+                    )
+                }
+                append(clause.text.trim())
+            }
+        }.trim()
+    }
 
     companion object {
         fun empty(language: LanguageCode = LanguageCode.UNKNOWN): LanguageSemanticGraph = LanguageSemanticGraph(
@@ -205,7 +230,16 @@ class LanguageSemanticGraphExtractor {
         var start = 0
         tokens.forEachIndexed { index, token ->
             val punctuationBoundary = token.kind == TokenKind.PUNCTUATION && token.original in CLAUSE_PUNCTUATION
-            val connectiveBoundary = index > start && token.kind == TokenKind.WORD && token.normalized in RELATION_CUES
+            val relationType = RELATION_CUES[token.normalized]
+            val startRelationType = tokens.getOrNull(start)?.normalized?.let(RELATION_CUES::get)
+            val nestedSequenceCue =
+                relationType == SemanticLinkType.SEQUENCE &&
+                    startRelationType == SemanticLinkType.CONJUNCTION
+            val connectiveBoundary =
+                index > start &&
+                    token.kind == TokenKind.WORD &&
+                    relationType != null &&
+                    !nestedSequenceCue
             if (connectiveBoundary) {
                 val end = previousContent(tokens, index - 1, start)
                 if (end >= start) result += start..end
@@ -335,7 +369,9 @@ class LanguageSemanticGraphExtractor {
             "und" to SemanticLinkType.CONJUNCTION, "and" to SemanticLinkType.CONJUNCTION,
             "oder" to SemanticLinkType.DISJUNCTION, "or" to SemanticLinkType.DISJUNCTION,
             "aber" to SemanticLinkType.CONTRAST, "jedoch" to SemanticLinkType.CONTRAST,
+            "sondern" to SemanticLinkType.CONTRAST, "stattdessen" to SemanticLinkType.CONTRAST,
             "but" to SemanticLinkType.CONTRAST, "however" to SemanticLinkType.CONTRAST,
+            "rather" to SemanticLinkType.CONTRAST, "instead" to SemanticLinkType.CONTRAST,
             "danach" to SemanticLinkType.SEQUENCE, "anschliessend" to SemanticLinkType.SEQUENCE,
             "anschließend" to SemanticLinkType.SEQUENCE, "then" to SemanticLinkType.SEQUENCE,
             "laut" to SemanticLinkType.ATTRIBUTION, "according" to SemanticLinkType.ATTRIBUTION,

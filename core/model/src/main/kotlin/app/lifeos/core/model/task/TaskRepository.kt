@@ -93,3 +93,30 @@ interface TaskRepository {
 interface TaskSnapshotRepository : TaskRepository {
     suspend fun loadReport(): TaskLoadReport
 }
+
+
+/**
+ * Durable task store with reconstructible metadata indexes for scheduler/admission hot paths.
+ * Task payloads remain authoritative; rebuildIndex() is the explicit recovery/integrity path.
+ */
+interface IndexedTaskSnapshotRepository : TaskSnapshotRepository {
+    suspend fun activeCount(types: Set<TaskType>): Int
+    suspend fun listByStates(
+        types: Set<TaskType>,
+        states: Set<TaskState>,
+        limit: Int = 100,
+    ): List<LifeTask> {
+        require(limit > 0)
+        if (types.isEmpty() || states.isEmpty()) return emptyList()
+        val report = loadReport()
+        check(report.unreadableEntries.isEmpty()) {
+            "Cannot query indexed task states with unreadable task entries"
+        }
+        return report.tasks.asSequence()
+            .filter { it.type in types && it.state in states }
+            .sortedWith(compareBy<LifeTask> { it.createdAt }.thenBy { it.id.value })
+            .take(limit)
+            .toList()
+    }
+    suspend fun rebuildIndex(): TaskIndexReport
+}

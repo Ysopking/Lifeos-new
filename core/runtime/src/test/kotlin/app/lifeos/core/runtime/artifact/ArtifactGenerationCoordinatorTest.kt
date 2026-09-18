@@ -7,6 +7,10 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.SemanticArtifactPlan
+import app.lifeos.core.model.SemanticArtifactKind
+import app.lifeos.core.model.SemanticArtifactClaim
+import app.lifeos.core.model.PhotonRevisionRef
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -153,6 +157,7 @@ class ArtifactGenerationCoordinatorTest {
         confidence = confidence,
         content = "$field-content",
         contributedAt = requestedAt.plusSeconds(2),
+        claimIds = setOf(field),
     )
 
     private inner class Fixture(
@@ -163,13 +168,41 @@ class ArtifactGenerationCoordinatorTest {
         val contributions: List<ArtifactContribution>,
         val asset: AssetRef,
     ) {
-        fun generation(profile: ArtifactGenerationProfile): ArtifactGenerationRequest = ArtifactGenerationRequest(
-            request = request,
-            profile = profile,
-            contributions = contributions,
-            finalizedAt = finalizedAt,
-            materializedAsset = asset,
-        )
+        fun generation(profile: ArtifactGenerationProfile): ArtifactGenerationRequest {
+            val semanticKind = when (request.kind) {
+                ArtifactKind.IMAGE -> SemanticArtifactKind.IMAGE
+                ArtifactKind.CODE -> SemanticArtifactKind.TASK
+                ArtifactKind.DOCUMENT,
+                ArtifactKind.REPORT -> if (request.targetMimeType == "application/pdf") {
+                    SemanticArtifactKind.PDF
+                } else {
+                    SemanticArtifactKind.TEXT
+                }
+                ArtifactKind.OTHER -> SemanticArtifactKind.TEXT
+            }
+            val semanticPlan = SemanticArtifactPlan(
+                kind = semanticKind,
+                claims = contributions.map { contribution ->
+                    SemanticArtifactClaim(
+                        claimId = contribution.claimIds.single(),
+                        evidence = contribution.provenance.parentIds.mapTo(linkedSetOf()) {
+                            PhotonRevisionRef(it, 1L)
+                        },
+                        confidenceMicros = (contribution.confidence * 1_000_000.0).toLong(),
+                        canonicalContent = contribution.content,
+                    )
+                },
+                sourceWorldRevision = 1L,
+            )
+            return ArtifactGenerationRequest(
+                request = request,
+                profile = profile,
+                contributions = contributions,
+                semanticPlan = semanticPlan,
+                finalizedAt = finalizedAt,
+                materializedAsset = asset,
+            )
+        }
     }
 
     private class RecordingPhotonRepository : PhotonRepository {

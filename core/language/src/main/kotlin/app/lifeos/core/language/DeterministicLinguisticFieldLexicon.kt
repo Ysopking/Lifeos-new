@@ -10,7 +10,9 @@ class DeterministicLinguisticFieldLexicon(
         require(concepts.map { it.id }.distinct().size == concepts.size)
     }
 
-    fun byId(id: String): LinguisticConcept? = concepts.firstOrNull { it.id == id }
+    private val conceptsById: Map<String, LinguisticConcept> = concepts.associateBy { it.id }
+
+    fun byId(id: String): LinguisticConcept? = conceptsById[id]
 
     companion object {
         private fun defaultConcepts(): List<LinguisticConcept> = listOf(
@@ -156,6 +158,78 @@ class DeterministicLinguisticFieldLexicon(
                 semanticTag = "MOON",
                 entityType = EntityType.OBJECT,
                 attractsTags = setOf("NIGHT", "LIGHT_SOURCE"),
+            ),
+            LinguisticConcept(
+                id = "authority.jobcenter",
+                canonical = "jobcenter",
+                variants = setOf("job-centre", "jobcentre"),
+                semanticTag = "AUTHORITY_JOBCENTER",
+                attractsTags = setOf("NOTICE", "APPLICATION", "DEADLINE"),
+                semanticMass = 1.25,
+            ),
+            LinguisticConcept(
+                id = "document.notice",
+                canonical = "bescheid",
+                variants = setOf("bescheide", "notice"),
+                semanticTag = "NOTICE",
+                attractsTags = setOf("AUTHORITY_JOBCENTER", "CLAIM", "DEADLINE"),
+                semanticMass = 1.20,
+            ),
+            LinguisticConcept(
+                id = "legal.objection",
+                canonical = "widerspruch",
+                variants = setOf("widersprueche", "widersprüche", "objection"),
+                semanticTag = "OBJECTION",
+                attractsTags = setOf("NOTICE", "DEADLINE"),
+                semanticMass = 1.15,
+            ),
+            LinguisticConcept(
+                id = "temporal.deadline",
+                canonical = "frist",
+                variants = setOf("fristen", "deadline"),
+                semanticTag = "DEADLINE",
+                attractsTags = setOf("NOTICE", "OBJECTION"),
+                semanticMass = 1.10,
+            ),
+            LinguisticConcept(
+                id = "debt.installment",
+                canonical = "ratenzahlung",
+                variants = setOf("ratenzahlungen", "installment"),
+                semanticTag = "INSTALLMENT",
+                attractsTags = setOf("AGREEMENT", "PAYMENT", "DEBT"),
+                semanticMass = 1.10,
+            ),
+            LinguisticConcept(
+                id = "contract.agreement",
+                canonical = "vereinbarung",
+                variants = setOf("vereinbarungen", "agreement"),
+                semanticTag = "AGREEMENT",
+                attractsTags = setOf("INSTALLMENT", "CONTRACT"),
+                semanticMass = 1.00,
+            ),
+            LinguisticConcept(
+                id = "benefit.care",
+                canonical = "pflegegeld",
+                variants = emptySet(),
+                semanticTag = "CARE_BENEFIT",
+                attractsTags = setOf("NOTICE", "AUTHORITY_JOBCENTER"),
+                semanticMass = 1.05,
+            ),
+            LinguisticConcept(
+                id = "insurance.health",
+                canonical = "krankenversicherung",
+                variants = setOf("krankenversicherungen"),
+                semanticTag = "HEALTH_INSURANCE",
+                attractsTags = setOf("CONTRIBUTION", "CONTRACT"),
+                semanticMass = 1.10,
+            ),
+            LinguisticConcept(
+                id = "finance.contribution",
+                canonical = "beitrag",
+                variants = setOf("beitraege", "beiträge", "contribution"),
+                semanticTag = "CONTRIBUTION",
+                attractsTags = setOf("HEALTH_INSURANCE", "PAYMENT"),
+                semanticMass = 0.95,
             ),
             LinguisticConcept(
                 id = "berlin",

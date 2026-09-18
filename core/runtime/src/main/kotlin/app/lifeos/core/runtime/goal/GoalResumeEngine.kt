@@ -4,14 +4,44 @@ import app.lifeos.core.language.Ambiguity
 import app.lifeos.core.language.EntityType
 import app.lifeos.core.language.GoalConstraint
 import app.lifeos.core.language.GoalFrame
+import app.lifeos.core.language.TemporalRelation
+import app.lifeos.core.language.SemanticTemporalValue
+import app.lifeos.core.language.SemanticQuantityV2
+import app.lifeos.core.language.SemanticInterpretationQuality
+import app.lifeos.core.language.QuantityTemporalResult
+import app.lifeos.core.language.QuantityComparator
+import app.lifeos.core.language.DomainSemanticRelationType
+import app.lifeos.core.language.DomainSemanticRelation
+import app.lifeos.core.language.DomainSemanticPackId
+import app.lifeos.core.language.DomainSemanticNodeId
+import app.lifeos.core.language.DomainSemanticNode
+import app.lifeos.core.language.DomainSemanticGraph
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
 import app.lifeos.core.language.LanguageSemanticGraph
+import app.lifeos.core.language.PredicateConcept
+import app.lifeos.core.language.PredicateFrame
+import app.lifeos.core.language.ScopeType
+import app.lifeos.core.language.SemanticActionEdge
+import app.lifeos.core.language.SemanticActionEdgeType
+import app.lifeos.core.language.SemanticActionGraph
+import app.lifeos.core.language.SemanticActionNode
+import app.lifeos.core.language.SemanticActionNodeType
+import app.lifeos.core.language.SemanticEvidence
+import app.lifeos.core.language.SemanticNodeId
+import app.lifeos.core.language.SemanticRole
+import app.lifeos.core.language.SemanticScope
+import app.lifeos.core.language.SemanticValue
+import app.lifeos.core.language.SpeechAct
+import app.lifeos.core.language.SpeechActType
+import app.lifeos.core.language.TextSpan
 import app.lifeos.core.language.ReferenceExpression
 import app.lifeos.core.language.ReferenceKind
 import app.lifeos.core.language.ResolvedReference
 import app.lifeos.core.language.SemanticClause
 import app.lifeos.core.language.SemanticEntity
+import app.lifeos.core.language.SemanticEntityV2
+import app.lifeos.core.language.SemanticEntityTypeId
 import app.lifeos.core.language.SemanticLink
 import app.lifeos.core.language.SemanticLinkType
 import app.lifeos.core.language.SemanticModality
@@ -21,9 +51,11 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRelation
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import java.time.Instant
+import java.util.Currency
 
 enum class GoalResumeBlockReason {
     NOT_CONTINUATION,
@@ -195,12 +227,14 @@ class GoalResumeEngine {
     }
 }
 
-/** Strict decoder for the persisted goal/v2 and goal/v3 contracts emitted by GoalPhotonFactory. */
+/** Strict decoder for persisted goal/v2-v4 contracts emitted by GoalPhotonFactory. */
 private object PersistedGoalFrameDecoder {
     fun decode(photon: Photon): GoalFrame? = runCatching {
         val lines = photon.content.lines()
         val version = lines.firstOrNull()
-        require(version == GOAL_V2 || version == GOAL_V3) { "Unsupported persisted goal version" }
+        require(version == GOAL_V2 || version == GOAL_V3 || version == GOAL_V4) {
+            "Unsupported persisted goal version"
+        }
         val intent = IntentType.valueOf(required(lines, "intent"))
         val language = LanguageCode.valueOf(required(lines, "language"))
         val confidence = required(lines, "confidence").toDouble().also { require(it in 0.0..1.0) }
@@ -238,10 +272,15 @@ private object PersistedGoalFrameDecoder {
             .map { line ->
                 val assignment = requireNotNull(splitUnescaped(line.removePrefix("reference."), '='))
                 val kind = ReferenceKind.valueOf(unescape(assignment.first))
-                val payload = requireNotNull(splitUnescaped(assignment.second, '|'))
-                val rawTarget = unescape(payload.first)
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size in 2..3) { "Malformed persisted reference" }
+                val rawTarget = unescape(fields[0])
                 val target = rawTarget.takeUnless { it == "UNRESOLVED" }?.let(::PhotonId)
-                val score = payload.second.toDouble().also { require(it in 0.0..1.0) }
+                val score = fields[1].toDouble().also { require(it in 0.0..1.0) }
+                val revision = fields.getOrNull(2)?.toLong()?.also { require(it >= 0L) } ?: 0L
+                val targetRef = target?.takeIf { revision > 0L }?.let {
+                    PhotonRevisionRef(it, revision)
+                }
                 ResolvedReference(
                     expression = ReferenceExpression(
                         kind = kind,
@@ -251,8 +290,122 @@ private object PersistedGoalFrameDecoder {
                     ),
                     targetPhotonId = target,
                     score = score,
+                    targetPhotonRef = targetRef,
                 )
             }
+
+        val semanticEntitiesV2 = if (version == GOAL_V4) {
+            lines.filter { it.startsWith("entity.v2.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("entity.v2."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 7) { "Malformed persisted v2 entity" }
+                SemanticEntityV2(
+                    typeId = SemanticEntityTypeId(unescape(fields[0])),
+                    rawText = unescape(fields[1]),
+                    normalizedValue = unescape(fields[2]),
+                    tokenStart = fields[3].toInt().also { require(it >= 0) },
+                    tokenEndExclusive = fields[4].toInt(),
+                    confidence = fields[5].toDouble().also { require(it in 0.0..1.0) },
+                    source = unescape(fields[6]),
+                ).also { require(it.tokenEndExclusive > it.tokenStart) }
+            }
+        } else {
+            emptyList()
+        }
+
+        val quantityTemporal = if (version == GOAL_V4) {
+            val quantities = lines.filter { it.startsWith("canonical.quantity.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("canonical.quantity."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 9) { "Malformed canonical quantity" }
+                SemanticQuantityV2(
+                    comparator = QuantityComparator.valueOf(fields[0]),
+                    value = unescape(fields[1]).takeIf { it.isNotBlank() }?.toBigDecimal(),
+                    lowerBound = unescape(fields[2]).takeIf { it.isNotBlank() }?.toBigDecimal(),
+                    upperBound = unescape(fields[3]).takeIf { it.isNotBlank() }?.toBigDecimal(),
+                    unit = unescape(fields[4]).takeIf { it.isNotBlank() },
+                    currency = unescape(fields[5]).takeIf { it.isNotBlank() }?.let(Currency::getInstance),
+                    span = TextSpan(fields[6].toInt(), fields[7].toInt()),
+                    confidence = fields[8].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+            val temporals = lines.filter { it.startsWith("canonical.temporal.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("canonical.temporal."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 7) { "Malformed canonical temporal" }
+                SemanticTemporalValue(
+                    relation = TemporalRelation.valueOf(fields[0]),
+                    startInclusive = unescape(fields[1]).takeIf { it.isNotBlank() }?.let(Instant::parse),
+                    endInclusive = unescape(fields[2]).takeIf { it.isNotBlank() }?.let(Instant::parse),
+                    sourceText = unescape(fields[3]),
+                    span = TextSpan(fields[4].toInt(), fields[5].toInt()),
+                    confidence = fields[6].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+            QuantityTemporalResult(quantities, temporals)
+        } else {
+            QuantityTemporalResult(emptyList(), emptyList())
+        }
+
+        val domainSemanticGraph = if (version == GOAL_V4 && optional(lines, "domain.fingerprint") != null) {
+            val fingerprint = unescape(requireNotNull(optional(lines, "domain.fingerprint")))
+            val nodes = lines.filter { it.startsWith("domain.node.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("domain.node."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 6) { "Malformed domain semantic node" }
+                DomainSemanticNode(
+                    id = DomainSemanticNodeId(unescape(fields[0])),
+                    pack = DomainSemanticPackId.valueOf(fields[1]),
+                    type = unescape(fields[2]),
+                    value = unescape(fields[3]),
+                    confidence = fields[4].toDouble().also { require(it in 0.0..1.0) },
+                    sourceEntityType = unescape(fields[5])
+                        .takeIf { it.isNotBlank() }
+                        ?.let(::SemanticEntityTypeId),
+                )
+            }
+            val relations = lines.filter { it.startsWith("domain.relation.") }.map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("domain.relation."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 4) { "Malformed domain semantic relation" }
+                DomainSemanticRelation(
+                    from = DomainSemanticNodeId(unescape(fields[0])),
+                    to = DomainSemanticNodeId(unescape(fields[1])),
+                    type = DomainSemanticRelationType.valueOf(fields[2]),
+                    confidence = fields[3].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+            DomainSemanticGraph(
+                packs = nodes.mapTo(linkedSetOf()) { it.pack },
+                nodes = nodes,
+                relations = relations,
+                fingerprint = fingerprint,
+            )
+        } else {
+            DomainSemanticGraph.empty()
+        }
+
+        val interpretationQuality = if (version == GOAL_V4) {
+            optional(lines, "quality")?.let { encoded ->
+                val fields = splitAllUnescaped(encoded, '|')
+                require(fields.size == 6) { "Malformed semantic interpretation quality" }
+                SemanticInterpretationQuality(
+                    evidenceStrength = fields[0].toDouble(),
+                    interpretationMargin = fields[1].toDouble(),
+                    completeness = fields[2].toDouble(),
+                    contradictionCount = fields[3].toInt(),
+                    ambiguityCount = fields[4].toInt(),
+                    executionReadiness = fields[5].toDouble(),
+                )
+            } ?: SemanticInterpretationQuality.unknown()
+        } else {
+            SemanticInterpretationQuality.unknown()
+        }
 
         val ambiguities = lines
             .filter { it.startsWith("ambiguity.") }
@@ -268,10 +421,15 @@ private object PersistedGoalFrameDecoder {
                 )
             }
 
-        val semanticGraph = if (version == GOAL_V3) {
+        val semanticGraph = if (version == GOAL_V3 || version == GOAL_V4) {
             decodeSemanticGraph(lines, language)
         } else {
             LanguageSemanticGraph.empty(language)
+        }
+        val semanticActionGraph = if (version == GOAL_V4) {
+            decodeSemanticActionGraph(lines)
+        } else {
+            SemanticActionGraph.empty()
         }
 
         GoalFrame(
@@ -284,8 +442,226 @@ private object PersistedGoalFrameDecoder {
             confidence = confidence,
             language = language,
             semanticGraph = semanticGraph,
+            semanticActionGraph = semanticActionGraph,
+            semanticEntitiesV2 = semanticEntitiesV2,
+            quantityTemporal = quantityTemporal,
+            domainSemanticGraph = domainSemanticGraph,
+            interpretationQuality = interpretationQuality,
         )
     }.getOrNull()
+
+    private fun decodeSemanticActionGraph(lines: List<String>): SemanticActionGraph {
+        val fingerprint = unescape(required(lines, "action.fingerprint"))
+            .also { require(it.isNotBlank()) }
+
+        fun decodeEvidence(
+            prefix: String,
+            nodeIndex: Int,
+            fallback: SemanticEvidence,
+        ): List<SemanticEvidence> {
+            val marker = "$prefix.$nodeIndex."
+            val parsed = lines
+                .filter { it.startsWith(marker) }
+                .map { line ->
+                    val assignment = requireNotNull(splitUnescaped(line.removePrefix(marker), '='))
+                    val evidenceIndex = assignment.first.toInt().also { require(it >= 0) }
+                    val fields = splitAllUnescaped(assignment.second, '|')
+                    require(fields.size == 5) { "Malformed semantic evidence" }
+                    val spanStart = fields[3].toInt()
+                    val spanEnd = fields[4].toInt()
+                    val span = if (spanStart < 0 && spanEnd < 0) {
+                        null
+                    } else {
+                        TextSpan(spanStart, spanEnd)
+                    }
+                    evidenceIndex to SemanticEvidence(
+                        source = unescape(fields[0]),
+                        detail = unescape(fields[1]),
+                        strength = fields[2].toDouble().also { require(it in 0.0..1.0) },
+                        span = span,
+                    )
+                }
+            require(parsed.map { it.first }.distinct().size == parsed.size) {
+                "Persisted goal must not duplicate semantic evidence"
+            }
+            return parsed.sortedBy { it.first }.map { it.second }.ifEmpty { listOf(fallback) }
+        }
+
+        val parsedRoles = lines
+            .filter { it.startsWith("action.role.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("action.role."), '='))
+                val key = assignment.first.split('.')
+                require(key.size == 2) { "Malformed action role key" }
+                val nodeIndex = key[0].toInt().also { require(it >= 0) }
+                val role = SemanticRole.valueOf(key[1])
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 5 || fields.size == 7 || fields.size == 13) {
+                    "Malformed action role"
+                }
+                val refId = fields.getOrNull(5)?.let(::unescape).orEmpty()
+                val refRevision = fields.getOrNull(6)?.toLong()?.also { require(it >= 0L) } ?: 0L
+                require((refId.isBlank() && refRevision == 0L) || (refId.isNotBlank() && refRevision > 0L)) {
+                    "Persisted Photon reference must contain both id and positive revision"
+                }
+                val referencePhoton = if (refId.isNotBlank()) {
+                    PhotonRevisionRef(PhotonId(refId), refRevision)
+                } else {
+                    null
+                }
+                val quantity = if (fields.size == 13 && unescape(fields[7]).isNotBlank()) {
+                    SemanticQuantity(
+                        value = unescape(fields[7]),
+                        unit = unescape(fields[8]).ifBlank { null },
+                        comparator = unescape(fields[9]).ifBlank { null },
+                        tokenStart = fields[10].toInt().also { require(it >= 0) },
+                        tokenEndExclusive = fields[11].toInt(),
+                        confidence = fields[12].toDouble().also { require(it in 0.0..1.0) },
+                    )
+                } else {
+                    null
+                }
+                (nodeIndex to role) to SemanticValue(
+                    rawText = unescape(fields[0]),
+                    normalized = unescape(fields[1]),
+                    entityType = unescape(fields[2]).takeIf { it.isNotBlank() }?.let(EntityType::valueOf),
+                    quantity = quantity,
+                    referencePhoton = referencePhoton,
+                    resolved = fields[3].toBooleanStrict(),
+                    confidence = fields[4].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+        require(parsedRoles.map { it.first }.distinct().size == parsedRoles.size) {
+            "Persisted goal must not duplicate action roles"
+        }
+        val roleLines = parsedRoles.toMap()
+
+        val nodes = lines
+            .filter { it.startsWith("action.node.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("action.node."), '='))
+                val index = assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 16) { "Malformed semantic action node" }
+
+                val nodeId = SemanticNodeId(unescape(fields[0]))
+                val type = SemanticActionNodeType.valueOf(fields[1])
+                val clauseId = fields[2].toInt().also { require(it >= 0) }
+                val predicate = PredicateConcept.valueOf(fields[3])
+                val speechType = SpeechActType.valueOf(fields[4])
+                val speechConfidence = fields[5].toDouble().also { require(it in 0.0..1.0) }
+                val speechSpan = TextSpan(fields[6].toInt(), fields[7].toInt())
+                val frameConfidence = fields[8].toDouble().also { require(it in 0.0..1.0) }
+                val scopeTypes = enumSet(fields[9]) { ScopeType.valueOf(it) }
+                val requiredRoles = enumSet(fields[10]) { SemanticRole.valueOf(it) }
+                val unresolvedRoles = enumSet(fields[11]) { SemanticRole.valueOf(it) }
+                val unresolvedReference = fields[12].toBooleanStrict()
+                val unresolvedCondition = fields[13].toBooleanStrict()
+                val externalSideEffect = fields[14].toBooleanStrict()
+                val executionReadiness = fields[15].toDouble().also { require(it in 0.0..1.0) }
+                val roles = roleLines
+                    .filterKeys { it.first == index }
+                    .mapKeys { it.key.second }
+
+                val speechFallback = SemanticEvidence(
+                    source = "persisted-goal-v4",
+                    detail = "persisted speech act",
+                    strength = speechConfidence,
+                    span = speechSpan,
+                )
+                val frameFallback = SemanticEvidence(
+                    source = "persisted-goal-v4",
+                    detail = "persisted predicate frame",
+                    strength = frameConfidence,
+                    span = speechSpan,
+                )
+                val speechAct = SpeechAct(
+                    type = speechType,
+                    confidence = speechConfidence,
+                    evidence = decodeEvidence(
+                        prefix = "action.speech.evidence",
+                        nodeIndex = index,
+                        fallback = speechFallback,
+                    ),
+                    span = speechSpan,
+                )
+                val frame = PredicateFrame(
+                    nodeId = nodeId,
+                    clauseId = clauseId,
+                    predicate = predicate,
+                    roles = roles,
+                    scopeTypes = scopeTypes,
+                    speechAct = speechAct,
+                    confidence = frameConfidence,
+                    evidence = decodeEvidence(
+                        prefix = "action.frame.evidence",
+                        nodeIndex = index,
+                        fallback = frameFallback,
+                    ),
+                )
+                SemanticActionNode(
+                    id = nodeId,
+                    type = type,
+                    frame = frame,
+                    requiredRoles = requiredRoles,
+                    unresolvedRoles = unresolvedRoles,
+                    unresolvedReference = unresolvedReference,
+                    unresolvedCondition = unresolvedCondition,
+                    externalSideEffect = externalSideEffect,
+                    executionReadiness = executionReadiness,
+                )
+            }
+
+        val edges = lines
+            .filter { it.startsWith("action.edge.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("action.edge."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 4) { "Malformed semantic action edge" }
+                SemanticActionEdge(
+                    from = SemanticNodeId(unescape(fields[0])),
+                    to = SemanticNodeId(unescape(fields[1])),
+                    type = SemanticActionEdgeType.valueOf(fields[2]),
+                    confidence = fields[3].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+
+        val scopes = lines
+            .filter { it.startsWith("action.scope.") }
+            .map { line ->
+                val assignment = requireNotNull(splitUnescaped(line.removePrefix("action.scope."), '='))
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 6) { "Malformed semantic action scope" }
+                val targets = unescape(fields[1])
+                    .split(',')
+                    .filter { it.isNotBlank() }
+                    .mapTo(linkedSetOf()) { SemanticNodeId(it) }
+                SemanticScope(
+                    type = ScopeType.valueOf(fields[0]),
+                    targetNodeIds = targets,
+                    span = TextSpan(fields[2].toInt(), fields[3].toInt()),
+                    cue = unescape(fields[4]),
+                    confidence = fields[5].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+
+        return SemanticActionGraph(
+            nodes = nodes,
+            edges = edges,
+            scopes = scopes,
+            fingerprint = fingerprint,
+        )
+    }
+
+    private fun <T> enumSet(
+        encoded: String,
+        parser: (String) -> T,
+    ): Set<T> = encoded
+        .split(',')
+        .filter { it.isNotBlank() }
+        .mapTo(linkedSetOf(), parser)
 
     private fun decodeSemanticGraph(
         lines: List<String>,
@@ -402,6 +778,12 @@ private object PersistedGoalFrameDecoder {
         )
     }
 
+    private fun optional(lines: List<String>, key: String): String? {
+        val matches = lines.filter { it.startsWith("$key=") }
+        require(matches.size <= 1) { "Persisted goal must not duplicate $key field" }
+        return matches.singleOrNull()?.substringAfter('=')
+    }
+
     private fun required(lines: List<String>, key: String): String {
         val matches = lines.filter { it.startsWith("$key=") }
         require(matches.size == 1) { "Persisted goal must contain exactly one $key field" }
@@ -469,4 +851,5 @@ private object PersistedGoalFrameDecoder {
 
     private const val GOAL_V2 = "goal/v2"
     private const val GOAL_V3 = "goal/v3"
+    private const val GOAL_V4 = "goal/v4"
 }

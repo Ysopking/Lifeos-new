@@ -64,6 +64,15 @@ printf '%s\n' \
   'lint_debug=PASS' \
   'assemble_debug=PASS' \
   'assemble_debug_android_test=PASS' \
-  'integration_contract=PASS' > "$evidence_dir/gates.txt"
+  'integration_contract=PASS' \
+  'language_semantic_gold=PASS' \
+  'semantic_action_router=PASS' \
+  'semantic_execution_gate=PASS' \
+  'revision_reference_binding=PASS' \
+  'bounded_language_retrieval=PASS' \
+  'goal_v4_restart_parity=PASS' \
+  'linguistic_index_bounded=PASS' \
+  'domain_semantic_packs=PASS' \
+  'no_external_side_effect_without_executable_semantic_action=PASS' > "$evidence_dir/gates.txt"
 
 step "Product Gold pre-emulator matrix complete"

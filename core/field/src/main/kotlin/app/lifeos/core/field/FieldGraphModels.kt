@@ -180,21 +180,19 @@ data class FieldGraph(
     }
 
     private val nodeById: Map<FieldNodeId, FieldNode> = nodes.associateBy { it.id }
+    private val stableNodesCache: List<FieldNode> = nodes.sortedBy { it.id.value }
+    private val stableRelationsCache: List<FieldRelation> = relations.sortedBy { it.id.value }
+    private val outgoingByNode: Map<FieldNodeId, List<FieldRelation>> =
+        stableRelationsCache.groupBy { it.source }
+    private val incomingByNode: Map<FieldNodeId, List<FieldRelation>> =
+        stableRelationsCache.groupBy { it.target }
 
     fun node(id: FieldNodeId): FieldNode? = nodeById[id]
 
-    fun outgoing(id: FieldNodeId): List<FieldRelation> = relations
-        .asSequence()
-        .filter { it.source == id }
-        .sortedBy { it.id.value }
-        .toList()
+    fun outgoing(id: FieldNodeId): List<FieldRelation> = outgoingByNode[id].orEmpty()
 
-    fun incoming(id: FieldNodeId): List<FieldRelation> = relations
-        .asSequence()
-        .filter { it.target == id }
-        .sortedBy { it.id.value }
-        .toList()
+    fun incoming(id: FieldNodeId): List<FieldRelation> = incomingByNode[id].orEmpty()
 
-    fun stableNodes(): List<FieldNode> = nodes.sortedBy { it.id.value }
-    fun stableRelations(): List<FieldRelation> = relations.sortedBy { it.id.value }
+    fun stableNodes(): List<FieldNode> = stableNodesCache
+    fun stableRelations(): List<FieldRelation> = stableRelationsCache
 }

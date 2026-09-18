@@ -80,10 +80,23 @@ class FieldConvergenceEngine(
     private val config: ConvergenceConfig = ConvergenceConfig(),
     private val registry: DomainFieldRegistry = DomainFieldRegistry.EMPTY,
 ) {
+    private data class FieldExecutionContext(
+        val stableNodes: List<FieldNode>,
+        val stableRelations: List<FieldRelation>,
+        val competitionGroups: List<CompetitionGroup>,
+        val fields: List<DomainField>,
+    )
+
     fun converge(request: FieldConvergenceRequest): FieldConvergenceResult {
         val evidenceById = request.evidence.associateBy { it.id }
         val fields = registry.resolve(request.domainId, request.domainFields)
-        val fieldSetFingerprint = DomainFieldRegistry.fingerprintOf(fields)
+        val execution = FieldExecutionContext(
+            stableNodes = request.graph.stableNodes(),
+            stableRelations = request.graph.stableRelations(),
+            competitionGroups = request.graph.competitionGroups.sortedBy { it.key },
+            fields = fields,
+        )
+        val fieldSetFingerprint = DomainFieldRegistry.fingerprintOf(execution.fields)
         val seedData = seedNodeEnergy(request, evidenceById)
         val seedHypothesisBreakdowns = request.hypotheses.sortedBy { it.id.value }.map { hypothesis ->
             forceCalculator.hypothesisForce(
@@ -97,7 +110,7 @@ class FieldConvergenceEngine(
         val inputFingerprint = request.physicsFingerprint(
             config = config,
             forceCalculatorFingerprint = forceCalculator.fingerprint(),
-            resolvedFields = fields,
+            resolvedFields = execution.fields,
         )
         val initialEnergy = FieldEnergySnapshot(seedData.energy, seedHypothesisEnergy)
         val seedTrace = FieldSeedTrace(
@@ -113,7 +126,7 @@ class FieldConvergenceEngine(
 
         repeat(config.maxIterations) {
             val beforeState = state
-            val domainEvaluationTraces = fields.map { field ->
+            val domainEvaluationTraces = execution.fields.map { field ->
                 DomainFieldEvaluationTrace(
                     descriptor = field.descriptor,
                     evaluation = field.evaluate(state, request.graph, request.context),
@@ -123,14 +136,14 @@ class FieldConvergenceEngine(
             domainEvaluations.flatMap { it.conflicts }.sortedBy { it.key }.forEach { conflict ->
                 collectedConflicts[conflict.key] = conflict
             }
-            val relationForces = request.graph.stableRelations().map { relation ->
+            val relationForces = execution.stableRelations.map { relation ->
                 forceCalculator.relationForce(relation, state.energy.nodeEnergy[relation.source] ?: 0.0)
             }
             val domainForces = domainEvaluations.flatMap { it.forces }
                 .sortedWith(compareBy<FieldForce> { it.targetNodeId.value }.thenBy { it.sourceNodeId.value }.thenBy { it.reason })
             lastForces = relationForces + domainForces
 
-            val nextNodes = updateNodes(request.graph, seedData.energy, state.energy.nodeEnergy, lastForces)
+            val nextNodes = updateNodes(execution, seedData.energy, state.energy.nodeEnergy, lastForces)
             val domainBias = mergeBias(domainEvaluations)
             val nextHypotheses = updateHypotheses(
                 hypotheses = request.hypotheses,
@@ -205,25 +218,49 @@ class FieldConvergenceEngine(
     }
 
     private fun updateNodes(
-        graph: FieldGraph,
+        execution: FieldExecutionContext,
         seed: Map<FieldNodeId, Double>,
         previous: Map<FieldNodeId, Double>,
         forces: List<FieldForce>,
     ): Map<FieldNodeId, Double> {
-        val grouped = forces.groupBy { it.targetNodeId }
-        val raw = graph.stableNodes().associate { node ->
-            val incoming = grouped[node.id].orEmpty()
-            val attraction = incoming.filter { it.polarity == ForcePolarity.ATTRACTION }.sumOf { it.magnitude }
-            val repulsion = incoming.filter { it.polarity == ForcePolarity.REPULSION }.sumOf { it.magnitude }
-            val desired = ((seed[node.id] ?: 0.0) + attraction * 0.35 - repulsion * 0.35).coerceIn(0.0, 1.0)
+        val grouped = mutableMapOf<FieldNodeId, MutableList<FieldForce>>()
+        forces.forEach { force ->
+            grouped.getOrPut(force.targetNodeId) { mutableListOf() }.add(force)
+        }
+        val raw = execution.stableNodes.associate { node ->
+            var attraction = 0.0
+            var repulsion = 0.0
+            grouped[node.id].orEmpty().forEach { force ->
+                when (force.polarity) {
+                    ForcePolarity.ATTRACTION -> attraction += force.magnitude
+                    ForcePolarity.REPULSION -> repulsion += force.magnitude
+                    ForcePolarity.CONSTRAINT -> Unit
+                }
+            }
+            val desired = ((seed[node.id] ?: 0.0) + attraction * 0.35 - repulsion * 0.35)
+                .coerceIn(0.0, 1.0)
             val old = previous[node.id] ?: 0.0
             node.id to blend(old, desired)
         }.toMutableMap()
 
-        graph.competitionGroups.sortedBy { it.key }.forEach { group ->
-            val snapshot = group.nodeIds.associateWith { raw[it] ?: 0.0 }
+        execution.competitionGroups.forEach { group ->
+            val ranked = group.nodeIds
+                .asSequence()
+                .map { it to (raw[it] ?: 0.0) }
+                .sortedWith(
+                    compareByDescending<Pair<FieldNodeId, Double>> { it.second }
+                        .thenBy { it.first.value }
+                )
+                .take(2)
+                .toList()
+            val top = ranked.firstOrNull()
+            val second = ranked.getOrNull(1)
             group.nodeIds.sortedBy { it.value }.forEach { id ->
-                val competitor = snapshot.filterKeys { it != id }.values.maxOrNull() ?: 0.0
+                val competitor = when {
+                    top == null -> 0.0
+                    id == top.first -> second?.second ?: 0.0
+                    else -> top.second
+                }
                 raw[id] = ((raw[id] ?: 0.0) - competitor * 0.12).coerceIn(0.0, 1.0)
             }
         }
@@ -287,7 +324,17 @@ class FieldConvergenceEngine(
         }
 
         val finalHypotheses = ranked.mapIndexed { index, (hypothesis, energy) ->
-            val breakdown = forceCalculator.hypothesisForce(hypothesis, evidenceById, state.energy.nodeEnergy, request.context)
+            val breakdown = forceCalculator.hypothesisForce(
+                hypothesis,
+                evidenceById,
+                state.energy.nodeEnergy,
+                request.context,
+            )
+            val evidenceQuality = hypothesisEvidenceQuality(
+                hypothesis = hypothesis,
+                evidenceById = evidenceById,
+                context = request.context,
+            )
             val finalState = when {
                 status == ConvergenceStatus.CONVERGED && index == 0 -> HypothesisState.CONVERGED
                 status == ConvergenceStatus.CONVERGED && energy < config.minConvergence -> HypothesisState.REJECTED
@@ -303,8 +350,8 @@ class FieldConvergenceEngine(
                     support = breakdown.nodeCoherence,
                     contradiction = breakdown.contradiction,
                     context = breakdown.context,
-                    temporal = 0.0,
-                    authority = 0.0,
+                    temporal = evidenceQuality.temporal,
+                    authority = evidenceQuality.authority,
                     total = energy,
                 ),
             )
@@ -337,6 +384,37 @@ class FieldConvergenceEngine(
             iterations = state.iteration.index,
             trace = trace,
             snapshot = snapshot,
+        )
+    }
+
+    private data class HypothesisEvidenceQuality(
+        val temporal: Double,
+        val authority: Double,
+    )
+
+    private fun hypothesisEvidenceQuality(
+        hypothesis: FieldHypothesis,
+        evidenceById: Map<EvidenceId, FieldEvidence>,
+        context: FieldContext,
+    ): HypothesisEvidenceQuality {
+        var totalWeight = 0.0
+        var temporal = 0.0
+        var authority = 0.0
+        hypothesis.evidenceLinks
+            .asSequence()
+            .filter { it.relation != EvidenceRelationType.DUPLICATES }
+            .sortedBy { it.evidenceId.value }
+            .forEach { link ->
+                val evidence = evidenceById[link.evidenceId] ?: return@forEach
+                val force = forceCalculator.evidenceForce(evidence, context)
+                totalWeight += link.weight
+                temporal += force.temporalValidity * link.weight
+                authority += force.authority * link.weight
+            }
+        if (totalWeight <= 0.0) return HypothesisEvidenceQuality(0.0, 0.0)
+        return HypothesisEvidenceQuality(
+            temporal = (temporal / totalWeight).coerceIn(0.0, 1.0),
+            authority = (authority / totalWeight).coerceIn(0.0, 1.0),
         )
     }
 

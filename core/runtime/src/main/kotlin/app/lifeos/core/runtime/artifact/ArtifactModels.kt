@@ -35,6 +35,7 @@ data class ArtifactRevisionManifest(
     val stateHash: String,
     val materializedAsset: AssetRef? = null,
     val validation: ArtifactValidationEvidence,
+    val semanticPlanFingerprint: String? = null,
 ) {
     init {
         require(inputPhotonIds.none { it.value.isBlank() }) {
@@ -49,6 +50,10 @@ data class ArtifactRevisionManifest(
         require(stateHash.matches(Regex("[0-9a-f]{64}"))) {
             "Artifact revision state hash must be lowercase hexadecimal"
         }
+        require(
+            semanticPlanFingerprint == null ||
+                semanticPlanFingerprint.matches(Regex("[0-9a-f]{64}"))
+        ) { "Artifact semantic plan fingerprint must be lowercase SHA-256" }
     }
 }
 

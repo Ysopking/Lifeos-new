@@ -213,6 +213,17 @@ data class OwnerPolicyRepositoryLoadReport(
 /** Durable implementations must atomically append only when expectedRevision is still current. */
 interface OwnerPolicyRepository {
     suspend fun loadReport(): OwnerPolicyRepositoryLoadReport
+
+    suspend fun headRevision(): Long =
+        loadReport().events.maxOfOrNull { it.revision } ?: 0L
+
+    suspend fun loadAfter(revisionExclusive: Long): List<OwnerPolicyEvent> {
+        require(revisionExclusive >= 0L)
+        return loadReport().events
+            .filter { it.revision > revisionExclusive }
+            .sortedBy { it.revision }
+    }
+
     suspend fun append(expectedRevision: Long, event: OwnerPolicyEvent): Boolean
 }
 
@@ -271,6 +282,9 @@ class OwnerPolicyLedger(
     private val repository: OwnerPolicyRepository,
     private val now: () -> Instant = Instant::now,
 ) {
+    @Volatile
+    private var cachedSnapshot: OwnerPolicySnapshot? = null
+
     suspend fun grant(grant: OwnerPolicyGrant): OwnerPolicyGrant {
         repeat(MAX_CAS_ATTEMPTS) {
             val snapshot = loadSnapshot()
@@ -344,31 +358,71 @@ class OwnerPolicyLedger(
     suspend fun snapshot(): OwnerPolicySnapshot = loadSnapshot()
 
     private suspend fun loadSnapshot(): OwnerPolicySnapshot {
-        val report = repository.loadReport()
-        check(report.unreadableEntries.isEmpty()) {
-            "Owner policy store is unreadable: ${report.unreadableEntries.joinToString(",")}" 
+        val durableHead = repository.headRevision()
+        val cached = cachedSnapshot
+        if (cached != null && cached.revision == durableHead) return cached
+
+        if (cached == null || cached.revision > durableHead) {
+            val report = repository.loadReport()
+            check(report.unreadableEntries.isEmpty()) {
+                "Owner policy store is unreadable: ${report.unreadableEntries.joinToString(",")}"
+            }
+            val rebuilt = replay(
+                base = OwnerPolicySnapshot(0L, emptyList()),
+                events = report.events.sortedBy { it.revision },
+                expectedHead = durableHead,
+            )
+            cachedSnapshot = rebuilt
+            return rebuilt
         }
-        val ordered = report.events.sortedBy { it.revision }
-        require(ordered.map { it.revision } == (1L..ordered.size.toLong()).toList()) {
-            "Owner policy event revisions must be contiguous"
-        }
-        val active = linkedMapOf<OwnerPolicyGrantId, OwnerPolicyGrant>()
-        ordered.forEach { event ->
+
+        val tail = repository.loadAfter(cached.revision)
+        val updated = replay(
+            base = cached,
+            events = tail,
+            expectedHead = durableHead,
+        )
+        cachedSnapshot = updated
+        return updated
+    }
+
+    private fun replay(
+        base: OwnerPolicySnapshot,
+        events: List<OwnerPolicyEvent>,
+        expectedHead: Long,
+    ): OwnerPolicySnapshot {
+        val active = base.activeGrants.associateByTo(
+            linkedMapOf(),
+            OwnerPolicyGrant::id,
+        )
+        var revision = base.revision
+        events.sortedBy { it.revision }.forEach { event ->
+            require(event.revision == revision + 1L) {
+                "Owner policy event revisions must be contiguous"
+            }
             when (event.type) {
                 OwnerPolicyEventType.GRANT -> {
                     val grant = requireNotNull(event.grant)
                     val existing = active[grant.id]
-                    require(existing == null || existing == grant) { "Owner policy grant identity collision" }
+                    require(existing == null || existing == grant) {
+                        "Owner policy grant identity collision"
+                    }
                     active[grant.id] = grant
                 }
                 OwnerPolicyEventType.REVOKE -> {
                     val id = requireNotNull(event.revokedGrantId)
-                    require(active.remove(id) != null) { "Owner policy revoked unknown/inactive grant" }
+                    require(active.remove(id) != null) {
+                        "Owner policy revoked unknown/inactive grant"
+                    }
                 }
             }
+            revision = event.revision
+        }
+        require(revision == expectedHead) {
+            "Owner policy tail does not reach durable head"
         }
         return OwnerPolicySnapshot(
-            revision = ordered.lastOrNull()?.revision ?: 0L,
+            revision = revision,
             activeGrants = active.values.sortedBy { it.id.value },
         )
     }

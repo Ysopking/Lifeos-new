@@ -1,7 +1,9 @@
 package app.lifeos.core.language
 
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
 import java.time.Duration
+import java.util.Locale
 
 class ReferenceExpressionExtractor {
     private val explicitIdRegex = Regex("\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b")
@@ -166,53 +168,154 @@ class ReferenceExpressionExtractor {
  */
 class ReferenceResolver {
     fun resolve(expression: ReferenceExpression, context: LanguageContext): ResolvedReference {
-        val candidates = rank(expression, context)
-        val best = candidates.firstOrNull()
+        val revisionCandidates = rankRevisionRefs(expression, context)
+        if (revisionCandidates.isNotEmpty()) {
+            val best = revisionCandidates.first()
+            val compatibility = revisionCandidates
+                .groupBy { it.first.photonId }
+                .map { (id, scored) -> id to scored.maxOf { it.second } }
+                .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+            return ResolvedReference(
+                expression = expression,
+                targetPhotonId = best.first.photonId,
+                score = best.second,
+                alternatives = compatibility
+                    .filterNot { it.first == best.first.photonId }
+                    .take(3),
+                targetPhotonRef = best.first,
+                revisionAlternatives = revisionCandidates.drop(1).take(3),
+            )
+        }
+
+        // Compatibility-only path for legacy/in-memory contexts that predate revision binding.
+        // Never invent a revision: execution remains blocked because targetPhotonRef stays null.
+        val legacy = rankLegacyIds(expression, context)
+        val best = legacy.firstOrNull()
         return ResolvedReference(
             expression = expression,
             targetPhotonId = best?.first,
             score = best?.second ?: 0.0,
-            alternatives = candidates.drop(1).take(3),
+            alternatives = legacy.drop(1).take(3),
+            targetPhotonRef = null,
+            revisionAlternatives = emptyList(),
         )
     }
 
     fun rank(expression: ReferenceExpression, context: LanguageContext): List<Pair<PhotonId, Double>> {
-        if (expression.kind == ReferenceKind.EXPLICIT_ID) {
-            val id = PhotonId(expression.rawText)
-            val found = context.items.any { it.photonId == id }
-            return if (found) listOf(id to 1.0) else emptyList()
+        val revisionRank = rankRevisionRefs(expression, context)
+        if (revisionRank.isNotEmpty()) {
+            return revisionRank
+                .groupBy { it.first.photonId }
+                .map { (id, scored) -> id to scored.maxOf { it.second } }
+                .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
         }
+        return rankLegacyIds(expression, context)
+    }
+
+    private fun rankLegacyIds(
+        expression: ReferenceExpression,
+        context: LanguageContext,
+    ): List<Pair<PhotonId, Double>> {
         if (context.items.isEmpty()) return emptyList()
-
-        val candidates = context.items.filterNot { item ->
-            expression.kind == ReferenceKind.PREVIOUS &&
-                "goal" in expression.preferredKinds &&
-                ("intent:continue" in item.tags || "goal-resumed" in item.tags)
-        }
-
+        val candidates = ReferenceCandidateIndexV3(context)
+            .candidates(expression, MAX_REFERENCE_CANDIDATES)
+            .filterNot { candidate ->
+                val item = candidate.item
+                expression.kind == ReferenceKind.PREVIOUS &&
+                    "goal" in expression.preferredKinds &&
+                    ("intent:continue" in item.tags || "goal-resumed" in item.tags)
+            }
         return candidates
-            .map { item -> item.photonId to score(item, expression, context) }
+            .map { candidate ->
+                candidate.item.photonId to score(
+                    item = candidate.item,
+                    expression = expression,
+                    context = context,
+                    indexScore = candidate.indexScore,
+                )
+            }
             .filter { it.second > 0.0 }
             .groupBy { it.first }
             .map { (id, scored) -> id to scored.maxOf { it.second } }
-            .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+            .sortedWith(
+                compareByDescending<Pair<PhotonId, Double>> { it.second }
+                    .thenBy { it.first.value }
+            )
+            .take(MAX_RANKED_REFERENCES)
     }
 
-    private fun score(item: LanguageContextItem, expression: ReferenceExpression, context: LanguageContext): Double {
-        var score = 0.05
-        if (
+    fun rankRevisionRefs(
+        expression: ReferenceExpression,
+        context: LanguageContext,
+    ): List<Pair<PhotonRevisionRef, Double>> {
+        if (context.items.isEmpty()) return emptyList()
+
+        val candidates = ReferenceCandidateIndexV3(context)
+            .candidates(expression, MAX_REFERENCE_CANDIDATES)
+            .filterNot { candidate ->
+                val item = candidate.item
+                expression.kind == ReferenceKind.PREVIOUS &&
+                    "goal" in expression.preferredKinds &&
+                    ("intent:continue" in item.tags || "goal-resumed" in item.tags)
+            }
+
+        return candidates
+            .mapNotNull { candidate ->
+                val item = candidate.item
+                val ref = item.revisionRef ?: return@mapNotNull null
+                ref to score(
+                    item = item,
+                    expression = expression,
+                    context = context,
+                    indexScore = candidate.indexScore,
+                )
+            }
+            .filter { it.second > 0.0 }
+            .groupBy { it.first }
+            .map { (ref, scored) -> ref to scored.maxOf { it.second } }
+            .sortedWith(
+                compareByDescending<Pair<PhotonRevisionRef, Double>> { it.second }
+                    .thenByDescending { it.first.revision }
+                    .thenBy { it.first.photonId.value }
+            )
+            .take(MAX_RANKED_REFERENCES)
+    }
+
+    private fun score(
+        item: LanguageContextItem,
+        expression: ReferenceExpression,
+        context: LanguageContext,
+        indexScore: Double,
+    ): Double {
+        var score = 0.05 + indexScore * 0.10
+        val expressionTerms = referenceTerms(expression.rawText)
+        val semanticKindMatch =
             expression.preferredKinds.isEmpty() ||
-            item.kind in expression.preferredKinds ||
-            item.tags.any { it in expression.preferredKinds }
-        ) {
-            score += 0.34
+                item.kind in expression.preferredKinds ||
+                item.tags.any { it in expression.preferredKinds } ||
+                item.semanticTypes.any { semantic ->
+                    expression.preferredKinds.any { preferred ->
+                        semantic == preferred || semantic.endsWith(":" + preferred)
+                    }
+                }
+        if (semanticKindMatch) {
+            score += 0.30
         } else {
-            score -= 0.20
+            score -= 0.24
+        }
+
+        if (expressionTerms.isNotEmpty()) {
+            val overlap = expressionTerms.count(item.normalizedTerms::contains).toDouble() /
+                expressionTerms.size.toDouble()
+            val exactPreferredTerms = expressionTerms.filterNot { it in REFERENCE_STOP_WORDS }
+            val exactOverlap = exactPreferredTerms.count(item.normalizedTerms::contains)
+            score += overlap * 0.26
+            if (exactOverlap > 0) score += minOf(0.18, exactOverlap * 0.06)
         }
         if (expression.kind == ReferenceKind.OTHER) {
             score += if (item.active) -0.18 else 0.20
         } else if (item.active) {
-            score += 0.16
+            score += 0.08
         }
         if (
             item.photonId == context.activeGoalId &&
@@ -237,6 +340,16 @@ class ReferenceResolver {
         }
         if (expression.kind == ReferenceKind.LAST_RESULT && "result" in item.tags) score += 0.18
 
+        if (expression.kind == ReferenceKind.LAST_RESULT && "result" in item.semanticTypes) {
+            score += 0.08
+        }
+        if (item.goalId != null && item.goalId == context.activeGoalId) {
+            score += 0.08
+        }
+        if (item.matterId != null && expressionTerms.any { it in MATTER_TERMS }) {
+            score += 0.08
+        }
+
         val confidenceWeighted = score * item.confidence
         val activeGoalAnchor =
             item.photonId == context.activeGoalId &&
@@ -248,5 +361,27 @@ class ReferenceResolver {
             confidenceWeighted
         }
         return resolved.coerceIn(0.0, 1.0)
+    }
+
+    private fun referenceTerms(value: String): Set<String> =
+        TERM_REGEX.findAll(value)
+            .map { it.value.lowercase(Locale.ROOT).replace("ß", "ss") }
+            .filter { it.length > 1 }
+            .filterNot { it in REFERENCE_STOP_WORDS }
+            .toSet()
+
+    private companion object {
+        const val MAX_REFERENCE_CANDIDATES = 32
+        const val MAX_RANKED_REFERENCES = 12
+        val TERM_REGEX = Regex("[\\p{L}\\p{N}]+")
+        val REFERENCE_STOP_WORDS = setOf(
+            "das", "die", "der", "den", "dem", "dies", "diese", "dieses", "diesen",
+            "andere", "anderen", "bitte", "mit", "und", "oder", "mach", "mache",
+            "it", "this", "that", "the", "other", "with", "and", "or", "please", "make",
+        )
+        val MATTER_TERMS = setOf(
+            "bescheid", "jobcenter", "behorde", "behoerde", "schuld", "forderung",
+            "vertrag", "frist", "matter", "case", "debt", "claim",
+        )
     }
 }

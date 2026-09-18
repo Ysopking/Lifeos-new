@@ -1,6 +1,7 @@
 package app.lifeos.core.runtime.tasks
 
 import app.lifeos.core.model.task.CreateTaskResult
+import app.lifeos.core.model.task.IndexedTaskSnapshotRepository
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskDraft
 import app.lifeos.core.model.task.TaskRepository
@@ -16,7 +17,7 @@ class DurableTaskEngine(
 ) {
     /** Shared synchronization/snapshot boundary for all bounded cognition producers on this engine. */
     internal val cognitionAdmissionMutex = Mutex()
-    internal val cognitionSnapshotRepository: TaskSnapshotRepository? = tasks as? TaskSnapshotRepository
+    internal val cognitionSnapshotRepository: IndexedTaskSnapshotRepository? = tasks as? IndexedTaskSnapshotRepository
 
     suspend fun submit(draft: TaskDraft): LifeTask {
         val createdAt = now()

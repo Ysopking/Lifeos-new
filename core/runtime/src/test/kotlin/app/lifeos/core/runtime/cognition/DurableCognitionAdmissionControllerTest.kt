@@ -1,8 +1,8 @@
 package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.task.IndexedTaskSnapshotRepository
 import app.lifeos.core.model.task.TaskDraft
-import app.lifeos.core.model.task.TaskLoadReport
 import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
@@ -61,10 +61,33 @@ class DurableCognitionAdmissionControllerTest {
     }
 
     @Test
+    fun indexedAdmissionHotPathDoesNotLoadFullTaskSnapshot() = runTest {
+        val delegate = InMemoryTaskRepository()
+        var fullSnapshotReads = 0
+        val indexedTasks = object : IndexedTaskSnapshotRepository by delegate {
+            override suspend fun loadReport() = delegate.loadReport().also {
+                fullSnapshotReads += 1
+            }
+        }
+        val engine = taskEngine(indexedTasks)
+        val admission = DurableCognitionAdmissionController(
+            tasks = indexedTasks,
+            taskEngine = engine,
+            maxActiveTasks = 2,
+        )
+
+        assertNotNull(admission.submit(draft(1)))
+        assertNotNull(admission.submit(draft(1)))
+        assertEquals(1, admission.availableCapacity())
+        assertEquals(0, fullSnapshotReads)
+    }
+
+    @Test
     fun taskLedgerReadFailureFailsClosed() = runTest {
         val delegate = InMemoryTaskRepository()
-        val failingTasks = object : TaskSnapshotRepository by delegate {
-            override suspend fun loadReport(): TaskLoadReport = error("ledger-unreadable")
+        val failingTasks = object : IndexedTaskSnapshotRepository by delegate {
+            override suspend fun activeCount(types: Set<TaskType>): Int =
+                error("ledger-index-unreadable")
         }
         val admission = DurableCognitionAdmissionController(
             tasks = failingTasks,
