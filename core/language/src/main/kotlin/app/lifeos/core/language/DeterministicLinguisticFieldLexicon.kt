@@ -10,7 +10,9 @@ class DeterministicLinguisticFieldLexicon(
         require(concepts.map { it.id }.distinct().size == concepts.size)
     }
 
-    fun byId(id: String): LinguisticConcept? = concepts.firstOrNull { it.id == id }
+    private val conceptsById: Map<String, LinguisticConcept> = concepts.associateBy { it.id }
+
+    fun byId(id: String): LinguisticConcept? = conceptsById[id]
 
     companion object {
         private fun defaultConcepts(): List<LinguisticConcept> = listOf(
