@@ -56,9 +56,13 @@ class ExtensionPhotonReaderTest {
         val ref = PhotonRevisionRef(PhotonId("missing"), 3)
         val repository = RecordingRepository(emptyList(), forcedRefs = listOf(ref))
 
-        assertFailsWith<IllegalArgumentException> {
+        var failedClosed = false
+        try {
             ExtensionPhotonReader(repository).query(ExtensionPhotonQuery(limit = 1))
+        } catch (_: IllegalArgumentException) {
+            failedClosed = true
         }
+        assertTrue(failedClosed)
     }
 
     private fun photon(id: String, revision: Long): Photon = Photon(
