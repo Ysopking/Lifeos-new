@@ -27,6 +27,10 @@ import app.lifeos.core.model.health.ProtectionMode
 import app.lifeos.core.model.health.ProtectionStateLoadResult
 import app.lifeos.core.model.worker.WorkerId
 import app.lifeos.core.runtime.CognitiveSnapshotManager
+import app.lifeos.core.runtime.life.DurableLifeMemoryRuntimeRegistry
+import app.lifeos.core.runtime.CognitiveSnapshotRuntimeRegistry
+import app.lifeos.core.runtime.CognitiveSnapshotProducer
+import app.lifeos.core.runtime.CognitiveSnapshotDependencyState
 import app.lifeos.core.runtime.DurableLifeOsRuntime
 import app.lifeos.core.runtime.DurableRuntimeStateBridge
 import app.lifeos.core.runtime.InfluenceExecutor
@@ -373,6 +377,24 @@ class LifeOsKernelFactory(
         )
         val cognitiveSnapshotManager = CognitiveSnapshotManager(
             repository = EncryptedCognitiveSnapshotRepository(appContext),
+        )
+        CognitiveSnapshotRuntimeRegistry.install(
+            CognitiveSnapshotProducer(
+                manager = cognitiveSnapshotManager,
+                journal = cognitiveEventJournal,
+                worlds = worldFormulaSnapshotRepository,
+                dependencyState = {
+                    thoughtGraph.snapshot().let { snapshot ->
+                        CognitiveSnapshotDependencyState(
+                            revision = snapshot.revision,
+                            fingerprint = snapshot.contentFingerprint,
+                        )
+                    }
+                },
+                memoryFingerprint = {
+                    DurableLifeMemoryRuntimeRegistry.current()?.current()?.fingerprint
+                },
+            )
         )
         val cognitiveScheduler = CognitiveScheduler()
         val cognitionAdmission = DurableCognitionAdmissionController(
