@@ -11,7 +11,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 class TaskSchedulerLoop(
     private val scope: CoroutineScope,
-    private val scheduler: TaskScheduler,
+    private val scheduler: TaskSchedulingEngine,
     private val wakeSource: TaskSchedulerWakeSource,
     private val batchSize: Int = 16,
     private val rescanInterval: Duration = Duration.ofSeconds(30),
