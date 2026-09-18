@@ -28,6 +28,30 @@ class OwnerPolicyCodecTest {
     }
 
     @Test
+    fun segmentedCodecPreservesGlobalRevisionWithoutWeakeningFullLogValidation() {
+        val grant = OwnerPolicyGrant.create(
+            actorId = OwnerActorId("owner"),
+            effect = OwnerEffectType.FILE_WRITE,
+            resource = OwnerResourceSelector(OwnerResourceSelectorType.EXACT, "file://segment"),
+            scope = "private",
+            validFrom = Instant.EPOCH,
+        )
+        val event = OwnerPolicyEvent(
+            revision = 7,
+            type = OwnerPolicyEventType.GRANT,
+            recordedAt = Instant.EPOCH,
+            grant = grant,
+        )
+        val encoded = OwnerPolicyEventLogCodec.encodeSegment(event)
+
+        assertEquals(event, OwnerPolicyEventLogCodec.decodeSegment(encoded))
+        assertFailsWith<IllegalArgumentException> { OwnerPolicyEventLogCodec.decode(encoded) }
+        assertFailsWith<IllegalArgumentException> {
+            OwnerPolicyEventLogCodec.encode(listOf(event))
+        }
+    }
+
+    @Test
     fun corruptionAndNonContiguousHistoryAreRejected() {
         val empty = OwnerPolicyEventLogCodec.encode(emptyList())
         val corrupted = empty.copyOf().also {
