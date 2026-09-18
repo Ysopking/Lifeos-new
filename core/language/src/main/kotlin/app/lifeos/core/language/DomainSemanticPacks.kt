@@ -193,6 +193,13 @@ class DomainSemanticInterpreter {
         if (notice != null && deadline != null && notice.id != deadline.id) {
             relations += relation(notice, deadline, DomainSemanticRelationType.HAS_DEADLINE)
         }
+        if (deadline != null && temporalNodes.isNotEmpty()) {
+            temporalNodes.forEach { temporal ->
+                if (deadline.id != temporal.id) {
+                    relations += relation(deadline, temporal, DomainSemanticRelationType.RELATES_TO)
+                }
+            }
+        }
 
         actionGraph.nodes.forEach { action ->
             when (action.frame.predicate) {
