@@ -119,6 +119,5 @@ fun ExtensionKind.requiredRegistrationMode(): ExtensionRegistrationMode = when (
     ExtensionKind.WORLD_EQUATION_PACK -> ExtensionRegistrationMode.EVOLUTION_CANDIDATE_ONLY
     ExtensionKind.WORLD_SIGNAL_PACK,
     ExtensionKind.WORLD_TOPOLOGY_PACK,
-    ExtensionKind.WORLD_PROJECTION_PACK,
-    -> ExtensionRegistrationMode.EXTENSION_POINT_CANDIDATE
+    ExtensionKind.WORLD_PROJECTION_PACK -> ExtensionRegistrationMode.EXTENSION_POINT_CANDIDATE
 }
