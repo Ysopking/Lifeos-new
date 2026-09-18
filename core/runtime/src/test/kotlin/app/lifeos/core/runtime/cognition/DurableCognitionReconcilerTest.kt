@@ -4,12 +4,14 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.task.CreateTaskResult
 import app.lifeos.core.model.task.LifeTask
+import app.lifeos.core.model.task.IndexedTaskSnapshotRepository
+import app.lifeos.core.model.task.TaskIndexReport
 import app.lifeos.core.model.task.TaskLoadReport
 import app.lifeos.core.model.task.TaskRepository
-import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.model.worker.WorkerId
@@ -97,8 +99,14 @@ class DurableCognitionReconcilerTest {
             idempotencyKey = "failed-existing",
         )
         val tasks = SnapshotTaskRepository(snapshotExtras = listOf(failed))
+        val coverage = CognitionCoverageIndex(MemoryCoverageRepository())
+        coverage.markCovered(PhotonRevisionRef(photon.id, photon.revision))
 
-        val result = reconciler(TestPhotonRepository(listOf(photon)), tasks).reconcile()
+        val result = reconciler(
+            TestPhotonRepository(listOf(photon)),
+            tasks,
+            coverage = coverage,
+        ).reconcile()
 
         assertEquals(1, result.alreadyCovered)
         assertEquals(0, result.submitted)
@@ -117,8 +125,17 @@ class DurableCognitionReconcilerTest {
     fun reconciliationRemainsCoveredWithFreshProcessState() = runTest {
         val photons = TestPhotonRepository(listOf(photon("restart", revision = 2)))
         val tasks = SnapshotTaskRepository()
-        val first = reconciler(photons, tasks).reconcile()
-        val afterRestart = reconciler(photons, tasks).reconcile()
+        val coverageRepository = MemoryCoverageRepository()
+        val first = reconciler(
+            photons,
+            tasks,
+            coverage = CognitionCoverageIndex(coverageRepository),
+        ).reconcile()
+        val afterRestart = reconciler(
+            photons,
+            tasks,
+            coverage = CognitionCoverageIndex(coverageRepository),
+        ).reconcile()
         assertEquals(1, first.submitted)
         assertEquals(0, afterRestart.submitted)
         assertEquals(1, afterRestart.alreadyCovered)
@@ -167,6 +184,7 @@ class DurableCognitionReconcilerTest {
             tasks = tasks,
             cognition = cognition,
             taskEngine = taskEngine,
+            coverage = CognitionCoverageIndex(MemoryCoverageRepository()),
         )
 
         val firstPass = reconciler.reconcile()
@@ -222,8 +240,9 @@ class DurableCognitionReconcilerTest {
 
     private fun reconciler(
         photons: PhotonRepository,
-        tasks: SnapshotTaskRepository,
+        tasks: IndexedTaskSnapshotRepository,
         batchSize: Int = 100,
+        coverage: CognitionCoverageIndex = CognitionCoverageIndex(MemoryCoverageRepository()),
     ): DurableCognitionReconciler {
         val taskEngine = DurableTaskEngine(
             tasks = tasks,
@@ -240,6 +259,7 @@ class DurableCognitionReconcilerTest {
             tasks = tasks,
             cognition = cognition,
             taskEngine = taskEngine,
+            coverage = coverage,
             maxSubmissionsPerPass = batchSize,
         )
     }
@@ -254,6 +274,16 @@ class DurableCognitionReconcilerTest {
             createdAt = Instant.parse("2026-09-11T09:00:00Z"),
         ),
     )
+
+    private class MemoryCoverageRepository : CognitionCoverageRepository {
+        private var snapshot: CognitionCoverageSnapshot? = null
+
+        override suspend fun load(): CognitionCoverageSnapshot? = snapshot
+
+        override suspend fun save(snapshot: CognitionCoverageSnapshot) {
+            this.snapshot = snapshot
+        }
+    }
 
     private class TestPhotonRepository(initial: List<Photon>) : PhotonRepository {
         private val values = initial.associateByTo(linkedMapOf()) { it.id }
@@ -279,7 +309,7 @@ class DurableCognitionReconcilerTest {
     private class SnapshotTaskRepository(
         private val delegate: InMemoryTaskRepository = InMemoryTaskRepository(),
         private val snapshotExtras: List<LifeTask> = emptyList(),
-    ) : TaskSnapshotRepository, TaskRepository by delegate {
+    ) : IndexedTaskSnapshotRepository, TaskRepository by delegate {
         private val knownIds = linkedSetOf<app.lifeos.core.model.task.TaskId>()
 
         override suspend fun create(task: LifeTask): CreateTaskResult {
@@ -297,6 +327,43 @@ class DurableCognitionReconcilerTest {
             unreadableEntries = emptyList(),
         )
 
+        override suspend fun activeCount(types: Set<TaskType>): Int =
+            loadReport().tasks.count { task ->
+                task.type in types && task.state !in TERMINAL_STATES
+            }
+
+        override suspend fun listByStates(
+            types: Set<TaskType>,
+            states: Set<TaskState>,
+            limit: Int,
+        ): List<LifeTask> {
+            require(limit > 0)
+            return loadReport().tasks.asSequence()
+                .filter { it.type in types && it.state in states }
+                .sortedWith(compareBy<LifeTask> { it.createdAt }.thenBy { it.id.value })
+                .take(limit)
+                .toList()
+        }
+
+        override suspend fun rebuildIndex(): TaskIndexReport {
+            val all = loadReport().tasks
+            return TaskIndexReport(
+                formatVersion = 1,
+                taskCount = all.size,
+                activeTaskCount = all.count { it.state !in TERMINAL_STATES },
+                idempotencyKeyCount = all.map { it.idempotencyKey }.distinct().size,
+            )
+        }
+
         suspend fun snapshot(): List<LifeTask> = loadReport().tasks
+
+        private companion object {
+            val TERMINAL_STATES = setOf(
+                TaskState.COMPLETED,
+                TaskState.SUPERSEDED,
+                TaskState.FAILED,
+                TaskState.CANCELLED,
+            )
+        }
     }
 }
