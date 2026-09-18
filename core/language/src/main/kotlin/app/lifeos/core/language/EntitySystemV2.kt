@@ -47,6 +47,10 @@ object EntityTypeRegistry {
     val FILE = type("documents.file", "documents", EntityType.FILE)
     val DOCUMENT = type("documents.document", "documents")
     val IMAGE = type("documents.image", "documents", EntityType.IMAGE)
+    val COLOR = type("visual.color", "visual", EntityType.COLOR)
+    val OBJECT = type("core.object", "core", EntityType.OBJECT)
+    val ACTION = type("core.action", "core", EntityType.ACTION)
+    val STYLE = type("visual.style", "visual", EntityType.STYLE)
     val CONTRACT = type("contract.contract", "contract")
     val INVOICE = type("finance.invoice", "finance")
     val NOTICE = type("authority.notice", "authority")
@@ -71,7 +75,8 @@ object EntityTypeRegistry {
         PERSON, ORGANIZATION, AUTHORITY, LOCATION, ADDRESS, EMAIL_ADDRESS, PHONE_NUMBER, URL,
         DATE, TIME, DURATION, TIME_RANGE, DEADLINE,
         NUMBER, MONEY, CURRENCY, PERCENTAGE, QUANTITY, UNIT,
-        FILE, DOCUMENT, IMAGE, CONTRACT, INVOICE, NOTICE, APPLICATION, CLAIM,
+        FILE, DOCUMENT, IMAGE, COLOR, OBJECT, ACTION, STYLE,
+        CONTRACT, INVOICE, NOTICE, APPLICATION, CLAIM,
         ACCOUNT, BANK_ACCOUNT, DEBT, PAYMENT, INSTALLMENT,
         MEDICATION, DOSAGE, EVENT, APPOINTMENT, CASE, MATTER,
     ).associateBy { it.id }
@@ -294,11 +299,10 @@ class DeterministicEntityPipelineV2(
             EntityType.NUMBER -> EntityTypeRegistry.NUMBER
             EntityType.FILE -> EntityTypeRegistry.FILE
             EntityType.IMAGE -> EntityTypeRegistry.IMAGE
-            else -> SemanticEntityTypeDefinition(
-                id = SemanticEntityTypeId("legacy." + type.name.lowercase(Locale.ROOT)),
-                family = "legacy",
-                legacyType = type,
-            )
+            EntityType.COLOR -> EntityTypeRegistry.COLOR
+            EntityType.OBJECT -> EntityTypeRegistry.OBJECT
+            EntityType.ACTION -> EntityTypeRegistry.ACTION
+            EntityType.STYLE -> EntityTypeRegistry.STYLE
         }
         return SemanticEntityV2(
             typeId = definition.id,
