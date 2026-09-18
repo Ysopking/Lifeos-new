@@ -80,18 +80,17 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
     }
 
     private fun readEvent(file: File): DeepSearchMissionEvent {
-        val events = DeepSearchMissionEventLogCodec.decode(
+        val event = DeepSearchMissionEventLogCodec.decodeSegment(
             decrypt(file, DeepSearchMissionEventLogCodec.MAX_PAYLOAD_BYTES)
         )
-        require(events.size == 1) { "DeepSearch segment must contain one event" }
-        return events.single()
+        return event
     }
 
     private fun writeEvent(file: File, event: DeepSearchMissionEvent) {
         file.parentFile?.let { check(it.isDirectory || it.mkdirs()) }
         writeEncrypted(
             file,
-            DeepSearchMissionEventLogCodec.encode(listOf(event)),
+            DeepSearchMissionEventLogCodec.encodeSegment(event),
             DeepSearchMissionEventLogCodec.MAX_PAYLOAD_BYTES,
         )
     }
