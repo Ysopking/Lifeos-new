@@ -12,6 +12,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 
 @RunWith(AndroidJUnit4::class)
 class EncryptedPhotonRevisionStoreTest {
@@ -27,8 +28,8 @@ class EncryptedPhotonRevisionStoreTest {
         val first = testPhoton(id, 1, "one")
         val second = testPhoton(id, 2, "two")
 
-        assertIs<PhotonRevisionWriteResult.Created>(store.saveRevision(first, null))
-        assertIs<PhotonRevisionWriteResult.Advanced>(store.saveRevision(second, 1))
+        assertTrue(store.saveRevision(first, null) is PhotonRevisionWriteResult.Created)
+        assertTrue(store.saveRevision(second, 1) is PhotonRevisionWriteResult.Advanced)
 
         assertEquals(first, store.load(PhotonRevisionRef(id, 1)))
         assertEquals(second, store.load(PhotonRevisionRef(id, 2)))
