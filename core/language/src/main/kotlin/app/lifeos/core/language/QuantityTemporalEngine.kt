@@ -225,6 +225,19 @@ class QuantityTemporalEngine {
             )
         }
 
+        AT_WEEKDAY_REGEX.findAll(original).forEach { match ->
+            val day = weekday(match.groupValues[1]) ?: return@forEach
+            val date = baseDate.with(TemporalAdjusters.nextOrSame(day))
+            result += dayValue(
+                TemporalRelation.AT,
+                date,
+                zoneId,
+                match.value,
+                TextSpan(match.range.first, match.range.last + 1),
+                0.97,
+            )
+        }
+
         WEEKDAY_RANGE_REGEX.findAll(original).forEach { match ->
             val firstDay = weekday(match.groupValues[1]) ?: return@forEach
             val secondDay = weekday(match.groupValues[2]) ?: return@forEach
@@ -263,7 +276,8 @@ class QuantityTemporalEngine {
     private fun comparator(cue: String): QuantityComparator = when (cue) {
         "mindestens", "at least" -> QuantityComparator.GREATER_OR_EQUAL
         "mehr als", "über", "ueber", "more than" -> QuantityComparator.GREATER_THAN
-        "höchstens", "hoechstens", "at most" -> QuantityComparator.LESS_OR_EQUAL
+        "höchstens", "hoechstens", "nicht mehr als", "not more than", "at most" ->
+            QuantityComparator.LESS_OR_EQUAL
         "weniger als", "unter", "less than" -> QuantityComparator.LESS_THAN
         else -> QuantityComparator.EQUAL
     }
@@ -332,7 +346,7 @@ class QuantityTemporalEngine {
             """(?i)\bzwischen\s+(\d+(?:[.,]\d+)?)\s+(?:und|bis)\s+(\d+(?:[.,]\d+)?)\s*([\p{L}%€$£]+)?"""
         )
         val SCALAR_REGEX = Regex(
-            """(?i)(?:(mindestens|mehr\s+als|über|ueber|höchstens|hoechstens|weniger\s+als|unter|at\s+least|more\s+than|at\s+most|less\s+than)\s+)?(\d+(?:[.,]\d+)?)\s*([\p{L}%€$£]+)?"""
+            """(?i)(?:(nicht\s+mehr\s+als|not\s+more\s+than|mindestens|mehr\s+als|über|ueber|höchstens|hoechstens|weniger\s+als|unter|at\s+least|more\s+than|at\s+most|less\s+than)\s+)?(\d+(?:[.,]\d+)?)\s*([\p{L}%€$£]+)?"""
         )
         val RELATIVE_DAY_REGEX = Regex("""(?i)\b(übermorgen|uebermorgen|morgen|heute|gestern|tomorrow|today|yesterday)\b""")
         val NEXT_WEEKDAY_REGEX = Regex(
@@ -342,6 +356,9 @@ class QuantityTemporalEngine {
         val WITHIN_DAYS_REGEX = Regex("""(?i)\binnerhalb\s+von\s+(\d+|ein|einem|zwei|drei|vier|fünf|fuenf)\s+tagen?\b""")
         val UNTIL_DATE_REGEX = Regex(
             """(?i)\bbis\s+(\d{1,2})\.?\s+(januar|februar|märz|maerz|april|mai|juni|juli|august|september|oktober|november|dezember)(?:\s+(\d{4}))?\b"""
+        )
+        val AT_WEEKDAY_REGEX = Regex(
+            """(?i)\b(?:am|on)\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"""
         )
         val WEEKDAY_RANGE_REGEX = Regex(
             """(?i)\bzwischen\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\s+und\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b"""
