@@ -26,6 +26,7 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
     override suspend fun loadReport(): ToolWorkshopJobRepositoryLoadReport = withContext(Dispatchers.IO) {
         processMutex.withLock {
             ensureMigrated()
+            readHeadOrRecover()
             val unreadable = mutableListOf<String>()
             val events = eventFiles().mapNotNull { file ->
                 runCatching { readEvent(file) }
@@ -94,19 +95,26 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
     }
 
     private fun readHeadOrRecover(): Long {
-        if (exists(headFile)) runCatching { return readHead() }
-        val recovered = eventFiles().mapNotNull { file ->
-            file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
-        }.maxOrNull() ?: 0L
-        if (recovered > 0L) {
-            val revisions = eventFiles().mapNotNull { file ->
+        val files = eventFiles()
+        val byRevision = files.groupBy { file ->
+            requireNotNull(
                 file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
-            }.toSet()
-            require((1L..recovered).all { it in revisions }) {
-                "ToolWorkshop event segments are not contiguous"
-            }
+            ) { "Invalid ToolWorkshop event segment name: ${file.name}" }
         }
-        writeHead(recovered)
+        require(byRevision.values.all { it.size == 1 }) {
+            "ToolWorkshop contains duplicate global event revisions"
+        }
+        val revisions = byRevision.keys.sorted()
+        val recovered = revisions.lastOrNull() ?: 0L
+        require(revisions == if (recovered == 0L) emptyList() else (1L..recovered).toList()) {
+            "ToolWorkshop event segments are not contiguous"
+        }
+
+        val storedHead = if (exists(headFile)) runCatching(::readHead).getOrNull() else null
+        require(storedHead == null || storedHead <= recovered) {
+            "ToolWorkshop head points past durable event tail"
+        }
+        if (storedHead != recovered) writeHead(recovered)
         return recovered
     }
 
