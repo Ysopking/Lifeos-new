@@ -201,6 +201,15 @@ class CognitionJournalIndex(
     suspend fun refs(kind: CognitionJournalKind): List<PhotonRevisionRef> =
         mutex.withLock { currentLocked().refs(kind) }
 
+    suspend fun entry(
+        kind: CognitionJournalKind,
+        stableId: String,
+    ): CognitionJournalIndexEntry? = mutex.withLock {
+        currentLocked().entries.firstOrNull {
+            it.kind == kind && it.stableId == stableId
+        }
+    }
+
     suspend fun size(kind: CognitionJournalKind): Long =
         mutex.withLock { currentLocked().size(kind) }
 
@@ -383,14 +392,14 @@ class CognitionJournalIndex(
                 val value = CognitionOutcomeCodec.decode(photon.content)
                 val current = cognitionOutcomeStableId(value)
                 val legacy = cognitionOutcomeLegacyStableId(value)
-                val stableId = when (photon.id) {
-                    CognitionJournalIdentity.photonId(kind.tag, current) -> current
-                    CognitionJournalIdentity.photonId(kind.tag, legacy) -> legacy
+                when (photon.id) {
+                    CognitionJournalIdentity.photonId(kind.tag, current),
+                    CognitionJournalIdentity.photonId(kind.tag, legacy) -> Unit
                     else -> error("Outcome journal identity mismatch")
                 }
                 RecoveredEntry(
                     kind = kind,
-                    stableId = stableId,
+                    stableId = current,
                     ref = ref,
                     recordedAt = value.recordedAt,
                 )
