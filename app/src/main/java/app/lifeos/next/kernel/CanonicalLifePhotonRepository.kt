@@ -50,7 +50,7 @@ internal class CanonicalLifePhotonRepository(
             PRODUCTIVE_TAGS.sorted().forEach { tag ->
                 var cursor: PhotonIndexCursor? = null
                 var exhausted = false
-                repeat(MAX_RECONCILIATION_PAGES_PER_TAG) {
+                for (pageNumber in 1..MAX_RECONCILIATION_PAGES_PER_TAG) {
                     val page = delegate.query(
                         PhotonIndexQuery(
                             allTags = setOf(tag),
@@ -63,7 +63,7 @@ internal class CanonicalLifePhotonRepository(
                     refs += page
                     if (page.size < PhotonIndexQuery.HARD_PAGE_LIMIT) {
                         exhausted = true
-                        return@repeat
+                        break
                     }
                     cursor = PhotonIndexCursor(
                         order = PhotonIndexOrder.OLDEST_FIRST,
