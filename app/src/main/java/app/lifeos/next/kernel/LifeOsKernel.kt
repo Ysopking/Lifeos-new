@@ -13,6 +13,8 @@ import app.lifeos.core.model.BinaryAssetStore
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.PhotonRevisionWriteResult
+import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RuntimeSupervisor
@@ -306,8 +308,26 @@ class LifeOsKernel internal constructor(
         mode: PhotonIngressMode,
     ): PhotonSubmissionResult {
         ProductivePhotonIngressClassification.requireOrMark(photonStore, photon, mode)
-        val previous = photonStore.load(photon.id)
-        photonStore.save(photon)
+        val previous = if (photonStore is RevisionedPhotonRepository) {
+            when (
+                val write = photonStore.saveRevision(
+                    photon = photon,
+                    expectedPreviousRevision = photon.revision
+                        .takeIf { it > 1L }
+                        ?.minus(1L),
+                )
+            ) {
+                is PhotonRevisionWriteResult.Created -> null
+                is PhotonRevisionWriteResult.Advanced -> write.previous
+                is PhotonRevisionWriteResult.Idempotent -> write.previous
+                is PhotonRevisionWriteResult.Conflict ->
+                    error("Photon revision conflict: ${write.reason}")
+            }
+        } else {
+            photonStore.load(photon.id).also {
+                photonStore.save(photon)
+            }
+        }
         mutableBootstrapState.update { current ->
             val photons = (current.photons.filterNot { it.id == photon.id } + photon)
                 .sortedBy { it.provenance.createdAt }

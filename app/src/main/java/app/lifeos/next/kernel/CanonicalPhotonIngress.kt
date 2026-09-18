@@ -91,19 +91,6 @@ class CanonicalPhotonIngress(
         photon: Photon,
         mode: PhotonIngressMode = PhotonIngressMode.ORIGIN,
     ): PhotonSubmissionResult {
-        val persisted = kernel.photonStore.load(photon.id)
-        if (persisted != null) {
-            check(persisted.revision <= photon.revision) {
-                "Refusing stale Photon ingress for ${photon.id.value}: " +
-                    "${photon.revision} < ${persisted.revision}"
-            }
-            if (persisted.revision == photon.revision) {
-                check(persisted == photon) {
-                    "Conflicting Photon ingress state for ${photon.id.value}@${photon.revision}"
-                }
-            }
-        }
-
         val live = kernel.bootstrapState.value.photons.firstOrNull { it.id == photon.id }
         if (live != null) {
             check(live.revision <= photon.revision) {
