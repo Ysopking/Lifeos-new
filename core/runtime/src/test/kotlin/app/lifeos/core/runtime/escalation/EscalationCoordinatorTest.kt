@@ -80,6 +80,43 @@ class EscalationCoordinatorTest {
     }
 
     @Test
+    fun activeInFlightEscalationResumesByNodeWithoutOriginalTrigger() = runBlocking {
+        val repository = MemoryRepository()
+        val trigger = trigger()
+        var originalExecutionId: EscalationExecutionId? = null
+        val first = EscalationCoordinator(
+            policy = EscalationPolicy(),
+            ledger = EscalationLedger(repository),
+            executors = registry { request ->
+                originalExecutionId = request.executionId
+                throw CancellationException("simulated-process-death")
+            },
+        )
+        assertIs<CancellationException>(
+            runCatching { first.coordinate(trigger) }.exceptionOrNull()
+        )
+
+        var resumedRequest: EscalationExecutionRequest? = null
+        val second = EscalationCoordinator(
+            policy = EscalationPolicy(),
+            ledger = EscalationLedger(repository),
+            executors = registry { request ->
+                resumedRequest = request
+                EscalationExecutionResult.Succeeded("resumed-without-trigger")
+            },
+        )
+        val resumed = second.resumeActive(trigger.nodeId)
+
+        assertEquals(1, resumed.size)
+        val completed = assertIs<EscalationCoordinationResult.Completed>(resumed.single())
+        assertEquals(originalExecutionId, completed.executionId)
+        assertEquals(originalExecutionId, resumedRequest?.executionId)
+        assertTrue(completed.resumed)
+        assertTrue(resumedRequest?.resuming == true)
+        assertEquals(EscalationState.ACTION_SUCCEEDED, completed.snapshot.state)
+    }
+
+    @Test
     fun terminalEscalationIsReplayedWithoutExecutingAgain() = runBlocking {
         val repository = MemoryRepository()
         val trigger = trigger()
