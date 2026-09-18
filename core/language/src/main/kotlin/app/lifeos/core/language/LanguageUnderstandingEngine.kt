@@ -7,6 +7,7 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import java.time.Instant
+import java.time.ZoneId
 import kotlin.math.abs
 import kotlin.math.min
 
@@ -25,6 +26,7 @@ class LanguageUnderstandingEngine(
     private val speechActParser: SpeechActParser = SpeechActParser(),
     private val predicateFrameParser: PredicateFrameParser = PredicateFrameParser(),
     private val semanticActionGraphBuilder: SemanticActionGraphBuilder = SemanticActionGraphBuilder(),
+    private val quantityTemporalEngine: QuantityTemporalEngine = QuantityTemporalEngine(),
 ) {
     fun understand(text: String): LanguageUnderstandingResult =
         understand(text, LanguageContext(), retainContext = false)
@@ -48,6 +50,11 @@ class LanguageUnderstandingEngine(
             fieldAdapter.entities(utterance, linguisticField),
         )
         val semanticGraph = semanticGraphExtractor.extract(utterance, entities)
+        val quantityTemporal = quantityTemporalEngine.parse(
+            utterance = utterance,
+            referenceInstant = context.now,
+            zoneId = ZoneId.of(context.zoneId),
+        )
         val references = referenceExtractor.extract(utterance, topIntent).map { referenceResolver.resolve(it, context) }
         val speechActs = speechActParser.parse(utterance, semanticGraph)
         val predicateFrames = predicateFrameParser.parse(
@@ -70,7 +77,13 @@ class LanguageUnderstandingEngine(
             linguisticField = linguisticField,
             actionGraph = semanticActionGraph,
         )
-        val constraints = buildConstraints(utterance, entities, references, linguisticField)
+        val constraints = buildConstraints(
+            utterance,
+            entities,
+            references,
+            linguisticField,
+            quantityTemporal,
+        )
         val confidence = calculateConfidence(evidence.first().score, entities, references, ambiguities, linguisticField)
         val goal = GoalFrame(
             intent = operationalIntent,
@@ -84,6 +97,7 @@ class LanguageUnderstandingEngine(
             semanticGraph = semanticGraph,
             semanticActionGraph = semanticActionGraph,
             semanticEntitiesV2 = entityV2.entities,
+            quantityTemporal = quantityTemporal,
         )
         return LanguageUnderstandingResult(
             utterance = utterance,
@@ -129,6 +143,7 @@ class LanguageUnderstandingEngine(
         entities: List<SemanticEntity>,
         references: List<ResolvedReference>,
         linguisticField: LinguisticFieldResult,
+        quantityTemporal: QuantityTemporalResult,
     ): List<GoalConstraint> {
         val constraints = mutableListOf<GoalConstraint>()
         entities.forEach { entity ->
@@ -150,12 +165,44 @@ class LanguageUnderstandingEngine(
                     source = "linguistic-field:${resolution.rawToken}",
                 )
             }
-        references.filter { it.targetPhotonId != null }.forEach { reference ->
+        references.filter { it.targetPhotonRef != null }.forEach { reference ->
+            val ref = requireNotNull(reference.targetPhotonRef)
             constraints += GoalConstraint(
                 key = "reference.${reference.expression.kind.name.lowercase()}",
-                value = reference.targetPhotonId!!.value,
+                value = "${ref.photonId.value}@${ref.revision}",
                 confidence = reference.score,
                 source = "reference:${reference.expression.rawText}",
+            )
+        }
+        quantityTemporal.quantities.forEachIndexed { index, quantity ->
+            val value = buildString {
+                append(quantity.comparator.name)
+                append(':')
+                append(quantity.value?.toPlainString().orEmpty())
+                append(':')
+                append(quantity.lowerBound?.toPlainString().orEmpty())
+                append(':')
+                append(quantity.upperBound?.toPlainString().orEmpty())
+                append(':')
+                append(quantity.currency?.currencyCode ?: quantity.unit.orEmpty())
+            }
+            constraints += GoalConstraint(
+                key = "quantity.v2.$index",
+                value = value,
+                confidence = quantity.confidence,
+                source = "quantity-temporal-engine",
+            )
+        }
+        quantityTemporal.temporals.forEachIndexed { index, temporal ->
+            constraints += GoalConstraint(
+                key = "temporal.v2.$index",
+                value = listOf(
+                    temporal.relation.name,
+                    temporal.startInclusive?.toString().orEmpty(),
+                    temporal.endInclusive?.toString().orEmpty(),
+                ).joinToString(":"),
+                confidence = temporal.confidence,
+                source = "quantity-temporal-engine",
             )
         }
         return constraints.distinctBy { Triple(it.key, it.value, it.source) }
