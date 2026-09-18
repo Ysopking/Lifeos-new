@@ -265,8 +265,10 @@ class SemanticActionGraphBuilder {
         unresolvedReference: Boolean,
         unresolvedCondition: Boolean,
     ): Double {
+        if (frame.speechAct.type !in setOf(SpeechActType.COMMAND, SpeechActType.REQUEST)) {
+            return 0.0
+        }
         var score = frame.confidence
-        if (frame.speechAct.type !in setOf(SpeechActType.COMMAND, SpeechActType.REQUEST)) score *= 0.20
         if (frame.negated || frame.quoted || frame.hypothetical) score = 0.0
         if (unresolvedCondition) score = 0.0
         if (unresolvedReference) score *= 0.20
