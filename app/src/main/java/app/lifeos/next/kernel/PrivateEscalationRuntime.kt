@@ -14,6 +14,7 @@ import app.lifeos.core.runtime.escalation.EscalationLedger
 import app.lifeos.core.runtime.escalation.EscalationLevel
 import app.lifeos.core.runtime.escalation.EscalationLevelExecutor
 import app.lifeos.core.runtime.escalation.EscalationPolicy
+import app.lifeos.core.runtime.escalation.EscalationRuntimeRegistry
 import app.lifeos.core.runtime.escalation.ProtectionEscalationAuthority
 import app.lifeos.core.runtime.escalation.ProtectionEscalationContext
 import app.lifeos.core.runtime.escalation.ProtectionEscalationContextSource
@@ -34,6 +35,7 @@ import kotlinx.coroutines.CoroutineScope
  */
 internal data class PrivateEscalationRuntime(
     val ledger: EscalationLedger,
+    val coordinator: EscalationCoordinator,
     val orchestrator: AutomaticHealthEscalationOrchestrator,
 ) {
     suspend fun verifyLedgerIntegrity() {
@@ -116,8 +118,10 @@ internal data class PrivateEscalationRuntime(
                 ledger = ledger,
                 executors = executors,
             )
+            EscalationRuntimeRegistry.install(coordinator)
             return PrivateEscalationRuntime(
                 ledger = ledger,
+                coordinator = coordinator,
                 orchestrator = AutomaticHealthEscalationOrchestrator(
                     scope = scope,
                     graph = graph,
