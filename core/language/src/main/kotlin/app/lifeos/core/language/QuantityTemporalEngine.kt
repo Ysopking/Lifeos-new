@@ -67,9 +67,28 @@ data class SemanticTemporalValue(
     }
 }
 
+data class SemanticDateTimeValue(
+    val instant: Instant,
+    val zoneId: String,
+    val sourceText: String,
+    val span: TextSpan,
+    val dateSpan: TextSpan?,
+    val timeSpan: TextSpan,
+    val confidence: Double,
+) {
+    init {
+        require(zoneId.isNotBlank())
+        require(sourceText.isNotBlank())
+        require(confidence.isFinite() && confidence in 0.0..1.0)
+        require(span.contains(timeSpan))
+        require(dateSpan == null || span.contains(dateSpan))
+    }
+}
+
 data class QuantityTemporalResult(
     val quantities: List<SemanticQuantityV2>,
     val temporals: List<SemanticTemporalValue>,
+    val dateTimes: List<SemanticDateTimeValue> = emptyList(),
 )
 
 class QuantityTemporalEngine {
@@ -81,6 +100,7 @@ class QuantityTemporalEngine {
         val quantities = buildList {
             addAll(parseRanges(utterance))
             addAll(parseScalarQuantities(utterance))
+            addAll(parseWordQuantities(utterance))
         }.distinctBy {
             listOf(
                 it.span.start.toString(),
@@ -97,8 +117,13 @@ class QuantityTemporalEngine {
         val temporals = parseTemporals(utterance, referenceInstant, zoneId)
             .distinctBy { Triple(it.span.start, it.span.endExclusive, it.relation) }
             .sortedBy { it.span.start }
-
-        return QuantityTemporalResult(quantities, temporals)
+        val dateTimes = bindDateTimes(
+            utterance = utterance,
+            temporals = temporals,
+            referenceInstant = referenceInstant,
+            zoneId = zoneId,
+        )
+        return QuantityTemporalResult(quantities, temporals, dateTimes)
     }
 
     private fun parseRanges(utterance: NormalizedUtterance): List<SemanticQuantityV2> =
@@ -121,10 +146,13 @@ class QuantityTemporalEngine {
 
     private fun parseScalarQuantities(utterance: NormalizedUtterance): List<SemanticQuantityV2> =
         SCALAR_REGEX.findAll(utterance.original).mapNotNull { match ->
-            // Range matches are authority for their complete span.
+            // Range and temporal matches are authority for their complete span.
             if (RANGE_REGEX.findAll(utterance.original).any { range ->
                     match.range.first >= range.range.first && match.range.last <= range.range.last
                 }) return@mapNotNull null
+            if (numericSpanBelongsToTemporal(utterance.original, match.range.first, match.range.last + 1)) {
+                return@mapNotNull null
+            }
 
             val cue = match.groupValues[1].lowercase(Locale.ROOT).trim()
             val amount = decimal(match.groupValues[2]) ?: return@mapNotNull null
@@ -141,6 +169,93 @@ class QuantityTemporalEngine {
                 confidence = if (cue.isBlank()) 0.96 else 0.99,
             )
         }.toList()
+
+    private fun parseWordQuantities(utterance: NormalizedUtterance): List<SemanticQuantityV2> =
+        utterance.tokens.withIndex().mapNotNull { indexed ->
+            val amount = NUMBER_WORD_DECIMALS[indexed.value.normalized] ?: return@mapNotNull null
+            val unitToken = utterance.tokens.getOrNull(indexed.index + 1)
+                ?.takeIf { it.kind == TokenKind.WORD || it.kind == TokenKind.PUNCTUATION }
+                ?: return@mapNotNull null
+            val (unit, currency) = normalizeUnit(unitToken.normalized)
+            if (unit == null && currency == null) return@mapNotNull null
+            SemanticQuantityV2(
+                value = amount,
+                unit = unit,
+                currency = currency,
+                comparator = QuantityComparator.EQUAL,
+                lowerBound = null,
+                upperBound = null,
+                span = TextSpan(indexed.value.start, unitToken.endExclusive),
+                confidence = 0.95,
+            )
+        }
+
+    private fun numericSpanBelongsToTemporal(
+        text: String,
+        start: Int,
+        endExclusive: Int,
+    ): Boolean {
+        val temporalRegexes = listOf(
+            CLOCK_REGEX,
+            AT_DATE_REGEX,
+            UNTIL_DATE_REGEX,
+        )
+        return temporalRegexes.any { regex ->
+            regex.findAll(text).any { match ->
+                start >= match.range.first && endExclusive <= match.range.last + 1
+            }
+        }
+    }
+
+    private fun bindDateTimes(
+        utterance: NormalizedUtterance,
+        temporals: List<SemanticTemporalValue>,
+        referenceInstant: Instant,
+        zoneId: ZoneId,
+    ): List<SemanticDateTimeValue> {
+        val baseDate = referenceInstant.atZone(zoneId).toLocalDate()
+        return CLOCK_REGEX.findAll(utterance.original).mapNotNull { match ->
+            var hour = match.groupValues[1].toIntOrNull() ?: return@mapNotNull null
+            val minute = match.groupValues.getOrNull(2).orEmpty().ifBlank { "0" }.toIntOrNull()
+                ?: return@mapNotNull null
+            val meridiem = match.groupValues.getOrNull(3).orEmpty().lowercase(Locale.ROOT)
+            if (meridiem == "pm" && hour in 1..11) hour += 12
+            if (meridiem == "am" && hour == 12) hour = 0
+            val time = runCatching { LocalTime.of(hour, minute) }.getOrNull() ?: return@mapNotNull null
+            val timeSpan = TextSpan(match.range.first, match.range.last + 1)
+            val nearestDate = temporals
+                .asSequence()
+                .filter { it.relation == TemporalRelation.AT && it.startInclusive != null }
+                .map { temporal ->
+                    val distance = when {
+                        temporal.span.endExclusive < timeSpan.start -> timeSpan.start - temporal.span.endExclusive
+                        timeSpan.endExclusive < temporal.span.start -> temporal.span.start - timeSpan.endExclusive
+                        else -> 0
+                    }
+                    temporal to distance
+                }
+                .filter { it.second <= MAX_DATE_TIME_BINDING_DISTANCE }
+                .minWithOrNull(
+                    compareBy<Pair<SemanticTemporalValue, Int>> { it.second }
+                        .thenBy { it.first.span.start }
+                )
+                ?.first
+            val date = nearestDate?.startInclusive?.atZone(zoneId)?.toLocalDate() ?: baseDate
+            val dateSpan = nearestDate?.span
+            val combinedStart = minOf(dateSpan?.start ?: timeSpan.start, timeSpan.start)
+            val combinedEnd = maxOf(dateSpan?.endExclusive ?: timeSpan.endExclusive, timeSpan.endExclusive)
+            SemanticDateTimeValue(
+                instant = LocalDateTime.of(date, time).atZone(zoneId).toInstant(),
+                zoneId = zoneId.id,
+                sourceText = utterance.original.substring(combinedStart, combinedEnd),
+                span = TextSpan(combinedStart, combinedEnd),
+                dateSpan = dateSpan,
+                timeSpan = timeSpan,
+                confidence = if (nearestDate != null) minOf(0.995, nearestDate.confidence) else 0.94,
+            )
+        }.distinctBy { listOf(it.instant.toString(), it.zoneId, it.span.start, it.span.endExclusive) }
+            .sortedBy { it.span.start }
+    }
 
     private fun parseTemporals(
         utterance: NormalizedUtterance,
@@ -312,9 +427,21 @@ class QuantityTemporalEngine {
             return currencyCode to Currency.getInstance(currencyCode)
         }
         val unit = when (normalized) {
+            "b", "byte", "bytes" -> "B"
+            "kb", "kilobyte", "kilobytes" -> "KB"
             "mb", "megabyte", "megabytes" -> "MB"
             "gb", "gigabyte", "gigabytes" -> "GB"
-            "kb", "kilobyte", "kilobytes" -> "KB"
+            "tb", "terabyte", "terabytes" -> "TB"
+            "ms", "millisekunde", "millisekunden", "millisecond", "milliseconds" -> "ms"
+            "s", "sekunde", "sekunden", "second", "seconds" -> "s"
+            "min", "minute", "minuten", "minutes" -> "min"
+            "h", "stunde", "stunden", "hour", "hours" -> "h"
+            "g", "gramm", "gram", "grams" -> "g"
+            "kg", "kilogramm", "kilogram", "kilograms" -> "kg"
+            "mm", "millimeter" -> "mm"
+            "cm", "centimeter", "zentimeter" -> "cm"
+            "m", "meter", "metre", "meters", "metres" -> "m"
+            "km", "kilometer", "kilometre", "kilometers", "kilometres" -> "km"
             "%", "prozent", "percent" -> "%"
             else -> normalized.uppercase(Locale.ROOT)
         }
@@ -359,11 +486,15 @@ class QuantityTemporalEngine {
     private fun weekday(raw: String): DayOfWeek? = WEEKDAYS[raw.lowercase(Locale.ROOT)]
 
     private companion object {
+        const val MAX_DATE_TIME_BINDING_DISTANCE = 48
         val RANGE_REGEX = Regex(
             """(?i)\bzwischen\s+(\d+(?:[.,]\d+)?)\s+(?:und|bis)\s+(\d+(?:[.,]\d+)?)\s*([\p{L}%€$£]+)?"""
         )
         val SCALAR_REGEX = Regex(
             """(?i)(?:(nicht\s+mehr\s+als|not\s+more\s+than|mindestens|mehr\s+als|über|ueber|höchstens|hoechstens|weniger\s+als|unter|at\s+least|more\s+than|at\s+most|less\s+than)\s+)?(\d+(?:[.,]\d+)?)\s*([\p{L}%€$£]+)?"""
+        )
+        val CLOCK_REGEX = Regex(
+            """(?i)\\b(?:um|at)\\s+(\\d{1,2})(?::(\\d{2}))?\\s*(?:uhr\\b|(am|pm)\\b)?"""
         )
         val RELATIVE_DAY_REGEX = Regex("""(?i)\b(übermorgen|uebermorgen|morgen|heute|gestern|tomorrow|today|yesterday)\b""")
         val AT_DATE_REGEX = Regex(
@@ -397,6 +528,19 @@ class QuantityTemporalEngine {
             "freitag" to DayOfWeek.FRIDAY, "friday" to DayOfWeek.FRIDAY,
             "samstag" to DayOfWeek.SATURDAY, "saturday" to DayOfWeek.SATURDAY,
             "sonntag" to DayOfWeek.SUNDAY, "sunday" to DayOfWeek.SUNDAY,
+        )
+        val NUMBER_WORD_DECIMALS = mapOf(
+            "null" to BigDecimal.ZERO, "zero" to BigDecimal.ZERO,
+            "ein" to BigDecimal.ONE, "eins" to BigDecimal.ONE, "eine" to BigDecimal.ONE, "one" to BigDecimal.ONE,
+            "zwei" to BigDecimal("2"), "two" to BigDecimal("2"),
+            "drei" to BigDecimal("3"), "three" to BigDecimal("3"),
+            "vier" to BigDecimal("4"), "four" to BigDecimal("4"),
+            "fünf" to BigDecimal("5"), "fuenf" to BigDecimal("5"), "five" to BigDecimal("5"),
+            "sechs" to BigDecimal("6"), "six" to BigDecimal("6"),
+            "sieben" to BigDecimal("7"), "seven" to BigDecimal("7"),
+            "acht" to BigDecimal("8"), "eight" to BigDecimal("8"),
+            "neun" to BigDecimal("9"), "nine" to BigDecimal("9"),
+            "zehn" to BigDecimal("10"), "ten" to BigDecimal("10"),
         )
         val NUMBER_WORDS = mapOf(
             "ein" to 1, "einer" to 1, "einem" to 1, "zwei" to 2, "drei" to 3,
