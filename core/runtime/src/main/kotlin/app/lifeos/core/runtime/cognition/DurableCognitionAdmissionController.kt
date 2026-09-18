@@ -41,7 +41,11 @@ class DurableCognitionAdmissionController(
     }
 
     private val effectiveForegroundReserve: Int
-        get() = foregroundReserve.coerceAtMost((maxActiveTasks - 1).coerceAtLeast(0))
+        get() = if (maxActiveTasks <= DEFAULT_FOREGROUND_RESERVE) {
+            0
+        } else {
+            foregroundReserve.coerceAtMost((maxActiveTasks - 1).coerceAtLeast(0))
+        }
 
     suspend fun submit(draft: TaskDraft): LifeTask? = mutex.withLock {
         require(draft.type.isCognitionTask()) { "Admission controller accepts cognition tasks only" }
