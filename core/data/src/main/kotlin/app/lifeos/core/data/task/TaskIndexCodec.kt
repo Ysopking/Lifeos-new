@@ -104,6 +104,21 @@ internal class TaskIndexSnapshot(
             .take(limit)
     }
 
+    fun byStates(
+        types: Set<TaskType>,
+        states: Set<TaskState>,
+        limit: Int,
+    ): List<TaskIndexEntry> {
+        require(limit > 0)
+        if (types.isEmpty() || states.isEmpty()) return emptyList()
+        return states.asSequence()
+            .flatMap { byState[it].orEmpty().asSequence() }
+            .filter { it.type in types }
+            .sortedWith(compareBy<TaskIndexEntry> { it.createdAt }.thenBy { it.id.value })
+            .take(limit)
+            .toList()
+    }
+
     fun expiredLeases(now: Instant, limit: Int): List<TaskIndexEntry> {
         require(limit > 0) { "Expired lease limit must be positive" }
         return LEASED_STATES
