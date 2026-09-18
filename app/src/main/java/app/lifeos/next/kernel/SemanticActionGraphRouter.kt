@@ -273,17 +273,32 @@ class SemanticActionGraphRouter(
             )
         }
 
+        val dependencyRawText = dependencyReference?.expression?.rawText
         return base.copy(
             intent = intent,
             references = buildList {
                 dependencyReference?.let(::add)
-                addAll(base.references.filterNot {
+                addAll(base.references.filterNot { reference ->
                     dependencyReference != null &&
-                        it.expression.kind == ReferenceKind.LAST_RESULT
+                        (
+                            reference.expression.kind == ReferenceKind.LAST_RESULT ||
+                                reference.expression.rawText.equals(
+                                    dependencyRawText,
+                                    ignoreCase = true,
+                                )
+                        )
                 })
             },
-            ambiguities = base.ambiguities.filterNot {
-                it.code in NODE_RESOLVED_AMBIGUITIES
+            ambiguities = base.ambiguities.filterNot { ambiguity ->
+                ambiguity.code in NODE_RESOLVED_AMBIGUITIES ||
+                    (
+                        dependencyRawText != null &&
+                            ambiguity.code in RESULT_DEPENDENCY_RESOLVED_AMBIGUITIES &&
+                            ambiguity.message.contains(
+                                "'$dependencyRawText'",
+                                ignoreCase = true,
+                            )
+                    )
             },
             semanticActionGraph = nodeGraph,
         )
@@ -385,6 +400,10 @@ class SemanticActionGraphRouter(
             "intent_competition",
             "multi_goal_competition",
             "command_vs_question",
+        )
+        val RESULT_DEPENDENCY_RESOLVED_AMBIGUITIES = setOf(
+            "unresolved_reference",
+            "reference_competition",
         )
     }
 }
