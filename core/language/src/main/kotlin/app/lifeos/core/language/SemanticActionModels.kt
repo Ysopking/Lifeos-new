@@ -281,6 +281,25 @@ data class SemanticActionGraph(
     }
 }
 
+fun PredicateConcept.toIntentTypeOrNull(): IntentType? = when (this) {
+    PredicateConcept.CREATE_IMAGE -> IntentType.CREATE_IMAGE
+    PredicateConcept.TRANSFORM_IMAGE -> IntentType.TRANSFORM_IMAGE
+    PredicateConcept.SEARCH -> IntentType.SEARCH
+    PredicateConcept.CONTINUE -> IntentType.CONTINUE
+    PredicateConcept.BUILD -> IntentType.BUILD_OR_IMPLEMENT
+    PredicateConcept.QUERY -> IntentType.QUERY
+    PredicateConcept.SCHEDULE -> IntentType.SCHEDULE
+    PredicateConcept.COMMUNICATE -> IntentType.COMMUNICATE
+    PredicateConcept.STORE_MEMORY -> IntentType.STORE_OR_REMEMBER
+    PredicateConcept.OWE,
+    PredicateConcept.PAY,
+    PredicateConcept.DELETE,
+    PredicateConcept.UPLOAD,
+    PredicateConcept.SELECT,
+    PredicateConcept.CONDITION_CHECK,
+    PredicateConcept.UNKNOWN -> null
+}
+
 fun IntentType.toPredicateConcept(): PredicateConcept = when (this) {
     IntentType.CREATE_IMAGE -> PredicateConcept.CREATE_IMAGE
     IntentType.TRANSFORM_IMAGE -> PredicateConcept.TRANSFORM_IMAGE
