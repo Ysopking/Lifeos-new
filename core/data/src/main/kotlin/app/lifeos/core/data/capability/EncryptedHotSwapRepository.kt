@@ -75,11 +75,10 @@ class EncryptedHotSwapRepository(context: Context) : HotSwapRepository {
         HotSwapEventLogCodec.decode(decrypt(legacyFile, HotSwapEventLogCodec.MAX_PAYLOAD_BYTES))
 
     private fun readEvent(file: File): HotSwapEvent {
-        val events = HotSwapEventLogCodec.decode(
+        val event = HotSwapEventLogCodec.decodeSegment(
             decrypt(file, HotSwapEventLogCodec.MAX_PAYLOAD_BYTES)
         )
-        require(events.size == 1)
-        return events.single().also { event ->
+        return event.also { event ->
             require(file == eventFile(event.revision))
         }
     }
@@ -87,7 +86,7 @@ class EncryptedHotSwapRepository(context: Context) : HotSwapRepository {
     private fun writeEvent(file: File, event: HotSwapEvent) {
         writeEncrypted(
             file,
-            HotSwapEventLogCodec.encode(listOf(event)),
+            HotSwapEventLogCodec.encodeSegment(event),
             HotSwapEventLogCodec.MAX_PAYLOAD_BYTES,
         )
     }
