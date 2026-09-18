@@ -146,6 +146,17 @@ class AutomaticHealthEscalationOrchestrator(
                     false
                 }
 
+                val resumed = coordinator.resumeActive(node.id)
+                val resumedFailure = resumed
+                    .filterIsInstance<EscalationCoordinationResult.Completed>()
+                    .firstOrNull {
+                        it.snapshot.level == EscalationLevel.L2_RECOVER_COMPONENT &&
+                            it.execution is EscalationExecutionResult.Failed
+                    }
+                if (resumed.isNotEmpty() && resumedFailure == null) {
+                    return@launch
+                }
+
                 val trigger = EscalationTrigger(
                     nodeId = node.id,
                     scope = node.scope,
@@ -159,7 +170,11 @@ class AutomaticHealthEscalationOrchestrator(
                     evidenceRefs = setOf(healthObservationRef(node, observation)),
                     observedAt = observation.observedAt,
                 )
-                val result = coordinator.coordinate(trigger)
+                val result = if (resumedFailure == null) {
+                    coordinator.coordinate(trigger)
+                } else {
+                    resumedFailure
+                }
                 if (
                     result is EscalationCoordinationResult.Completed &&
                     result.snapshot.level == EscalationLevel.L2_RECOVER_COMPONENT &&
