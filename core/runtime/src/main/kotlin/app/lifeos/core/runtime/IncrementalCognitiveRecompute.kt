@@ -22,6 +22,8 @@ data class CognitiveRecomputePlan(
     val projectionStates: Map<String, ProjectionValidity>,
     val escalateRegional: Boolean,
     val escalateGlobal: Boolean,
+    val affectedPhotonRefs: Set<PhotonRevisionRef> = emptySet(),
+    val projectionStatesByRef: Map<PhotonRevisionRef, ProjectionValidity> = emptyMap(),
 )
 
 /**
@@ -50,25 +52,36 @@ class IncrementalCognitiveRecomputePlanner(
             source = PhotonRevisionRef(delta.sourcePhotonId, delta.sourceRevision),
             magnitudeMicros = delta.magnitudeMicros,
         )
-        val affected = propagated.mapTo(linkedSetOf()) { it.target.photonId }
-        val states = linkedMapOf<String, ProjectionValidity>()
+        val refs = propagated.mapTo(linkedSetOf()) { it.target }
+        val statesByRef = linkedMapOf<PhotonRevisionRef, ProjectionValidity>()
         propagated.forEach { value ->
             val validity = dependencyIndex.validity(value.reason)
-            val key = value.target.photonId.value
-            val previous = states[key]
-            states[key] = when {
+            val previous = statesByRef[value.target]
+            statesByRef[value.target] = when {
                 previous == ProjectionValidity.INVALID -> previous
                 validity == ProjectionValidity.INVALID -> validity
                 else -> ProjectionValidity.STALE
             }
         }
+        val states = statesByRef.entries
+            .groupBy { it.key.photonId.value }
+            .mapValues { (_, entries) ->
+                if (entries.any { it.value == ProjectionValidity.INVALID }) {
+                    ProjectionValidity.INVALID
+                } else {
+                    ProjectionValidity.STALE
+                }
+            }
+            .toSortedMap()
         val maxMagnitude = propagated.maxOfOrNull { it.magnitudeMicros } ?: 0L
 
         return CognitiveRecomputePlan(
-            affectedPhotonIds = affected,
+            affectedPhotonIds = refs.mapTo(linkedSetOf()) { it.photonId },
             projectionStates = states,
             escalateRegional = maxMagnitude >= regionalThresholdMicros,
             escalateGlobal = maxMagnitude >= globalThresholdMicros,
+            affectedPhotonRefs = refs,
+            projectionStatesByRef = statesByRef.toMap(),
         )
     }
 }
