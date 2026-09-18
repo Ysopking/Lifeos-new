@@ -23,6 +23,8 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 @JvmInline
 value class BootGenerationId(val value: String) {
@@ -243,6 +245,33 @@ class BootSnapshotLoader(
             reason = "source-exception:${error.javaClass.simpleName}",
         )
         fallback
+    }
+}
+
+/**
+ * Process-boot scoped immutable read session. Every consumer sees the exact same durable truth and
+ * the underlying authority stores are read at most once by this session.
+ */
+class BootReadSession(
+    private val loader: BootSnapshotLoader,
+) {
+    private val mutex = Mutex()
+
+    @Volatile
+    private var cached: DurableBootSnapshot? = null
+
+    suspend fun snapshot(): DurableBootSnapshot {
+        cached?.let { return it }
+        return mutex.withLock {
+            cached ?: loader.load().also { cached = it }
+        }
+    }
+
+    suspend fun readFailures(source: BootSnapshotSource): List<BootSnapshotReadFailure> =
+        snapshot().readFailures.filter { it.source == source }
+
+    suspend fun invalidateForTestOnly() = mutex.withLock {
+        cached = null
     }
 }
 
