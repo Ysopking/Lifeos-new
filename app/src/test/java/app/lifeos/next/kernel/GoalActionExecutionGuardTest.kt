@@ -3,6 +3,7 @@ package app.lifeos.next.kernel
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
@@ -227,16 +228,15 @@ class GoalActionExecutionGuardTest {
     )
 
     private fun context(intent: IntentType, goalPhotonId: String): GoalActionContext {
-        val goal = GoalFrame(
-            intent = intent,
-            objective = "test goal",
-            entities = emptyList(),
-            references = emptyList(),
-            constraints = emptyList(),
-            ambiguities = emptyList(),
-            confidence = 1.0,
-            language = LanguageCode.EN,
-        )
+        val text = when (intent) {
+            IntentType.QUERY -> "What is LIFEOS?"
+            IntentType.SCHEDULE -> "Remind me about the appointment."
+            else -> error("Unsupported test intent: " + intent)
+        }
+        val goal = LanguageUnderstandingEngine()
+            .understand(text)
+            .goal
+            .copy(objective = "test goal")
         return GoalActionContext(
             goal = goal,
             routing = GoalCapabilityResolution(
