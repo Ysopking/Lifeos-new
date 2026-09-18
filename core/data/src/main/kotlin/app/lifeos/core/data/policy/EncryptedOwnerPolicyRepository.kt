@@ -137,9 +137,7 @@ class EncryptedOwnerPolicyRepository(context: Context) : OwnerPolicyRepository {
             file = file,
             maxPlaintextBytes = OwnerPolicyEventLogCodec.MAX_PAYLOAD_BYTES,
         )
-        val events = OwnerPolicyEventLogCodec.decode(plaintext)
-        require(events.size == 1) { "Owner policy segment must contain exactly one event" }
-        val event = events.single()
+        val event = OwnerPolicyEventLogCodec.decodeSegment(plaintext)
         require(file == eventFile(event.revision)) {
             "Owner policy event segment/revision mismatch"
         }
@@ -147,7 +145,7 @@ class EncryptedOwnerPolicyRepository(context: Context) : OwnerPolicyRepository {
     }
 
     private fun writeEvent(file: File, event: OwnerPolicyEvent) {
-        val plaintext = OwnerPolicyEventLogCodec.encode(listOf(event))
+        val plaintext = OwnerPolicyEventLogCodec.encodeSegment(event)
         writeEncrypted(file, plaintext, OwnerPolicyEventLogCodec.MAX_PAYLOAD_BYTES)
     }
 
