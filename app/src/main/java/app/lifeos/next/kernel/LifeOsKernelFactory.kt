@@ -11,6 +11,7 @@ import app.lifeos.core.runtime.convergence.DefaultProductiveConvergenceAuthority
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.cognition.EncryptedCognitionCoverageRepository
 import app.lifeos.core.data.cognition.EncryptedCognitionJournalIndexRepository
+import app.lifeos.core.data.cognition.EncryptedCognitiveModuleSnapshotRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.evolution.EncryptedEvolutionStore
@@ -177,6 +178,8 @@ class LifeOsKernelFactory(
         val cognitionCoverageIndex = CognitionCoverageIndex(
             repository = EncryptedCognitionCoverageRepository(appContext),
         )
+        val cognitiveModuleSnapshotRepository =
+            EncryptedCognitiveModuleSnapshotRepository(appContext)
         val learningAdaptationRepository = EncryptedLearningAdaptationRepository(appContext)
         val learningAdaptations = DurableLearningAdaptationLedger(learningAdaptationRepository)
         val goalPlanRepository = EncryptedGoalPlanRepository(appContext)
@@ -842,6 +845,24 @@ class LifeOsKernelFactory(
                         }
                     },
                     object : StoreProbe {
+                        override val storeId: String = "cognitive-module-snapshot-store"
+                        override suspend fun probe(): StoreStatus = try {
+                            val head = cognitiveModuleSnapshotRepository.loadHead()
+                            if (head != null) {
+                                requireNotNull(
+                                    cognitiveModuleSnapshotRepository.load(head.activeSnapshotId)
+                                ) { "Cognitive module head points to missing snapshot" }
+                            }
+                            StoreStatus(storeId, StoreState.HEALTHY)
+                        } catch (error: Exception) {
+                            StoreStatus(
+                                storeId = storeId,
+                                state = StoreState.CORRUPTED,
+                                message = error.message ?: error::class.simpleName,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
                         override val storeId: String = "evolution-store"
                         override suspend fun probe(): StoreStatus {
                             bootReadSession.readOnce("evolution-store") {
@@ -935,6 +956,10 @@ class LifeOsKernelFactory(
             bootCoordinator = bootCoordinator,
             bootEngineRuntime = bootEngineRuntime,
             continuousCognition = continuousCognition,
+            cognitiveModuleSnapshotRepository = cognitiveModuleSnapshotRepository,
+            activeExtensionSnapshotId = {
+                extensionRegistryHeadRepository.load()?.activeSnapshotId
+            },
             photonTransactions = photonTransactions,
             cognitiveOutcomes = cognitiveOutcomes,
             cognitiveTriggers = cognitiveTriggers,
