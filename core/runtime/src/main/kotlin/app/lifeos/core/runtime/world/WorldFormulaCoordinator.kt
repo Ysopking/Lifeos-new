@@ -7,6 +7,7 @@ import app.lifeos.core.field.world.WorldFieldNodeId
 import app.lifeos.core.field.world.WorldFieldState
 import app.lifeos.core.field.world.WorldFieldVector
 import app.lifeos.core.field.world.WorldSignalDimension
+import app.lifeos.core.runtime.CognitiveSnapshotRuntimeRegistry
 import app.lifeos.core.runtime.cognition.CognitiveTriggerSink
 import kotlinx.coroutines.CancellationException
 
@@ -122,6 +123,7 @@ class WorldFormulaCoordinator(
             )
         }
 
+        captureCognitiveSnapshotBestEffort(snapshot)
         emitTriggerBestEffort(request, snapshot)
         return WorldFormulaExecution(
             state = WorldFormulaExecutionState.COMPLETED,
@@ -140,6 +142,18 @@ class WorldFormulaCoordinator(
             persisted = false,
             message = "invalid-world-formula:${request.id}:${detail.take(240)}",
         )
+
+    private suspend fun captureCognitiveSnapshotBestEffort(
+        snapshot: WorldFormulaSnapshot,
+    ) {
+        try {
+            CognitiveSnapshotRuntimeRegistry.capturePersistedWorld(snapshot)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // WorldFormula persistence remains authoritative even if checkpoint capture is unavailable.
+        }
+    }
 
     private suspend fun emitTriggerBestEffort(
         request: WorldFormulaRequest,
