@@ -353,6 +353,7 @@ class LifeOsKernel internal constructor(
                 localDeepSearch = actions.localDeepSearch,
                 localSchedule = actions.localSchedule,
                 localCommunication = actions.localCommunication,
+                externalEffect = actions.externalEffect,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
