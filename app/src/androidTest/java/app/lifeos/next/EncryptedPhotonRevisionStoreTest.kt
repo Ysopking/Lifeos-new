@@ -11,8 +11,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import kotlin.test.assertEquals
-import kotlin.test.assertIs
+import org.junit.Assert.assertEquals
 
 @RunWith(AndroidJUnit4::class)
 class EncryptedPhotonRevisionStoreTest {
