@@ -105,6 +105,18 @@ interface IndexedTaskSnapshotRepository : TaskSnapshotRepository {
         types: Set<TaskType>,
         states: Set<TaskState>,
         limit: Int = 100,
-    ): List<LifeTask>
+    ): List<LifeTask> {
+        require(limit > 0)
+        if (types.isEmpty() || states.isEmpty()) return emptyList()
+        val report = loadReport()
+        check(report.unreadableEntries.isEmpty()) {
+            "Cannot query indexed task states with unreadable task entries"
+        }
+        return report.tasks.asSequence()
+            .filter { it.type in types && it.state in states }
+            .sortedWith(compareBy<LifeTask> { it.createdAt }.thenBy { it.id.value })
+            .take(limit)
+            .toList()
+    }
     suspend fun rebuildIndex(): TaskIndexReport
 }
