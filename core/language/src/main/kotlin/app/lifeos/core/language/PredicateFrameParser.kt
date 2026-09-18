@@ -297,7 +297,10 @@ class PredicateFrameParser(
                 return SemanticValue(it.original, it.original, confidence = 0.68)
             }
         }
-        return people.firstOrNull { it.first > clause.tokenStart }?.second
+        // A capitalized noun is not sufficient recipient evidence. Without an explicit
+        // user marker or recipient preposition, keep RECIPIENT unresolved/absent instead of
+        // inventing a person role that can lower or misdirect action semantics.
+        return null
     }
 
     private fun fallbackObject(
