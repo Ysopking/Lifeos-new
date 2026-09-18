@@ -266,7 +266,7 @@ class GoalActionExecutionGuardTest {
     private fun context(intent: IntentType, goalPhotonId: String): GoalActionContext {
         val text = when (intent) {
             IntentType.QUERY -> "What is LIFEOS?"
-            IntentType.STORE_OR_REMEMBER -> "Remember this."
+            IntentType.STORE_OR_REMEMBER -> "Merke dir die Semantic-Recovery-Notiz."
             IntentType.SCHEDULE -> "Schedule image."
             else -> error("Unsupported test intent: " + intent)
         }
