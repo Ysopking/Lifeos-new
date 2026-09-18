@@ -170,6 +170,23 @@ class QuantityTemporalEngine {
             )
         }
 
+        AT_DATE_REGEX.findAll(original).forEach { match ->
+            val date = explicitGermanDate(
+                dayRaw = match.groupValues[1],
+                monthRaw = match.groupValues[2],
+                yearRaw = match.groupValues.getOrNull(3).orEmpty(),
+                baseDate = baseDate,
+            ) ?: return@forEach
+            result += dayValue(
+                TemporalRelation.AT,
+                date,
+                zoneId,
+                match.value,
+                TextSpan(match.range.first, match.range.last + 1),
+                0.995,
+            )
+        }
+
         NEXT_WEEKDAY_REGEX.findAll(original).forEach { match ->
             val day = weekday(match.groupValues[1]) ?: return@forEach
             val date = baseDate.with(TemporalAdjusters.next(day))
@@ -349,6 +366,9 @@ class QuantityTemporalEngine {
             """(?i)(?:(nicht\s+mehr\s+als|not\s+more\s+than|mindestens|mehr\s+als|über|ueber|höchstens|hoechstens|weniger\s+als|unter|at\s+least|more\s+than|at\s+most|less\s+than)\s+)?(\d+(?:[.,]\d+)?)\s*([\p{L}%€$£]+)?"""
         )
         val RELATIVE_DAY_REGEX = Regex("""(?i)\b(übermorgen|uebermorgen|morgen|heute|gestern|tomorrow|today|yesterday)\b""")
+        val AT_DATE_REGEX = Regex(
+            """(?i)\b(?:am|on)\s+(\d{1,2})\.?\s+(januar|februar|märz|maerz|april|mai|juni|juli|august|september|oktober|november|dezember)(?:\s+(\d{4}))?\b"""
+        )
         val NEXT_WEEKDAY_REGEX = Regex(
             """(?i)\b(?:nächsten|naechsten|kommenden|next)\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"""
         )
