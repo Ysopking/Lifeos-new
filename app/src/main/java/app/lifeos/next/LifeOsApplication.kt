@@ -20,6 +20,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.CausalCognitionEngine
+import app.lifeos.core.runtime.CognitiveWorkload
 import app.lifeos.core.runtime.CausalDerivedPhotonPersistence
 import app.lifeos.core.runtime.PhotonBackedCausalLedgerStore
 import app.lifeos.core.runtime.PhotonIngressMode
@@ -207,7 +208,14 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                         delegate = kernel.photonStore,
                         productiveIngress = photonIngress::ingest,
                     )
-                    lifeMemoryRuntime = DurableLifeMemoryRuntime(lifePhotonRepository)
+                    lifeMemoryRuntime = DurableLifeMemoryRuntime(
+                        photons = lifePhotonRepository,
+                        residentBudgetProvider = {
+                            hardwareResourceIntelligence
+                                .cognitiveBudget(CognitiveWorkload.FIELD)
+                                .maxHotPhotons
+                        },
+                    )
                     DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
                     multimodalPerception = MultimodalPerceptionRuntime(kernel)
                     runBlocking { multimodalPerception.install() }
