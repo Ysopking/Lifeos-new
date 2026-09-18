@@ -91,7 +91,8 @@ class PhotonRehydrator(
         CognitionJournalIntegrityVerifier(repository).verify()
 
         val report = repository.loadReport()
-        val assessments = validator.assess(report.photons)
+        val cognitivePhotons = report.photons.filterNot { "internal" in it.tags }
+        val assessments = validator.assess(cognitivePhotons)
         val quarantined = assessments
             .asSequence()
             .filter { it.state == PhotonIntegrityState.QUARANTINED }
@@ -102,7 +103,7 @@ class PhotonRehydrator(
         val warm = mutableListOf<Photon>()
         val cold = mutableListOf<PhotonId>()
 
-        report.photons.forEach { photon ->
+        cognitivePhotons.forEach { photon ->
             if (photon.id in quarantined) return@forEach
             when (hydrationPolicy.tier(photon)) {
                 PhotonHydrationTier.HOT -> hot += photon
