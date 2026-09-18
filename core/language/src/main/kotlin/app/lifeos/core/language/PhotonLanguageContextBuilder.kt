@@ -1,6 +1,7 @@
 package app.lifeos.core.language
 
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRevisionRef
 import java.time.Instant
@@ -12,7 +13,7 @@ class PhotonLanguageContextBuilder {
     fun build(
         photons: List<Photon>,
         now: Instant = Instant.now(),
-        excludeIds: Set<app.lifeos.core.model.PhotonId> = emptySet(),
+        excludeIds: Set<PhotonId> = emptySet(),
     ): LanguageContext {
         val eligible = photons.filterNot { photon ->
             photon.id in excludeIds || "context-record" in photon.tags
