@@ -82,18 +82,17 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
     }
 
     private fun readEvent(file: File): SelfHealingEvent {
-        val events = SelfHealingEventLogCodec.decode(
+        val event = SelfHealingEventLogCodec.decodeSegment(
             decrypt(file, SelfHealingEventLogCodec.MAX_PAYLOAD_BYTES)
         )
-        require(events.size == 1)
-        return events.single()
+        return event
     }
 
     private fun writeEvent(file: File, event: SelfHealingEvent) {
         file.parentFile?.let { check(it.isDirectory || it.mkdirs()) }
         writeEncrypted(
             file,
-            SelfHealingEventLogCodec.encode(listOf(event)),
+            SelfHealingEventLogCodec.encodeSegment(event),
             SelfHealingEventLogCodec.MAX_PAYLOAD_BYTES,
         )
     }
