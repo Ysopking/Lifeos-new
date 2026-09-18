@@ -28,6 +28,7 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
     override suspend fun loadReport(): SelfHealingRepositoryLoadReport = withContext(Dispatchers.IO) {
         processMutex.withLock {
             ensureMigrated()
+            readHeadOrRecover()
             val unreadable = mutableListOf<String>()
             val events = eventFiles().mapNotNull { file ->
                 runCatching { readEvent(file) }
@@ -110,13 +111,26 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
     }
 
     private fun readHeadOrRecover(): Long {
-        if (exists(headFile)) runCatching { return readHead() }
-        val revisions = eventFiles().mapNotNull { file ->
-            file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
-        }.toSet()
-        val recovered = revisions.maxOrNull() ?: 0L
-        if (recovered > 0L) require((1L..recovered).all { it in revisions })
-        writeHead(recovered)
+        val files = eventFiles()
+        val byRevision = files.groupBy { file ->
+            requireNotNull(
+                file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
+            ) { "Invalid Self-healing event segment name: ${file.name}" }
+        }
+        require(byRevision.values.all { it.size == 1 }) {
+            "Self-healing contains duplicate global event revisions"
+        }
+        val revisions = byRevision.keys.sorted()
+        val recovered = revisions.lastOrNull() ?: 0L
+        require(revisions == if (recovered == 0L) emptyList() else (1L..recovered).toList()) {
+            "Self-healing event segments are not contiguous"
+        }
+
+        val storedHead = if (exists(headFile)) runCatching(::readHead).getOrNull() else null
+        require(storedHead == null || storedHead <= recovered) {
+            "Self-healing head points past durable event tail"
+        }
+        if (storedHead != recovered) writeHead(recovered)
         return recovered
     }
 
