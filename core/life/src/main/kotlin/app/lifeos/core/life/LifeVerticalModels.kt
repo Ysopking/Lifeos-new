@@ -1,6 +1,7 @@
 package app.lifeos.core.life
 
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
 import java.time.Instant
 
 @JvmInline value class LifeMatterId(val value: String)
@@ -11,12 +12,12 @@ data class AuthoritiesMatter(
     val matterId: LifeMatterId,
     val authority: String,
     val caseReference: String? = null,
-    val documentPhotonIds: Set<PhotonId> = emptySet(),
-    val claimPhotonIds: Set<PhotonId> = emptySet(),
+    val documentPhotonIds: Set<PhotonRevisionRef> = emptySet(),
+    val claimPhotonIds: Set<PhotonRevisionRef> = emptySet(),
     val requirementIds: Set<String> = emptySet(),
     val deadlineIds: Set<String> = emptySet(),
-    val submittedEvidencePhotonIds: Set<PhotonId> = emptySet(),
-    val legalReferencePhotonIds: Set<PhotonId> = emptySet(),
+    val submittedEvidencePhotonIds: Set<PhotonRevisionRef> = emptySet(),
+    val legalReferencePhotonIds: Set<PhotonRevisionRef> = emptySet(),
     val openQuestions: Set<String> = emptySet(),
     val proposedActions: Set<String> = emptySet(),
 )
@@ -34,10 +35,33 @@ data class LifeDeadline(
 }
 
 data class MoneyAmount(val minorUnits: Long, val currency: String = "EUR") {
-    init { require(currency.isNotBlank()) }
+    init {
+        require(minorUnits >= 0L) { "Money amount must not be negative" }
+        require(currency.matches(Regex("[A-Z]{3}"))) {
+            "Currency must be normalized ISO-4217 uppercase"
+        }
+    }
+
+    companion object {
+        fun normalized(minorUnits: Long, currency: String = "EUR"): MoneyAmount =
+            MoneyAmount(minorUnits, currency.trim().uppercase())
+    }
 }
 
-data class DebtPayment(val id: String, val amount: MoneyAmount, val paidAt: Instant, val sourcePhotonId: PhotonId?)
+data class DebtPayment(
+    val id: String,
+    val amount: MoneyAmount,
+    val paidAt: Instant,
+    val sourcePhotonRef: PhotonRevisionRef?,
+) {
+    init { require(id.isNotBlank()) }
+}
+
+enum class VerifiedDebtAmountBasis {
+    PRINCIPAL_ONLY,
+    TOTAL_CLAIM,
+    COMPONENT_SUM,
+}
 
 data class DebtMatter(
     val matterId: LifeMatterId,
@@ -47,11 +71,18 @@ data class DebtMatter(
     val claimedFees: MoneyAmount? = null,
     val claimedInterest: MoneyAmount? = null,
     val verifiedAmount: MoneyAmount? = null,
+    val verifiedAmountBasis: VerifiedDebtAmountBasis? = null,
     val disputedAmount: MoneyAmount? = null,
     val payments: List<DebtPayment> = emptyList(),
     val outstandingEstimate: MoneyAmount? = null,
     val installmentDueAt: Instant? = null,
-)
+) {
+    init {
+        require((verifiedAmount == null) == (verifiedAmountBasis == null)) {
+            "Verified debt amount requires an explicit amount basis"
+        }
+    }
+}
 
 data class DebtLedgerRow(
     val matterId: LifeMatterId,
