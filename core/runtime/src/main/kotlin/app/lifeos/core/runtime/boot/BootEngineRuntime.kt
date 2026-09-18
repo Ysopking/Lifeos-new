@@ -311,6 +311,14 @@ class BootEngineRuntime(
 ) {
     private val mutex = Mutex()
 
+    suspend fun activeCycle(): BootEngineCycle? = mutex.withLock {
+        val report = cycles.loadReport()
+        require(!report.corrupted) {
+            "BootEngine cycle recovery required: ${report.message}"
+        }
+        report.activeCycle
+    }
+
     suspend fun startCycle(
         frozenInputs: BootEngineFrozenInputs,
     ): BootEngineCycle = mutex.withLock {
