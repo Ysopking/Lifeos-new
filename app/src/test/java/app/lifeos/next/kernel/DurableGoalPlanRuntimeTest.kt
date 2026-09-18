@@ -3,6 +3,7 @@ package app.lifeos.next.kernel
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
@@ -90,7 +91,7 @@ class DurableGoalPlanRuntimeTest {
         val replay = dispatcher.execute(context)
 
         assertEquals(1, executions)
-        assertEquals(GoalActionDispatchResult(), replay)
+        assertEquals(outcome, replay.recoveredOutcome)
         assertEquals(1, checkpointRepository.checkpoints.size)
         assertTrue(ledger.states.value.values.single().stepStates.values.all {
             it == GoalStepState.COMPLETED
@@ -166,16 +167,17 @@ class DurableGoalPlanRuntimeTest {
         now = { at },
     )
 
-    private fun goal(intent: IntentType, objective: String) = GoalFrame(
-        intent = intent,
-        objective = objective,
-        entities = emptyList(),
-        references = emptyList(),
-        constraints = emptyList(),
-        ambiguities = emptyList(),
-        confidence = 1.0,
-        language = LanguageCode.EN,
-    )
+    private fun goal(intent: IntentType, objective: String): GoalFrame {
+        val text = when (intent) {
+            IntentType.QUERY -> "What is LIFEOS?"
+            IntentType.COMMUNICATE -> "Send the report."
+            else -> error("Unsupported test intent: " + intent)
+        }
+        return LanguageUnderstandingEngine()
+            .understand(text)
+            .goal
+            .copy(objective = objective)
+    }
 
     private fun routing(goal: GoalFrame) = GoalCapabilityResolution(
         plan = LanguageGoalCapabilityMapper().plan(goal),
