@@ -84,6 +84,16 @@ class EncryptedTaskRepository(context: Context) : IndexedTaskSnapshotRepository 
         ensureIndexInternal().activeCount(types)
     }
 
+    override suspend fun listByStates(
+        types: Set<TaskType>,
+        states: Set<TaskState>,
+        limit: Int,
+    ): List<LifeTask> = ioLocked {
+        ensureIndexInternal()
+            .byStates(types, states, limit)
+            .map(::readIndexedTaskInternal)
+    }
+
     override suspend fun rebuildIndex(): TaskIndexReport = ioLocked {
         val report = loadReportInternal()
         val snapshot = TaskIndexSnapshot.from(report.tasks)
