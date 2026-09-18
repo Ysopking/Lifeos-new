@@ -61,6 +61,14 @@ class GoalResumeEngineTest {
             originalUnderstanding.goal.semanticGraph.fingerprint,
             result.frame.semanticGraph.fingerprint,
         )
+        assertEquals(
+            originalUnderstanding.goal.semanticActionGraph.fingerprint,
+            result.frame.semanticActionGraph.fingerprint,
+        )
+        assertEquals(
+            originalUnderstanding.goal.semanticActionGraph,
+            result.frame.semanticActionGraph,
+        )
         assertEquals(target.content, result.resumedPhoton.content)
         assertEquals(setOf(target.id, requestGoalId, requestSource.id), result.resumedPhoton.provenance.parentIds)
         assertTrue("goal-resumed" in result.resumedPhoton.tags)
@@ -70,7 +78,7 @@ class GoalResumeEngineTest {
     }
 
     @Test
-    fun `structured v3 semantics survive resume without reinterpreting source`() {
+    fun `structured v4 semantics survive resume without reinterpreting source`() {
         val source = source(
             "source-structured",
             "Suche die Datei, wenn sie größer als 10 MB ist, weil der Speicher voll ist.",
@@ -104,16 +112,16 @@ class GoalResumeEngineTest {
     }
 
     @Test
-    fun `legacy v2 goal remains resumable after v3 rollout`() {
+    fun `legacy v2 goal remains readable after v4 rollout`() {
         val source = source("source-legacy", "Was weißt du über Balkonbank?")
         val current = goalPhoton(source)
         val legacy = current.copy(
             id = PhotonId("goal-legacy-v2"),
             content = current.content
                 .lines()
-                .filterNot { it.startsWith("semantic.") }
+                .filterNot { it.startsWith("semantic.") || it.startsWith("action.") }
                 .joinToString("\n")
-                .replaceFirst("goal/v3", "goal/v2"),
+                .replaceFirst("goal/v4", "goal/v2"),
         )
         val requestSource = source("continue-legacy", "Weiter", now)
 
