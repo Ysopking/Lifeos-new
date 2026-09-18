@@ -1,10 +1,12 @@
 package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.Photon
-import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.PhotonRevisionRef
+import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.model.task.IndexedTaskSnapshotRepository
 import app.lifeos.core.model.task.TaskDraft
-import app.lifeos.core.model.task.TaskSnapshotRepository
 import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.runtime.tasks.DurableTaskEngine
@@ -19,22 +21,18 @@ data class DurableCognitionReconciliationResult(
 )
 
 /**
- * Repairs the only non-atomic boundary in live cognition: a photon can be durably saved before its
- * PROCESS_PHOTON task is durably created. Existing task records, including terminal records, are
- * the cross-process coverage ledger. Reconciliation therefore never creates a second queue/vault.
+ * Universal revision coverage reconciliation.
  *
- * Internal cognition-journal Photons are persistence metadata, not cognitive evidence. They are
- * deliberately excluded so durable journaling cannot recursively schedule itself after restart.
- *
- * Each pass is deliberately bounded. Durable admission may stop a pass earlier when TaskStore
- * capacity is exhausted; uncovered photons remain in the photon vault and are therefore the
- * recovery source of truth for a later pass.
+ * Photon revisions are authoritative. The coverage index is only a durable projection of revisions
+ * that already crossed the TaskStore boundary. Reconciliation therefore compares B101 PhotonIndex
+ * refs directly with this projection and decrypts only uncovered candidate Photons.
  */
 class DurableCognitionReconciler(
     private val photons: PhotonRepository,
-    private val tasks: TaskSnapshotRepository,
+    private val tasks: IndexedTaskSnapshotRepository,
     private val cognition: ContinuousCognitionEngine,
     private val taskEngine: DurableTaskEngine,
+    private val coverage: CognitionCoverageIndex,
     private val maxSubmissionsPerPass: Int = DEFAULT_MAX_SUBMISSIONS_PER_PASS,
 ) {
     init {
@@ -42,18 +40,13 @@ class DurableCognitionReconciler(
     }
 
     suspend fun reconcile(): DurableCognitionReconciliationResult {
-        val photonReport = photons.loadReport()
-        val taskReport = tasks.loadReport()
-        check(taskReport.unreadableEntries.isEmpty()) {
-            "Cannot reconcile cognition with unreadable durable task entries"
-        }
-
-        val created = taskReport.tasks.filter {
-            (it.type == TaskType.PROCESS_PHOTON || it.type == TaskType.REPROCESS_PHOTON) &&
-                it.state == TaskState.CREATED
-        }.sortedBy { it.id.value }
-        val createdBatch = created.take(maxSubmissionsPerPass)
-        for (task in createdBatch) {
+        val cognitionTypes = setOf(TaskType.PROCESS_PHOTON, TaskType.REPROCESS_PHOTON)
+        val created = tasks.listByStates(
+            types = cognitionTypes,
+            states = setOf(TaskState.CREATED),
+            limit = maxSubmissionsPerPass,
+        )
+        for (task in created) {
             val resumed = taskEngine.submit(
                 TaskDraft(
                     type = task.type,
@@ -66,75 +59,95 @@ class DurableCognitionReconciler(
             )
             check(resumed.id == task.id) { "Created cognition task changed identity during resume" }
         }
+        coverage.markCovered(
+            created.flatMap { task ->
+                task.inputPhotonRevisions.map { (id, revision) -> PhotonRevisionRef(id, revision) }
+            }
+        )
 
-        val coveredRevisions = buildSet {
-            taskReport.tasks
-                .asSequence()
-                .filter { it.type == TaskType.PROCESS_PHOTON || it.type == TaskType.REPROCESS_PHOTON }
-                .forEach { task ->
-                    task.inputPhotonRevisions.forEach { (photonId, revision) ->
-                        add(PhotonRevision(photonId, revision))
-                    }
-                }
+        val actualRefs = latestPhotonRefs()
+        val covered = coverage.snapshot().covered
+        val uncoveredRefs = actualRefs.filterNot { it in covered }
+        val remainingBudget = (maxSubmissionsPerPass - created.size).coerceAtLeast(0)
+
+        val candidates = mutableListOf<Photon>()
+        var consideredUncovered = 0
+        for (ref in uncoveredRefs) {
+            if (candidates.size >= remainingBudget) break
+            val photon = load(ref) ?: continue
+            consideredUncovered += 1
+            if (COGNITION_JOURNAL_ROOT_TAG in photon.tags) {
+                coverage.markCovered(ref)
+                continue
+            }
+            candidates += photon
         }
 
-        val orderedPhotons = photonReport.photons
-            .asSequence()
-            .filterNot { COGNITION_JOURNAL_ROOT_TAG in it.tags }
-            .sortedWith(compareBy<Photon> { it.id.value }.thenBy { it.revision })
-            .toList()
-        val uncovered = orderedPhotons.filter { photon ->
-            PhotonRevision(photon.id, photon.revision) !in coveredRevisions
-        }
-        val candidates = uncovered.take((maxSubmissionsPerPass - createdBatch.size).coerceAtLeast(0))
-        val taskIds = ArrayList<String>(candidates.size)
-
-        for (photon in candidates) {
-            val submission = cognition.submit(
-                delta = PhotonDelta(
-                    deltaId = CognitiveDeltaIdentity.photonRevision(photon.id, photon.revision),
-                    source = RECONCILIATION_SOURCE,
-                    photonId = photon.id,
-                    revisionAfter = photon.revision,
-                    type = if (photon.revision == 1L) PhotonDeltaType.CREATED else PhotonDeltaType.UPDATED,
-                    importanceHint = photon.semanticMass,
-                    timestamp = photon.provenance.createdAt,
-                    correlationId = photon.id.value,
-                ),
-                priority = CognitivePriority.HIGH,
-                salience = SalienceVector(
-                    novelty = 0.0,
-                    relevance = 1.0,
-                    urgency = 0.75,
-                    semanticMass = photon.semanticMass,
-                    confidenceImpact = photon.confidence,
-                    goalAffinity = if ("chat" in photon.tags || "goal" in photon.tags) 1.0 else 0.5,
-                ),
-                targetModules = setOf(THOUGHT_MATRIX_MODULE),
-                budget = RECONCILIATION_BUDGET,
-            )
-            val durableTaskId = submission.durableTaskId ?: break
-            if (!submission.accepted) break
-            taskIds += durableTaskId
-        }
+        val batch = cognition.submitBatch(
+            candidates.map { photon ->
+                CognitiveSubmissionDraft(
+                    delta = PhotonDelta(
+                        deltaId = CognitiveDeltaIdentity.photonRevision(photon.id, photon.revision),
+                        source = RECONCILIATION_SOURCE,
+                        photonId = photon.id,
+                        revisionAfter = photon.revision,
+                        type = if (photon.revision == 1L) PhotonDeltaType.CREATED else PhotonDeltaType.UPDATED,
+                        importanceHint = photon.semanticMass,
+                        timestamp = photon.provenance.createdAt,
+                        correlationId = photon.id.value,
+                    ),
+                    priority = CognitivePriority.HIGH,
+                    salience = SalienceVector(
+                        novelty = 0.0,
+                        relevance = 1.0,
+                        urgency = 0.75,
+                        semanticMass = photon.semanticMass,
+                        confidenceImpact = photon.confidence,
+                        goalAffinity = if ("chat" in photon.tags || "goal" in photon.tags) 1.0 else 0.5,
+                    ),
+                    targetModules = setOf(THOUGHT_MATRIX_MODULE),
+                    budget = RECONCILIATION_BUDGET,
+                )
+            }
+        )
+        val taskIds = batch.results.mapNotNull { it.durableTaskId }
 
         return DurableCognitionReconciliationResult(
-            scannedPhotons = orderedPhotons.size,
-            alreadyCovered = orderedPhotons.size - uncovered.size,
+            scannedPhotons = actualRefs.size,
+            alreadyCovered = actualRefs.count { it in covered },
             submitted = taskIds.size,
-            deferred = uncovered.size - taskIds.size + created.size - createdBatch.size,
+            deferred = (uncoveredRefs.size - consideredUncovered).coerceAtLeast(0) +
+                (candidates.size - taskIds.size).coerceAtLeast(0),
             durableTaskIds = taskIds,
-            resumedCreated = createdBatch.size,
+            resumedCreated = created.size,
         )
     }
 
-    private data class PhotonRevision(
-        val photonId: PhotonId,
-        val revision: Long,
-    )
+    private suspend fun latestPhotonRefs(): List<PhotonRevisionRef> =
+        if (photons is RevisionedPhotonRepository) {
+            photons.query(
+                PhotonIndexQuery(
+                    latestOnly = true,
+                    includeTombstoned = false,
+                    limit = MAX_INDEX_SCAN,
+                )
+            )
+        } else {
+            photons.loadReport().photons
+                .map { PhotonRevisionRef(it.id, it.revision) }
+                .sortedWith(compareBy<PhotonRevisionRef> { it.photonId.value }.thenBy { it.revision })
+        }
+
+    private suspend fun load(ref: PhotonRevisionRef): Photon? =
+        if (photons is RevisionedPhotonRepository) {
+            photons.load(ref)
+        } else {
+            photons.load(ref.photonId)?.takeIf { it.revision == ref.revision }
+        }
 
     private companion object {
         const val DEFAULT_MAX_SUBMISSIONS_PER_PASS = 100
+        const val MAX_INDEX_SCAN = 250_000
         const val RECONCILIATION_SOURCE = "boot-cognition-reconcile"
         const val THOUGHT_MATRIX_MODULE = "Gedankenmatrix"
         val RECONCILIATION_BUDGET = CognitiveWorkBudget(
