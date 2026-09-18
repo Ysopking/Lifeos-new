@@ -23,6 +23,14 @@ data class PhotonIndexEntry(
     }
 }
 
+enum class PhotonIndexOrder {
+    IDENTITY,
+    NEWEST_FIRST,
+    OLDEST_FIRST,
+    HIGHEST_SEMANTIC_MASS,
+    HIGHEST_CONFIDENCE,
+}
+
 data class PhotonIndexQuery(
     val ids: Set<PhotonId> = emptySet(),
     val phases: Set<PhotonPhase> = emptySet(),
@@ -30,6 +38,7 @@ data class PhotonIndexQuery(
     val allTags: Set<String> = emptySet(),
     val latestOnly: Boolean = true,
     val includeTombstoned: Boolean = false,
+    val order: PhotonIndexOrder = PhotonIndexOrder.IDENTITY,
     val limit: Int = 1_024,
 ) {
     init {
