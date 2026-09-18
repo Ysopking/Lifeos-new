@@ -8,7 +8,11 @@ class LinguisticFieldEngine(
     private val lexicon: DeterministicLinguisticFieldLexicon = DeterministicLinguisticFieldLexicon(),
     private val weights: LinguisticFieldWeights = LinguisticFieldWeights(),
     private val graphemeFieldEngine: GraphemeFieldEngine = GraphemeFieldEngine(),
-    private val compoundResolver: CompoundFieldResolver = CompoundFieldResolver(lexicon),
+    private val morphologyEngine: GermanMorphologyEngine = GermanMorphologyEngine(),
+    private val lexicalIndex: LinguisticFieldIndexV2 =
+        LinguisticFieldIndexV2(lexicon, morphologyEngine),
+    private val compoundResolver: CompoundFieldResolver =
+        CompoundFieldResolver(lexicon, lexicalIndex),
     private val maxIterations: Int = 6,
     private val convergenceDelta: Double = 1e-4,
     private val resolutionThreshold: Double = 0.55,
@@ -170,7 +174,8 @@ class LinguisticFieldEngine(
     private fun seedCandidates(tokenIndex: Int, token: String): List<FieldCandidate> {
         val normalized = normalizeFieldText(token)
         if (normalized.isBlank()) return emptyList()
-        return lexicon.concepts.mapNotNull { concept ->
+        return lexicalIndex.candidateConceptIds(normalized).mapNotNull { conceptId ->
+            val concept = lexicon.byId(conceptId) ?: return@mapNotNull null
             val best = concept.allForms.map { form ->
                 val trace = graphemeFieldEngine.compare(normalized, form)
                 SeedEvidence(
@@ -290,33 +295,8 @@ class LinguisticFieldEngine(
         return sums.mapValues { (intent, sum) -> (sum / (counts[intent] ?: 1)).coerceIn(0.0, 1.0) }
     }
 
-    private fun morphologyAffinity(left: String, right: String): Double {
-        if (left == right) return 1.0
-        val a = stem(left)
-        val b = stem(right)
-        if (a == b && a.length >= 3) return 0.96
-        val prefixScore = commonPrefixLength(a, b).toDouble() / max(a.length, b.length).coerceAtLeast(1)
-        val containment = when {
-            a.length >= 4 && b.contains(a) -> 0.82
-            b.length >= 4 && a.contains(b) -> 0.82
-            else -> 0.0
-        }
-        return max(prefixScore, containment).coerceIn(0.0, 1.0)
-    }
-
-    private fun stem(value: String): String {
-        val suffixes = listOf("ern", "en", "er", "es", "e", "n", "s", "ing")
-        return suffixes.firstNotNullOfOrNull { suffix ->
-            if (value.endsWith(suffix) && value.length - suffix.length >= 3) value.dropLast(suffix.length) else null
-        } ?: value
-    }
-
-    private fun commonPrefixLength(a: String, b: String): Int {
-        val limit = min(a.length, b.length)
-        var index = 0
-        while (index < limit && a[index] == b[index]) index++
-        return index
-    }
+    private fun morphologyAffinity(left: String, right: String): Double =
+        morphologyEngine.affinity(left, right)
 
     private fun snapshot(candidates: Map<Int, List<FieldCandidate>>): Map<Pair<Int, String>, Double> =
         candidates.flatMap { (index, values) -> values.map { (index to it.conceptId) to it.activation } }.toMap()
