@@ -43,6 +43,23 @@ class PhotonRehydratorTest {
     }
 
     @Test
+    fun internalPersistenceMetadataIsVerifiedButNotHydratedIntoCognition() = runTest {
+        val internal = photon(content = "index", phase = PhotonPhase.ACTIVE).copy(
+            tags = setOf("internal", "cognition-journal-index"),
+        )
+        val repository = FakePhotonRepository(mutableListOf(internal))
+
+        val result = PhotonRehydrator(repository).rehydrate()
+
+        assertEquals(0, result.restoredCount)
+        assertTrue(result.hot.isEmpty())
+        assertTrue(result.warm.isEmpty())
+        assertTrue(result.cold.isEmpty())
+        assertTrue(result.assessments.isEmpty())
+        assertEquals(1, repository.photons.size)
+    }
+
+    @Test
     fun duplicatePhotonIdsAreQuarantinedInsteadOfDeleted() = runTest {
         val id = PhotonId("duplicate")
         val first = photon(id = id, content = "one")
