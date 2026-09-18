@@ -4,13 +4,13 @@ import java.security.MessageDigest
 
 data class CognitiveSnapshot(
     val schemaVersion: Int,
-    val projectionVersion: Int,
     val worldRevision: Long,
     val eventSequence: Long,
     val worldRoot: String,
-    val dependencyIndexFingerprint: String,
-    val memoryIndexFingerprint: String,
     val payload: ByteArray,
+    val projectionVersion: Int = 1,
+    val dependencyIndexFingerprint: String = "uninitialized",
+    val memoryIndexFingerprint: String = "uninitialized",
 ) {
     init {
         require(schemaVersion > 0)
@@ -25,13 +25,13 @@ data class CognitiveSnapshot(
 
 data class SnapshotManifest(
     val schemaVersion: Int,
-    val projectionVersion: Int,
     val worldRevision: Long,
     val eventSequence: Long,
     val worldRoot: String,
-    val dependencyIndexFingerprint: String,
-    val memoryIndexFingerprint: String,
     val payloadSha256: String,
+    val projectionVersion: Int = 1,
+    val dependencyIndexFingerprint: String = "uninitialized",
+    val memoryIndexFingerprint: String = "uninitialized",
 )
 
 class SnapshotVerifier {
