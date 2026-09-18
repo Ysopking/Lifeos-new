@@ -43,6 +43,7 @@ data class CompoundFieldBinding(
  */
 class CompoundFieldResolver(
     private val lexicon: DeterministicLinguisticFieldLexicon = DeterministicLinguisticFieldLexicon(),
+    private val lexicalIndex: LinguisticFieldIndexV2 = LinguisticFieldIndexV2(lexicon),
 ) {
     fun resolve(utterance: NormalizedUtterance): List<CompoundFieldBinding> = utterance.tokens
         .withIndex()
@@ -52,13 +53,6 @@ class CompoundFieldResolver(
     fun resolveToken(tokenIndex: Int, rawToken: String): CompoundFieldBinding? {
         val token = normalizeFieldText(rawToken)
         if (token.length < MIN_COMPOUND_LENGTH) return null
-        val forms = lexicon.concepts.flatMap { concept ->
-            concept.allForms
-                .filter { it.length >= MIN_COMPONENT_LENGTH }
-                .map { form -> FormBinding(form, concept) }
-        }.distinctBy { it.form to it.concept.id }
-            .sortedWith(compareByDescending<FormBinding> { it.form.length }.thenBy { it.concept.id })
-
         var best: Candidate? = null
         fun search(position: Int, components: List<CompoundFieldComponent>, linkers: List<IntRange>) {
             if (position == token.length) {
@@ -70,14 +64,16 @@ class CompoundFieldResolver(
             }
             if (components.size >= MAX_COMPONENTS) return
 
-            forms.forEach { binding ->
-                if (!token.startsWith(binding.form, position)) return@forEach
-                val end = position + binding.form.length
+            lexicalIndex.formsStartingAt(token, position)
+                .filter { it.form.length >= MIN_COMPONENT_LENGTH }
+                .forEach { indexed ->
+                val concept = lexicon.byId(indexed.conceptId) ?: return@forEach
+                val end = position + indexed.form.length
                 val component = CompoundFieldComponent(
-                    conceptId = binding.concept.id,
-                    canonical = binding.concept.canonical,
-                    semanticTag = binding.concept.semanticTag,
-                    entityType = binding.concept.entityType,
+                    conceptId = concept.id,
+                    canonical = concept.canonical,
+                    semanticTag = concept.semanticTag,
+                    entityType = concept.entityType,
                     startOffset = position,
                     endOffsetExclusive = end,
                     confidence = 0.94,
@@ -128,7 +124,6 @@ class CompoundFieldResolver(
             ).coerceIn(0.0, 1.0)
     }
 
-    private data class FormBinding(val form: String, val concept: LinguisticConcept)
     private data class Candidate(
         val components: List<CompoundFieldComponent>,
         val linkers: List<IntRange>,
