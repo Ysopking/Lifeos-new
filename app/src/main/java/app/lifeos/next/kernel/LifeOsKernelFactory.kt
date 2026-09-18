@@ -11,6 +11,7 @@ import app.lifeos.core.data.evolution.EncryptedEvolutionStore
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.learning.EncryptedLearningAdaptationRepository
+import app.lifeos.core.data.snapshot.EncryptedCognitiveSnapshotRepository
 import app.lifeos.core.data.goal.EncryptedGoalPlanRepository
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
 import app.lifeos.core.data.task.EncryptedTaskRepository
@@ -25,6 +26,7 @@ import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.health.ProtectionMode
 import app.lifeos.core.model.health.ProtectionStateLoadResult
 import app.lifeos.core.model.worker.WorkerId
+import app.lifeos.core.runtime.CognitiveSnapshotManager
 import app.lifeos.core.runtime.DurableLifeOsRuntime
 import app.lifeos.core.runtime.DurableRuntimeStateBridge
 import app.lifeos.core.runtime.InfluenceExecutor
@@ -365,6 +367,9 @@ class LifeOsKernelFactory(
             store = store,
             journalIndex = cognitionJournalIndex,
         )
+        val cognitiveSnapshotManager = CognitiveSnapshotManager(
+            repository = EncryptedCognitiveSnapshotRepository(appContext),
+        )
         val cognitiveScheduler = CognitiveScheduler()
         val cognitionAdmission = DurableCognitionAdmissionController(
             tasks = taskRepository,
@@ -502,6 +507,9 @@ class LifeOsKernelFactory(
                 },
                 RuntimeStateRehydrationStep {
                     cognitionJournalIndex.reconcile()
+                },
+                RuntimeStateRehydrationStep {
+                    cognitiveSnapshotManager.replay(cognitiveEventJournal)
                 },
                 RuntimeStateRehydrationStep {
                     cognitionReconciler.reconcile()
