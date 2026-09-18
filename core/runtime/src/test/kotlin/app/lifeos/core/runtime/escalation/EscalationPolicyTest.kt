@@ -49,6 +49,20 @@ class EscalationPolicyTest {
     }
 
     @Test
+    fun safeRecoveryUnavailableQuarantinesWithoutWaitingForThreshold() {
+        assertEquals(
+            EscalationLevel.L3_QUARANTINE,
+            policy.decide(
+                trigger(
+                    retryBudgetRemaining = false,
+                    consecutiveFailures = 1,
+                    componentRecoveryAvailable = false,
+                )
+            ).level,
+        )
+    }
+
+    @Test
     fun repeatedFieldFailureQuarantinesAtThreshold() {
         assertEquals(
             EscalationLevel.L3_QUARANTINE,
@@ -163,6 +177,7 @@ class EscalationPolicyTest {
         recoverable: Boolean = true,
         consecutiveFailures: Int = 1,
         retryBudgetRemaining: Boolean = false,
+        componentRecoveryAvailable: Boolean = true,
         contextInconsistent: Boolean = false,
         knownGoodFallbackId: String? = null,
         recentPromotionId: String? = null,
@@ -179,6 +194,7 @@ class EscalationPolicyTest {
         recoverable = recoverable,
         consecutiveFailures = consecutiveFailures,
         retryBudgetRemaining = retryBudgetRemaining,
+        componentRecoveryAvailable = componentRecoveryAvailable,
         contextInconsistent = contextInconsistent,
         knownGoodFallbackId = knownGoodFallbackId,
         recentPromotionId = recentPromotionId,

@@ -101,6 +101,13 @@ class EscalationPolicy(
             )
         }
 
+        if (trigger.recoverable && !trigger.componentRecoveryAvailable) {
+            return EscalationLevel.L3_QUARANTINE to listOf(
+                "safe-component-recovery-unavailable",
+                "retry-budget-exhausted",
+            )
+        }
+
         if (trigger.consecutiveFailures >= config.quarantineAfterConsecutiveFailures) {
             return EscalationLevel.L3_QUARANTINE to listOf(
                 "component-failure-threshold-exhausted",
