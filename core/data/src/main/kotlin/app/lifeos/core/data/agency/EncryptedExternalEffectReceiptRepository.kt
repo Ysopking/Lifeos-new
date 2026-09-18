@@ -63,11 +63,11 @@ class EncryptedExternalEffectReceiptRepository(context: Context) : ExternalEffec
                 require(previous.idempotencyKey == receipt.idempotencyKey) {
                     "External effect receipt idempotency collision"
                 }
-                require(
-                    previous.state == ExternalEffectState.UNKNOWN_OUTCOME ||
-                        previous == receipt
-                ) {
-                    "Final external effect receipt cannot be rewritten"
+                require(receipt.recordedAt >= previous.recordedAt) {
+                    "External effect receipt time cannot move backwards"
+                }
+                require(previous == receipt || transitionAllowed(previous.state, receipt.state)) {
+                    "Illegal external effect receipt transition: ${previous.state} -> ${receipt.state}"
                 }
             }
             EncryptedLedgerVaultSupport.atomicWrite(
@@ -92,6 +92,8 @@ class EncryptedExternalEffectReceiptRepository(context: Context) : ExternalEffec
                 data.writeInt(receipt.recordedAt.nano)
                 data.writeNullable(receipt.externalReference)
                 data.writeNullable(receipt.observationFingerprint)
+                data.writeNullable(receipt.challengeId)
+                data.writeNullable(receipt.challengeResolutionFingerprint)
                 data.writeNullable(receipt.detail)
             }
             output.toByteArray()
@@ -99,7 +101,8 @@ class EncryptedExternalEffectReceiptRepository(context: Context) : ExternalEffec
 
     private fun decode(bytes: ByteArray): EffectReceipt =
         DataInputStream(ByteArrayInputStream(bytes)).use { data ->
-            require(data.readInt() == VERSION)
+            val version = data.readInt()
+            require(version in 1..VERSION) { "Unsupported external effect receipt version" }
             val actionId = data.readUTF()
             val idempotencyKey = data.readUTF()
             val states = ExternalEffectState.values()
@@ -108,18 +111,55 @@ class EncryptedExternalEffectReceiptRepository(context: Context) : ExternalEffec
             val seconds = data.readLong()
             val nanos = data.readInt()
             require(nanos in 0..999_999_999)
+            val externalReference = data.readNullable()
+            val observationFingerprint = data.readNullable()
+            val challengeId = if (version >= 2) data.readNullable() else null
+            val challengeResolutionFingerprint = if (version >= 2) data.readNullable() else null
+            val detail = data.readNullable()
             val receipt = EffectReceipt(
                 actionId = actionId,
                 idempotencyKey = idempotencyKey,
                 state = states[ordinal],
                 recordedAt = Instant.ofEpochSecond(seconds, nanos.toLong()),
-                externalReference = data.readNullable(),
-                observationFingerprint = data.readNullable(),
-                detail = data.readNullable(),
+                externalReference = externalReference,
+                observationFingerprint = observationFingerprint,
+                challengeId = challengeId,
+                challengeResolutionFingerprint = challengeResolutionFingerprint,
+                detail = detail,
             )
             require(data.available() == 0)
             receipt
         }
+
+    private fun transitionAllowed(
+        previous: ExternalEffectState,
+        next: ExternalEffectState,
+    ): Boolean = when (previous) {
+        ExternalEffectState.UNKNOWN_OUTCOME -> next in setOf(
+            ExternalEffectState.UNKNOWN_OUTCOME,
+            ExternalEffectState.CONFIRMED,
+            ExternalEffectState.REJECTED,
+            ExternalEffectState.FAILED,
+            ExternalEffectState.WAITING_FOR_USER,
+        )
+        ExternalEffectState.USER_CHALLENGE_REQUIRED,
+        ExternalEffectState.WAITING_FOR_USER -> next in setOf(
+            ExternalEffectState.WAITING_FOR_USER,
+            ExternalEffectState.RESUMED,
+            ExternalEffectState.REJECTED,
+            ExternalEffectState.FAILED,
+        )
+        ExternalEffectState.RESUMED -> next in setOf(
+            ExternalEffectState.UNKNOWN_OUTCOME,
+            ExternalEffectState.CONFIRMED,
+            ExternalEffectState.REJECTED,
+            ExternalEffectState.FAILED,
+            ExternalEffectState.WAITING_FOR_USER,
+        )
+        ExternalEffectState.CONFIRMED,
+        ExternalEffectState.REJECTED,
+        ExternalEffectState.FAILED -> false
+    }
 
     private fun DataOutputStream.writeNullable(value: String?) {
         writeBoolean(value != null)
@@ -153,7 +193,7 @@ class EncryptedExternalEffectReceiptRepository(context: Context) : ExternalEffec
         const val ROOT_DIRECTORY = "external-effect-receipts"
         const val RECEIPT_SUFFIX = ".effect"
         const val KEY_ALIAS = "lifeos.external.effects.v1"
-        const val VERSION = 1
+        const val VERSION = 2
         const val MAX_TEXT_CHARS = 16_384
         const val MAX_PLAINTEXT_BYTES = 128 * 1024
         val processMutex = Mutex()
