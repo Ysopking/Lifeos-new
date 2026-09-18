@@ -55,6 +55,62 @@ class FieldForceCalculatorTest {
         assertEquals(-0.4, contradiction.signedMagnitude)
     }
 
+    @Test
+    fun `duplicate evidence does not increase hypothesis support mass`() {
+        val calculator = FieldForceCalculator()
+        val primary = evidence(SourceAuthority.OFFICIAL)
+        val duplicate = primary.copy(
+            id = StableFieldIds.evidence(
+                domain = domain,
+                sourcePhotonId = "duplicate-source",
+                sourceRevision = 1L,
+                semanticKey = "duplicate",
+                ordinal = 0,
+            ),
+            sourcePhotonId = PhotonId("duplicate-source"),
+        )
+        val node = FieldNode.create(domain, FieldNodeKind.STATE, "hypothesis-node")
+        val baseline = FieldHypothesis.create(
+            domainId = domain,
+            semanticKey = "debt.principal",
+            scope = HypothesisScope.DOMAIN,
+            nodeIds = setOf(node.id),
+            evidenceLinks = listOf(
+                HypothesisEvidenceLink(
+                    evidenceId = primary.id,
+                    relation = EvidenceRelationType.SUPPORTS,
+                    weight = 1.0,
+                )
+            ),
+            explanation = "baseline",
+        )
+        val withDuplicate = baseline.copy(
+            evidenceLinks = baseline.evidenceLinks + HypothesisEvidenceLink(
+                evidenceId = duplicate.id,
+                relation = EvidenceRelationType.DUPLICATES,
+                weight = 1.0,
+            )
+        )
+        val evidenceById = mapOf(primary.id to primary, duplicate.id to duplicate)
+        val nodeEnergy = mapOf(node.id to 0.5)
+
+        val baselineForce = calculator.hypothesisForce(
+            baseline,
+            evidenceById,
+            nodeEnergy,
+            context,
+        )
+        val duplicateForce = calculator.hypothesisForce(
+            withDuplicate,
+            evidenceById,
+            nodeEnergy,
+            context,
+        )
+
+        assertEquals(baselineForce.support, duplicateForce.support)
+        assertEquals(baselineForce.total, duplicateForce.total)
+    }
+
     private fun evidence(
         authority: SourceAuthority,
         validity: TemporalValidity = TemporalValidity.UNBOUNDED,
