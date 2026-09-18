@@ -50,8 +50,8 @@ fun interface GoalConvergenceDecisionSource {
         routing: GoalCapabilityResolution,
         sourcePhoton: Photon,
         goalPhotonId: PhotonId,
-        goalPhotonRevision: Long,
-        at: Instant,
+        goalPhotonRevision: Long = 1L,
+        at: Instant = sourcePhoton.provenance.createdAt,
     ): ConvergenceDecisionCheckpoint
 }
 
@@ -66,8 +66,8 @@ class GoalConvergenceDecisionProvider(
         routing: GoalCapabilityResolution,
         sourcePhoton: Photon,
         goalPhotonId: PhotonId,
-        goalPhotonRevision: Long = 1L,
-        at: Instant = sourcePhoton.provenance.createdAt,
+        goalPhotonRevision: Long,
+        at: Instant,
     ): ConvergenceDecisionCheckpoint {
         require(goalPhotonRevision > 0L)
 
