@@ -324,7 +324,17 @@ class FieldConvergenceEngine(
         }
 
         val finalHypotheses = ranked.mapIndexed { index, (hypothesis, energy) ->
-            val breakdown = forceCalculator.hypothesisForce(hypothesis, evidenceById, state.energy.nodeEnergy, request.context)
+            val breakdown = forceCalculator.hypothesisForce(
+                hypothesis,
+                evidenceById,
+                state.energy.nodeEnergy,
+                request.context,
+            )
+            val evidenceQuality = hypothesisEvidenceQuality(
+                hypothesis = hypothesis,
+                evidenceById = evidenceById,
+                context = request.context,
+            )
             val finalState = when {
                 status == ConvergenceStatus.CONVERGED && index == 0 -> HypothesisState.CONVERGED
                 status == ConvergenceStatus.CONVERGED && energy < config.minConvergence -> HypothesisState.REJECTED
@@ -340,8 +350,8 @@ class FieldConvergenceEngine(
                     support = breakdown.nodeCoherence,
                     contradiction = breakdown.contradiction,
                     context = breakdown.context,
-                    temporal = 0.0,
-                    authority = 0.0,
+                    temporal = evidenceQuality.temporal,
+                    authority = evidenceQuality.authority,
                     total = energy,
                 ),
             )
@@ -374,6 +384,37 @@ class FieldConvergenceEngine(
             iterations = state.iteration.index,
             trace = trace,
             snapshot = snapshot,
+        )
+    }
+
+    private data class HypothesisEvidenceQuality(
+        val temporal: Double,
+        val authority: Double,
+    )
+
+    private fun hypothesisEvidenceQuality(
+        hypothesis: FieldHypothesis,
+        evidenceById: Map<EvidenceId, FieldEvidence>,
+        context: FieldContext,
+    ): HypothesisEvidenceQuality {
+        var totalWeight = 0.0
+        var temporal = 0.0
+        var authority = 0.0
+        hypothesis.evidenceLinks
+            .asSequence()
+            .filter { it.relation != EvidenceRelationType.DUPLICATES }
+            .sortedBy { it.evidenceId.value }
+            .forEach { link ->
+                val evidence = evidenceById[link.evidenceId] ?: return@forEach
+                val force = forceCalculator.evidenceForce(evidence, context)
+                totalWeight += link.weight
+                temporal += force.temporalValidity * link.weight
+                authority += force.authority * link.weight
+            }
+        if (totalWeight <= 0.0) return HypothesisEvidenceQuality(0.0, 0.0)
+        return HypothesisEvidenceQuality(
+            temporal = (temporal / totalWeight).coerceIn(0.0, 1.0),
+            authority = (authority / totalWeight).coerceIn(0.0, 1.0),
         )
     }
 
