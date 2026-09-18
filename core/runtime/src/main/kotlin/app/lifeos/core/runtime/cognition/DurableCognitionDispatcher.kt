@@ -88,6 +88,103 @@ class DurableCognitionDispatcher(
         }
     }
 
+    suspend fun dispatchBatch(items: List<CognitiveWorkItem>): List<DurableCognitiveDispatchResult> {
+        if (items.isEmpty()) return emptyList()
+
+        data class Prepared(
+            val index: Int,
+            val item: CognitiveWorkItem,
+            val draft: TaskDraft,
+            val key: CognitiveProcessingKey,
+            val startedHere: Boolean,
+        )
+
+        val fixed = arrayOfNulls<DurableCognitiveDispatchResult>(items.size)
+        val prepared = mutableListOf<Prepared>()
+
+        items.forEachIndexed { index, item ->
+            val photonId = item.photonId
+            val revision = item.photonRevision
+            if (photonId == null || revision == null) {
+                fixed[index] = DurableCognitiveDispatchResult(
+                    item.id,
+                    skippedReason = if (photonId == null) "missing-photon-id" else "missing-photon-revision",
+                )
+                return@forEachIndexed
+            }
+            val draft = TaskDraft(
+                type = TaskType.PROCESS_PHOTON,
+                priority = item.priority.toTaskPriority(),
+                inputPhotonIds = setOf(photonId),
+                inputPhotonRevisions = mapOf(photonId to revision),
+                idempotencyKey = idempotencyKey(item, photonId.value, revision),
+            )
+            val key = CognitiveProcessingKey(
+                deltaId = item.triggeringDeltaId,
+                moduleId = DURABLE_MODULE_ID,
+                operation = DURABLE_OPERATION,
+                inputRevision = revision,
+            )
+            when (ledger.state(key)) {
+                ProcessingState.PROCESSING -> fixed[index] = DurableCognitiveDispatchResult(
+                    item.id,
+                    skippedReason = "already-processing",
+                )
+                ProcessingState.COMMITTED -> prepared += Prepared(index, item, draft, key, false)
+                null -> {
+                    if (ledger.tryStart(key)) {
+                        prepared += Prepared(index, item, draft, key, true)
+                    } else {
+                        fixed[index] = DurableCognitiveDispatchResult(
+                            item.id,
+                            skippedReason = "already-processing",
+                        )
+                    }
+                }
+            }
+        }
+
+        if (prepared.isNotEmpty()) {
+            try {
+                val tasks = admissionController?.submitBatch(prepared.map { it.draft })
+                    ?: prepared.map { taskEngine.submit(it.draft) }
+                prepared.forEachIndexed { preparedIndex, value ->
+                    val task = tasks[preparedIndex]
+                    if (task == null) {
+                        if (value.startedHere) ledger.abort(value.key)
+                        fixed[value.index] = DurableCognitiveDispatchResult(
+                            workId = value.item.id,
+                            skippedReason = BACKPRESSURE_REASON,
+                        )
+                    } else {
+                        if (value.startedHere) {
+                            check(ledger.commit(value.key)) {
+                                "Cognitive durable ledger lost batch processing state"
+                            }
+                        }
+                        fixed[value.index] = DurableCognitiveDispatchResult(
+                            workId = value.item.id,
+                            task = task,
+                        )
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                prepared.filter { it.startedHere }.forEach { ledger.abort(it.key) }
+                throw cancelled
+            } catch (error: Exception) {
+                prepared.filter { it.startedHere }.forEach { ledger.abort(it.key) }
+                throw error
+            }
+        }
+
+        return fixed.mapIndexed { index, result ->
+            result ?: DurableCognitiveDispatchResult(
+                workId = items[index].id,
+                skippedReason = "batch-dispatch-unresolved",
+            )
+        }
+    }
+
     private suspend fun submitDurably(draft: TaskDraft): LifeTask? {
         val controller = admissionController
         return if (controller != null) {
