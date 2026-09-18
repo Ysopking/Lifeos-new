@@ -46,13 +46,19 @@ class DeepSearchEncryptedRepositoryCorruptionDeviceTest {
             )
             assertTrue(repository.append(0L, planned))
 
-            val vault = root.resolve("deep-search-v2/missions.dsmission")
-            assertTrue("Mission vault must exist before corruption", vault.isFile && vault.length() > 0L)
+            val missionRoot = root.resolve("deep-search-v2")
+            val segments = missionRoot.resolve("missions")
+                .walkTopDown()
+                .filter { it.isFile && it.name.startsWith("event-") && it.name.endsWith(".dsmission") }
+                .toList()
+            assertEquals("Exactly one mission segment must exist before corruption", 1, segments.size)
+            val vault = segments.single()
+            assertTrue("Mission segment must contain encrypted data", vault.length() > 0L)
             corruptAtomicFile(vault)
 
             val report = repository.loadReport()
             assertTrue(report.events.isEmpty())
-            assertEquals(listOf("missions.dsmission"), report.unreadableEntries)
+            assertEquals(listOf(vault.relativeTo(missionRoot).path), report.unreadableEntries)
 
             val blocked = runCatching {
                 repository.append(
