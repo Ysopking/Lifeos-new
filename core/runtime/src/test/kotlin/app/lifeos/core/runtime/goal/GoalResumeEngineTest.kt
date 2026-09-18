@@ -245,7 +245,11 @@ class GoalResumeEngineTest {
         val source = source("source-partial-ref", "Erstelle ein Bild.")
         val valid = goalPhoton(source)
         val roleLine = requireNotNull(valid.content.lines().firstOrNull { it.startsWith("action.role.") })
-        val corruptRole = roleLine.substringBeforeLast('|') + "|5"
+        val assignment = roleLine.substringAfter('=').split('|').toMutableList()
+        require(assignment.size >= 7)
+        assignment[5] = ""
+        assignment[6] = "5"
+        val corruptRole = roleLine.substringBefore('=') + "=" + assignment.joinToString("|")
         val target = valid.copy(
             id = PhotonId("goal-partial-ref"),
             content = valid.content.replace(roleLine, corruptRole),
