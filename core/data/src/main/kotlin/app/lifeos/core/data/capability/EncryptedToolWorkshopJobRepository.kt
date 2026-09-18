@@ -78,18 +78,17 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
     }
 
     private fun readEvent(file: File): ToolWorkshopJobEvent {
-        val events = ToolWorkshopJobEventLogCodec.decode(
+        val event = ToolWorkshopJobEventLogCodec.decodeSegment(
             decrypt(file, ToolWorkshopJobEventLogCodec.MAX_PAYLOAD_BYTES)
         )
-        require(events.size == 1)
-        return events.single()
+        return event
     }
 
     private fun writeEvent(file: File, event: ToolWorkshopJobEvent) {
         file.parentFile?.let { check(it.isDirectory || it.mkdirs()) }
         writeEncrypted(
             file,
-            ToolWorkshopJobEventLogCodec.encode(listOf(event)),
+            ToolWorkshopJobEventLogCodec.encodeSegment(event),
             ToolWorkshopJobEventLogCodec.MAX_PAYLOAD_BYTES,
         )
     }
