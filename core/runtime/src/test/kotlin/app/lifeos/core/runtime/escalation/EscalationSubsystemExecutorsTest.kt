@@ -94,7 +94,7 @@ class EscalationSubsystemExecutorsTest {
             source = "escalation-test",
             message = "repeated failure",
         )
-        val authority = MemoryProtectionAuthority()
+        val authority = MemoryProtectionAuthority(at)
         val executor = ProtectionQuarantineEscalationExecutor(
             contexts = ProtectionEscalationContextSource {
                 ProtectionEscalationContext(
@@ -232,7 +232,9 @@ class EscalationSubsystemExecutorsTest {
         )
     }
 
-    private class MemoryProtectionAuthority : ProtectionEscalationAuthority {
+    private class MemoryProtectionAuthority(
+        private val now: Instant,
+    ) : ProtectionEscalationAuthority {
         private var current = RuntimeProtectionState.normal()
         var quarantineCalls: Int = 0
             private set
@@ -252,7 +254,7 @@ class EscalationSubsystemExecutorsTest {
                 affectedNodes = nodes.mapTo(linkedSetOf()) {
                     app.lifeos.core.model.health.ProtectionNodeRef(it.value)
                 },
-                enteredAt = at,
+                enteredAt = now,
                 lastVerifiedAt = null,
                 actor = ProtectionActor.ESCALATION,
                 provenance = provenance,
