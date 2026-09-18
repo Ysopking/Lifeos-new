@@ -42,7 +42,10 @@ class SemanticActionRecoveryDeviceTest {
         )
 
         val submission = app.kernel.persistUserUtterance(user)
-        val execution = requireNotNull(submission.actionGraphExecution)
+        val execution = requireNotNull(submission.actionGraphExecution) {
+            "Semantic action submission failed before graph result; languageFailure=" +
+                submission.languageFailure.orEmpty()
+        }
         val executionDiagnostic = execution.executions.joinToString(";") { node ->
             val knowledgeFailure = (node.dispatch?.localKnowledge as? LocalKnowledgeExecutionResult.Failed)
                 ?.message
