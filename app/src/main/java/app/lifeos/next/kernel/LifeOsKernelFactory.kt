@@ -530,7 +530,9 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "goal-plan-ledger"
                         override suspend fun probe(): StoreStatus {
-                            val report = goalPlanRepository.loadReport()
+                            val report = bootReadSession.readOnce("goal-plan-ledger") {
+                                goalPlanRepository.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.isCorrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
@@ -541,18 +543,20 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "photon-store"
                         override suspend fun probe(): StoreStatus {
-                            val report = store.loadReport()
+                            val failures = bootReadSession.readFailures(BootSnapshotSource.PHOTON)
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableFiles.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
-                                message = if (report.unreadableFiles.isEmpty()) null else "unreadable:${report.unreadableFiles.size}",
+                                state = if (failures.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
+                                message = if (failures.isEmpty()) null else "unreadable:${failures.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "learning-adaptation-ledger"
                         override suspend fun probe(): StoreStatus {
-                            val report = learningAdaptationRepository.loadReport()
+                            val report = bootReadSession.readOnce("learning-adaptation-ledger") {
+                                learningAdaptationRepository.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
@@ -563,14 +567,18 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "thought-matrix-state-store"
                         override suspend fun probe(): StoreStatus {
-                            thoughtMatrixStateRepository.load()
+                            bootReadSession.readOnce("thought-matrix-state-store") {
+                                thoughtMatrixStateRepository.load()
+                            }
                             return StoreStatus(storeId, StoreState.HEALTHY)
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "thought-graph-delta-store"
                         override suspend fun probe(): StoreStatus {
-                            val report = thoughtGraphDeltaRepository.loadReport()
+                            val report = bootReadSession.readOnce("thought-graph-delta-store") {
+                                thoughtGraphDeltaRepository.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
@@ -581,7 +589,9 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "field-thought-graph-projection-outbox"
                         override suspend fun probe(): StoreStatus {
-                            val report = fieldThoughtGraphProjectionOutbox.loadReport()
+                            val report = bootReadSession.readOnce("field-thought-graph-projection-outbox") {
+                                fieldThoughtGraphProjectionOutbox.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
@@ -592,15 +602,21 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "task-store"
                         override suspend fun probe(): StoreStatus {
-                            val now = Instant.now()
-                            taskRepository.listRunnable(now, limit = 1)
-                            taskRepository.listExpiredLeases(now, limit = 1)
-                            return StoreStatus(storeId, StoreState.HEALTHY)
+                            val failures = bootReadSession.readFailures(BootSnapshotSource.TASK)
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (failures.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
+                                message = if (failures.isEmpty()) null else "unreadable:${failures.size}",
+                            )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "runtime-protection-store"
-                        override suspend fun probe(): StoreStatus = when (val protection = protectionRepository.load()) {
+                        override suspend fun probe(): StoreStatus = when (
+                            val protection = bootReadSession.readOnce("runtime-protection-store") {
+                                protectionRepository.load()
+                            }
+                        ) {
                             ProtectionStateLoadResult.Missing -> StoreStatus(storeId = storeId, state = StoreState.HEALTHY)
                             is ProtectionStateLoadResult.Loaded -> StoreStatus(
                                 storeId = storeId,
@@ -613,18 +629,20 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "field-snapshot-store"
                         override suspend fun probe(): StoreStatus {
-                            val report = fieldSnapshotRepository.loadReport()
+                            val failures = bootReadSession.readFailures(BootSnapshotSource.FIELD)
                             return StoreStatus(
                                 storeId = storeId,
-                                state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
-                                message = if (report.unreadableEntries.isEmpty()) null else "unreadable:${report.unreadableEntries.size}",
+                                state = if (failures.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
+                                message = if (failures.isEmpty()) null else "unreadable:${failures.size}",
                             )
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "world-formula-snapshot-store"
                         override suspend fun probe(): StoreStatus {
-                            val report = worldFormulaSnapshotRepository.loadReport()
+                            val report = bootReadSession.readOnce("world-formula-snapshot-store") {
+                                worldFormulaSnapshotRepository.loadReport()
+                            }
                             return StoreStatus(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
@@ -635,15 +653,22 @@ class LifeOsKernelFactory(
                     object : StoreProbe {
                         override val storeId: String = "evolution-store"
                         override suspend fun probe(): StoreStatus {
-                            evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
+                            bootReadSession.readOnce("evolution-store") {
+                                evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
+                            }
                             return StoreStatus(storeId, StoreState.HEALTHY)
                         }
                     },
                     object : StoreProbe {
                         override val storeId: String = "generated-tool-state-store"
                         override suspend fun probe(): StoreStatus {
-                            generatedToolStateRepository.loadAll()
-                            return StoreStatus(storeId, StoreState.HEALTHY)
+                            bootReadSession.snapshot()
+                            val failures = bootReadSession.readFailures(BootSnapshotSource.TOOL)
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (failures.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
+                                message = if (failures.isEmpty()) null else "unreadable:${failures.size}",
+                            )
                         }
                     },
                     object : StoreProbe {
