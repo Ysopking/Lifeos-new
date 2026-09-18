@@ -453,7 +453,7 @@ class ArtifactCoordinator(
             append('}')
         } ?: append("null")
         append(",\"semanticPlanFingerprint\":")
-        revision.semanticPlanFingerprint?.let(::appendJson) ?: append("null")
+        revision.semanticPlanFingerprint?.let { fingerprint -> appendJson(fingerprint) } ?: append("null")
         append(",\"validation\":{")
         append("\"minimumDistinctModules\":")
         append(revision.validation.profile.minimumDistinctModules)
