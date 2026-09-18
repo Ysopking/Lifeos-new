@@ -117,7 +117,7 @@ internal class ClauseSyntaxAnalyzer {
             "und", "oder", "aber", "danach", "anschließend", "anschliessend",
             "and", "or", "but", "then",
         )
-        val QUOTE_MARKERS = setOf(""", "„", "“", "”", "«", "»")
+        val QUOTE_MARKERS = setOf("\"", "„", "“", "”", "«", "»")
     }
 }
 
