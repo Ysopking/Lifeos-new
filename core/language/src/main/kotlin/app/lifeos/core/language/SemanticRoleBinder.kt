@@ -12,10 +12,16 @@ class SemanticRoleBinder {
         clause: SemanticClause,
         contract: PredicateActionContract,
         references: List<ResolvedReference>,
+        tokenStart: Int = clause.tokenStart,
+        tokenEndExclusive: Int = clause.tokenEndExclusive,
     ): MutableMap<SemanticRole, SemanticValue> {
+        require(tokenStart >= clause.tokenStart)
+        require(tokenEndExclusive <= clause.tokenEndExclusive)
+        require(tokenEndExclusive > tokenStart)
         val roles = linkedMapOf<SemanticRole, SemanticValue>()
 
         clause.entities
+            .filter { it.tokenStart < tokenEndExclusive && it.tokenEndExclusive > tokenStart }
             .sortedBy { it.tokenStart }
             .forEach { entity ->
                 when (entity.type) {
@@ -31,6 +37,7 @@ class SemanticRoleBinder {
             }
 
         clause.quantities
+            .filter { it.tokenStart < tokenEndExclusive && it.tokenEndExclusive > tokenStart }
             .sortedBy { it.tokenStart }
             .firstOrNull()
             ?.let { quantity ->
