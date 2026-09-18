@@ -3,8 +3,13 @@ package app.lifeos.core.runtime.life
 import app.lifeos.core.model.CausalTraceId
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexOrder
+import app.lifeos.core.model.PhotonIndexQuery
+import app.lifeos.core.model.PhotonIndexReport
 import app.lifeos.core.model.PhotonLoadReport
-import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.PhotonRevisionRef
+import app.lifeos.core.model.PhotonRevisionWriteResult
+import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.CausalDerivedPhotonPersistence
 import java.time.Instant
@@ -229,12 +234,101 @@ class FuturePlanningRuntimeTest {
         )
     }
 
-    private class MemoryPhotonRepository : PhotonRepository {
-        private val data = linkedMapOf<PhotonId, Photon>()
-        override suspend fun save(photon: Photon) { data[photon.id] = photon }
-        override suspend fun load(id: PhotonId): Photon? = data[id]
-        override suspend fun loadReport(): PhotonLoadReport = PhotonLoadReport(data.values.toList(), emptyList())
+    private class MemoryPhotonRepository : RevisionedPhotonRepository {
+        private val data = linkedMapOf<PhotonRevisionRef, Photon>()
+
+        override suspend fun save(photon: Photon) {
+            val ref = PhotonRevisionRef(photon.id, photon.revision)
+            data[ref]?.let { existing -> require(existing == photon) }
+            data[ref] = photon
+        }
+
+        override suspend fun load(id: PhotonId): Photon? =
+            data.values.filter { it.id == id }.maxByOrNull { it.revision }
+
+        override suspend fun load(ref: PhotonRevisionRef): Photon? = data[ref]
+
+        override suspend fun latestRef(id: PhotonId): PhotonRevisionRef? =
+            data.keys.filter { it.photonId == id }.maxByOrNull { it.revision }
+
+        override suspend fun saveRevision(
+            photon: Photon,
+            expectedPreviousRevision: Long?,
+        ): PhotonRevisionWriteResult {
+            val previous = load(photon.id)
+            if (previous == photon) {
+                return PhotonRevisionWriteResult.Idempotent(photon, previous)
+            }
+            if (previous?.revision != expectedPreviousRevision) {
+                return PhotonRevisionWriteResult.Conflict(
+                    photon = photon,
+                    previous = previous,
+                    reason = "test-revision-conflict",
+                )
+            }
+            save(photon)
+            return if (previous == null) {
+                PhotonRevisionWriteResult.Created(photon)
+            } else {
+                PhotonRevisionWriteResult.Advanced(photon, previous)
+            }
+        }
+
+        override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> {
+            val latest = data.values
+                .groupBy { it.id }
+                .mapValues { (_, photons) -> photons.maxBy { it.revision } }
+                .values
+                .filter { photon ->
+                    (!query.latestOnly || latestRef(photon.id)?.revision == photon.revision) &&
+                        (query.ids.isEmpty() || photon.id in query.ids) &&
+                        (query.phases.isEmpty() || photon.phase in query.phases) &&
+                        (query.mimeTypes.isEmpty() || photon.mimeType in query.mimeTypes) &&
+                        photon.tags.containsAll(query.allTags)
+                }
+            val ordered = when (query.order) {
+                PhotonIndexOrder.IDENTITY ->
+                    latest.sortedWith(compareBy<Photon>({ it.id.value }, { it.revision }))
+                PhotonIndexOrder.NEWEST_FIRST ->
+                    latest.sortedByDescending { it.provenance.createdAt }
+                PhotonIndexOrder.OLDEST_FIRST ->
+                    latest.sortedBy { it.provenance.createdAt }
+                PhotonIndexOrder.HIGHEST_SEMANTIC_MASS ->
+                    latest.sortedByDescending { it.semanticMass }
+                PhotonIndexOrder.HIGHEST_CONFIDENCE ->
+                    latest.sortedByDescending { it.confidence }
+            }.map { PhotonRevisionRef(it.id, it.revision) }
+
+            val after = query.after?.lastRef
+            val remaining = if (after == null) {
+                ordered
+            } else {
+                val index = ordered.indexOf(after)
+                if (index < 0) emptyList() else ordered.drop(index + 1)
+            }
+            return remaining.take(query.limit)
+        }
+
+        override suspend fun indexReport(): PhotonIndexReport {
+            val latestRefs = data.keys
+                .groupBy { it.photonId }
+                .mapValues { (_, refs) -> refs.maxBy { it.revision } }
+            return PhotonIndexReport(
+                formatVersion = 1,
+                entryCount = data.size,
+                livePhotonCount = latestRefs.size,
+                tombstonedPhotonCount = 0,
+                latestRefs = latestRefs,
+            )
+        }
+
+        override suspend fun loadReport(): PhotonLoadReport =
+            PhotonLoadReport(data.values.toList(), emptyList())
+
         override suspend fun loadAll(): List<Photon> = data.values.toList()
-        override suspend fun delete(id: PhotonId) { data.remove(id) }
+
+        override suspend fun delete(id: PhotonId) {
+            data.keys.filter { it.photonId == id }.toList().forEach(data::remove)
+        }
     }
 }
