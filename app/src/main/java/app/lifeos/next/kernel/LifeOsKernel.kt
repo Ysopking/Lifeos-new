@@ -181,6 +181,11 @@ class LifeOsKernel internal constructor(
         },
     )
 
+    private val semanticActionGraphRouter = SemanticActionGraphRouter(
+        capabilities = goalCapabilityRouter,
+        dispatcher = goalActionDispatcher,
+    )
+
     fun start(): Job = synchronized(startLock) {
         bootstrapJob ?: scope.launch {
             bootstrap()
@@ -381,14 +386,13 @@ class LifeOsKernel internal constructor(
             val effectiveRouting = resumed?.routing ?: routing
             val effectiveSource = resumed?.sourcePhoton ?: photon
             val effectiveGoalPhotonId = resumed?.resumedGoal?.photon?.id ?: goalPhoton.photon.id
-            val actions = goalActionDispatcher.execute(
-                GoalActionContext(
-                    goal = effectiveGoal,
-                    routing = effectiveRouting,
-                    sourcePhoton = effectiveSource,
-                    goalPhotonId = effectiveGoalPhotonId,
-                )
+            val actionGraphExecution = semanticActionGraphRouter.execute(
+                goal = effectiveGoal,
+                sourcePhoton = effectiveSource,
+                goalPhotonId = effectiveGoalPhotonId,
+                goalPhotonRevision = resumed?.resumedGoal?.photon?.revision ?: goalPhoton.photon.revision,
             )
+            val actions = actionGraphExecution.primaryDispatch ?: GoalActionDispatchResult()
 
             LanguageSubmissionResult(
                 source = source,
@@ -404,6 +408,7 @@ class LifeOsKernel internal constructor(
                 localSchedule = actions.localSchedule,
                 localCommunication = actions.localCommunication,
                 externalEffect = actions.externalEffect,
+                actionGraphExecution = actionGraphExecution,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
