@@ -313,7 +313,7 @@ class PredicateFrameParser(
         if (words.isEmpty()) return null
         val raw = words.joinToString(" ") { tokens[it].original }
         val normalized = words.joinToString(" ") { tokens[it].normalized }
-        val deictic = normalized.split(' ').any { it in REFERENCE_PRONOUNS }
+        val deictic = normalized in REFERENCE_PRONOUNS
         return SemanticValue(
             rawText = raw,
             normalized = normalized,
