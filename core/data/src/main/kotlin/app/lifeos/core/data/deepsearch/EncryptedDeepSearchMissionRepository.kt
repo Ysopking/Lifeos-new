@@ -88,7 +88,7 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
     }
 
     private fun requireReadableEventHistory() {
-        eventFiles().forEach(::readEvent)
+        eventFiles().forEach { file -> readEvent(file) }
     }
 
     private fun writeEvent(file: File, event: DeepSearchMissionEvent) {
