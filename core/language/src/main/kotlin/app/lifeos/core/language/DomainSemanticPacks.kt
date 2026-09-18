@@ -239,6 +239,27 @@ class DomainSemanticInterpreter(
                     }
             }
 
+            if (claims.isEmpty() && notices.isNotEmpty()) {
+                localQuantities
+                    .filter { it.pack == DomainSemanticPackId.FINANCE }
+                    .forEach { amount ->
+                        val source = context.quantities.firstOrNull { quantityNodes[it]?.id == amount.id }
+                        val amountStart = source?.span?.start ?: Int.MAX_VALUE
+                        notices
+                            .minByOrNull { (documentEntity, _) ->
+                                kotlin.math.abs(tokenCharStart(documentEntity) - amountStart)
+                            }
+                            ?.second
+                            ?.let { document ->
+                                relations += relation(
+                                    document,
+                                    amount,
+                                    DomainSemanticRelationType.HAS_AMOUNT,
+                                )
+                            }
+                    }
+            }
+
             deadlines.forEach { (deadlineEntity, deadlineNode) ->
                 nearestBefore(deadlineEntity, notices)?.let { document ->
                     relations += relation(document, deadlineNode, DomainSemanticRelationType.HAS_DEADLINE)
