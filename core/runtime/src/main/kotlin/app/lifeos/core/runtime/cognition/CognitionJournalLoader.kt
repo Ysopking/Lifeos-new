@@ -1,6 +1,8 @@
 package app.lifeos.core.runtime.cognition
 
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonIndexCursor
+import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.PhotonRevisionRef
@@ -11,16 +13,12 @@ internal suspend fun loadCognitionJournalPhotons(
     kind: CognitionJournalKind,
 ): List<Photon> {
     if (repository is RevisionedPhotonRepository) {
-        val refs = repository.query(
-            PhotonIndexQuery(
-                mimeTypes = setOf(COGNITION_JOURNAL_MIME),
-                allTags = setOf(
-                    COGNITION_JOURNAL_ROOT_TAG,
-                    "cognition-journal-kind:${kind.tag}",
-                ),
-                latestOnly = true,
-                limit = CognitionJournalIndexSnapshot.MAX_ENTRIES,
-            )
+        val refs = queryCognitionJournalRefs(
+            repository = repository,
+            allTags = setOf(
+                COGNITION_JOURNAL_ROOT_TAG,
+                "cognition-journal-kind:${kind.tag}",
+            ),
         )
         return loadCognitionJournalPhotons(repository, refs)
             .sortedBy { it.id.value }
@@ -38,13 +36,9 @@ internal suspend fun loadAllCognitionJournalPhotons(
     repository: PhotonRepository,
 ): List<Photon> {
     if (repository is RevisionedPhotonRepository) {
-        val refs = repository.query(
-            PhotonIndexQuery(
-                mimeTypes = setOf(COGNITION_JOURNAL_MIME),
-                allTags = setOf(COGNITION_JOURNAL_ROOT_TAG),
-                latestOnly = true,
-                limit = CognitionJournalIndexSnapshot.MAX_ENTRIES,
-            )
+        val refs = queryCognitionJournalRefs(
+            repository = repository,
+            allTags = setOf(COGNITION_JOURNAL_ROOT_TAG),
         )
         return loadCognitionJournalPhotons(repository, refs)
     }
@@ -52,6 +46,35 @@ internal suspend fun loadAllCognitionJournalPhotons(
     return repository.loadReport().photons.filter {
         it.mimeType == COGNITION_JOURNAL_MIME &&
             COGNITION_JOURNAL_ROOT_TAG in it.tags
+    }
+}
+
+private suspend fun queryCognitionJournalRefs(
+    repository: RevisionedPhotonRepository,
+    allTags: Set<String>,
+): List<PhotonRevisionRef> {
+    val refs = mutableListOf<PhotonRevisionRef>()
+    var cursor: PhotonIndexCursor? = null
+    while (true) {
+        val page = repository.query(
+            PhotonIndexQuery(
+                mimeTypes = setOf(COGNITION_JOURNAL_MIME),
+                allTags = allTags,
+                latestOnly = true,
+                order = PhotonIndexOrder.IDENTITY,
+                after = cursor,
+                limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
+            )
+        )
+        refs += page
+        require(refs.size <= CognitionJournalIndexSnapshot.MAX_ENTRIES) {
+            "Cognition journal query exceeds bounded capacity"
+        }
+        if (page.size < PhotonIndexQuery.HARD_PAGE_LIMIT) return refs
+        cursor = PhotonIndexCursor(
+            order = PhotonIndexOrder.IDENTITY,
+            lastRef = page.last(),
+        )
     }
 }
 
