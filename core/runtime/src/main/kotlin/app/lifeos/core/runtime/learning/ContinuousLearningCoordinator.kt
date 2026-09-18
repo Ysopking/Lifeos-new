@@ -4,6 +4,7 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.task.TaskDraft
 import app.lifeos.core.model.task.TaskPriority
 import app.lifeos.core.model.task.TaskType
+import app.lifeos.core.runtime.LifeOsGoldLoopProjectionRuntimeRegistry
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.CapabilityGapDetector as RuntimeCapabilityGapDetector
 import app.lifeos.core.runtime.capability.CapabilityRequirement
@@ -327,6 +328,8 @@ class ContinuousLearningCoordinator(
             for (event in events) {
                 val result = processEvent(event)
                 state = persistAdvance(state, event, result.eventFingerprint)
+                LifeOsGoldLoopProjectionRuntimeRegistry.currentOrNull()
+                    ?.observeCommittedLearning(event)
                 processed += result
             }
         }
