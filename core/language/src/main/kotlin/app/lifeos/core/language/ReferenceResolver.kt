@@ -1,6 +1,7 @@
 package app.lifeos.core.language
 
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
 import java.time.Duration
 
 class ReferenceExpressionExtractor {
@@ -166,21 +167,41 @@ class ReferenceExpressionExtractor {
  */
 class ReferenceResolver {
     fun resolve(expression: ReferenceExpression, context: LanguageContext): ResolvedReference {
-        val candidates = rank(expression, context)
-        val best = candidates.firstOrNull()
+        val revisionCandidates = rankRevisionRefs(expression, context)
+        val best = revisionCandidates.firstOrNull()
+        val compatibility = revisionCandidates
+            .groupBy { it.first.photonId }
+            .map { (id, scored) -> id to scored.maxOf { it.second } }
+            .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
         return ResolvedReference(
             expression = expression,
-            targetPhotonId = best?.first,
+            targetPhotonId = best?.first?.photonId,
             score = best?.second ?: 0.0,
-            alternatives = candidates.drop(1).take(3),
+            alternatives = compatibility
+                .filterNot { it.first == best?.first?.photonId }
+                .take(3),
+            targetPhotonRef = best?.first,
+            revisionAlternatives = revisionCandidates.drop(1).take(3),
         )
     }
 
-    fun rank(expression: ReferenceExpression, context: LanguageContext): List<Pair<PhotonId, Double>> {
+    fun rank(expression: ReferenceExpression, context: LanguageContext): List<Pair<PhotonId, Double>> =
+        rankRevisionRefs(expression, context)
+            .groupBy { it.first.photonId }
+            .map { (id, scored) -> id to scored.maxOf { it.second } }
+            .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+
+    fun rankRevisionRefs(
+        expression: ReferenceExpression,
+        context: LanguageContext,
+    ): List<Pair<PhotonRevisionRef, Double>> {
         if (expression.kind == ReferenceKind.EXPLICIT_ID) {
             val id = PhotonId(expression.rawText)
-            val found = context.items.any { it.photonId == id }
-            return if (found) listOf(id to 1.0) else emptyList()
+            val found = context.items
+                .filter { it.photonId == id }
+                .mapNotNull { item -> item.revisionRef?.let { it to 1.0 } }
+                .maxByOrNull { it.first.revision }
+            return found?.let(::listOf).orEmpty()
         }
         if (context.items.isEmpty()) return emptyList()
 
@@ -191,11 +212,18 @@ class ReferenceResolver {
         }
 
         return candidates
-            .map { item -> item.photonId to score(item, expression, context) }
+            .mapNotNull { item ->
+                val ref = item.revisionRef ?: return@mapNotNull null
+                ref to score(item, expression, context)
+            }
             .filter { it.second > 0.0 }
             .groupBy { it.first }
-            .map { (id, scored) -> id to scored.maxOf { it.second } }
-            .sortedWith(compareByDescending<Pair<PhotonId, Double>> { it.second }.thenBy { it.first.value })
+            .map { (ref, scored) -> ref to scored.maxOf { it.second } }
+            .sortedWith(
+                compareByDescending<Pair<PhotonRevisionRef, Double>> { it.second }
+                    .thenByDescending { it.first.revision }
+                    .thenBy { it.first.photonId.value }
+            )
     }
 
     private fun score(item: LanguageContextItem, expression: ReferenceExpression, context: LanguageContext): Double {
