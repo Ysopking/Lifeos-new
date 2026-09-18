@@ -187,6 +187,13 @@ class ExtensionHotSwapCoordinator(
         require(!authorization.activationAllowed)
 
         snapshots.save(targetSnapshot)
+
+        val finalAuthorization = hotSwapAuthority.authorize(subject, current, targetSnapshot)
+            ?: return ExtensionHotSwapResult.Blocked("extension-hotswap-authorization-revoked")
+        require(finalAuthorization == authorization) {
+            "Extension HotSwap authorization changed before head publication"
+        }
+
         val next = ExtensionRegistryHead.create(
             revision = current.revision + 1L,
             snapshot = targetSnapshot,
@@ -222,6 +229,12 @@ class ExtensionHotSwapCoordinator(
         require(authorization.expectedHeadFingerprint == current.fingerprint)
         require(authorization.restoreSnapshotId == restore.id)
         require(authorization.restoreSnapshotFingerprint == restore.fingerprint())
+
+        val finalAuthorization = rollbackAuthority.authorize(current, restore)
+            ?: return ExtensionHotSwapResult.Blocked("extension-rollback-authorization-revoked")
+        require(finalAuthorization == authorization) {
+            "Extension rollback authorization changed before head publication"
+        }
 
         val next = ExtensionRegistryHead.create(
             revision = current.revision + 1L,
