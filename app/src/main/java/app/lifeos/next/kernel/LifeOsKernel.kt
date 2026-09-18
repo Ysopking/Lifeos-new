@@ -212,6 +212,7 @@ class LifeOsKernel internal constructor(
             val response = fastConversationReply(photon.content, context)
             val assistantPhoton = assistantPhotonFor(photon, response, fast = true)
             val assistant = persistWithoutCognition(assistantPhoton, PhotonIngressMode.DERIVED)
+            enqueueFastConversationBackground(photon)
             ConversationTurnResult(
                 route = route,
                 responseText = response,
@@ -233,6 +234,41 @@ class LifeOsKernel internal constructor(
                 assistant = assistant,
                 language = language,
             )
+        }
+    }
+
+    private fun enqueueFastConversationBackground(photon: Photon) {
+        scope.launch {
+            try {
+                continuousCognition.submit(
+                    delta = PhotonDelta(
+                        deltaId = CognitiveDeltaIdentity.photonRevision(photon.id, photon.revision),
+                        source = "kernel-fast-chat-background",
+                        photonId = photon.id,
+                        revisionAfter = photon.revision,
+                        type = PhotonDeltaType.CREATED,
+                        importanceHint = photon.semanticMass,
+                        timestamp = photon.provenance.createdAt,
+                        correlationId = photon.id.value,
+                    ),
+                    priority = CognitivePriority.BACKGROUND,
+                    salience = SalienceVector(
+                        novelty = 0.35,
+                        relevance = 0.35,
+                        urgency = 0.0,
+                        semanticMass = photon.semanticMass,
+                        confidenceImpact = photon.confidence,
+                        goalAffinity = 0.15,
+                    ),
+                    targetModules = setOf("Gedankenmatrix"),
+                    budget = FAST_CHAT_BACKGROUND_BUDGET,
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // Fast response stays authoritative; durable cognition reconciliation can recover
+                // persisted conversation Photons if background admission is temporarily unavailable.
+            }
         }
     }
 
@@ -828,6 +864,12 @@ class LifeOsKernel internal constructor(
     private companion object {
         const val PRIVATE_OWNER_ACTOR_ID = "private-owner"
         const val OWNER_ASSET_REVIEW_PENDING = "awaiting-owner-review"
+        val FAST_CHAT_BACKGROUND_BUDGET = CognitiveWorkBudget(
+            maxDurationMs = 5_000,
+            maxModuleInvocations = 4,
+            maxNewPhotons = 4,
+            maxNetworkCalls = 0,
+        )
         val LIVE_SUBMISSION_BUDGET = CognitiveWorkBudget(
             maxDurationMs = 30_000,
             maxModuleInvocations = 16,
