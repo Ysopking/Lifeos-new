@@ -3,6 +3,8 @@ package app.lifeos.core.runtime.life
 import app.lifeos.core.model.CanonicalPhotonState
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
@@ -210,9 +212,17 @@ class PhotonBackedMemoryAccessLedgerStore(
     }
 
     suspend fun snapshot(): MemoryAccessLedger {
-        val events = photons.loadAll()
-            .filter { "memory-access-event" in it.tags }
-            .map(::decodeEvent)
+        val events = if (photons is RevisionedPhotonRepository) {
+            photons.query(
+                PhotonIndexQuery(
+                    allTags = setOf("memory-access-event"),
+                    latestOnly = true,
+                    limit = 250_000,
+                )
+            ).mapNotNull { photons.load(it) }
+        } else {
+            photons.loadAll().filter { "memory-access-event" in it.tags }
+        }.map(::decodeEvent)
             .sortedWith(compareBy<AccessEvent> { it.at }.thenBy { it.id.value })
         var ledger = MemoryAccessLedger()
         events.forEach { event ->
@@ -423,6 +433,8 @@ class DurableLifeMemoryRuntime(
     @Volatile
     private var latest: DurableLifeMemorySnapshot? = null
 
+    private val authoritativeById = linkedMapOf<PhotonId, Photon>()
+
     fun current(): DurableLifeMemorySnapshot? = latest
 
     suspend fun rebuild(now: Instant): DurableLifeMemorySnapshot {
@@ -431,6 +443,8 @@ class DurableLifeMemoryRuntime(
         val authoritative = ActiveLifeSourceProjection.filter(storedAuthoritative, all)
         val graphEvidence = authoritative.filterNot { "causal-ledger" in it.tags }
         val memoryEvidence = graphEvidence.filterNot { "life-source-gap" in it.tags }
+        authoritativeById.clear()
+        authoritativeById.putAll(memoryEvidence.associateBy { it.id })
         val durableAccess = accessStore.snapshot()
         val effectiveAccess = rebuildableRelevance(durableAccess, memoryEvidence, all)
         val graph = graphProjector.project(graphEvidence)
@@ -473,7 +487,12 @@ class DurableLifeMemoryRuntime(
         committedAt: Instant,
     ): Pair<DurableLifeIngestCommit, DurableLifeMemorySnapshot> {
         val commit = ingestor.ingest(descriptor, records, nextPosition, authorized, committedAt)
-        return commit to rebuild(committedAt)
+        val changed = buildList {
+            addAll(commit.evidencePhotons)
+            commit.permissionGap?.let(::add)
+        }.filterNot { "life-source-gap" in it.tags }
+        val snapshot = if (latest == null) rebuild(committedAt) else applyDelta(changed, committedAt)
+        return commit to snapshot
     }
 
     suspend fun recordUnavailable(
@@ -481,7 +500,8 @@ class DurableLifeMemoryRuntime(
         observedAt: Instant,
     ): Pair<Photon, DurableLifeMemorySnapshot> {
         val gap = ingestor.recordUnavailable(descriptor, observedAt)
-        return gap to rebuild(observedAt)
+        val snapshot = latest ?: rebuild(observedAt)
+        return gap to snapshot
     }
 
     suspend fun recordAccess(
@@ -502,7 +522,52 @@ class DurableLifeMemoryRuntime(
             futureRelevance = futureRelevance,
             seinRelevance = seinRelevance,
         )
-        return rebuild(at)
+        val current = latest ?: return rebuild(at)
+        val target = authoritativeById[photonId] ?: return current
+        val access = current.accessLedger.recordAccess(
+            photonId = photonId,
+            at = at,
+            goalRelevance = goalRelevance,
+            relationshipWeight = relationshipWeight,
+            futureRelevance = futureRelevance,
+            seinRelevance = seinRelevance,
+        )
+        return applyDelta(listOf(target), at, access)
+    }
+
+    suspend fun applyDelta(
+        changed: Collection<Photon>,
+        at: Instant,
+        accessLedger: MemoryAccessLedger? = null,
+    ): DurableLifeMemorySnapshot {
+        val current = latest ?: return rebuild(at)
+        changed.forEach { photon ->
+            if (isLifeMemoryManagementPhoton(photon) || "life-source-gap" in photon.tags) return@forEach
+            authoritativeById[photon.id] = photon
+        }
+        val graphEvidence = authoritativeById.values.filterNot { "causal-ledger" in it.tags }
+        val effectiveAccess = accessLedger ?: current.accessLedger
+        val graph = graphProjector.project(graphEvidence)
+        val raw = memoryEngine.projectDelta(
+            current = current.memory,
+            changed = changed.filter { it.id in authoritativeById },
+            accessChanges = effectiveAccess,
+            now = at,
+        )
+        val memory = stabilize(raw, authoritativeById.values.toList())
+        memory.derivedPhotons.forEach { saveIdempotent(it) }
+        return DurableLifeMemorySnapshot(
+            graph = graph,
+            memory = memory,
+            accessLedger = effectiveAccess,
+            authoritativePhotonCount = authoritativeById.size,
+            fingerprint = StableCognitiveIds.fingerprint(
+                "durable-life-memory-snapshot/v4",
+                graph.fingerprint,
+                memory.fingerprint,
+                authoritativeById.size.toString(),
+            ),
+        ).also { latest = it }
     }
 
     private fun stabilize(
