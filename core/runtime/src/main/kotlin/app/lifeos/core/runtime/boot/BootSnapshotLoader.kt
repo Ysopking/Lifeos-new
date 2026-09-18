@@ -260,6 +260,8 @@ class BootReadSession(
     @Volatile
     private var cached: DurableBootSnapshot? = null
 
+    private val extraReads = mutableMapOf<String, Any?>()
+
     suspend fun snapshot(): DurableBootSnapshot {
         cached?.let { return it }
         return mutex.withLock {
@@ -270,8 +272,21 @@ class BootReadSession(
     suspend fun readFailures(source: BootSnapshotSource): List<BootSnapshotReadFailure> =
         snapshot().readFailures.filter { it.source == source }
 
+    @Suppress("UNCHECKED_CAST")
+    suspend fun <T> readOnce(
+        key: String,
+        read: suspend () -> T,
+    ): T {
+        require(key.isNotBlank())
+        return mutex.withLock {
+            if (key in extraReads) return@withLock extraReads.getValue(key) as T
+            read().also { extraReads[key] = it }
+        }
+    }
+
     suspend fun invalidateForTestOnly() = mutex.withLock {
         cached = null
+        extraReads.clear()
     }
 }
 
