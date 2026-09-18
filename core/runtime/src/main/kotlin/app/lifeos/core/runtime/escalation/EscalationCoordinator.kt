@@ -136,24 +136,57 @@ class EscalationCoordinator(
         }
     }
 
+    suspend fun resumeActive(
+        nodeId: HealthNodeId,
+    ): List<EscalationCoordinationResult> {
+        val snapshots = ledger.active()
+            .filter { it.nodeId == nodeId && it.state != EscalationState.OPEN }
+        return buildList {
+            for (candidate in snapshots) {
+                val mutex = locks.computeIfAbsent(candidate.escalationId) { Mutex() }
+                add(
+                    mutex.withLock {
+                        val fresh = requireNotNull(ledger.snapshot(candidate.escalationId)) {
+                            "Active escalation disappeared during resume"
+                        }
+                        if (fresh.terminal) {
+                            EscalationCoordinationResult.ReplayedTerminal(fresh)
+                        } else {
+                            require(fresh.state != EscalationState.OPEN) {
+                                "Undecided escalation cannot resume without its trigger"
+                            }
+                            executeSnapshot(fresh, forceResuming = true)
+                        }
+                    }
+                )
+            }
+        }
+    }
+
     private suspend fun coordinateLocked(
         trigger: EscalationTrigger,
     ): EscalationCoordinationResult {
-        var snapshot = ledger.open(trigger)
+        val decision = policy.decide(trigger)
+        val snapshot = ledger.openDecided(trigger, decision)
         if (snapshot.terminal) {
             return EscalationCoordinationResult.ReplayedTerminal(snapshot)
         }
-
-        if (snapshot.state == EscalationState.OPEN) {
-            val decision = policy.decide(trigger)
-            snapshot = ledger.decide(snapshot, decision)
+        require(snapshot.state != EscalationState.OPEN) {
+            "New escalation must persist its decision atomically with opening"
         }
+        return executeSnapshot(snapshot, forceResuming = false)
+    }
 
+    private suspend fun executeSnapshot(
+        initial: EscalationSnapshot,
+        forceResuming: Boolean,
+    ): EscalationCoordinationResult {
+        var snapshot = initial
         val level = requireNotNull(snapshot.level) {
             "Escalation action cannot execute without a durable decision"
         }
         val executionId = EscalationExecutionId.create(snapshot.escalationId, level)
-        val resuming = snapshot.state == EscalationState.ACTION_IN_FLIGHT
+        val resuming = forceResuming || snapshot.state == EscalationState.ACTION_IN_FLIGHT
 
         if (snapshot.state == EscalationState.DECIDED) {
             snapshot = ledger.markActionStarted(

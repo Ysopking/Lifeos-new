@@ -23,6 +23,37 @@ class EscalationLedger(
         return requireNotNull(snapshot(trigger.id))
     }
 
+    suspend fun openDecided(
+        trigger: EscalationTrigger,
+        decision: EscalationDecision,
+    ): EscalationSnapshot {
+        require(decision.escalationId == trigger.id)
+        require(decision.triggerFingerprint == trigger.fingerprint)
+        snapshot(trigger.id)?.let { existing ->
+            require(existing.nodeId == trigger.nodeId)
+            require(existing.triggerFingerprint == trigger.fingerprint)
+            return if (existing.state == EscalationState.OPEN) {
+                decide(existing, decision)
+            } else {
+                require(existing.level == decision.level) {
+                    "Existing escalation decision differs from deterministic policy"
+                }
+                existing
+            }
+        }
+        append(
+            escalationId = trigger.id,
+            nodeId = trigger.nodeId,
+            triggerFingerprint = trigger.fingerprint,
+            type = EscalationRecordType.OPENED,
+            recordedAt = decision.decidedAt,
+            level = decision.level,
+            detail = decision.reasonCodes.joinToString("|"),
+            evidenceRefs = trigger.evidenceRefs,
+        )
+        return requireNotNull(snapshot(trigger.id))
+    }
+
     suspend fun decide(
         snapshot: EscalationSnapshot,
         decision: EscalationDecision,
@@ -169,9 +200,9 @@ class EscalationLedger(
         require(records.all { it.nodeId == first.nodeId })
         require(records.all { it.triggerFingerprint == first.triggerFingerprint })
 
-        var state = EscalationState.OPEN
-        var level: EscalationLevel? = null
-        var detail: String? = null
+        var level: EscalationLevel? = first.level
+        var state = if (level == null) EscalationState.OPEN else EscalationState.DECIDED
+        var detail: String? = first.detail
         val evidence = linkedSetOf<String>()
         evidence += first.evidenceRefs
 
