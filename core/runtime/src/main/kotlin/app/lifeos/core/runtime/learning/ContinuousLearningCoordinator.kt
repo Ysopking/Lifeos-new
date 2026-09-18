@@ -353,6 +353,10 @@ class ContinuousLearningCoordinator(
         )
     }
 
+    @Deprecated(
+        message = "BootEngine owns productive continuous learning; use processAvailable() from BootEngineLearningPhase",
+        level = DeprecationLevel.WARNING,
+    )
     fun start(
         scope: CoroutineScope,
         pollInterval: Duration = Duration.ofSeconds(5),
