@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.learning
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.runtime.LifeOsGoldLoopProjectionRuntimeRegistry
 import app.lifeos.core.runtime.cognition.OutcomePhotonFactory
 import app.lifeos.core.runtime.cognition.OutcomePredictionPhotonFactory
 import app.lifeos.core.runtime.workers.CognitiveTaskExecutionResult
@@ -101,7 +102,9 @@ class OutcomeLearningCoordinator(
             outcomePhoton = outcomePhoton,
             score = score,
             adaptations = adaptations.sortedBy { it.target.stableKey },
-        )
+        ).also { record ->
+            LifeOsGoldLoopProjectionRuntimeRegistry.currentOrNull()?.observeOutcomeLearning(record)
+        }
     }
 
     private suspend fun saveExact(photon: Photon) {
