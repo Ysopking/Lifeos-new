@@ -44,6 +44,7 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
         processMutex.withLock {
             require(expectedRevision >= 0L)
             ensureMigrated()
+            requireReadableEventHistory()
             val currentRevision = readHeadOrRecover()
             if (currentRevision != expectedRevision) return@withLock false
             require(event.revision == expectedRevision + 1L) {
@@ -84,6 +85,10 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
             decrypt(file, DeepSearchMissionEventLogCodec.MAX_PAYLOAD_BYTES)
         )
         return event
+    }
+
+    private fun requireReadableEventHistory() {
+        eventFiles().forEach(::readEvent)
     }
 
     private fun writeEvent(file: File, event: DeepSearchMissionEvent) {
