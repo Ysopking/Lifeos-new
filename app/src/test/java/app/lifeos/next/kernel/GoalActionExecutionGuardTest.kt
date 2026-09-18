@@ -230,7 +230,7 @@ class GoalActionExecutionGuardTest {
     private fun context(intent: IntentType, goalPhotonId: String): GoalActionContext {
         val text = when (intent) {
             IntentType.QUERY -> "What is LIFEOS?"
-            IntentType.SCHEDULE -> "Remind me about the appointment."
+            IntentType.SCHEDULE -> "Schedule image."
             else -> error("Unsupported test intent: " + intent)
         }
         val goal = LanguageUnderstandingEngine()
