@@ -97,9 +97,15 @@ class PredicateFrameParser(
             result += PredicateOccurrence(concept, make.index)
         }
 
+        val wordSet = words.mapTo(linkedSetOf()) { it.value.normalized }
         words.forEach { indexed ->
-            val concept = PREDICATE_ORDER.firstOrNull { candidate ->
-                matchesPredicate(indexed.value.normalized, candidate)
+            val normalized = indexed.value.normalized
+            val concept = when {
+                normalized == "erinnere" && "dich" in wordSet && "mich" !in wordSet ->
+                    PredicateConcept.STORE_MEMORY
+                else -> PREDICATE_ORDER.firstOrNull { candidate ->
+                    matchesPredicate(normalized, candidate)
+                }
             } ?: return@forEach
             result += PredicateOccurrence(concept, indexed.index)
         }
