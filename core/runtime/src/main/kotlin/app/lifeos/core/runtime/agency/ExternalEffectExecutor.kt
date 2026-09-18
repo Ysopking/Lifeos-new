@@ -268,6 +268,19 @@ class PolicyGatedExternalEffectExecutor(
         challengeId: String? = null,
         challengeResolutionFingerprint: String? = null,
     ): EffectReceipt {
+        val previous = receipts.load(contract.actionId)
+        if (previous != null) {
+            require(previous.idempotencyKey == contract.idempotencyKey) {
+                "External action id reused with another idempotency key"
+            }
+            require(allowedTransition(previous.state, state)) {
+                "Illegal external effect transition: " + previous.state + " -> " + state
+            }
+        } else {
+            require(state != ExternalEffectState.RESUMED) {
+                "External effect cannot start in RESUMED state"
+            }
+        }
         val receipt = EffectReceipt(
             actionId = contract.actionId,
             idempotencyKey = contract.idempotencyKey,
@@ -281,6 +294,46 @@ class PolicyGatedExternalEffectExecutor(
         )
         receipts.save(receipt)
         return receipt
+    }
+
+    private fun allowedTransition(
+        previous: ExternalEffectState,
+        next: ExternalEffectState,
+    ): Boolean {
+        if (previous == next) {
+            return previous in setOf(
+                ExternalEffectState.UNKNOWN_OUTCOME,
+                ExternalEffectState.WAITING_FOR_USER,
+                ExternalEffectState.RESUMED,
+            )
+        }
+        return when (previous) {
+            ExternalEffectState.CONFIRMED,
+            ExternalEffectState.REJECTED,
+            ExternalEffectState.FAILED -> false
+
+            ExternalEffectState.USER_CHALLENGE_REQUIRED,
+            ExternalEffectState.WAITING_FOR_USER -> next in setOf(
+                ExternalEffectState.RESUMED,
+                ExternalEffectState.REJECTED,
+                ExternalEffectState.FAILED,
+            )
+
+            ExternalEffectState.RESUMED -> next in setOf(
+                ExternalEffectState.CONFIRMED,
+                ExternalEffectState.REJECTED,
+                ExternalEffectState.FAILED,
+                ExternalEffectState.UNKNOWN_OUTCOME,
+                ExternalEffectState.WAITING_FOR_USER,
+            )
+
+            ExternalEffectState.UNKNOWN_OUTCOME -> next in setOf(
+                ExternalEffectState.CONFIRMED,
+                ExternalEffectState.REJECTED,
+                ExternalEffectState.FAILED,
+                ExternalEffectState.WAITING_FOR_USER,
+            )
+        }
     }
 
     private suspend fun loadVerifiedPayload(contract: ExternalActionContract): ByteArray? {
