@@ -258,7 +258,9 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
                 data.writeInt(MANIFEST_VERSION)
                 data.writeLong(manifest.currentRevision)
                 data.writeInt(manifest.missionIds.size)
-                manifest.missionIds.sorted().forEach(data::writeText)
+                manifest.missionIds.sorted().forEach { missionId ->
+                    data.writeText(missionId)
+                }
                 data.writeBoolean(manifest.pending != null)
                 manifest.pending?.let { pending ->
                     data.writeLong(pending.revision)
