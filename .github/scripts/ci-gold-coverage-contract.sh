@@ -16,6 +16,15 @@ required_jvm_tests=(
   "app/src/test/java/app/lifeos/next/kernel/GenesisBuildStudioExpansionRuntimeTest.kt"
   "app/src/test/java/app/lifeos/next/kernel/AndroidWebDeepSearchSourceTest.kt"
   "app/src/test/java/app/lifeos/next/OutcomeOverviewTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/LanguageGoldCorpusTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/SemanticActionSafetyTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/EntitySystemV2Test.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/QuantityTemporalEngineTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/LinguisticFieldIndexV2Test.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/RevisionAwareReferenceResolverTest.kt"
+  "core/language/src/test/kotlin/app/lifeos/core/language/LanguageContextRetrieverTest.kt"
+  "core/runtime/src/test/kotlin/app/lifeos/core/runtime/ConversationFastPathSafetyTest.kt"
+  "core/runtime/src/test/kotlin/app/lifeos/core/runtime/goal/GoalResumeEngineTest.kt"
 )
 
 required_device_tests=(
