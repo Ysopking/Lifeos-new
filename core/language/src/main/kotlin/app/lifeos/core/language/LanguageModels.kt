@@ -167,6 +167,7 @@ data class GoalFrame(
     val intent: IntentType,
     val objective: String,
     val entities: List<SemanticEntity>,
+    val semanticEntitiesV2: List<SemanticEntityV2> = emptyList(),
     val references: List<ResolvedReference>,
     val constraints: List<GoalConstraint>,
     val ambiguities: List<Ambiguity>,
