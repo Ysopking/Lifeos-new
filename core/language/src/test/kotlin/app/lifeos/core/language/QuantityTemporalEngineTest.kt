@@ -53,6 +53,25 @@ class QuantityTemporalEngineTest {
     }
 
     @Test
+    fun `binds relative date and clock time into one canonical date time`() {
+        val result = parse("morgen um 14:30 Uhr")
+        val dateTime = result.dateTimes.single()
+
+        assertTrue(dateTime.sourceText.lowercase().contains("morgen"))
+        assertTrue(dateTime.sourceText.contains("14:30"))
+        assertEquals("Europe/Berlin", dateTime.zoneId)
+        assertEquals("2026-09-19T12:30:00Z", dateTime.instant.toString())
+    }
+
+    @Test
+    fun `clock time is temporal evidence and never a scalar quantity`() {
+        val result = parse("morgen um 14:30 Uhr")
+
+        assertTrue(result.dateTimes.isNotEmpty())
+        assertTrue(result.quantities.isEmpty())
+    }
+
+    @Test
     fun `within duration creates bounded temporal interval`() {
         val result = parse("innerhalb von 14 Tagen")
         val within = result.temporals.single { it.relation == TemporalRelation.WITHIN }
