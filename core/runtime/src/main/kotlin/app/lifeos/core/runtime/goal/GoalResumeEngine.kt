@@ -454,9 +454,9 @@ private object PersistedGoalFrameDecoder {
         val fingerprint = unescape(required(lines, "action.fingerprint"))
             .also { require(it.isNotBlank()) }
 
-        val roleLines = lines
+        val parsedRoles = lines
             .filter { it.startsWith("action.role.") }
-            .associate { line ->
+            .map { line ->
                 val assignment = requireNotNull(splitUnescaped(line.removePrefix("action.role."), '='))
                 val key = assignment.first.split('.')
                 require(key.size == 2) { "Malformed action role key" }
@@ -466,7 +466,10 @@ private object PersistedGoalFrameDecoder {
                 require(fields.size == 5 || fields.size == 7) { "Malformed action role" }
                 val refId = fields.getOrNull(5)?.let(::unescape).orEmpty()
                 val refRevision = fields.getOrNull(6)?.toLong()?.also { require(it >= 0L) } ?: 0L
-                val referencePhoton = if (refId.isNotBlank() && refRevision > 0L) {
+                require((refId.isBlank() && refRevision == 0L) || (refId.isNotBlank() && refRevision > 0L)) {
+                    "Persisted Photon reference must contain both id and positive revision"
+                }
+                val referencePhoton = if (refId.isNotBlank()) {
                     PhotonRevisionRef(PhotonId(refId), refRevision)
                 } else {
                     null
@@ -480,6 +483,10 @@ private object PersistedGoalFrameDecoder {
                     confidence = fields[4].toDouble().also { require(it in 0.0..1.0) },
                 )
             }
+        require(parsedRoles.map { it.first }.distinct().size == parsedRoles.size) {
+            "Persisted goal must not duplicate action roles"
+        }
+        val roleLines = parsedRoles.toMap()
 
         val nodes = lines
             .filter { it.startsWith("action.node.") }
