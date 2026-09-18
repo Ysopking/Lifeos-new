@@ -185,7 +185,7 @@ internal object LifeOsStartupComposition {
         LifeOsStartupStage.DEEP_SEARCH -> hooks.installDeepSearchRuntime
         LifeOsStartupStage.SELF_HEALING -> hooks.startSelfHealingRuntime
         LifeOsStartupStage.DURABLE_GOALS -> hooks.installDurableGoalPlanRuntime
-        LifeOsStartupStage.RUNTIME_STARTED -> {}
+        LifeOsStartupStage.RUNTIME_STARTED -> suspend { Unit }
     }
 
     private fun evidence(stage: LifeOsStartupStage, layerIndex: Int): LifeOsStartupStageEvidence {
