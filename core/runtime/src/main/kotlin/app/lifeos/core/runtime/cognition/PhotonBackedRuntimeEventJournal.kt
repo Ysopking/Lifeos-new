@@ -80,7 +80,7 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
 
     private suspend fun ensureIndexLocked() {
         if (indexReady) return
-        val tail = readTailLocked()
+        val tail = runCatching { readTailLocked() }.getOrNull()
         if (tail == null) {
             rebuildIndexFromAuthorityLocked()
         } else {
@@ -132,6 +132,12 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
     /** One-time migration/recovery path. EVENT photons remain the authority. */
     private suspend fun rebuildIndexFromAuthorityLocked() {
         val authoritative = events().sortedBy { it.offset }
+
+        // INDEX is a projection only. Remove every partial/corrupt index artifact before rebuilding
+        // so a crash during the very first append or legacy migration cannot poison offset 1.
+        loadCognitionJournalPhotons(store, CognitionJournalKind.INDEX)
+            .forEach { store.delete(it.id) }
+
         if (authoritative.isEmpty()) {
             cachedTail = 0L
             return
@@ -186,7 +192,10 @@ class PhotonBackedRuntimeEventJournal(private val store: PhotonRepository) : Cog
         require("cognition-journal-kind:${CognitionJournalKind.INDEX.tag}" in photon.tags)
         val lines = photon.content.lineSequence().toList()
         require(lines.size == 2 && lines[0] == TAIL_SCHEMA) { "Invalid runtime event tail schema" }
-        return lines[1].removePrefix("offset=").toLong().also { require(it >= 0L) }
+        return lines[1].removePrefix("offset=").toLong().also { offset ->
+            require(offset > 0L)
+            require(photon.revision == offset) { "Runtime event tail revision/content mismatch" }
+        }
     }
 
     private suspend fun writeTailLocked(offset: Long, at: Instant) {
