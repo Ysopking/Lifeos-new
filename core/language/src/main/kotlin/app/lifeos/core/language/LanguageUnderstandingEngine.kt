@@ -14,6 +14,8 @@ class LanguageUnderstandingEngine(
     private val normalizer: UtteranceNormalizer = UtteranceNormalizer(),
     private val intentClassifier: RuleBasedIntentClassifier = RuleBasedIntentClassifier(),
     private val entityExtractor: RuleBasedEntityExtractor = RuleBasedEntityExtractor(),
+    private val entityPipelineV2: DeterministicEntityPipelineV2 =
+        DeterministicEntityPipelineV2(entityExtractor),
     private val constraintExtractor: RuleBasedConstraintExtractor = RuleBasedConstraintExtractor(),
     private val referenceExtractor: ReferenceExpressionExtractor = ReferenceExpressionExtractor(),
     private val referenceResolver: ReferenceResolver = ReferenceResolver(),
@@ -40,8 +42,11 @@ class LanguageUnderstandingEngine(
         val ruleEvidence = intentClassifier.classify(utterance)
         val evidence = fieldAdapter.mergeIntentEvidence(ruleEvidence, fieldAdapter.intentEvidence(linguisticField))
         val topIntent = evidence.first().intent
-        val ruleEntities = entityExtractor.extract(utterance)
-        val entities = fieldAdapter.mergeEntities(ruleEntities, fieldAdapter.entities(utterance, linguisticField))
+        val entityV2 = entityPipelineV2.extract(utterance)
+        val entities = fieldAdapter.mergeEntities(
+            entityV2.legacyProjection,
+            fieldAdapter.entities(utterance, linguisticField),
+        )
         val semanticGraph = semanticGraphExtractor.extract(utterance, entities)
         val references = referenceExtractor.extract(utterance, topIntent).map { referenceResolver.resolve(it, context) }
         val speechActs = speechActParser.parse(utterance, semanticGraph)
@@ -78,6 +83,7 @@ class LanguageUnderstandingEngine(
             language = utterance.language,
             semanticGraph = semanticGraph,
             semanticActionGraph = semanticActionGraph,
+            semanticEntitiesV2 = entityV2.entities,
         )
         return LanguageUnderstandingResult(
             utterance = utterance,
