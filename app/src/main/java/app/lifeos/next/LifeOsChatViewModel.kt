@@ -20,7 +20,6 @@ import app.lifeos.core.runtime.life.SpeechWordObservation
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.topology.LifeOsSubsystemState
 import app.lifeos.next.kernel.KernelBootstrapStatus
-import app.lifeos.next.kernel.LifeOsResponseComposer
 import app.lifeos.next.ui.chat.ChatImagePreviewLoader
 import app.lifeos.next.ui.chat.ChatImagePreviewState
 import app.lifeos.next.ui.chat.ChatTimelineItem
@@ -250,7 +249,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             var userTurnPersisted = false
             try {
-                val result = kernel.persistUserUtterance(userPhoton)
+                val turn = kernel.submitConversationTurn(userPhoton)
                 userTurnPersisted = true
                 mutableState.update {
                     it.copy(
@@ -258,32 +257,10 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                     )
                 }
 
-                val response = LifeOsResponseComposer.compose(result)
-                val assistantPhoton = Photon(
-                    content = response,
-                    provenance = Provenance(
-                        source = "lifeos-chat",
-                        actor = "lifeos",
-                        parentIds = setOf(userPhoton.id),
-                    ),
-                    relations = setOf(
-                        PhotonRelation(
-                            target = userPhoton.id,
-                            type = RelationType.DERIVED_FROM,
-                        )
-                    ),
-                    tags = setOf("chat", "chat:assistant", conversationTag, turnTag),
-                )
-                val stored = kernel.persistAndIngest(assistantPhoton)
                 mutableState.update { state ->
                     state.copy(
                         turnProcessing = ChatTurnProcessingState.idle(),
-                        error = if (stored.processingQueued) {
-                            state.error
-                        } else {
-                            stored.processingFailure
-                                ?: "Die LIFEOS-Antwort wurde gespeichert, aber nicht vollständig zur Cognition eingereiht."
-                        },
+                        error = turn.assistant.processingFailure ?: state.error,
                     )
                 }
             } catch (cancelled: CancellationException) {
