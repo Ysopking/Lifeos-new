@@ -2,6 +2,9 @@ package app.lifeos.core.runtime.trace
 
 import app.lifeos.core.runtime.artifact.ArtifactFinalizationResult
 import app.lifeos.core.runtime.artifact.ArtifactGenerationResult
+import app.lifeos.core.runtime.agency.ActionContract
+import app.lifeos.core.runtime.agency.ActionEffectReceipt
+import app.lifeos.core.runtime.agency.ActionEffectStatus
 import app.lifeos.core.runtime.evolution.EvolutionCanaryKillSwitchEvidence
 import app.lifeos.core.runtime.evolution.EvolutionCanaryOutcome
 import app.lifeos.core.runtime.health.DurableSelfHealingResult
@@ -368,6 +371,64 @@ class LifecycleDecisionTraceRecorder(
             traceId,
             nodes = listOf(artifactNode, generationNode) + evidenceNodes + claimNodes,
             links = links,
+        )
+    }
+
+    suspend fun recordActionEffect(
+        contract: ActionContract,
+        receipt: ActionEffectReceipt,
+    ): DecisionTraceRecordResult = record("action-effect") {
+        require(receipt.contractId == contract.id)
+        require(receipt.traceId == contract.traceId)
+
+        val contractNode = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.SELECTION,
+            sourceType = "action-contract",
+            sourceId = contract.id.value,
+            sourceRevision = 1L,
+            reasonCodes = listOf(
+                "EFFECT_${contract.request.effect.name}",
+                "EXPECTED_${contract.expectedEffectFingerprint}",
+                "SCOPE_${contract.request.scope}",
+            ),
+            recordedAt = contract.frozenAt,
+        )
+        val assessment = receipt.policyAssessment
+        val policyNode = DecisionTraceNode.create(
+            type = DecisionTraceNodeType.POLICY_CONSTRAINT,
+            sourceType = "owner-policy-decision",
+            sourceId = assessment.decisionId.value,
+            sourceRevision = assessment.policyRevision,
+            reasonCodes = buildList {
+                add(if (assessment.allowed) "AUTHORIZED" else "DENIED")
+                assessment.grantId?.let { add("GRANT_${it.value}") }
+                assessment.reasonCodes.forEach { add("REASON_${it.name}") }
+            },
+            recordedAt = receipt.recordedAt,
+        )
+        val receiptNode = DecisionTraceNode.create(
+            type = when (receipt.status) {
+                ActionEffectStatus.SUCCEEDED -> DecisionTraceNodeType.EXECUTION_OUTCOME
+                ActionEffectStatus.DENIED -> DecisionTraceNodeType.REJECTION
+                ActionEffectStatus.UNKNOWN_OUTCOME -> DecisionTraceNodeType.UNRESOLVED_UNCERTAINTY
+            },
+            sourceType = "action-effect-receipt",
+            sourceId = receipt.contractId.value,
+            sourceRevision = assessment.policyRevision,
+            reasonCodes = buildList {
+                add(receipt.status.name)
+                receipt.observedEffectId?.let { add("OBSERVED_$it") }
+                receipt.detail?.let { add("DETAIL_$it") }
+            },
+            recordedAt = receipt.recordedAt,
+        )
+        ledger.append(
+            id = contract.traceId,
+            nodes = listOf(contractNode, policyNode, receiptNode),
+            links = listOf(
+                DecisionTraceLink(policyNode.id, contractNode.id, DecisionTraceLinkType.CONSTRAINS),
+                DecisionTraceLink(contractNode.id, receiptNode.id, DecisionTraceLinkType.PRODUCED),
+            ),
         )
     }
 
