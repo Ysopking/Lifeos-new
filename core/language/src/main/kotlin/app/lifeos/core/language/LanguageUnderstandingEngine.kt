@@ -220,6 +220,14 @@ class LanguageUnderstandingEngine(
                 source = "quantity-temporal-engine",
             )
         }
+        quantityTemporal.dateTimes.forEachIndexed { index, dateTime ->
+            constraints += GoalConstraint(
+                key = "datetime.v3.$index",
+                value = listOf(dateTime.instant.toString(), dateTime.zoneId).joinToString(":"),
+                confidence = dateTime.confidence,
+                source = "quantity-temporal-engine-v3",
+            )
+        }
         return constraints.distinctBy { Triple(it.key, it.value, it.source) }
     }
 
@@ -561,6 +569,23 @@ class GoalPhotonFactory {
                 .append(temporal.span.start).append('|')
                 .append(temporal.span.endExclusive).append('|')
                 .append(temporal.confidence).append('\n')
+        }
+        frame.quantityTemporal.dateTimes.sortedWith(
+            compareBy<SemanticDateTimeValue> { it.span.start }
+                .thenBy { it.span.endExclusive }
+                .thenBy { it.instant }
+        ).forEachIndexed { index, dateTime ->
+            append("canonical.datetime.").append(index).append('=')
+                .append(escape(dateTime.instant.toString())).append('|')
+                .append(escape(dateTime.zoneId)).append('|')
+                .append(escape(dateTime.sourceText)).append('|')
+                .append(dateTime.span.start).append('|')
+                .append(dateTime.span.endExclusive).append('|')
+                .append(dateTime.dateSpan?.start ?: -1).append('|')
+                .append(dateTime.dateSpan?.endExclusive ?: -1).append('|')
+                .append(dateTime.timeSpan.start).append('|')
+                .append(dateTime.timeSpan.endExclusive).append('|')
+                .append(dateTime.confidence).append('\n')
         }
         append("domain.fingerprint=").append(frame.domainSemanticGraph.fingerprint).append('\n')
         frame.domainSemanticGraph.nodes.sortedBy { it.id.value }.forEachIndexed { index, node ->
