@@ -269,7 +269,10 @@ class DeterministicEntityPipelineV2(
         if (index == 0 && token.normalized in SENTENCE_INITIAL_NON_NAMES) return false
         if (token.normalized in AUTHORITY_TERMS) return false
         if (DOCUMENT_TERMS.containsKey(token.normalized)) return false
-        return true
+
+        val previous = utterance.tokens.getOrNull(index - 1)?.normalized
+        val titled = previous in PERSON_TITLES
+        return titled || token.normalized in COMMON_GIVEN_NAMES
     }
 
     private fun domainCompoundTypes(raw: String): Set<SemanticEntityTypeDefinition> {
@@ -414,6 +417,14 @@ class DeterministicEntityPipelineV2(
                 MEDICATION_TERMS +
                 MATTER_TERMS
             ).toSet()
+        val COMMON_GIVEN_NAMES = setOf(
+            "anna", "daniel", "emma", "jane", "john", "julia", "lara", "laura", "leon",
+            "lena", "lisa", "lukas", "maria", "max", "michael", "paul", "peter", "sarah", "thomas",
+        )
+        val PERSON_TITLES = setOf(
+            "herr", "frau", "dr", "doktor", "prof", "professor", "mr", "mrs", "ms",
+        )
+
         val SENTENCE_INITIAL_NON_NAMES = setOf(
             "der", "die", "das", "ein", "eine", "ich", "du", "wir", "sie", "er", "es",
             "wenn", "falls", "bitte", "the", "a", "an", "i", "you", "we", "he", "she", "it", "if",
