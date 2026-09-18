@@ -15,8 +15,17 @@ object ToolWorkshopJobEventLogCodec {
     const val MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 
     fun encode(events: List<ToolWorkshopJobEvent>): ByteArray {
+        require(events.map { it.revision } == (1L..events.size.toLong()).toList()) {
+            "ToolWorkshopJobEvent full-log revisions must be contiguous"
+        }
+        return encodePayload(events)
+    }
+
+    /** Encodes one immutable segment while preserving its global ledger revision. */
+    fun encodeSegment(event: ToolWorkshopJobEvent): ByteArray = encodePayload(listOf(event))
+
+    private fun encodePayload(events: List<ToolWorkshopJobEvent>): ByteArray {
         require(events.size <= MAX_EVENTS)
-        require(events.map { it.revision } == (1L..events.size.toLong()).toList())
         return ByteArrayOutputStream().let { bytes ->
             DataOutputStream(bytes).use { out ->
                 out.writeInt(MAGIC)
@@ -35,14 +44,27 @@ object ToolWorkshopJobEventLogCodec {
         }.also { require(it.size <= MAX_PAYLOAD_BYTES) }
     }
 
-    fun decode(bytes: ByteArray): List<ToolWorkshopJobEvent> {
+    fun decode(bytes: ByteArray): List<ToolWorkshopJobEvent> =
+        decodePayload(bytes).also { events ->
+            require(events.map { it.revision } == (1L..events.size.toLong()).toList()) {
+                "ToolWorkshopJobEvent full-log revisions must be contiguous"
+            }
+        }
+
+    /** Decodes exactly one immutable segment without rebasing its global revision. */
+    fun decodeSegment(bytes: ByteArray): ToolWorkshopJobEvent =
+        decodePayload(bytes).also { events ->
+            require(events.size == 1) { "ToolWorkshop segment must contain exactly one event" }
+        }.single()
+
+    private fun decodePayload(bytes: ByteArray): List<ToolWorkshopJobEvent> {
         require(bytes.isNotEmpty() && bytes.size <= MAX_PAYLOAD_BYTES)
         val input = DataInputStream(ByteArrayInputStream(bytes))
         require(input.readInt() == MAGIC) { "Invalid ToolWorkshop job payload magic" }
         require(input.readInt() == VERSION) { "Unsupported ToolWorkshop job payload version" }
         val count = input.readInt()
         require(count in 0..MAX_EVENTS)
-        val events = List(count) { index ->
+        val events = List(count) {
             ToolWorkshopJobEvent(
                 revision = input.readLong(),
                 definition = readDefinition(input),
@@ -50,7 +72,7 @@ object ToolWorkshopJobEventLogCodec {
                 recordedAt = Instant.parse(read(input)),
                 stageFingerprint = readNullable(input),
                 detail = readNullable(input),
-            ).also { require(it.revision == index + 1L) }
+            )
         }
         require(input.available() == 0) { "Trailing ToolWorkshop job payload bytes" }
         return events
