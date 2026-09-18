@@ -215,8 +215,10 @@ class PhotonBackedMemoryAccessLedgerStore(
         return event
     }
 
-    suspend fun snapshot(): MemoryAccessLedger {
-        val events = photons.loadAll()
+    suspend fun snapshot(): MemoryAccessLedger = snapshot(photons.loadAll())
+
+    fun snapshot(allPhotons: Collection<Photon>): MemoryAccessLedger {
+        val events = allPhotons
             .filter { "memory-access-event" in it.tags }
             .map(::decodeEvent)
             .sortedWith(compareBy<AccessEvent> { it.at }.thenBy { it.id.value })
@@ -450,7 +452,7 @@ class DurableLifeMemoryRuntime(
         val authoritative = ActiveLifeSourceProjection.filter(storedAuthoritative, all)
         val graphEvidence = authoritative.filterNot { "causal-ledger" in it.tags }
         val memoryEvidence = graphEvidence.filterNot { "life-source-gap" in it.tags }
-        val durableAccess = accessStore.snapshot()
+        val durableAccess = accessStore.snapshot(all)
         val effectiveAccess = rebuildableRelevance(durableAccess, memoryEvidence, all)
         val graph = graphProjector.project(graphEvidence)
         val rawMemory = memoryEngine.project(memoryEvidence, effectiveAccess, now)
