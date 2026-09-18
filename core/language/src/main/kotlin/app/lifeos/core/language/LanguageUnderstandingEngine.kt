@@ -299,7 +299,7 @@ class GoalPhotonFactory {
     }
 
     private fun serialize(frame: GoalFrame, field: LinguisticFieldResult?): String = buildString {
-        append("goal/v3\n")
+        append("goal/v4\n")
         append("intent=").append(frame.intent.name).append('\n')
         append("language=").append(frame.language.name).append('\n')
         append("confidence=").append(frame.confidence).append('\n')
@@ -323,6 +323,50 @@ class GoalPhotonFactory {
                 .append(link.toClauseId).append('|')
                 .append(link.type.name).append('|')
                 .append(escape(link.cue)).append('\n')
+        }
+        append("action.fingerprint=").append(frame.semanticActionGraph.fingerprint).append('\n')
+        frame.semanticActionGraph.nodes.sortedBy { it.id.value }.forEachIndexed { index, node ->
+            append("action.node.").append(index).append('=')
+                .append(escape(node.id.value)).append('|')
+                .append(node.type.name).append('|')
+                .append(node.frame.clauseId).append('|')
+                .append(node.frame.predicate.name).append('|')
+                .append(node.frame.speechAct.type.name).append('|')
+                .append(node.frame.speechAct.confidence).append('|')
+                .append(node.frame.speechAct.span.start).append('|')
+                .append(node.frame.speechAct.span.endExclusive).append('|')
+                .append(node.frame.confidence).append('|')
+                .append(node.frame.scopeTypes.map { it.name }.sorted().joinToString(",")).append('|')
+                .append(node.requiredRoles.map { it.name }.sorted().joinToString(",")).append('|')
+                .append(node.unresolvedRoles.map { it.name }.sorted().joinToString(",")).append('|')
+                .append(node.unresolvedReference).append('|')
+                .append(node.unresolvedCondition).append('|')
+                .append(node.externalSideEffect).append('|')
+                .append(node.executionReadiness).append('\n')
+            node.frame.roles.entries.sortedBy { it.key.name }.forEach { (role, value) ->
+                append("action.role.").append(index).append('.').append(role.name).append('=')
+                    .append(escape(value.rawText)).append('|')
+                    .append(escape(value.normalized)).append('|')
+                    .append(value.entityType?.name.orEmpty()).append('|')
+                    .append(value.resolved).append('|')
+                    .append(value.confidence).append('\n')
+            }
+        }
+        frame.semanticActionGraph.edges.forEachIndexed { index, edge ->
+            append("action.edge.").append(index).append('=')
+                .append(escape(edge.from.value)).append('|')
+                .append(escape(edge.to.value)).append('|')
+                .append(edge.type.name).append('|')
+                .append(edge.confidence).append('\n')
+        }
+        frame.semanticActionGraph.scopes.forEachIndexed { index, scope ->
+            append("action.scope.").append(index).append('=')
+                .append(scope.type.name).append('|')
+                .append(escape(scope.targetNodeIds.map { it.value }.sorted().joinToString(","))).append('|')
+                .append(scope.span.start).append('|')
+                .append(scope.span.endExclusive).append('|')
+                .append(escape(scope.cue)).append('|')
+                .append(scope.confidence).append('\n')
         }
         field?.let {
             append("field.converged=").append(it.converged).append('\n')
