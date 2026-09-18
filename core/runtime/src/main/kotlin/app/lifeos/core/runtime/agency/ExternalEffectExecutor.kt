@@ -15,11 +15,23 @@ sealed interface ExternalTransportResult {
     data class Rejected(val reason: String) : ExternalTransportResult
     data class Failed(val reason: String) : ExternalTransportResult
     data class Unknown(val externalReference: String? = null) : ExternalTransportResult
-    data class ChallengeRequired(val reason: String) : ExternalTransportResult
+    data class ChallengeRequired(
+        val challengeId: String,
+        val reason: String,
+    ) : ExternalTransportResult {
+        init {
+            require(challengeId.isNotBlank())
+            require(reason.isNotBlank())
+        }
+    }
 }
 
 fun interface ExternalEffectTransport {
-    suspend fun execute(contract: ExternalActionContract): ExternalTransportResult
+    suspend fun execute(
+        contract: ExternalActionContract,
+        payload: ByteArray,
+        challengeResolution: ExternalChallengeResolution?,
+    ): ExternalTransportResult
 }
 
 fun interface ExternalObservationReconciler {
@@ -31,6 +43,10 @@ fun interface ExternalObservationReconciler {
 
 interface ExternalEffectExecutor {
     suspend fun execute(contract: ExternalActionContract): EffectReceipt
+    suspend fun resumeAfterChallenge(
+        contract: ExternalActionContract,
+        resolution: ExternalChallengeResolution,
+    ): EffectReceipt
     suspend fun reconcile(contract: ExternalActionContract): EffectReceipt
 }
 
@@ -43,6 +59,7 @@ interface ExternalEffectExecutor {
 class PolicyGatedExternalEffectExecutor(
     private val policyGate: OwnerPolicyEffectGate,
     private val receipts: ExternalEffectReceiptRepository,
+    private val payloads: ExternalPayloadRepository,
     private val transport: ExternalEffectTransport,
     private val observationReconciler: ExternalObservationReconciler,
     private val now: () -> Instant = Instant::now,
@@ -53,13 +70,23 @@ class PolicyGatedExternalEffectExecutor(
             require(previous.idempotencyKey == contract.idempotencyKey) {
                 "External action id reused with another idempotency key"
             }
-            return if (previous.state == ExternalEffectState.UNKNOWN_OUTCOME) {
-                reconcile(contract)
-            } else {
-                previous
+            return when (previous.state) {
+                ExternalEffectState.UNKNOWN_OUTCOME,
+                ExternalEffectState.RESUMED -> reconcile(contract)
+
+                ExternalEffectState.USER_CHALLENGE_REQUIRED,
+                ExternalEffectState.WAITING_FOR_USER,
+                ExternalEffectState.CONFIRMED,
+                ExternalEffectState.REJECTED,
+                ExternalEffectState.FAILED -> previous
             }
         }
 
+        val payload = loadVerifiedPayload(contract) ?: return persist(
+            contract = contract,
+            state = ExternalEffectState.FAILED,
+            detail = "external-payload-missing-or-corrupt",
+        )
         val prepared = when (val result = policyGate.prepare(contract.requiredOwnerPolicy)) {
             is OwnerEffectPreparationResult.Ready -> result.preparation
             is OwnerEffectPreparationResult.Blocked -> return persist(
@@ -74,7 +101,7 @@ class PolicyGatedExternalEffectExecutor(
                 request = contract.requiredOwnerPolicy,
                 prepared = prepared,
             ) {
-                transport.execute(contract)
+                transport.execute(contract, payload, null)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -96,12 +123,96 @@ class PolicyGatedExternalEffectExecutor(
         }
     }
 
+    override suspend fun resumeAfterChallenge(
+        contract: ExternalActionContract,
+        resolution: ExternalChallengeResolution,
+    ): EffectReceipt {
+        val previous = requireNotNull(receipts.load(contract.actionId)) {
+            "Cannot resume external action without a durable challenge receipt"
+        }
+        require(previous.idempotencyKey == contract.idempotencyKey)
+        require(
+            previous.state == ExternalEffectState.WAITING_FOR_USER ||
+                previous.state == ExternalEffectState.USER_CHALLENGE_REQUIRED
+        ) { "External action is not waiting for a user challenge" }
+        require(previous.challengeId == resolution.challengeId) {
+            "External challenge resolution belongs to another challenge"
+        }
+        if (!resolution.confirmedByUser) {
+            return persist(
+                contract = contract,
+                state = ExternalEffectState.REJECTED,
+                detail = "external-challenge-not-confirmed",
+                challengeId = previous.challengeId,
+                challengeResolutionFingerprint = resolution.fingerprint,
+            )
+        }
+
+        val payload = loadVerifiedPayload(contract) ?: return persist(
+            contract = contract,
+            state = ExternalEffectState.FAILED,
+            detail = "external-payload-missing-or-corrupt",
+            challengeId = previous.challengeId,
+            challengeResolutionFingerprint = resolution.fingerprint,
+        )
+        val prepared = when (val result = policyGate.prepare(contract.requiredOwnerPolicy)) {
+            is OwnerEffectPreparationResult.Ready -> result.preparation
+            is OwnerEffectPreparationResult.Blocked -> return persist(
+                contract = contract,
+                state = ExternalEffectState.REJECTED,
+                detail = "owner-policy-blocked-after-challenge",
+                challengeId = previous.challengeId,
+                challengeResolutionFingerprint = resolution.fingerprint,
+            )
+        }
+
+        val exposed = try {
+            policyGate.expose(
+                request = contract.requiredOwnerPolicy,
+                prepared = prepared,
+            ) {
+                persist(
+                    contract = contract,
+                    state = ExternalEffectState.RESUMED,
+                    detail = "external-challenge-resumed",
+                    challengeId = previous.challengeId,
+                    challengeResolutionFingerprint = resolution.fingerprint,
+                )
+                transport.execute(contract, payload, resolution)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return persist(
+                contract = contract,
+                state = ExternalEffectState.UNKNOWN_OUTCOME,
+                detail = error.message ?: "transport-exception-after-challenge",
+                challengeId = previous.challengeId,
+                challengeResolutionFingerprint = resolution.fingerprint,
+            )
+        }
+
+        return when (exposed) {
+            is OwnerEffectExposureResult.Blocked -> persist(
+                contract = contract,
+                state = ExternalEffectState.REJECTED,
+                detail = "owner-policy-revoked-before-resumed-effect",
+                challengeId = previous.challengeId,
+                challengeResolutionFingerprint = resolution.fingerprint,
+            )
+            is OwnerEffectExposureResult.Exposed -> fromTransport(contract, exposed.value)
+        }
+    }
+
     override suspend fun reconcile(contract: ExternalActionContract): EffectReceipt {
         val previous = requireNotNull(receipts.load(contract.actionId)) {
             "Cannot reconcile external action without a durable receipt"
         }
         require(previous.idempotencyKey == contract.idempotencyKey)
-        if (previous.state != ExternalEffectState.UNKNOWN_OUTCOME) return previous
+        if (
+            previous.state != ExternalEffectState.UNKNOWN_OUTCOME &&
+            previous.state != ExternalEffectState.RESUMED
+        ) return previous
 
         val result = try {
             observationReconciler.reconcile(contract, previous)
@@ -141,9 +252,10 @@ class PolicyGatedExternalEffectExecutor(
             externalReference = result.externalReference,
         )
         is ExternalTransportResult.ChallengeRequired -> persist(
-            contract,
-            ExternalEffectState.USER_CHALLENGE_REQUIRED,
-            result.reason,
+            contract = contract,
+            state = ExternalEffectState.WAITING_FOR_USER,
+            detail = result.reason,
+            challengeId = result.challengeId,
         )
     }
 
@@ -153,6 +265,8 @@ class PolicyGatedExternalEffectExecutor(
         detail: String,
         externalReference: String? = null,
         observationFingerprint: String? = null,
+        challengeId: String? = null,
+        challengeResolutionFingerprint: String? = null,
     ): EffectReceipt {
         val receipt = EffectReceipt(
             actionId = contract.actionId,
@@ -161,10 +275,20 @@ class PolicyGatedExternalEffectExecutor(
             recordedAt = now(),
             externalReference = externalReference,
             observationFingerprint = observationFingerprint,
+            challengeId = challengeId,
+            challengeResolutionFingerprint = challengeResolutionFingerprint,
             detail = detail,
         )
         receipts.save(receipt)
         return receipt
+    }
+
+    private suspend fun loadVerifiedPayload(contract: ExternalActionContract): ByteArray? {
+        val payload = payloads.load(contract.payloadHandle) ?: return null
+        return payload.takeIf {
+            PayloadHandle.fromPayload(it) == contract.payloadHandle &&
+                contract.payloadHandle.fingerprint == contract.payloadFingerprint
+        }
     }
 }
 
@@ -194,12 +318,13 @@ object ExternalTransportRuntimeRegistry {
         reconcilers[scheme] = reconciler
     }
 
-    fun transport(): ExternalEffectTransport = ExternalEffectTransport { contract ->
+    fun transport(): ExternalEffectTransport = ExternalEffectTransport { contract, payload, challenge ->
         val delegate = transports[contract.endpoint.scheme]
             ?: return@ExternalEffectTransport ExternalTransportResult.ChallengeRequired(
-                "no-transport-installed-for:${contract.endpoint.scheme}"
+                challengeId = "transport:${contract.endpoint.scheme}",
+                reason = "no-transport-installed-for:${contract.endpoint.scheme}",
             )
-        delegate.execute(contract)
+        delegate.execute(contract, payload, challenge)
     }
 
     fun reconciler(): ExternalObservationReconciler = ExternalObservationReconciler { contract, previous ->
