@@ -269,7 +269,11 @@ class LanguageUnderstandingEngine(
         val matchingNodes = actionGraph.nodes.filter { it.frame.predicate == intentPredicate }
         if (intentPredicate != PredicateConcept.UNKNOWN && matchingNodes.isNotEmpty()) {
             val speechActs = matchingNodes.map { it.frame.speechAct.type }.toSet()
-            if (SpeechActType.QUESTION in speechActs && matchingNodes.none { it.executable }) {
+            if (
+                topIntent !in setOf(IntentType.QUERY, IntentType.CONVERSATION, IntentType.UNKNOWN) &&
+                SpeechActType.QUESTION in speechActs &&
+                matchingNodes.none { it.executable }
+            ) {
                 result += Ambiguity(
                     code = "command_vs_question",
                     message = "Action topic was recognized inside a question, not an executable request",
