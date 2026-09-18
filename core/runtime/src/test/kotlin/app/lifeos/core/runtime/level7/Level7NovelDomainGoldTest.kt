@@ -2,6 +2,7 @@ package app.lifeos.core.runtime.level7
 
 import app.lifeos.core.runtime.learning.CandidateCluster
 import app.lifeos.core.runtime.learning.ConceptInductionEngine
+import app.lifeos.core.runtime.learning.ConceptInductionPolicy
 import app.lifeos.core.runtime.learning.PatternOccurrence
 import app.lifeos.core.runtime.learning.PatternSignature
 import app.lifeos.core.runtime.thought.ThoughtGraphEdgeKind
@@ -32,8 +33,10 @@ class Level7NovelDomainGoldTest {
         )
 
         val induction = ConceptInductionEngine(
-            minimumSupport = 2,
-            minimumInformationGain = 0.01,
+            ConceptInductionPolicy(
+                minimumSupport = 2,
+                minimumInformationGain = 0.01,
+            )
         ).induce(listOf(cluster)).single()
 
         assertTrue(induction.supportCount >= 2)
