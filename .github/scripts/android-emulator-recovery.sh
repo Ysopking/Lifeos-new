@@ -98,6 +98,14 @@ run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#seedProductGoldChatRoundTrip' \
   "$report_dir/seed-product-gold-chat.txt"
 
+run_test \
+  'app.lifeos.next.ProductGoldenChatDeviceTest#seedSemanticGoalV4RoundTrip' \
+  "$report_dir/seed-semantic-goal-v4.txt"
+
+run_test \
+  'app.lifeos.next.SemanticActionRecoveryDeviceTest#seedSemanticActionDataflow' \
+  "$report_dir/seed-semantic-action-dataflow.txt"
+
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
@@ -106,6 +114,10 @@ assert_cold_launcher "$cold_start"
 run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' \
   "$report_dir/recovered-product-gold-chat.txt"
+
+run_test \
+  'app.lifeos.next.SemanticActionRecoveryDeviceTest#recoverSemanticActionDataflowAfterColdStart' \
+  "$report_dir/recovered-semantic-action-dataflow.txt"
 
 run_test \
   'app.lifeos.next.ThoughtGraphCompactionDeviceTest#recoverCompactedGraphHistory' \
