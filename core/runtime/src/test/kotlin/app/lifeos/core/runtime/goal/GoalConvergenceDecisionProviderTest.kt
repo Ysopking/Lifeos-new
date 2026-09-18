@@ -52,6 +52,7 @@ import java.time.Instant
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class GoalConvergenceDecisionProviderTest {
@@ -100,6 +101,41 @@ class GoalConvergenceDecisionProviderTest {
         assertEquals(1, checkpoints.checkpoints.size)
         assertEquals(first, checkpoints.checkpoints.values.single())
         assertTrue(first.decision.reasons.contains("all-convergence-action-gates-satisfied"))
+    }
+
+    @Test
+    fun `missing active cycle is convergence not ready and never reaches productive authority`() = runBlocking {
+        val photons = MemoryPhotonRepository()
+        val goal = goal(IntentType.QUERY)
+        val goalId = PhotonId("goal-no-cycle")
+        photons.save(goalPhoton(goalId, goal))
+        var authorityCalls = 0
+        val provider = GoalConvergenceDecisionProvider(
+            productiveConvergence = ProductiveConvergenceAuthority {
+                authorityCalls += 1
+                error("Productive authority must not run without an active cycle")
+            },
+            bootEngine = bootEngine(),
+            photons = photons,
+        )
+        val routing = GoalCapabilityResolution(
+            plan = LanguageGoalCapabilityMapper().plan(goal),
+            selectedProviders = emptyMap(),
+            gaps = emptyList(),
+        )
+
+        val error = assertFailsWith<ProductiveConvergenceNotReadyException> {
+            provider.decide(
+                goal = goal,
+                routing = routing,
+                sourcePhoton = sourcePhoton(),
+                goalPhotonId = goalId,
+                at = at,
+            )
+        }
+
+        assertEquals("active-bootengine-cycle-unavailable", error.reason)
+        assertEquals(0, authorityCalls)
     }
 
     @Test

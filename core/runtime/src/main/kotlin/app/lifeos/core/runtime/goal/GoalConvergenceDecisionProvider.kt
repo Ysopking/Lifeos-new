@@ -174,9 +174,10 @@ class GoalConvergenceDecisionProvider(
         }
         require(goalPhoton.id == goalPhotonId && goalPhoton.revision == goalPhotonRevision)
 
-        val cycle = requireNotNull(bootEngine.activeCycle()) {
-            "Productive goal convergence requires an active BootEngine cycle"
-        }
+        val cycle = bootEngine.activeCycle()
+            ?: throw ProductiveConvergenceNotReadyException(
+                "active-bootengine-cycle-unavailable"
+            )
         val workingSet = thoughtGraph.project(
             goalPhoton = goalPhoton,
             source = source,
