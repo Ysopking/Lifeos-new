@@ -89,11 +89,12 @@ class PhotonRehydrator(
 ) {
     suspend fun rehydrate(): PhotonRehydrationResult {
         val sessionSnapshot = bootReadSession?.snapshot()
-        val photons = sessionSnapshot?.photons ?: repository.loadReport().photons
+        val fallbackReport = if (sessionSnapshot == null) repository.loadReport() else null
+        val photons = sessionSnapshot?.photons ?: checkNotNull(fallbackReport).photons
         val unreadable = sessionSnapshot?.readFailures
             ?.filter { it.source == BootSnapshotSource.PHOTON }
             ?.mapNotNull { it.entry }
-            ?: repository.loadReport().unreadableFiles
+            ?: checkNotNull(fallbackReport).unreadableFiles
 
         // Internal cognition journals share the encrypted Photon repository. When a shared boot
         // session exists, validate the already decrypted snapshot instead of loading journal refs.
