@@ -116,6 +116,13 @@ data class LanguageContextItem(
     val contentTerms: Set<String>,
     val confidence: Double = 1.0,
     val revisionRef: PhotonRevisionRef? = null,
+    val semanticTypes: Set<String> = emptySet(),
+    val normalizedTerms: Set<String> = contentTerms,
+    val conceptIds: Set<String> = emptySet(),
+    val relationKeys: Set<String> = emptySet(),
+    val conversationId: String? = null,
+    val matterId: String? = null,
+    val goalId: PhotonId? = null,
 ) {
     init {
         require(kind.isNotBlank())
