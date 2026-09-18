@@ -5,4 +5,5 @@ internal enum class CognitionJournalKind(val tag: String) {
     TRANSACTION("transaction"),
     OUTCOME("outcome"),
     TRIGGER("trigger"),
+    INDEX("index"),
 }
