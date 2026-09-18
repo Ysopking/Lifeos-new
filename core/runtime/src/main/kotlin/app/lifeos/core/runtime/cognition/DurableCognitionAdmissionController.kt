@@ -1,9 +1,8 @@
 package app.lifeos.core.runtime.cognition
 
+import app.lifeos.core.model.task.IndexedTaskSnapshotRepository
 import app.lifeos.core.model.task.LifeTask
 import app.lifeos.core.model.task.TaskDraft
-import app.lifeos.core.model.task.TaskSnapshotRepository
-import app.lifeos.core.model.task.TaskState
 import app.lifeos.core.model.task.TaskType
 import app.lifeos.core.runtime.resource.ResourceBudgetDemand
 import app.lifeos.core.runtime.resource.ResourceBudgetDomain
@@ -25,7 +24,7 @@ import kotlinx.coroutines.sync.withLock
  * better spent on higher-value work. A task-ledger integrity failure fails closed.
  */
 class DurableCognitionAdmissionController(
-    private val tasks: TaskSnapshotRepository,
+    private val tasks: IndexedTaskSnapshotRepository,
     private val taskEngine: DurableTaskEngine,
     private val maxActiveTasks: Int = DEFAULT_MAX_ACTIVE_TASKS,
     private val sharedBudgets: SharedResourceBudgetGate? = SharedResourceBudgetRuntimeRegistry.current(),
@@ -39,12 +38,7 @@ class DurableCognitionAdmissionController(
     suspend fun submit(draft: TaskDraft): LifeTask? = mutex.withLock {
         require(draft.type.isCognitionTask()) { "Admission controller accepts cognition tasks only" }
 
-        val report = tasks.loadReport()
-        check(report.unreadableEntries.isEmpty()) {
-            "Cannot admit cognition with unreadable durable task entries"
-        }
-
-        val existing = report.tasks.firstOrNull { it.idempotencyKey == draft.idempotencyKey }
+        val existing = tasks.findByIdempotencyKey(draft.idempotencyKey)
         if (existing != null) {
             check(existing.type == draft.type) {
                 "Idempotency key collision across task types: ${draft.idempotencyKey}"
@@ -52,9 +46,7 @@ class DurableCognitionAdmissionController(
             return@withLock taskEngine.submit(draft)
         }
 
-        val active = report.tasks.count { task ->
-            task.type.isCognitionTask() && !task.state.isTerminal()
-        }
+        val active = tasks.activeCount(COGNITION_TYPES)
         if (active >= maxActiveTasks) return@withLock null
 
         sharedBudgets?.let { broker ->
@@ -83,30 +75,15 @@ class DurableCognitionAdmissionController(
     }
 
     suspend fun availableCapacity(): Int = mutex.withLock {
-        val report = tasks.loadReport()
-        check(report.unreadableEntries.isEmpty()) {
-            "Cannot inspect cognition capacity with unreadable durable task entries"
-        }
-        val active = report.tasks.count { task ->
-            task.type.isCognitionTask() && !task.state.isTerminal()
-        }
+        val active = tasks.activeCount(COGNITION_TYPES)
         (maxActiveTasks - active).coerceAtLeast(0)
     }
 
-    private fun TaskType.isCognitionTask(): Boolean =
-        this == TaskType.PROCESS_PHOTON || this == TaskType.REPROCESS_PHOTON
-
-    private fun TaskState.isTerminal(): Boolean = when (this) {
-        TaskState.COMPLETED,
-        TaskState.SUPERSEDED,
-        TaskState.FAILED,
-        TaskState.CANCELLED -> true
-
-        else -> false
-    }
+    private fun TaskType.isCognitionTask(): Boolean = this in COGNITION_TYPES
 
     private companion object {
         const val DEFAULT_MAX_ACTIVE_TASKS = 100
+        val COGNITION_TYPES = setOf(TaskType.PROCESS_PHOTON, TaskType.REPROCESS_PHOTON)
         val COGNITION_HARD_QUOTA = ResourceBudgetQuota(
             elapsedMillis = 5_000,
             workUnits = 32,
