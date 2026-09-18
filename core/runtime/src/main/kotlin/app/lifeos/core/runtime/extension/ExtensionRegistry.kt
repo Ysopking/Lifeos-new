@@ -114,22 +114,18 @@ data class ExtensionRegistrySnapshot private constructor(
                 }
             }
 
-            val order = deterministicTopologicalOrder(byId.values.toList(), byRef)
-            val provisional = ExtensionRegistrySnapshot(
-                id = "pending",
-                entries = byId.values.toList(),
-                topologicalOrder = order,
-            )
+            val canonicalEntries = byId.values.toList()
+            val order = deterministicTopologicalOrder(canonicalEntries, byRef)
             val fingerprint = StableFieldIds.fingerprint(
                 "extension-registry-snapshot/v1",
-                *provisional.entries
+                *canonicalEntries
                     .map { it.fingerprint() }
                     .toTypedArray(),
                 *order.map { "order:${it.fingerprint()}" }.toTypedArray(),
             )
             return ExtensionRegistrySnapshot(
                 id = "extension-registry:$fingerprint",
-                entries = provisional.entries,
+                entries = canonicalEntries,
                 topologicalOrder = order,
             )
         }
