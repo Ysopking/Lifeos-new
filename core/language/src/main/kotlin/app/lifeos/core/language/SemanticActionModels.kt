@@ -82,15 +82,51 @@ value class SemanticNodeId(val value: String) {
     }
 }
 
+enum class SemanticScopeTargetKind {
+    PREDICATE,
+    ROLE,
+    RELATION,
+}
+
+data class SemanticScopeTarget(
+    val kind: SemanticScopeTargetKind,
+    val nodeId: SemanticNodeId? = null,
+    val role: SemanticRole? = null,
+    val edgeId: SemanticActionEdgeId? = null,
+) {
+    init {
+        when (kind) {
+            SemanticScopeTargetKind.PREDICATE -> {
+                require(nodeId != null)
+                require(role == null)
+                require(edgeId == null)
+            }
+            SemanticScopeTargetKind.ROLE -> {
+                require(nodeId != null)
+                require(role != null)
+                require(edgeId == null)
+            }
+            SemanticScopeTargetKind.RELATION -> {
+                require(nodeId == null)
+                require(role == null)
+                require(edgeId != null)
+            }
+        }
+    }
+}
+
 data class SemanticScope(
     val type: ScopeType,
     val targetNodeIds: Set<SemanticNodeId>,
     val span: TextSpan,
     val cue: String,
     val confidence: Double,
+    val targets: Set<SemanticScopeTarget> = targetNodeIds.mapTo(linkedSetOf()) {
+        SemanticScopeTarget(SemanticScopeTargetKind.PREDICATE, nodeId = it)
+    },
 ) {
     init {
-        require(targetNodeIds.isNotEmpty())
+        require(targetNodeIds.isNotEmpty() || targets.isNotEmpty())
         require(cue.isNotBlank())
         require(confidence.isFinite() && confidence in 0.0..1.0)
     }
@@ -243,15 +279,41 @@ data class SemanticActionNode(
     }
 }
 
+@JvmInline
+value class SemanticActionEdgeId(val value: String) {
+    init {
+        require(value.startsWith(PREFIX))
+        require(value.removePrefix(PREFIX).matches(Regex("[0-9a-f]{64}")))
+    }
+
+    companion object {
+        const val PREFIX = "semantic-edge:"
+        fun create(
+            from: SemanticNodeId,
+            to: SemanticNodeId,
+            type: SemanticActionEdgeType,
+        ): SemanticActionEdgeId = SemanticActionEdgeId(
+            PREFIX + StableCognitiveIds.fingerprint(
+                "semantic-action-edge/v2",
+                from.value,
+                to.value,
+                type.name,
+            )
+        )
+    }
+}
+
 data class SemanticActionEdge(
     val from: SemanticNodeId,
     val to: SemanticNodeId,
     val type: SemanticActionEdgeType,
     val confidence: Double,
+    val id: SemanticActionEdgeId = SemanticActionEdgeId.create(from, to, type),
 ) {
     init {
         require(from != to)
         require(confidence.isFinite() && confidence in 0.0..1.0)
+        require(id == SemanticActionEdgeId.create(from, to, type))
     }
 }
 
@@ -265,7 +327,14 @@ data class SemanticActionGraph(
         require(nodes.map { it.id }.distinct().size == nodes.size)
         val ids = nodes.mapTo(linkedSetOf()) { it.id }
         require(edges.all { it.from in ids && it.to in ids })
-        require(scopes.all { scope -> scope.targetNodeIds.isNotEmpty() && scope.targetNodeIds.all { it in ids } })
+        val edgeIds = edges.mapTo(linkedSetOf()) { it.id }
+        require(scopes.all { scope ->
+            scope.targetNodeIds.all { it in ids } &&
+                scope.targets.all { target ->
+                    (target.nodeId == null || target.nodeId in ids) &&
+                        (target.edgeId == null || target.edgeId in edgeIds)
+                }
+        })
         require(fingerprint.isNotBlank())
     }
 
