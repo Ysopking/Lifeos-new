@@ -82,7 +82,7 @@ import kotlinx.coroutines.launch
 class LifeOsKernel internal constructor(
     val runtime: LifeOsRuntime,
     val matrix: ThoughtMatrix,
-    val photonStore: PhotonRepository,
+    val photonStore: RevisionedPhotonRepository,
     val photonTransactions: PhotonTransactionJournal,
     val cognitiveOutcomes: CognitiveOutcomeJournal,
     val cognitiveTriggers: CognitiveTriggerSink,
