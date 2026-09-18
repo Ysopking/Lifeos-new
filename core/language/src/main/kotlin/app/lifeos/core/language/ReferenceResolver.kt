@@ -3,6 +3,7 @@ package app.lifeos.core.language
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonRevisionRef
 import java.time.Duration
+import java.util.Locale
 
 class ReferenceExpressionExtractor {
     private val explicitIdRegex = Regex("\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b")
@@ -228,14 +229,29 @@ class ReferenceResolver {
 
     private fun score(item: LanguageContextItem, expression: ReferenceExpression, context: LanguageContext): Double {
         var score = 0.05
-        if (
+        val expressionTerms = referenceTerms(expression.rawText)
+        val semanticKindMatch =
             expression.preferredKinds.isEmpty() ||
-            item.kind in expression.preferredKinds ||
-            item.tags.any { it in expression.preferredKinds }
-        ) {
-            score += 0.34
+                item.kind in expression.preferredKinds ||
+                item.tags.any { it in expression.preferredKinds } ||
+                item.semanticTypes.any { semantic ->
+                    expression.preferredKinds.any { preferred ->
+                        semantic == preferred || semantic.endsWith(":" + preferred)
+                    }
+                }
+        if (semanticKindMatch) {
+            score += 0.30
         } else {
-            score -= 0.20
+            score -= 0.24
+        }
+
+        if (expressionTerms.isNotEmpty()) {
+            val overlap = expressionTerms.count(item.normalizedTerms::contains).toDouble() /
+                expressionTerms.size.toDouble()
+            val exactPreferredTerms = expressionTerms.filterNot { it in REFERENCE_STOP_WORDS }
+            val exactOverlap = exactPreferredTerms.count(item.normalizedTerms::contains)
+            score += overlap * 0.26
+            if (exactOverlap > 0) score += minOf(0.18, exactOverlap * 0.06)
         }
         if (expression.kind == ReferenceKind.OTHER) {
             score += if (item.active) -0.18 else 0.20
@@ -265,6 +281,16 @@ class ReferenceResolver {
         }
         if (expression.kind == ReferenceKind.LAST_RESULT && "result" in item.tags) score += 0.18
 
+        if (expression.kind == ReferenceKind.LAST_RESULT && "result" in item.semanticTypes) {
+            score += 0.08
+        }
+        if (item.goalId != null && item.goalId == context.activeGoalId) {
+            score += 0.08
+        }
+        if (item.matterId != null && expressionTerms.any { it in MATTER_TERMS }) {
+            score += 0.08
+        }
+
         val confidenceWeighted = score * item.confidence
         val activeGoalAnchor =
             item.photonId == context.activeGoalId &&
@@ -276,5 +302,25 @@ class ReferenceResolver {
             confidenceWeighted
         }
         return resolved.coerceIn(0.0, 1.0)
+    }
+
+    private fun referenceTerms(value: String): Set<String> =
+        TERM_REGEX.findAll(value)
+            .map { it.value.lowercase(Locale.ROOT).replace("ß", "ss") }
+            .filter { it.length > 1 }
+            .filterNot { it in REFERENCE_STOP_WORDS }
+            .toSet()
+
+    private companion object {
+        val TERM_REGEX = Regex("[\\p{L}\\p{N}]+")
+        val REFERENCE_STOP_WORDS = setOf(
+            "das", "die", "der", "den", "dem", "dies", "diese", "dieses", "diesen",
+            "andere", "anderen", "bitte", "mit", "und", "oder", "mach", "mache",
+            "it", "this", "that", "the", "other", "with", "and", "or", "please", "make",
+        )
+        val MATTER_TERMS = setOf(
+            "bescheid", "jobcenter", "behorde", "behoerde", "schuld", "forderung",
+            "vertrag", "frist", "matter", "case", "debt", "claim",
+        )
     }
 }
