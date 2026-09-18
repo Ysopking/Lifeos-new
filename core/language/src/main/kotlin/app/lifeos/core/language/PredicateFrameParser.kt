@@ -195,88 +195,51 @@ class PredicateFrameParser(
         clause: SemanticClause,
         predicate: PredicateConcept,
         predicateTokenIndex: Int,
+        argumentEndExclusive: Int,
         references: List<ResolvedReference>,
     ): Map<SemanticRole, SemanticValue> {
-        val roles = linkedMapOf<SemanticRole, SemanticValue>()
-        val clauseEntities = clause.entities.sortedBy { it.tokenStart }
-        val clauseQuantities = clause.quantities.sortedBy { it.tokenStart }
-
-        clauseEntities.firstOrNull { it.type == EntityType.IMAGE }?.let {
-            roles[SemanticRole.OBJECT] = it.asValue()
-        }
-        clauseEntities.firstOrNull { it.type == EntityType.FILE || it.type == EntityType.OBJECT }?.let {
-            roles.putIfAbsent(SemanticRole.OBJECT, it.asValue())
-        }
-        clauseEntities.firstOrNull { it.type == EntityType.LOCATION }?.let {
-            roles[SemanticRole.LOCATION] = it.asValue()
-        }
-        clauseEntities.firstOrNull { it.type == EntityType.DATE }?.let {
-            roles[SemanticRole.DATE] = it.asValue()
-        }
-        clauseEntities.firstOrNull { it.type == EntityType.TIME }?.let {
-            roles[SemanticRole.TIME] = it.asValue()
-        }
-        clauseEntities.firstOrNull { it.type == EntityType.DURATION }?.let {
-            roles[SemanticRole.DURATION] = it.asValue()
-        }
-
-        clauseQuantities.firstOrNull()?.let { quantity ->
-            roles[SemanticRole.AMOUNT] = SemanticValue(
-                rawText = quantity.value + quantity.unit?.let { " " + it }.orEmpty(),
-                normalized = quantity.value,
-                quantity = quantity,
-                confidence = quantity.confidence,
-            )
-            quantity.unit?.let { unit ->
-                roles[SemanticRole.UNIT] = SemanticValue(
-                    rawText = unit,
-                    normalized = unit,
-                    confidence = quantity.confidence,
-                )
-                if (unit.lowercase() in CURRENCY_UNITS) {
-                    roles[SemanticRole.CURRENCY] = SemanticValue(
-                        rawText = unit,
-                        normalized = normalizeCurrency(unit),
-                        confidence = quantity.confidence,
-                    )
-                }
-            }
-        }
+        val contract = contracts.contract(predicate)
+        val roles = roleBinder.bindBase(
+            clause = clause,
+            contract = contract,
+            references = references,
+            tokenStart = clause.tokenStart,
+            tokenEndExclusive = argumentEndExclusive,
+        )
 
         val personCandidates = personCandidates(utterance, clause)
         when (predicate) {
             PredicateConcept.OWE -> {
                 val before = personCandidates.lastOrNull { it.first < predicateTokenIndex }
-                val after = personCandidates.firstOrNull { it.first > predicateTokenIndex }
+                val after = personCandidates.firstOrNull {
+                    it.first > predicateTokenIndex && it.first < argumentEndExclusive
+                }
                 before?.second?.let { roles[SemanticRole.DEBTOR] = it }
                 after?.second?.let { roles[SemanticRole.CREDITOR] = it }
             }
-            PredicateConcept.COMMUNICATE -> {
-                recipient(utterance, clause, personCandidates)?.let {
+            PredicateConcept.COMMUNICATE,
+            PredicateConcept.PAY -> {
+                recipient(
+                    utterance = utterance,
+                    clause = clause,
+                    people = personCandidates.filter { it.first < argumentEndExclusive },
+                )?.let {
                     roles[SemanticRole.RECIPIENT] = it
                 }
             }
             else -> Unit
         }
 
-        if (predicate in OBJECT_REQUIRED_PREDICATES && SemanticRole.OBJECT !in roles) {
-            fallbackObject(utterance, clause, predicateTokenIndex)?.let {
+        val localRequirements = contract.localRoleAlternatives.flatten().toSet()
+        if (SemanticRole.OBJECT in localRequirements && SemanticRole.OBJECT !in roles) {
+            fallbackObject(
+                utterance = utterance,
+                clause = clause,
+                predicateTokenIndex = predicateTokenIndex,
+                argumentEndExclusive = argumentEndExclusive,
+            )?.let {
                 roles[SemanticRole.OBJECT] = it
             }
-        }
-
-        val resolvedReference = references
-            .filter { it.targetPhotonRef != null }
-            .maxByOrNull { it.score }
-        if (resolvedReference != null && predicate in REFERENCE_OBJECT_PREDICATES) {
-            val ref = requireNotNull(resolvedReference.targetPhotonRef)
-            roles[SemanticRole.OBJECT] = SemanticValue(
-                rawText = resolvedReference.expression.rawText,
-                normalized = ref.photonId.value,
-                referencePhoton = ref,
-                resolved = true,
-                confidence = resolvedReference.score,
-            )
         }
 
         return roles.toMap()
@@ -343,10 +306,11 @@ class PredicateFrameParser(
         utterance: NormalizedUtterance,
         clause: SemanticClause,
         predicateTokenIndex: Int,
+        argumentEndExclusive: Int,
     ): SemanticValue? {
         val tokens = utterance.tokens
         val words = mutableListOf<Int>()
-        for (index in predicateTokenIndex + 1 until clause.tokenEndExclusive) {
+        for (index in predicateTokenIndex + 1 until argumentEndExclusive) {
             val token = tokens[index]
             if (token.kind == TokenKind.PUNCTUATION) continue
             if (token.normalized in RECIPIENT_PREPOSITIONS && words.isNotEmpty()) break
