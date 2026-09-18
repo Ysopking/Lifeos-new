@@ -27,6 +27,8 @@ import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootContext
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootEngineRecoveryResult
+import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootRunResult
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
@@ -99,6 +101,7 @@ class LifeOsKernel internal constructor(
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
+    private val bootEngineRuntime: BootEngineRuntime,
     private val continuousCognition: ContinuousCognitionEngine,
     private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
@@ -212,7 +215,17 @@ class LifeOsKernel internal constructor(
             bootstrapJob?.cancel()
             bootstrapJob = null
         }
+        bootEngineRuntime.recover()
         supervisor.stop()
+    }
+
+    fun requireCognitiveReady() {
+        val state = mutableBootstrapState.value.status
+        require(
+            state == KernelBootstrapStatus.READY || state == KernelBootstrapStatus.DEGRADED
+        ) {
+            "Cognitive runtime is not ready: $state"
+        }
     }
 
     /**
@@ -867,6 +880,14 @@ class LifeOsKernel internal constructor(
         warnings: List<String>,
         degraded: Boolean,
     ) {
+        val cognitiveRecovery = bootEngineRuntime.recover()
+        when (cognitiveRecovery) {
+            BootEngineRecoveryResult.NoActiveCycle,
+            is BootEngineRecoveryResult.ResumePrepared,
+            is BootEngineRecoveryResult.ResumeCommit,
+            is BootEngineRecoveryResult.RecoveredCommitted -> Unit
+        }
+
         supervisor.start()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
