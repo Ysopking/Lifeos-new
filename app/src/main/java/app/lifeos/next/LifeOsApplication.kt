@@ -41,6 +41,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchResultPhotonPersistence
 import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
+import app.lifeos.core.runtime.health.ProtectionCoordinatorProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
 import app.lifeos.core.runtime.life.DomainEvidenceConvergenceCoordinator
 import app.lifeos.core.runtime.life.DomainEvidenceConvergingPersistence
@@ -75,6 +76,7 @@ import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
 import app.lifeos.next.kernel.MultimodalPerceptionRuntime
+import app.lifeos.next.kernel.PrivateEscalationRuntime
 import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
@@ -130,6 +132,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         private set
 
     internal lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
+        private set
+
+    internal lateinit var escalationRuntime: PrivateEscalationRuntime
         private set
 
     private lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
@@ -338,6 +343,11 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     val supervisor = requireNotNull(RuntimeSupervisorProcessRegistry.current()) {
                         "Kernel did not install its RuntimeSupervisor"
                     }
+                    val protectionCoordinator = requireNotNull(
+                        ProtectionCoordinatorProcessRegistry.current()
+                    ) {
+                        "Kernel did not install its ProtectionCoordinator"
+                    }
                     selfHealingRuntime = PrivateSelfHealingRuntime.create(
                         context = this,
                         scope = selfHealingScope,
@@ -347,8 +357,16 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                         runtime = kernel.runtime,
                         supervisor = supervisor,
                     )
+                    escalationRuntime = PrivateEscalationRuntime.create(
+                        context = this,
+                        scope = selfHealingScope,
+                        graph = healthGraph,
+                        protection = protectionCoordinator,
+                        selfHealing = selfHealingRuntime,
+                    )
                     runBlocking {
                         selfHealingRuntime.verifyLedgerIntegrity()
+                        escalationRuntime.verifyLedgerIntegrity()
                     }
                     LifeOsHealthPhotonBridge.start(
                         scope = selfHealingScope,
@@ -358,7 +376,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                             Unit
                         },
                     )
-                    selfHealingRuntime.orchestrator.start()
+                    escalationRuntime.orchestrator.start()
                 },
                 installDurableGoalPlanRuntime = {
                     DurableGoalPlanRuntimeRegistry.install(
