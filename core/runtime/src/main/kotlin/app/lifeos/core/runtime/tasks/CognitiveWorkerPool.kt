@@ -9,6 +9,9 @@ import app.lifeos.core.model.worker.WorkerId
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.atomic.AtomicInteger
 
 enum class CognitiveWorkerLane {
@@ -48,7 +51,10 @@ class CognitiveWorkerPool(
         }
     }
 
-    fun select(priority: TaskPriority): CognitiveWorkerSlot {
+    fun select(
+        priority: TaskPriority,
+        excludedWorkerIds: Set<WorkerId> = emptySet(),
+    ): CognitiveWorkerSlot? {
         val preferred = when (priority) {
             TaskPriority.CRITICAL,
             TaskPriority.INTERACTIVE -> listOf(
@@ -63,13 +69,19 @@ class CognitiveWorkerPool(
             TaskPriority.BACKGROUND -> listOf(
                 CognitiveWorkerLane.BACKGROUND,
                 CognitiveWorkerLane.ACTIVE,
-                CognitiveWorkerLane.INTERACTIVE,
             )
         }
-        val lane = preferred.first { byLane.getValue(it).isNotEmpty() }
-        val candidates = byLane.getValue(lane)
-        val index = Math.floorMod(cursors.getValue(lane).getAndIncrement(), candidates.size)
-        return candidates[index]
+        preferred.forEach { lane ->
+            val candidates = byLane.getValue(lane).filterNot { it.workerId in excludedWorkerIds }
+            if (candidates.isNotEmpty()) {
+                val index = Math.floorMod(
+                    cursors.getValue(lane).getAndIncrement(),
+                    candidates.size,
+                )
+                return candidates[index]
+            }
+        }
+        return null
     }
 
     fun count(lane: CognitiveWorkerLane): Int = byLane.getValue(lane).size
@@ -89,36 +101,44 @@ class PooledTaskScheduler(
         require(limit > 0)
         val scanTime = now()
         val runnable = tasks.listRunnable(scanTime, limit)
-        var claimedCount = 0
-        var dispatchedCount = 0
-        val failures = mutableListOf<TaskId>()
+        val claimed = mutableListOf<Pair<CognitiveWorkerSlot, LifeTask>>()
+        val usedWorkers = linkedSetOf<WorkerId>()
 
         for (candidate in runnable) {
             val queued = normalizeRunnable(candidate, scanTime) ?: continue
-            val slot = workers.select(queued.priority)
+            val slot = workers.select(queued.priority, usedWorkers) ?: continue
             val acquiredAt = now()
-            val claimed = tasks.claim(
+            val owned = tasks.claim(
                 id = queued.id,
                 workerId = slot.workerId,
                 acquiredAt = acquiredAt,
                 leaseUntil = acquiredAt.plus(leaseDuration),
             ) ?: continue
-
-            claimedCount += 1
-            try {
-                slot.dispatcher.dispatch(claimed)
-                dispatchedCount += 1
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                failures += claimed.id
-            }
+            usedWorkers += slot.workerId
+            claimed += slot to owned
+            if (claimed.size >= workers.slots.size) break
         }
+
+        val results = coroutineScope {
+            claimed.map { (slot, task) ->
+                async {
+                    try {
+                        slot.dispatcher.dispatch(task)
+                        task.id to true
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        task.id to false
+                    }
+                }
+            }.awaitAll()
+        }
+        val failures = results.filterNot { it.second }.map { it.first }
 
         return TaskScheduleResult(
             scanned = runnable.size,
-            claimed = claimedCount,
-            dispatched = dispatchedCount,
+            claimed = claimed.size,
+            dispatched = results.count { it.second },
             dispatchFailures = failures,
         )
     }
