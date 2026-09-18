@@ -18,9 +18,11 @@ internal class CanonicalLifePhotonRepository(
     private val delegate: PhotonRepository,
     private val productiveIngress: suspend (Photon, PhotonIngressMode) -> Unit,
 ) : PhotonRepository, PhotonResidencyController {
+    @Volatile
+    private var cognitionDeferred: Boolean = false
     override suspend fun save(photon: Photon) {
         val mode = productiveMode(photon)
-        if (mode == null) {
+        if (mode == null || cognitionDeferred) {
             delegate.save(photon)
         } else {
             productiveIngress(photon, mode)
@@ -37,6 +39,22 @@ internal class CanonicalLifePhotonRepository(
 
     override suspend fun retainResident(ids: Set<PhotonId>) {
         (delegate as? PhotonResidencyController)?.retainResident(ids)
+    }
+
+    /**
+     * Boot composition may build derived memory state before the durable worker/supervisor starts.
+     * During that bounded window we persist exact Photon truth only. The kernel's canonical
+     * DurableCognitionReconciler then creates missing tasks in bounded passes and its recovery
+     * observer refills capacity after each terminal result.
+     */
+    suspend fun <T> withCognitionDeferred(block: suspend () -> T): T {
+        check(!cognitionDeferred) { "Life cognition deferral is already active" }
+        cognitionDeferred = true
+        return try {
+            block()
+        } finally {
+            cognitionDeferred = false
+        }
     }
 
     /**
