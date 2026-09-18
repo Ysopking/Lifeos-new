@@ -431,6 +431,27 @@ class BootEngineRuntime(
         }
     }
 
+    suspend fun failEvaluation(
+        evaluation: BootEngineWorldEvaluation.Ready,
+        reason: String,
+    ): BootEngineCycle = mutex.withLock {
+        require(reason.isNotBlank())
+        val durableCycle = requireNotNull(cycles.load(evaluation.cycle.cycleId)) {
+            "BootEngine cycle disappeared before fail-closed terminalization"
+        }
+        require(durableCycle.fingerprint == evaluation.cycle.fingerprint) {
+            "BootEngine cycle changed before fail-closed terminalization"
+        }
+        require(durableCycle.state == BootEngineCycleState.WORLD_EVALUATED) {
+            "BootEngine can fail-close only a WORLD_EVALUATED cycle"
+        }
+        val failed = durableCycle.failed(reason)
+        check(cycles.compareAndSet(durableCycle.fingerprint, failed)) {
+            "BootEngine cycle changed while recording fail-closed terminalization"
+        }
+        failed
+    }
+
     suspend fun recover(): BootEngineRecoveryResult = mutex.withLock {
         val worldReport = worldHeads.loadReport()
         require(!worldReport.corrupted) {

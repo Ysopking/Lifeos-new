@@ -26,6 +26,8 @@ import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.model.task.TaskId
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
+import app.lifeos.core.runtime.boot.BootEngineCycleState
+import app.lifeos.core.runtime.boot.BootEngineFrozenInputs
 import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionCheckpoint
 import app.lifeos.core.runtime.convergence.ConvergenceDomainInput
@@ -33,6 +35,8 @@ import app.lifeos.core.runtime.convergence.CrossDomainConvergenceRequest
 import app.lifeos.core.runtime.convergence.ProductiveConvergenceAuthority
 import app.lifeos.core.runtime.convergence.ProductiveConvergenceInput
 import app.lifeos.core.runtime.convergence.ProductiveConvergenceResult
+import app.lifeos.core.runtime.convergence.ProductiveWorldPublicationNotReadyException
+import app.lifeos.core.runtime.thought.ThoughtGraphWorkingSet
 import java.time.Instant
 
 /**
@@ -55,11 +59,19 @@ interface GoalConvergenceDecisionSource {
     ): ConvergenceDecisionCheckpoint
 }
 
+fun interface GoalCycleFrozenInputSource {
+    suspend fun freeze(
+        workingSet: ThoughtGraphWorkingSet,
+        routing: GoalCapabilityResolution,
+    ): BootEngineFrozenInputs
+}
+
 class GoalConvergenceDecisionProvider(
     private val productiveConvergence: ProductiveConvergenceAuthority,
     private val bootEngine: BootEngineRuntime,
     private val photons: RevisionedPhotonRepository,
     private val thoughtGraph: GoalThoughtGraphProjector = GoalThoughtGraphProjector(),
+    private val cycleInputs: GoalCycleFrozenInputSource? = null,
 ) : GoalConvergenceDecisionSource {
     override suspend fun decide(
         goal: GoalFrame,
@@ -174,15 +186,29 @@ class GoalConvergenceDecisionProvider(
         }
         require(goalPhoton.id == goalPhotonId && goalPhoton.revision == goalPhotonRevision)
 
-        val cycle = bootEngine.activeCycle()
-            ?: throw ProductiveConvergenceNotReadyException(
-                "active-bootengine-cycle-unavailable"
-            )
         val workingSet = thoughtGraph.project(
             goalPhoton = goalPhoton,
             source = source,
             at = at,
         )
+        val cycle = bootEngine.activeCycle() ?: run {
+            val inputSource = cycleInputs
+                ?: throw ProductiveConvergenceNotReadyException(
+                    "active-bootengine-cycle-unavailable"
+                )
+            try {
+                bootEngine.startCycle(inputSource.freeze(workingSet, routing))
+            } catch (race: IllegalArgumentException) {
+                throw ProductiveConvergenceNotReadyException(
+                    "bootengine-cycle-start-unavailable:${race.message.orEmpty().take(160)}"
+                )
+            }
+        }
+        if (cycle.state != BootEngineCycleState.PREPARED) {
+            throw ProductiveConvergenceNotReadyException(
+                "active-bootengine-cycle-not-prepared:${cycle.state.name.lowercase()}"
+            )
+        }
         val sourceTaskId = TaskId(
             "goal-convergence:" + StableFieldIds.fingerprint(
                 "productive-goal-convergence-task/v1",
@@ -194,8 +220,8 @@ class GoalConvergenceDecisionProvider(
                 cycle.cycleId.value,
             )
         )
-        return when (
-            val result = productiveConvergence.decide(
+        val result = try {
+            productiveConvergence.decide(
                 ProductiveConvergenceInput(
                     cycle = cycle,
                     workingSet = workingSet,
@@ -207,7 +233,12 @@ class GoalConvergenceDecisionProvider(
                     capabilityGaps = routing.blockingGaps,
                 )
             )
-        ) {
+        } catch (blocked: ProductiveWorldPublicationNotReadyException) {
+            throw ProductiveConvergenceNotReadyException(
+                "world-publication:${blocked.reason}"
+            )
+        }
+        return when (result) {
             is ProductiveConvergenceResult.Decided -> result.checkpoint
             is ProductiveConvergenceResult.WorldNotStable -> throw ProductiveConvergenceNotReadyException(
                 "world-not-stable:${result.worldSnapshotId}"

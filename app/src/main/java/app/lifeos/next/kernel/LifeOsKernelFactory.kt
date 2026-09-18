@@ -4,6 +4,7 @@ import android.content.Context
 import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.data.EncryptedPhotonStore
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.goal.GoalCycleFrozenInputSource
 import app.lifeos.core.runtime.extension.ExtensionRegistryRehydrator
 import app.lifeos.core.runtime.convergence.WorldFormulaBoundConvergenceService
 import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
@@ -31,6 +32,7 @@ import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistryHeadRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistrySnapshotRepository
 import app.lifeos.core.data.worldmodel.EncryptedWorldModelRepository
+import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.LanguageUnderstandingEngine
@@ -51,6 +53,7 @@ import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.StaticFieldRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootEngineFrozenInputs
 import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootSnapshotSource
 import app.lifeos.core.runtime.boot.TaskRepositoryBootSource
@@ -170,6 +173,8 @@ class LifeOsKernelFactory(
     fun create(): LifeOsKernel {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val appContext = context.applicationContext
+        val cycleResourceIntelligence =
+            hardwareResourceIntelligence ?: HardwareResourceIntelligenceRuntime(appContext)
         val store = EncryptedPhotonStore(appContext)
         val cognitionJournalIndex = CognitionJournalIndex(
             repository = EncryptedCognitionJournalIndexRepository(appContext),
@@ -423,6 +428,44 @@ class LifeOsKernelFactory(
             productiveConvergence = DefaultProductiveConvergenceAuthority(productiveWorldConvergence),
             bootEngine = bootEngineRuntime,
             photons = store,
+            cycleInputs = GoalCycleFrozenInputSource { workingSet, routing ->
+                val hardware = cycleResourceIntelligence.currentHardwareSnapshot()
+                val calibration = learnedFieldCalibration.profile()
+                val strategyFingerprint = StableFieldIds.fingerprint(
+                    "productive-goal-strategy-snapshot/v1",
+                    calibration.fingerprint,
+                    routing.plan.goal.intent.name,
+                    *buildList {
+                        routing.selectedProviders.entries
+                            .sortedBy { it.key.value }
+                            .forEach { (capabilityId, provider) ->
+                                add(
+                                    "provider:${capabilityId.value}:${provider.providerId}:" +
+                                        "${provider.state.name}:${provider.trustLevel.name}:" +
+                                        "${java.lang.Double.toHexString(provider.reliability)}:" +
+                                        java.lang.Double.toHexString(provider.cost)
+                                )
+                            }
+                        routing.blockingGaps
+                            .sortedBy { it.requirement.capabilityId.value }
+                            .forEach { gap ->
+                                add(
+                                    "gap:${gap.requirement.capabilityId.value}:${gap.type.name}:" +
+                                        gap.requirement.severity.name
+                                )
+                                gap.candidateProviderIds.sorted().forEach { candidate ->
+                                    add("gap-candidate:${gap.requirement.capabilityId.value}:$candidate")
+                                }
+                            }
+                    }.toTypedArray(),
+                )
+                BootEngineFrozenInputs(
+                    representationSnapshotId = workingSet.sourceSnapshotId,
+                    strategySnapshotId = "goal-strategy:$strategyFingerprint",
+                    equationVersion = cognitiveWorldEquationProfile.spec.version,
+                    resourceSnapshotId = "hardware-state:${hardware.fingerprint()}",
+                )
+            },
         )
 
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
@@ -511,8 +554,8 @@ class LifeOsKernelFactory(
             ),
         )
         val durableStateBridge = DurableRuntimeStateBridge()
-        val hardware = hardwareResourceIntelligence?.currentHardwareSnapshot()
-        val availableCores = hardware?.availableProcessors ?: 1
+        val hardware = cycleResourceIntelligence.currentHardwareSnapshot()
+        val availableCores = hardware.availableProcessors
         val activeWorkers = (availableCores - 1).coerceIn(0, 3)
         val backgroundWorkers = if (availableCores >= 4) 1 else 0
         val maintenanceWorkers = if (availableCores >= 6) 1 else 0

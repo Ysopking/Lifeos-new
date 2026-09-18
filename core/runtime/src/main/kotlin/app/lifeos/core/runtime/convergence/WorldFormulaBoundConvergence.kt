@@ -6,6 +6,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.task.TaskId
 import app.lifeos.core.runtime.boot.BootEngineCycle
+import app.lifeos.core.runtime.boot.BootEngineCommitResult
 import app.lifeos.core.runtime.boot.BootEngineCycleState
 import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootEngineWorldEvaluation
@@ -102,6 +103,14 @@ sealed interface WorldFormulaBoundConvergenceResult {
         init {
             require(binding.worldStatus != WorldFormulaStatus.CONVERGED)
         }
+    }
+}
+
+class ProductiveWorldPublicationNotReadyException(
+    val reason: String,
+) : IllegalStateException(reason) {
+    init {
+        require(reason.isNotBlank())
     }
 }
 
@@ -234,6 +243,10 @@ class WorldFormulaBoundConvergenceService(
         )
 
         if (snapshot.status != WorldFormulaStatus.CONVERGED) {
+            bootEngine.failEvaluation(
+                evaluation = evaluation,
+                reason = "world-formula-not-stable:${snapshot.status.name.lowercase()}",
+            )
             return WorldFormulaBoundConvergenceResult.WorldNotStable(
                 binding = binding,
                 worldEvaluation = evaluation,
@@ -248,6 +261,31 @@ class WorldFormulaBoundConvergenceService(
                 workingSetFingerprint = bound.workingSetFingerprint,
             )
         )
+        when (val committed = bootEngine.commit(evaluation)) {
+            is BootEngineCommitResult.Committed -> Unit
+            BootEngineCommitResult.ConcurrentWorldHeadChanged -> {
+                bootEngine.failEvaluation(
+                    evaluation = evaluation,
+                    reason = "productive-world-head-changed-before-commit",
+                )
+                throw ProductiveWorldPublicationNotReadyException(
+                    "productive-world-head-changed-before-commit"
+                )
+            }
+            BootEngineCommitResult.ConcurrentCycleChanged ->
+                throw ProductiveWorldPublicationNotReadyException(
+                    "bootengine-cycle-changed-before-commit"
+                )
+            is BootEngineCommitResult.Blocked -> {
+                bootEngine.failEvaluation(
+                    evaluation = evaluation,
+                    reason = "productive-world-commit-blocked:${committed.reason}",
+                )
+                throw ProductiveWorldPublicationNotReadyException(
+                    "productive-world-commit-blocked:${committed.reason}"
+                )
+            }
+        }
         return WorldFormulaBoundConvergenceResult.Decided(
             decision = WorldBoundConvergenceDecision(binding, checkpoint),
             worldEvaluation = evaluation,
