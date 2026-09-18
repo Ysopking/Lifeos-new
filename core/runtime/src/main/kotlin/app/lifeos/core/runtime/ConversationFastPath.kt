@@ -93,7 +93,7 @@ class FastConversationSafetyGuard {
             "aber", "sondern", "und", "oder", "danach", "anschließend", "anschliessend",
             "but", "rather", "and", "or", "then",
         )
-        val QUOTE_MARKERS = setOf(""", "„", "“", "”", "«", "»")
+        val QUOTE_MARKERS = setOf("\\\"", "„", "“", "”", "«", "»")
     }
 }
 
