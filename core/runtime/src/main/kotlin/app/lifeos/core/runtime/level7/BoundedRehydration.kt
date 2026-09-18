@@ -11,6 +11,14 @@ enum class RehydrationStepKind {
     MEMORY_HEAD,
     GOAL_HEAD,
     LEARNING_HEAD,
+    WORLD_EQUATION_HEAD,
+    WORLD_MODEL_HEAD,
+    STRATEGY_HEAD,
+    CALIBRATION_HEAD,
+    REPRESENTATION_HEAD,
+    GOAL_HIERARCHY_HEAD,
+    LEARNING_WATERMARK,
+    DYNAMIC_MODULE_HEAD,
 }
 
 data class RehydrationStep(
@@ -43,7 +51,7 @@ data class BoundedRehydrationPlan private constructor(
     private fun expectedId(): String = "rehydration-plan:${fingerprint()}"
 
     companion object {
-        const val MAX_STEPS: Int = 8
+        const val MAX_STEPS: Int = 16
 
         fun create(steps: List<RehydrationStep>): BoundedRehydrationPlan {
             require(steps.isNotEmpty() && steps.size <= MAX_STEPS)
