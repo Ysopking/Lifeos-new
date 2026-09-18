@@ -167,3 +167,46 @@ class PolicyGatedExternalEffectExecutor(
         return receipt
     }
 }
+
+
+object ExternalEffectRuntimeRegistry {
+    @Volatile
+    private var installed: ExternalEffectExecutor? = null
+
+    fun install(executor: ExternalEffectExecutor) {
+        installed = executor
+    }
+
+    fun currentOrNull(): ExternalEffectExecutor? = installed
+}
+
+object ExternalTransportRuntimeRegistry {
+    private val transports = java.util.concurrent.ConcurrentHashMap<String, ExternalEffectTransport>()
+    private val reconcilers = java.util.concurrent.ConcurrentHashMap<String, ExternalObservationReconciler>()
+
+    fun install(
+        scheme: String,
+        transport: ExternalEffectTransport,
+        reconciler: ExternalObservationReconciler,
+    ) {
+        require(scheme.matches(Regex("[a-z][a-z0-9+.-]*")))
+        transports[scheme] = transport
+        reconcilers[scheme] = reconciler
+    }
+
+    fun transport(): ExternalEffectTransport = ExternalEffectTransport { contract ->
+        val delegate = transports[contract.endpoint.scheme]
+            ?: return@ExternalEffectTransport ExternalTransportResult.ChallengeRequired(
+                "no-transport-installed-for:${contract.endpoint.scheme}"
+            )
+        delegate.execute(contract)
+    }
+
+    fun reconciler(): ExternalObservationReconciler = ExternalObservationReconciler { contract, previous ->
+        val delegate = reconcilers[contract.endpoint.scheme]
+            ?: return@ExternalObservationReconciler ExternalTransportResult.Unknown(
+                previous.externalReference
+            )
+        delegate.reconcile(contract, previous)
+    }
+}
