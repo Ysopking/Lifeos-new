@@ -146,38 +146,19 @@ data class AbstractionCandidate private constructor(
             }) {
                 "Abstraction candidate pattern changed ThoughtGraph lineage"
             }
-            val targetIds = worldSnapshot.finalState.vectors.keys.mapTo(linkedSetOf()) { it.value }
-            require(affectedTargets.all { target ->
-                worldSnapshot.finalState.vectors.keys.any { nodeId ->
-                    worldSnapshot.finalState.vectors[nodeId] != null &&
-                        target.fingerprint() in worldSnapshot.finalState.vectors.keys
-                            .map { candidateNode ->
-                                candidateNode.value
-                            }
-                            .let { emptySet<String>() }
-                } || target.key.isNotBlank()
-            }) {
-                "Abstraction candidate contains invalid World targets"
+            require(affectedTargets.isNotEmpty() && affectedTargets.none { it.key.isBlank() }) {
+                "Abstraction candidate requires explicit affected World targets"
             }
-            require(worldSnapshot.id.isNotBlank())
-            require(targetIds.isNotEmpty())
+            val snapshotDimensions = worldSnapshot.finalState.vectors.values
+                .flatMapTo(linkedSetOf()) { it.dimensions() }
+            require(affectedDimensions.isNotEmpty()) {
+                "Abstraction candidate requires affected World dimensions"
+            }
+            require(affectedDimensions.all(snapshotDimensions::contains)) {
+                "Abstraction candidate references dimensions absent from the bound World snapshot"
+            }
 
-            val provisional = AbstractionCandidate(
-                id = "pending",
-                kind = kind,
-                semanticKey = semanticKey,
-                summary = summary,
-                producerId = producerId,
-                thoughtWorkingSetFingerprint = workingSet.fingerprint,
-                pattern = pattern,
-                worldSnapshotId = worldSnapshot.id,
-                worldSnapshotFingerprint = worldSnapshot.contentFingerprint(),
-                worldEquationVersion = worldSnapshot.equationVersion,
-                affectedTargets = affectedTargets,
-                affectedDimensions = affectedDimensions,
-                confidence = confidence,
-            )
-            val id = "abstraction-candidate:${StableFieldIds.fingerprint(
+            val fingerprint = StableFieldIds.fingerprint(
                 "abstraction-candidate/v1",
                 kind.name,
                 semanticKey,
@@ -194,11 +175,25 @@ data class AbstractionCandidate private constructor(
                     .map { "target:${it.fingerprint()}" }
                     .toTypedArray(),
                 *affectedDimensions.map { it.name }.sorted().map { "dimension:$it" }.toTypedArray(),
-            )}"
-            return provisional.copy(id = id)
+            )
+            return AbstractionCandidate(
+                id = "abstraction-candidate:$fingerprint",
+                kind = kind,
+                semanticKey = semanticKey,
+                summary = summary,
+                producerId = producerId,
+                thoughtWorkingSetFingerprint = workingSet.fingerprint,
+                pattern = pattern,
+                worldSnapshotId = worldSnapshot.id,
+                worldSnapshotFingerprint = worldSnapshot.contentFingerprint(),
+                worldEquationVersion = worldSnapshot.equationVersion,
+                affectedTargets = affectedTargets,
+                affectedDimensions = affectedDimensions,
+                confidence = confidence,
+            )
         }
     }
-}
+}}
 
 data class AbstractionValidationEvidence(
     val candidateId: String,
