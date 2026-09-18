@@ -15,6 +15,7 @@ data class ExternalActionContract(
     val idempotencyKey: String,
     val endpoint: ExternalEndpoint,
     val operation: String,
+    val payloadHandle: PayloadHandle,
     val payloadFingerprint: String,
     val requiredOwnerPolicy: OwnerEffectRequest,
     val resourceReservation: ExternalResourceReservation?,
@@ -28,6 +29,9 @@ data class ExternalActionContract(
         require(operation.isNotBlank())
         require(payloadFingerprint.matches(Regex("[0-9a-f]{64}"))) {
             "External payload fingerprint must be SHA-256"
+        }
+        require(payloadHandle.fingerprint == payloadFingerprint) {
+            "External payload handle/fingerprint mismatch"
         }
         require(sourcePhotonRefs.isNotEmpty()) { "External action requires source Photon revisions" }
         require(requiredOwnerPolicy.resource == endpoint.uri) {
