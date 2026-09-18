@@ -13,22 +13,34 @@ data class InvalidationResult(
     val recomputationPhotonIds: Set<PhotonId>,
 )
 
-/** Propagates revision deltas through dependency evidence without deleting historical state. */
+/** Uses the same revision-aware dependency index as recompute; no second BFS topology exists. */
 class CognitiveInvalidationEngine {
-    fun propagate(delta: CognitiveDelta, dependencies: Collection<CognitiveDependency>): InvalidationResult {
-        val queue = ArrayDeque<PhotonId>()
-        val visited = linkedSetOf<PhotonId>()
-        queue.add(delta.changedPhotonId)
-        while (queue.isNotEmpty()) {
-            val current = queue.removeFirst()
-            dependencies.asSequence()
-                .filter { it.sourcePhotonId == current }
-                .sortedBy { it.stableFingerprint }
-                .forEach { edge -> if (visited.add(edge.targetPhotonId)) queue.add(edge.targetPhotonId) }
+    fun propagate(
+        delta: CognitiveDelta,
+        dependencies: Collection<CognitiveDependency>,
+    ): InvalidationResult = propagate(delta, CognitiveDependencyIndex(dependencies))
+
+    fun propagate(
+        delta: CognitiveDelta,
+        dependencyIndex: CognitiveDependencyIndex,
+    ): InvalidationResult {
+        val propagated = dependencyIndex.propagate(
+            source = PhotonRevisionRef(delta.changedPhotonId, delta.fromRevision),
+            magnitudeMicros = 1_000_000L,
+        )
+        val affected = linkedMapOf<String, ProjectionValidity>()
+        propagated.forEach { value ->
+            val next = dependencyIndex.validity(value.reason)
+            val key = value.target.photonId.value
+            affected[key] = when {
+                affected[key] == ProjectionValidity.INVALID -> ProjectionValidity.INVALID
+                next == ProjectionValidity.INVALID -> ProjectionValidity.INVALID
+                else -> ProjectionValidity.STALE
+            }
         }
         return InvalidationResult(
-            affected = visited.associate { it.value to ProjectionValidity.STALE },
-            recomputationPhotonIds = visited,
+            affected = affected,
+            recomputationPhotonIds = propagated.mapTo(linkedSetOf()) { it.target.photonId },
         )
     }
 }
