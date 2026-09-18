@@ -176,7 +176,10 @@ class DurableGoalPlanRuntimeTest {
         return LanguageUnderstandingEngine()
             .understand(text)
             .goal
-            .copy(objective = objective)
+            .copy(
+                objective = objective,
+                confidence = 1.0,
+            )
     }
 
     private fun routing(goal: GoalFrame) = GoalCapabilityResolution(
