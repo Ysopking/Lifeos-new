@@ -357,13 +357,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     selfHealingRuntime.orchestrator.start()
                 },
                 installDurableGoalPlanRuntime = {
-                    val durableV5Decisions = DurableConvergenceDecisionCoordinator(
-                        EncryptedConvergenceDecisionCheckpointRepository(this),
-                    )
                     DurableGoalPlanRuntimeRegistry.install(
                         DurableGoalPlanRuntime(
                             ledger = kernel.goalPlans,
-                            convergence = GoalConvergenceDecisionProvider(durableV5Decisions),
+                            convergence = kernel.productiveGoalConvergence,
                             persistDerivedOutcome = { photon ->
                                 photonIngress.ingestWithReceipt(photon, PhotonIngressMode.DERIVED)
                             },
