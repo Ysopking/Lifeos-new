@@ -238,88 +238,18 @@ class LifeOsKernelFactory(
         val proceduralImageGenerator = foundation.proceduralImageGenerator
         val capabilityRegistry = foundation.capabilityRegistry
 
-        val generatedToolStateRepository = EncryptedGeneratedToolStateRepository(appContext)
-        val generatedTools = GeneratedToolRegistry(durableState = generatedToolStateRepository)
-        val generatedToolTrials = GeneratedToolTrialLedger(durableState = generatedToolStateRepository)
-        val generatedToolLifecycle = GeneratedToolLifecycleCoordinator(
-            tools = generatedTools,
-            trialLedger = generatedToolTrials,
+        val evolution = KernelEvolutionComposition(
+            appContext = appContext,
             capabilityRegistry = capabilityRegistry,
-        )
-        val privateGeneratedToolRuntime = PrivateGeneratedToolRuntimeResources.create(
-            context = appContext,
-            stateRepository = generatedToolStateRepository,
-            tools = generatedTools,
-            lifecycle = generatedToolLifecycle,
-        )
-        val evolutionStore = EncryptedEvolutionStore(appContext)
-        val novelAdmissionGate = NovelCapabilityAdmissionGate(
-            capabilities = capabilityRegistry,
-            tools = generatedTools,
-            artifacts = privateGeneratedToolRuntime.artifactRepository,
-        )
-        val novelCanary = NovelCapabilityCanaryCoordinator(
-            admissionGate = novelAdmissionGate,
-            trialRunner = privateGeneratedToolRuntime.trialRunner,
-            trialLedger = generatedToolTrials,
-            store = evolutionStore,
-        )
-        val novelReadiness = NovelCapabilityCanaryReadinessGate(
-            admissionGate = novelAdmissionGate,
-            trialLedger = generatedToolTrials,
-            store = evolutionStore,
-        )
-        val boundedNovelPromotion = BoundedNovelPromotionCoordinator(
-            admissionGate = novelAdmissionGate,
-            readinessGate = novelReadiness,
-            promotionStore = evolutionStore,
-            capabilities = capabilityRegistry,
-            tools = generatedTools,
-            artifacts = privateGeneratedToolRuntime.artifactRepository,
-            trials = generatedToolTrials,
-            lifecycle = generatedToolLifecycle,
-        )
-        val privateNovelActivation = PrivateNovelCapabilityActivationCoordinator(
-            capabilities = capabilityRegistry,
-            tools = generatedTools,
-            artifacts = privateGeneratedToolRuntime.artifactRepository,
-            trialLedger = generatedToolTrials,
-            canary = novelCanary,
-            admissionGate = novelAdmissionGate,
-            readinessGate = novelReadiness,
-            promotionStore = evolutionStore,
-            promotion = boundedNovelPromotion,
-        )
-        val generatedToolBootRehydrator = GeneratedToolBootStateRehydrator(
-            repository = generatedToolStateRepository,
-            tools = generatedTools,
-            trialLedger = generatedToolTrials,
-            capabilityRegistry = capabilityRegistry,
-            artifactRepository = privateGeneratedToolRuntime.artifactRepository,
-            novelPromotionStore = evolutionStore,
-        )
-        val evolutionResources = EvolutionRuntimeResources(
-            generatedTools = generatedTools,
-            trialLedger = generatedToolTrials,
-            lifecycle = generatedToolLifecycle,
-            canaryRouter = EvolutionCanaryRouter(evolutionStore),
-            outcomeCoordinator = EvolutionCanaryOutcomeCoordinator(
-                runtimeStore = evolutionStore,
-                outcomeStore = evolutionStore,
-                lifecycle = generatedToolLifecycle,
-            ),
-            promotionBridge = EvolutionPromotionBridge(
-                runtimeStore = evolutionStore,
-                outcomeStore = evolutionStore,
-                lifecycle = generatedToolLifecycle,
-            ),
-            privateNovelActivation = privateNovelActivation,
-            artifactRepository = privateGeneratedToolRuntime.artifactRepository,
-        )
-        val goalCapabilityRouter = LanguageGoalCapabilityRouter(
-            registry = capabilityRegistry,
-            reliability = learnedProviderReliability,
-        )
+            learnedProviderReliability = learnedProviderReliability,
+        ).compose()
+        val generatedToolStateRepository = evolution.generatedToolStateRepository
+        val generatedTools = evolution.generatedTools
+        val privateGeneratedToolRuntime = evolution.privateGeneratedToolRuntime
+        val evolutionStore = evolution.evolutionStore
+        val generatedToolBootRehydrator = evolution.generatedToolBootRehydrator
+        val evolutionResources = evolution.evolutionResources
+        val goalCapabilityRouter = evolution.goalCapabilityRouter
 
         val taskRepository = EncryptedTaskRepository(appContext)
         val checkpointRepository = EncryptedCheckpointRepository(appContext)
