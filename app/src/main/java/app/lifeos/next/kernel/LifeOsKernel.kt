@@ -129,6 +129,7 @@ class LifeOsKernel internal constructor(
     private val cognitiveModuleSnapshotRepository: CognitiveModuleSnapshotRepository? = null,
     private val activeExtensionSnapshotId: suspend () -> String? = { null },
     private val bootReadyMaintenanceTrigger: () -> Unit = {},
+    private val releaseBootReadSession: suspend () -> Unit = {},
     private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
     private val localDeepSearchGoalEngine: LocalDeepSearchGoalEngine = LocalDeepSearchGoalEngine(),
@@ -583,7 +584,7 @@ class LifeOsKernel internal constructor(
         mode: PhotonIngressMode,
     ): PhotonSubmissionResult {
         ProductivePhotonIngressClassification.requireOrMark(photonStore, photon, mode)
-        if (photonStore is RevisionedPhotonRepository) {
+        val previous = if (photonStore is RevisionedPhotonRepository) {
             when (
                 val write = photonStore.saveRevision(
                     photon = photon,
@@ -592,21 +593,30 @@ class LifeOsKernel internal constructor(
                         ?.minus(1L),
                 )
             ) {
-                is PhotonRevisionWriteResult.Created,
-                is PhotonRevisionWriteResult.Advanced,
-                is PhotonRevisionWriteResult.Idempotent -> Unit
+                is PhotonRevisionWriteResult.Created -> null
+                is PhotonRevisionWriteResult.Advanced -> write.previous
+                is PhotonRevisionWriteResult.Idempotent -> write.previous
                 is PhotonRevisionWriteResult.Conflict ->
                     error("Photon revision conflict: ${write.reason}")
             }
         } else {
-            photonStore.load(photon.id)?.let { existing ->
-                check(existing == photon) { "Photon identity conflict on fast conversation path" }
-            } ?: photonStore.save(photon)
+            photonStore.load(photon.id).also { existing ->
+                if (existing != null) {
+                    check(existing == photon) {
+                        "Photon identity conflict on fast conversation path"
+                    }
+                } else {
+                    photonStore.save(photon)
+                }
+            }
         }
         mutableBootstrapState.update { current ->
             current.copy(
-                photons = (current.photons.filterNot { it.id == photon.id } + photon)
-                    .sortedBy { it.provenance.createdAt }
+                photons = retainBootstrapWorkingSet(
+                    current.photons.filterNot { it.id == photon.id } + photon
+                ),
+                durablePhotonCount = current.durablePhotonCount +
+                    if (previous == null) 1L else 0L,
             )
         }
         return PhotonSubmissionResult(
@@ -646,9 +656,13 @@ class LifeOsKernel internal constructor(
             }
         }
         mutableBootstrapState.update { current ->
-            val photons = (current.photons.filterNot { it.id == photon.id } + photon)
-                .sortedBy { it.provenance.createdAt }
-            current.copy(photons = photons)
+            current.copy(
+                photons = retainBootstrapWorkingSet(
+                    current.photons.filterNot { it.id == photon.id } + photon
+                ),
+                durablePhotonCount = current.durablePhotonCount +
+                    if (previous == null) 1L else 0L,
+            )
         }
 
         return try {
@@ -990,6 +1004,8 @@ class LifeOsKernel internal constructor(
                     failureMessage = error.message ?: error::class.simpleName,
                 )
             }
+        } finally {
+            releaseBootReadSession()
         }
     }
 
@@ -1016,13 +1032,40 @@ class LifeOsKernel internal constructor(
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = if (degraded) KernelBootstrapStatus.DEGRADED else KernelBootstrapStatus.READY,
-            photons = context.photons.allPhotons,
+            photons = retainBootstrapWorkingSet(runtimePhotons),
+            durablePhotonCount = context.photons.restoredCount,
+            coldPhotonCount = context.photons.cold.size,
             unreadableFiles = context.photons.unreadableFiles.size,
             warnings = warnings,
         )
     }
 
+    private fun retainBootstrapWorkingSet(
+        photons: Iterable<Photon>,
+    ): List<Photon> {
+        val latestById = linkedMapOf<PhotonId, Photon>()
+        photons.forEach { photon ->
+            val current = latestById[photon.id]
+            if (current == null || photon.revision >= current.revision) {
+                latestById[photon.id] = photon
+            }
+        }
+        return latestById.values
+            .sortedWith(
+                compareByDescending<Photon> { it.provenance.createdAt }
+                    .thenByDescending { it.revision }
+                    .thenBy { it.id.value }
+            )
+            .take(MAX_BOOTSTRAP_WORKING_SET_PHOTONS)
+            .sortedWith(
+                compareBy<Photon> { it.provenance.createdAt }
+                    .thenBy { it.id.value }
+                    .thenBy { it.revision }
+            )
+    }
+
     private companion object {
+        const val MAX_BOOTSTRAP_WORKING_SET_PHOTONS = 4_096
         const val BUILTIN_EXTENSION_SNAPSHOT_ID = "extension-registry:builtin-baseline"
 
         const val PRIVATE_OWNER_ACTOR_ID = "private-owner"

@@ -284,10 +284,12 @@ class BootReadSession(
         }
     }
 
-    suspend fun invalidateForTestOnly() = mutex.withLock {
+    suspend fun releaseAfterBoot() = mutex.withLock {
         cached = null
         extraReads.clear()
     }
+
+    suspend fun invalidateForTestOnly() = releaseAfterBoot()
 }
 
 private fun projectContexts(photons: List<Photon>): List<BootContextProjection> = buildList {

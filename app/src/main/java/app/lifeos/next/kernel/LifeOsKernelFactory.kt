@@ -61,6 +61,7 @@ class LifeOsKernelFactory(
                 world.extensionRegistryHeadRepository.load()?.activeSnapshotId
             },
             bootReadyMaintenanceTrigger = bootReadyMaintenanceTrigger,
+            releaseBootReadSession = world.bootReadSession::releaseAfterBoot,
             photonTransactions = cognition.photonTransactions,
             cognitiveOutcomes = cognition.cognitiveOutcomes,
             cognitiveTriggers = cognition.cognitiveTriggers,

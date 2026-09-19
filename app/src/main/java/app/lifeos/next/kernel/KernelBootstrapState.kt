@@ -13,6 +13,8 @@ enum class KernelBootstrapStatus {
 data class KernelBootstrapState(
     val status: KernelBootstrapStatus = KernelBootstrapStatus.CREATED,
     val photons: List<Photon> = emptyList(),
+    val durablePhotonCount: Long = photons.size.toLong(),
+    val coldPhotonCount: Int = 0,
     val unreadableFiles: Int = 0,
     val warnings: List<String> = emptyList(),
     val failureMessage: String? = null,
@@ -22,4 +24,10 @@ data class KernelBootstrapState(
 
     val ready: Boolean
         get() = status == KernelBootstrapStatus.READY || status == KernelBootstrapStatus.DEGRADED
+
+    val retainedPhotonCount: Int
+        get() = photons.size
+
+    val workingSetTruncated: Boolean
+        get() = durablePhotonCount > photons.size.toLong()
 }
