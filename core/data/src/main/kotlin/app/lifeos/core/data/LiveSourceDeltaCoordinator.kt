@@ -66,6 +66,23 @@ data class LiveSourceCursorState(
         )
     }
 
+    fun advanceSnapshot(
+        baselineFingerprint: String,
+        nextObservationRevision: Long,
+        at: Instant,
+    ): LiveSourceCursorState {
+        require(bootstrapped)
+        require(cursor == null) { "Snapshot advancement requires a cursorless source" }
+        require(baselineFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(nextObservationRevision >= lastObservationRevision)
+        return copy(
+            revision = Math.addExact(revision, 1L),
+            baselineFingerprint = baselineFingerprint,
+            lastObservationRevision = nextObservationRevision,
+            updatedAt = at,
+        )
+    }
+
     companion object {
         fun initial(
             sourceId: LiveSourceId,
@@ -229,13 +246,15 @@ data class LiveSourceSyncSnapshot(
  * Operational connector runner for M01.
  *
  * Payload truth remains canonical Photons owned by LiveDataHub. This class persists only restart
- * metadata through [LiveSourceCursorRepository]: source cursor, baseline fingerprint and source
- * observation revision. Permission/account truth remains the revisioned account Photon.
+ * metadata through [LiveSourceCursorRepository] and, for cursorless providers, a durable
+ * [LiveSourceSnapshotRepository]. Snapshot state contains only external keys, fingerprints and
+ * privacy zones; canonical payload truth remains inside LiveDataHub Photons.
  */
 class LiveSourceDeltaCoordinator(
     connectors: Collection<LiveSourceConnector>,
     private val cursors: LiveSourceCursorRepository,
     private val hub: LiveDataHubAuthority,
+    private val snapshots: LiveSourceSnapshotRepository? = null,
     private val maxInventoryItems: Int = DEFAULT_MAX_INVENTORY_ITEMS,
     private val maxRawDeltas: Int = DEFAULT_MAX_RAW_DELTAS,
     private val coalescedCapacity: Int = DEFAULT_COALESCED_CAPACITY,
@@ -348,7 +367,13 @@ class LiveSourceDeltaCoordinator(
         }
 
         val cursor = state.cursor
-            ?: return LiveSourceSyncResult.IdleWithoutIncrementalCursor(sourceId, state)
+        if (cursor == null) {
+            return if (snapshots == null) {
+                LiveSourceSyncResult.IdleWithoutIncrementalCursor(sourceId, state)
+            } else {
+                advanceSnapshot(connector, rawObservation, state)
+            }
+        }
         return advance(connector, rawObservation, state, cursor)
     }
 
@@ -370,19 +395,20 @@ class LiveSourceDeltaCoordinator(
             )
             return LiveSourceSyncResult.SourceUnavailable(connector.adapter.sourceId, message, state)
         }
-        require(inventory.items.size <= maxInventoryItems) {
-            "Live source inventory exceeded bounded capacity"
-        }
-        require(inventory.items.map { it.externalKey }.distinct().size == inventory.items.size) {
-            "Live source inventory contains duplicate external keys"
-        }
-        val baseline = StableCognitiveIds.fingerprint(
-            "live-source-baseline/v1",
-            connector.adapter.sourceId.value,
-            *inventory.items.sortedBy { it.externalKey }.flatMap {
-                listOf(it.externalKey, it.fingerprint.orEmpty(), it.privacyZone.name)
-            }.toTypedArray(),
+        validateInventory(inventory)
+        val baseline = liveSourceInventoryFingerprint(
+            connector.adapter.sourceId,
+            inventory.items,
         )
+        if (inventory.cursor == null && snapshots != null) {
+            val snapshotFailure = seedSnapshotBaseline(
+                sourceId = connector.adapter.sourceId,
+                connectorIdentityFingerprint = state.connectorIdentityFingerprint,
+                items = inventory.items,
+                lastObservationRevision = state.lastObservationRevision,
+            )
+            if (snapshotFailure != null) return snapshotFailure
+        }
         val next = state.bootstrap(inventory.cursor, baseline, now())
         val durable = persistState(state, next)
             ?: return currentConflict(connector.adapter.sourceId)
@@ -400,6 +426,225 @@ class LiveSourceDeltaCoordinator(
             inventoryItemCount = inventory.items.size,
             state = durable,
         )
+    }
+
+    private suspend fun advanceSnapshot(
+        connector: LiveSourceConnector,
+        rawObservation: LiveDataAccountObservation,
+        initialState: LiveSourceCursorState,
+    ): LiveSourceSyncResult {
+        val snapshotRepository = requireNotNull(snapshots)
+        val sourceId = connector.adapter.sourceId
+        var state = initialState
+        var snapshot = when (val loaded = snapshotRepository.load(sourceId)) {
+            LiveSourceSnapshotLoadResult.Missing -> {
+                return LiveSourceSyncResult.StateUnreadable(
+                    sourceId,
+                    "Cursorless live source is missing its durable snapshot baseline",
+                )
+            }
+            is LiveSourceSnapshotLoadResult.Unreadable -> {
+                return LiveSourceSyncResult.StateUnreadable(
+                    sourceId,
+                    "Live source snapshot unreadable: " + loaded.message,
+                )
+            }
+            is LiveSourceSnapshotLoadResult.Loaded -> loaded.state
+        }
+
+        if (snapshot.connectorIdentityFingerprint != state.connectorIdentityFingerprint) {
+            return LiveSourceSyncResult.IdentityChanged(
+                sourceId = sourceId,
+                durableIdentityFingerprint = snapshot.connectorIdentityFingerprint,
+                observedIdentityFingerprint = state.connectorIdentityFingerprint,
+            )
+        }
+        if (snapshot.lastObservationRevision < state.lastObservationRevision) {
+            return LiveSourceSyncResult.StateUnreadable(
+                sourceId,
+                "Live source snapshot observation revision is behind cursor state",
+            )
+        }
+
+        if (
+            snapshot.lastObservationRevision > state.lastObservationRevision ||
+            snapshot.inventoryFingerprint != state.baselineFingerprint
+        ) {
+            val reconciled = state.advanceSnapshot(
+                baselineFingerprint = snapshot.inventoryFingerprint,
+                nextObservationRevision = snapshot.lastObservationRevision,
+                at = now(),
+            )
+            state = persistState(state, reconciled)
+                ?: return currentConflict(sourceId)
+        }
+
+        val inventory = try {
+            connector.adapter.inventory()
+        } catch (error: Exception) {
+            val message = error.message ?: error::class.simpleName ?: "source snapshot inventory failed"
+            health.failed(
+                sourceId,
+                now(),
+                app.lifeos.core.runtime.RuntimeFailureCategory.UNKNOWN,
+                message,
+                true,
+            )
+            return LiveSourceSyncResult.SourceUnavailable(sourceId, message, state)
+        }
+        validateInventory(inventory)
+
+        val observed = LiveSourceSnapshotDiff.between(
+            sourceId = sourceId,
+            previous = snapshot.items,
+            current = inventory.items,
+            afterObservationRevision = state.lastObservationRevision,
+        )
+        require(observed.size <= maxRawDeltas) {
+            "Live source snapshot diff exceeded bounded capacity"
+        }
+        val coalesced = try {
+            SourceDeltaCoalescer(coalescedCapacity).coalesce(observed)
+        } catch (overflow: SourceDeltaCapacityExceededException) {
+            health.failed(
+                sourceId,
+                now(),
+                app.lifeos.core.runtime.RuntimeFailureCategory.UNKNOWN,
+                overflow.message ?: "live source snapshot delta capacity exceeded",
+                true,
+            )
+            return LiveSourceSyncResult.CapacityBlocked(
+                sourceId = sourceId,
+                distinctObjectCount = overflow.distinctObjectCount,
+                capacity = overflow.capacity,
+                state = state,
+            )
+        }
+
+        var accepted = 0
+        for (sourceDelta in coalesced) {
+            val projected = connector.project(sourceDelta) ?: continue
+            validateProjection(connector, rawObservation, sourceDelta, projected)
+            when (val result = hub.ingest(projected)) {
+                is LiveDataIngestResult.Accepted -> accepted += 1
+                is LiveDataIngestResult.Blocked -> {
+                    return LiveSourceSyncResult.DeltaBlocked(
+                        sourceId = sourceId,
+                        deltaId = sourceDelta.deltaId,
+                        reasons = result.reasons,
+                        state = state,
+                    )
+                }
+            }
+        }
+
+        val nextObservationRevision = coalesced.maxOfOrNull { it.observationRevision }
+            ?: state.lastObservationRevision
+        val nextFingerprint = liveSourceInventoryFingerprint(sourceId, inventory.items)
+        if (
+            nextFingerprint == snapshot.inventoryFingerprint &&
+            nextObservationRevision == snapshot.lastObservationRevision
+        ) {
+            health.healthy(sourceId, now(), "source snapshot unchanged")
+            return LiveSourceSyncResult.Advanced(
+                sourceId = sourceId,
+                observedDeltaCount = observed.size,
+                coalescedDeltaCount = coalesced.size,
+                acceptedDeltaCount = accepted,
+                state = state,
+            )
+        }
+
+        val nextSnapshot = snapshot.replace(
+            nextItems = inventory.items,
+            nextObservationRevision = nextObservationRevision,
+            at = now(),
+        )
+        snapshot = persistSnapshot(snapshot, nextSnapshot)
+            ?: return currentSnapshotConflict(sourceId)
+
+        val nextState = state.advanceSnapshot(
+            baselineFingerprint = snapshot.inventoryFingerprint,
+            nextObservationRevision = snapshot.lastObservationRevision,
+            at = now(),
+        )
+        val durable = persistState(state, nextState)
+            ?: return currentConflict(sourceId)
+        hub.observeAccount(rawObservation.copy(sourceCursor = null))
+        health.healthy(
+            sourceId,
+            now(),
+            "source snapshot diff committed through cursor revision " + durable.revision,
+        )
+        return LiveSourceSyncResult.Advanced(
+            sourceId = sourceId,
+            observedDeltaCount = observed.size,
+            coalescedDeltaCount = coalesced.size,
+            acceptedDeltaCount = accepted,
+            state = durable,
+        )
+    }
+
+    private suspend fun seedSnapshotBaseline(
+        sourceId: LiveSourceId,
+        connectorIdentityFingerprint: String,
+        items: Collection<SourceInventoryItem>,
+        lastObservationRevision: Long,
+    ): LiveSourceSyncResult? {
+        val snapshotRepository = requireNotNull(snapshots)
+        return when (val loaded = snapshotRepository.load(sourceId)) {
+            LiveSourceSnapshotLoadResult.Missing -> {
+                val initial = LiveSourceSnapshotState.initial(
+                    sourceId = sourceId,
+                    connectorIdentityFingerprint = connectorIdentityFingerprint,
+                    items = items,
+                    lastObservationRevision = lastObservationRevision,
+                    at = now(),
+                )
+                when (val write = snapshotRepository.compareAndSet(sourceId, null, initial)) {
+                    is LiveSourceSnapshotWriteResult.Saved -> null
+                    is LiveSourceSnapshotWriteResult.Conflict ->
+                        LiveSourceSyncResult.StateConflict(sourceId, write.actualRevision)
+                    is LiveSourceSnapshotWriteResult.UnreadableExisting ->
+                        LiveSourceSyncResult.StateUnreadable(sourceId, write.message)
+                }
+            }
+            is LiveSourceSnapshotLoadResult.Unreadable ->
+                LiveSourceSyncResult.StateUnreadable(sourceId, loaded.message)
+            is LiveSourceSnapshotLoadResult.Loaded -> {
+                val current = loaded.state
+                if (current.connectorIdentityFingerprint != connectorIdentityFingerprint) {
+                    LiveSourceSyncResult.IdentityChanged(
+                        sourceId = sourceId,
+                        durableIdentityFingerprint = current.connectorIdentityFingerprint,
+                        observedIdentityFingerprint = connectorIdentityFingerprint,
+                    )
+                } else if (current.lastObservationRevision != lastObservationRevision) {
+                    LiveSourceSyncResult.StateUnreadable(
+                        sourceId,
+                        "Unbootstrapped live source owns an advanced snapshot revision",
+                    )
+                } else {
+                    val fingerprint = liveSourceInventoryFingerprint(sourceId, items)
+                    if (current.inventoryFingerprint == fingerprint) {
+                        null
+                    } else {
+                        val next = current.replace(items, lastObservationRevision, now())
+                        when (val write = snapshotRepository.compareAndSet(
+                            sourceId,
+                            current.revision,
+                            next,
+                        )) {
+                            is LiveSourceSnapshotWriteResult.Saved -> null
+                            is LiveSourceSnapshotWriteResult.Conflict ->
+                                LiveSourceSyncResult.StateConflict(sourceId, write.actualRevision)
+                            is LiveSourceSnapshotWriteResult.UnreadableExisting ->
+                                LiveSourceSyncResult.StateUnreadable(sourceId, write.message)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun advance(
@@ -506,6 +751,33 @@ class LiveSourceDeltaCoordinator(
         )
     }
 
+    private suspend fun persistSnapshot(
+        previous: LiveSourceSnapshotState,
+        next: LiveSourceSnapshotState,
+    ): LiveSourceSnapshotState? {
+        val snapshotRepository = requireNotNull(snapshots)
+        return when (
+            val write = snapshotRepository.compareAndSet(
+                sourceId = previous.sourceId,
+                expectedRevision = previous.revision,
+                next = next,
+            )
+        ) {
+            is LiveSourceSnapshotWriteResult.Saved -> write.state
+            is LiveSourceSnapshotWriteResult.UnreadableExisting -> null
+            is LiveSourceSnapshotWriteResult.Conflict -> {
+                when (val current = snapshotRepository.load(previous.sourceId)) {
+                    is LiveSourceSnapshotLoadResult.Loaded -> current.state.takeIf {
+                        it.connectorIdentityFingerprint == next.connectorIdentityFingerprint &&
+                            it.inventoryFingerprint == next.inventoryFingerprint &&
+                            it.lastObservationRevision >= next.lastObservationRevision
+                    }
+                    else -> null
+                }
+            }
+        }
+    }
+
     private suspend fun persistState(
         previous: LiveSourceCursorState,
         next: LiveSourceCursorState,
@@ -533,6 +805,18 @@ class LiveSourceDeltaCoordinator(
         }
     }
 
+    private suspend fun currentSnapshotConflict(sourceId: LiveSourceId): LiveSourceSyncResult {
+        val snapshotRepository = requireNotNull(snapshots)
+        return when (val current = snapshotRepository.load(sourceId)) {
+            is LiveSourceSnapshotLoadResult.Loaded ->
+                LiveSourceSyncResult.StateConflict(sourceId, current.state.revision)
+            LiveSourceSnapshotLoadResult.Missing ->
+                LiveSourceSyncResult.StateConflict(sourceId, null)
+            is LiveSourceSnapshotLoadResult.Unreadable ->
+                LiveSourceSyncResult.StateUnreadable(sourceId, current.message)
+        }
+    }
+
     private suspend fun currentConflict(sourceId: LiveSourceId): LiveSourceSyncResult =
         when (val current = cursors.load(sourceId)) {
             is LiveSourceCursorLoadResult.Loaded ->
@@ -554,6 +838,15 @@ class LiveSourceDeltaCoordinator(
         observation.connectorId.value,
         observation.accountFingerprint,
     )
+
+    private fun validateInventory(inventory: SourceInventory) {
+        require(inventory.items.size <= maxInventoryItems) {
+            "Live source inventory exceeded bounded capacity"
+        }
+        require(inventory.items.map { it.externalKey }.distinct().size == inventory.items.size) {
+            "Live source inventory contains duplicate external keys"
+        }
+    }
 
     private fun permissionReasons(
         observation: LiveDataAccountObservation,
