@@ -111,6 +111,10 @@ sealed interface PhotonRevisionWriteResult {
 
 interface PhotonIndexReader {
     suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef>
+
+    suspend fun queryEntries(query: PhotonIndexQuery): List<PhotonIndexEntry> =
+        throw UnsupportedOperationException("Photon index metadata queries are not supported")
+
     suspend fun indexReport(): PhotonIndexReport
 }
 

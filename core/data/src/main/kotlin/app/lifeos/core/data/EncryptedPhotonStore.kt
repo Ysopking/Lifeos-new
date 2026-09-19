@@ -115,6 +115,9 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
     }
 
     override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> =
+        queryEntries(query).map { it.ref }
+
+    override suspend fun queryEntries(query: PhotonIndexQuery): List<PhotonIndexEntry> =
         withContext(Dispatchers.IO) {
             val index = mutex.withLock { ensureIndexLocked() }
             val ordering = when (query.order) {
@@ -154,12 +157,7 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
                 }
                 cursorIndex + 1
             } ?: 0
-            ordered
-                .asSequence()
-                .drop(startIndex)
-                .take(query.limit)
-                .map { it.ref }
-                .toList()
+            ordered.asSequence().drop(startIndex).take(query.limit).toList()
         }
 
     override suspend fun indexReport(): PhotonIndexReport = withContext(Dispatchers.IO) {
