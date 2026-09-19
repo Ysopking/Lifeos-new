@@ -33,6 +33,7 @@ internal class SelfObservationRuntime(
     private val activeRepairs: suspend () -> List<SelfHealingIncidentSnapshot>,
     private val liveSourceSnapshot: () -> LiveSourceSyncSnapshot?,
     private val liveSourceFailure: () -> String?,
+    private val runtimeTelemetry: AndroidRuntimeTelemetryReader = AndroidRuntimeTelemetryReader(),
     private val now: () -> Instant = Instant::now,
     private val projector: SelfStateProjector = SelfStateProjector(),
 ) {
@@ -52,6 +53,7 @@ internal class SelfObservationRuntime(
             recovery = source { activeRepairs() },
             tools = source { toolStatus() },
             liveSources = liveSourceProjection(),
+            runtimeTelemetry = sourceSync { runtimeTelemetry.read() },
         )
     )
 

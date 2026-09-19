@@ -52,6 +52,23 @@ class SelfObservationRuntimeTest {
             activeRepairs = { emptyList() },
             liveSourceSnapshot = { LiveSourceSyncSnapshot(emptyList()) },
             liveSourceFailure = { null },
+            runtimeTelemetry = AndroidRuntimeTelemetryReader(
+                now = { now },
+                elapsedRealtimeNanos = { 100L },
+                processCpuTimeMillis = { 10L },
+                heapMetrics = {
+                    AndroidRuntimeTelemetryReader.HeapMetrics(
+                        totalBytes = 100L,
+                        freeBytes = 50L,
+                        maxBytes = 200L,
+                    )
+                },
+                nativeHeapAllocatedBytes = { 25L },
+                activeThreadCount = { 4 },
+                processUid = { 1 },
+                uidRxBytes = { -1L },
+                uidTxBytes = { -1L },
+            ),
             now = { now },
         )
 
@@ -61,6 +78,8 @@ class SelfObservationRuntimeTest {
         assertEquals(1, toolReads)
         assertNull(result.snapshot.memory.authoritativePhotonCount)
         assertEquals(0, result.snapshot.liveSources.sourceCount)
+        assertEquals(0.75, result.snapshot.runtime.telemetry?.heapHeadroom())
+        assertNull(result.snapshot.runtime.telemetry?.uidRxBytes)
         assertTrue(result.issues.any { it.detail == "life-memory-not-projected" })
         assertTrue(result.issues.any { it.detail == "runtime-topology-not-ready" })
     }
