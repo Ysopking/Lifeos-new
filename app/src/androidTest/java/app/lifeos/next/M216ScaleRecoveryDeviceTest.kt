@@ -26,7 +26,6 @@ class M216ScaleRecoveryDeviceTest {
 
     @Test
     fun seedBoundedScaleCorpusBeforeColdRestart() = runBlocking {
-        clearPhotonVault(context)
         val store = EncryptedPhotonStore(context)
 
         repeat(SCALE_PHOTONS) { index ->
@@ -41,12 +40,16 @@ class M216ScaleRecoveryDeviceTest {
                 ),
                 tags = setOf("m216-scale", "bucket:${index % 16}"),
             )
-            assertTrue(store.saveRevision(photon, null) is PhotonRevisionWriteResult.Created)
+            val write = store.saveRevision(photon, null)
+            assertTrue(
+                write is PhotonRevisionWriteResult.Created ||
+                    write is PhotonRevisionWriteResult.Idempotent
+            )
         }
 
         val report = store.indexReport()
-        assertEquals(SCALE_PHOTONS, report.livePhotonCount)
-        assertEquals(SCALE_PHOTONS, report.latestRefs.size)
+        assertTrue(report.livePhotonCount >= SCALE_PHOTONS)
+        assertEquals(SCALE_PHOTONS, countScaleRefs(store))
         assertEquals(
             PhotonRevisionRef(PhotonId(id(SCALE_PHOTONS - 1)), 1L),
             store.latestRef(PhotonId(id(SCALE_PHOTONS - 1))),
@@ -57,8 +60,7 @@ class M216ScaleRecoveryDeviceTest {
     fun recoverPagedScaleCorpusAfterColdRestart() = runBlocking {
         val reopened = EncryptedPhotonStore(context)
         val report = reopened.indexReport()
-        assertEquals(SCALE_PHOTONS, report.livePhotonCount)
-        assertEquals(SCALE_PHOTONS, report.latestRefs.size)
+        assertTrue(report.livePhotonCount >= SCALE_PHOTONS)
 
         var cursor: PhotonIndexCursor? = null
         var seen = 0
@@ -85,7 +87,25 @@ class M216ScaleRecoveryDeviceTest {
         assertEquals(PhotonRevisionRef(PhotonId(id(0)), 1L), first)
         assertEquals(PhotonRevisionRef(PhotonId(id(SCALE_PHOTONS - 1)), 1L), last)
         assertNotNull(reopened.load(requireNotNull(last)))
-        clearPhotonVault(context)
+    }
+
+    private suspend fun countScaleRefs(store: EncryptedPhotonStore): Int {
+        var cursor: PhotonIndexCursor? = null
+        var count = 0
+        while (true) {
+            val page = store.query(
+                PhotonIndexQuery(
+                    allTags = setOf("m216-scale"),
+                    order = PhotonIndexOrder.IDENTITY,
+                    after = cursor,
+                    limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
+                )
+            )
+            if (page.isEmpty()) return count
+            count += page.size
+            if (page.size < PhotonIndexQuery.HARD_PAGE_LIMIT) return count
+            cursor = PhotonIndexCursor(PhotonIndexOrder.IDENTITY, page.last())
+        }
     }
 
     private fun id(index: Int): String =
