@@ -28,6 +28,7 @@ import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
 import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
+import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
 import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistryHeadRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistrySnapshotRepository
@@ -151,6 +152,7 @@ import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
 import app.lifeos.core.runtime.world.ProductiveWorldHeadCommitter
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
+import app.lifeos.core.runtime.world.WorldEquationActivationAuthority
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
 import app.lifeos.core.runtime.workers.CognitiveWorkerFactory
 import app.lifeos.core.runtime.workers.ReportingCognitiveTaskDispatcher
@@ -399,8 +401,17 @@ class LifeOsKernelFactory(
         )
         val worldModelRepository = EncryptedWorldModelRepository(appContext)
         val cognitiveWorldEquationProfile = CognitiveWorldEquationProfile()
+        val worldEquationRegistry = InMemoryWorldEquationRegistry(
+            listOf(cognitiveWorldEquationProfile.spec)
+        )
+        val worldEquationHeads = EncryptedWorldEquationHeadRepository(appContext)
+        val worldEquationAuthority = WorldEquationActivationAuthority(
+            equations = worldEquationRegistry,
+            heads = worldEquationHeads,
+            baseline = cognitiveWorldEquationProfile.spec,
+        )
         val worldFormulaCoordinator = WorldFormulaCoordinator(
-            equations = InMemoryWorldEquationRegistry(listOf(cognitiveWorldEquationProfile.spec)),
+            equations = worldEquationRegistry,
             snapshots = worldFormulaSnapshotRepository,
         )
         val productiveWorldHeadCommitter = ProductiveWorldHeadCommitter(
@@ -462,7 +473,7 @@ class LifeOsKernelFactory(
                 BootEngineFrozenInputs(
                     representationSnapshotId = workingSet.sourceSnapshotId,
                     strategySnapshotId = "goal-strategy:$strategyFingerprint",
-                    equationVersion = cognitiveWorldEquationProfile.spec.version,
+                    equationVersion = worldEquationAuthority.activeVersion(),
                     resourceSnapshotId = "hardware-state:${hardware.fingerprint()}",
                 )
             },
