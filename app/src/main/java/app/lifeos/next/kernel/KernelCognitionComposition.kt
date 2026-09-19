@@ -30,6 +30,9 @@ import app.lifeos.core.runtime.cognition.PhotonBackedPhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.PhotonBackedRuntimeEventJournal
 import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
 import app.lifeos.core.runtime.context.DurableContextFieldEnricher
+import app.lifeos.core.runtime.field.AuthoritativeFieldProcessor
+import app.lifeos.core.runtime.field.FieldCutoverRuntimeRouter
+import app.lifeos.core.runtime.field.PhotonBackedFieldCutoverStateRepository
 import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.health.HealthNodeId
 import app.lifeos.core.runtime.health.HealthTaskExecutionObserver
@@ -78,6 +81,7 @@ internal data class KernelCognitionGraph(
 internal class KernelCognitionComposition(
     private val foundation: KernelFoundationGraph,
     private val world: KernelWorldGraph,
+    private val authoritativeFieldProcessors: List<AuthoritativeFieldProcessor> = emptyList(),
 ) {
     fun compose(): KernelCognitionGraph {
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
@@ -86,6 +90,10 @@ internal class KernelCognitionComposition(
             engineProvider = { foundation.learnedFieldCalibration.engine() },
             healthGate = foundation.healthGate,
             thoughtGraphProjection = world.fieldThoughtGraphProjection,
+        )
+        val fieldCutoverRouter = FieldCutoverRuntimeRouter(
+            states = PhotonBackedFieldCutoverStateRepository(foundation.store),
+            processors = authoritativeFieldProcessors,
         )
         val schedulerSignal = ConflatedTaskSchedulerSignal()
         val taskEngine = DurableTaskEngine(world.taskRepository, schedulerSignal)
@@ -192,6 +200,7 @@ internal class KernelCognitionComposition(
             executor = foundation.executor,
             checkpoints = world.checkpointRepository,
             fieldShadowProcessor = universalFieldShadow,
+            fieldCutoverRouter = fieldCutoverRouter,
             config = CognitiveWorkerConfig(
                 leaseDuration = TASK_LEASE_DURATION,
                 heartbeatInterval = HEARTBEAT_INTERVAL,
