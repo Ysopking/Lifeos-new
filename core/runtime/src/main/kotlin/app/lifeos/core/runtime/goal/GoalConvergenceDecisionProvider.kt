@@ -263,14 +263,14 @@ class GoalConvergenceDecisionProvider(
         )
         val activeCycle = bootEngine.activeCycle()
         val cycle = if (activeCycle != null) {
-            if (activeCycle.context.representationSnapshotId != workingSet.sourceSnapshotId) {
-                throw ProductiveConvergenceNotReadyException(
-                    "active-bootengine-cycle-representation-mismatch:" +
-                        activeCycle.cycleId.value
-                )
-            }
             cycleInputs?.let { inputSource ->
                 val expectedFrozenInputs = inputSource.freeze(workingSet, routing)
+                if (activeCycle.context.representationSnapshotId != workingSet.sourceSnapshotId) {
+                    throw ProductiveConvergenceNotReadyException(
+                        "active-bootengine-cycle-representation-mismatch:" +
+                            activeCycle.cycleId.value
+                    )
+                }
                 if (activeCycle.frozenInputsFingerprint != expectedFrozenInputs.fingerprint()) {
                     throw ProductiveConvergenceNotReadyException(
                         "active-bootengine-cycle-lineage-mismatch:" +
