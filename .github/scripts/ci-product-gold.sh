@@ -15,16 +15,31 @@ bash .github/scripts/ci-private-debug-security.sh
 step "Product Gold 02: mandatory coverage contract"
 bash .github/scripts/ci-gold-coverage-contract.sh
 
-step "Product Gold 03: complete core regression set"
+step "Product Gold 03: deterministic M216 scale evidence"
+scale_evidence_dir="$(pwd)/$evidence_dir"
+LIFEOS_SCALE_EVIDENCE_DIR="$scale_evidence_dir" \
+  ./gradlew :core:runtime:test \
+    --tests app.lifeos.core.runtime.scale.ScaleGoldEvidenceTest \
+    --rerun-tasks \
+    --stacktrace
+test -s "$scale_evidence_dir/scale-runtime.txt"
+grep -Fqx 'contract=lifeos-m216-scale/v1' "$scale_evidence_dir/scale-runtime.txt"
+grep -Fqx 'photon_count=10000' "$scale_evidence_dir/scale-runtime.txt"
+grep -Fqx 'relationship_count=25000' "$scale_evidence_dir/scale-runtime.txt"
+grep -Fqx 'ledger_event_count=10000' "$scale_evidence_dir/scale-runtime.txt"
+grep -Fqx 'bootstrap_retained_budget=4096' "$scale_evidence_dir/scale-runtime.txt"
+grep -Fqx 'presentation_visible_budget=20000' "$scale_evidence_dir/scale-runtime.txt"
+
+step "Product Gold 04: complete core regression set"
 bash .github/scripts/ci-core-fast.sh
 
-step "Product Gold 04: unit tests, lint and debug APK"
+step "Product Gold 05: unit tests, lint and debug APK"
 bash .github/scripts/ci-android-debug.sh
 
-step "Product Gold 05: AndroidTest and emulator preflight"
+step "Product Gold 06: AndroidTest and emulator preflight"
 bash .github/scripts/ci-emulator-preflight.sh
 
-step "Product Gold 06: integration contract presence"
+step "Product Gold 07: integration contract presence"
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeBindings.kt
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeTopology.kt
 test -f app/src/androidTest/java/app/lifeos/next/ProductGoldenChatDeviceTest.kt
@@ -46,7 +61,7 @@ grep -q 'SelfObservationGoldDeviceTest#seedAuthoritativeSelfStateBeforeProcessDe
 grep -q 'SelfObservationGoldDeviceTest#recoverAuthorityFingerprintAndObserveLiveState' .github/scripts/android-emulator-recovery.sh
 grep -q 'ChatMainActivity' app/src/main/AndroidManifest.xml
 
-step "Product Gold 07: immutable candidate evidence"
+step "Product Gold 08: immutable candidate evidence"
 test -s "$apk_path"
 checkout_sha="$(git rev-parse HEAD)"
 candidate_sha="${CANDIDATE_SHA:-$checkout_sha}"
@@ -76,6 +91,8 @@ printf 'product_gold_requires_emulator=true\n' | tee -a "$evidence_dir/candidate
 printf '%s\n' \
   'security_static=PASS' \
   'coverage_contract=PASS' \
+  'scale_fixture=PASS' \
+  'scale_runtime_bounds=PASS' \
   'core_fast=PASS' \
   'level7_contract_invariants=PASS' \
   'level7_architecture_guards=PASS' \

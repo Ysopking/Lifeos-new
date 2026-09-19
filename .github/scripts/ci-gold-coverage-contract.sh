@@ -121,12 +121,20 @@ require_exact_head_workflow ".github/workflows/android-emulator-recovery.yml" "A
 require_exact_head_workflow ".github/workflows/product-gold.yml" "LIFEOS Product Gold"
 
 product_gold_workflow=".github/workflows/product-gold.yml"
-grep -Fq 'CANDIDATE_SHA: ${{ github.sha }}' "$product_gold_workflow" || {
-  echo "product-gold-candidate-sha-not-bound-to-checkout-ref" >&2
+grep -Fq 'CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}' "$product_gold_workflow" || {
+  echo "product-gold-candidate-sha-not-bound-to-exact-source-head" >&2
   exit 1
 }
-grep -Fq 'SOURCE_HEAD_SHA:' "$product_gold_workflow" || {
+grep -Fq 'SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}' "$product_gold_workflow" || {
   echo "product-gold-source-head-sha-not-recorded" >&2
+  exit 1
+}
+grep -Fq 'ref: ${{ github.event.pull_request.head.sha || github.sha }}' "$product_gold_workflow" || {
+  echo "product-gold-checkout-not-bound-to-exact-source-head" >&2
+  exit 1
+}
+grep -Fq 'ci-exact-head-contract.sh' "$product_gold_workflow" || {
+  echo "product-gold-exact-head-contract-missing" >&2
   exit 1
 }
 grep -Fq 'offline_image_artifact_e2e=PASS' "$product_gold_workflow" || {
