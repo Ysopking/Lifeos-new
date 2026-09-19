@@ -54,6 +54,7 @@ class LifeOsKernelFactory(
             supervisor = cognition.supervisor,
             scope = foundation.scope,
             bootCoordinator = boot.bootCoordinator,
+            bootProgress = boot.bootState,
             bootEngineRuntime = world.bootEngineRuntime,
             continuousCognition = cognition.continuousCognition,
             cognitiveModuleSnapshotRepository = foundation.cognitiveModuleSnapshotRepository,

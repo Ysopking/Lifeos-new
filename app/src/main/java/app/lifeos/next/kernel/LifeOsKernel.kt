@@ -34,6 +34,7 @@ import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootEngineRecoveryResult
 import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootRunResult
+import app.lifeos.core.runtime.boot.BootState
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
@@ -125,6 +126,7 @@ class LifeOsKernel internal constructor(
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
+    val bootProgress: StateFlow<BootState>,
     private val bootEngineRuntime: BootEngineRuntime,
     private val continuousCognition: ContinuousCognitionEngine,
     private val cognitiveModuleSnapshotRepository: CognitiveModuleSnapshotRepository? = null,
@@ -1028,13 +1030,15 @@ class LifeOsKernel internal constructor(
         bootReadyMaintenanceTrigger()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
-        // Restore the process-local read model without enqueuing a second task family.
-        // Durable reconciliation has already restored missing work; terminal work stays terminal.
-        runtimePhotons.forEach { matrix.influence(it) }
+        val retainedRuntimePhotons = retainBootstrapWorkingSet(runtimePhotons)
+        // Restore only the bounded hot process read model. The encrypted Photon repository remains
+        // authoritative for overflow/cold items, so boot work scales with the M216 retention budget
+        // instead of total durable history.
+        retainedRuntimePhotons.forEach { matrix.influence(it) }
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = if (degraded) KernelBootstrapStatus.DEGRADED else KernelBootstrapStatus.READY,
-            photons = retainBootstrapWorkingSet(runtimePhotons),
+            photons = retainedRuntimePhotons,
             durablePhotonCount = context.photons.restoredCount,
             coldPhotonCount = context.photons.cold.size,
             unreadableFiles = context.photons.unreadableFiles.size,

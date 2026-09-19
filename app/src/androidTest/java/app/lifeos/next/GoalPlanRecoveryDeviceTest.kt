@@ -37,7 +37,8 @@ class GoalPlanRecoveryDeviceTest {
             }
         } ?: error(
             "Process startup timed out during V7 recovery at stage: " +
-                app.startupState.value.stage
+                app.startupState.value.stage +
+                "; kernel boot state=" + app.kernel.bootProgress.value.name
         )
         if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
             error("Process startup failed during V7 recovery: ${processStartup.failure ?: "unknown"}")

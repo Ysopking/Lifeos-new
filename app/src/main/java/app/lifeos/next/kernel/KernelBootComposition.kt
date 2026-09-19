@@ -2,6 +2,8 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.model.health.ProtectionMode
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootState
+import app.lifeos.core.runtime.boot.BootStateSink
 import app.lifeos.core.runtime.boot.CapabilityWarmup
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
 import app.lifeos.core.runtime.boot.ChainedStateRehydrator
@@ -23,9 +25,13 @@ import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 import java.time.Instant
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 internal data class KernelBootGraph(
     val bootCoordinator: BootCoordinator,
+    val bootState: StateFlow<BootState>,
 )
 
 /**
@@ -40,6 +46,7 @@ internal class KernelBootComposition(
     private val cognition: KernelCognitionGraph,
 ) {
     fun compose(): KernelBootGraph {
+        val mutableBootState = MutableStateFlow(BootState.NOT_STARTED)
         val primaryStateRehydrator = object : StateRehydrator {
             override suspend fun rehydrate(): RehydratedRuntimeState {
                 foundation.protectionCoordinator.rehydrate()
@@ -199,10 +206,14 @@ internal class KernelBootComposition(
                 )
             ),
             validator = DefaultBootValidator(),
+            stateSink = BootStateSink { snapshot ->
+                mutableBootState.value = snapshot.state
+            },
         )
 
         return KernelBootGraph(
             bootCoordinator = bootCoordinator,
+            bootState = mutableBootState.asStateFlow(),
         )
     }
 
