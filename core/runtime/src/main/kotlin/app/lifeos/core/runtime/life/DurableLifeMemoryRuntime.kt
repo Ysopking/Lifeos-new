@@ -11,6 +11,7 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.source.CanonicalSourceImporter
 import app.lifeos.core.runtime.source.SourceMetadataPhotonFactory
 import app.lifeos.core.runtime.source.SourceMetadataRepository
 import app.lifeos.core.runtime.sourcegraph.PhotonBackedSourceRelationshipRepository
@@ -57,6 +58,9 @@ data class DurableLifeIngestCommit(
     val evidencePhotons: List<Photon>,
     val checkpoint: DurableLifeSourceCheckpoint,
     val metadataPhotons: List<Photon> = emptyList(),
+    val importIndexPhotons: List<Photon> = emptyList(),
+    val relationshipPhotons: List<Photon> = emptyList(),
+    val importReceiptPhotons: List<Photon> = emptyList(),
     val permissionGap: Photon? = null,
 )
 
@@ -302,6 +306,8 @@ class DurableLifeSourceIngestor(
     private val photons: PhotonRepository,
     private val checkpoints: PhotonBackedLifeSourceCheckpointStore = PhotonBackedLifeSourceCheckpointStore(photons),
     private val sourceMetadata: SourceMetadataRepository = SourceMetadataRepository(photons),
+    private val canonicalImporter: CanonicalSourceImporter? =
+        (photons as? RevisionedPhotonRepository)?.let { CanonicalSourceImporter(it) },
 ) {
     suspend fun ingest(
         descriptor: LifeSourceDescriptor,
@@ -332,19 +338,38 @@ class DurableLifeSourceIngestor(
         }.sortedWith(compareBy<LifeSourceRecord> { it.observedAt }.thenBy { it.recordId })
         val evidence = mutableListOf<Photon>()
         val metadataPhotons = mutableListOf<Photon>()
+        val importIndexPhotons = mutableListOf<Photon>()
+        val relationshipPhotons = mutableListOf<Photon>()
+        val importReceiptPhotons = mutableListOf<Photon>()
         canonicalRecords.forEach { record ->
             val sourcePhoton = sourceRecordPhoton(descriptor, record)
             saveIdempotent(sourcePhoton)
             evidence += sourcePhoton
             record.metadata?.let { metadata ->
-                metadataPhotons += sourceMetadata.commit(sourcePhoton, metadata)
+                val importer = canonicalImporter
+                if (importer == null) {
+                    metadataPhotons += sourceMetadata.commit(sourcePhoton, metadata)
+                } else {
+                    val imported = importer.import(sourcePhoton, metadata)
+                    metadataPhotons += imported.metadataPhoton
+                    importIndexPhotons += imported.indexPhoton
+                    relationshipPhotons += imported.relationshipPhotons
+                    importReceiptPhotons += imported.receipt
+                }
             }
         }
-        val committedIds = (evidence + metadataPhotons)
-            .map { it.id.value }
+        val committed = (
+            evidence +
+                metadataPhotons +
+                importIndexPhotons +
+                relationshipPhotons +
+                importReceiptPhotons
+            ).distinctBy { it.id to it.revision }
+        val committedIds = committed
+            .map { it.id.value + "@" + it.revision }
             .sorted()
         val batchFingerprint = StableCognitiveIds.fingerprint(
-            "life-source-ingest-batch/v3",
+            "life-source-ingest-batch/v4",
             descriptor.fingerprint,
             before.position.orEmpty(),
             nextPosition.orEmpty(),
@@ -354,7 +379,7 @@ class DurableLifeSourceIngestor(
             previous = before,
             nextPosition = nextPosition,
             batchFingerprint = batchFingerprint,
-            evidenceIds = (evidence + metadataPhotons).mapTo(linkedSetOf()) { it.id },
+            evidenceIds = committed.mapTo(linkedSetOf()) { it.id },
             committedAt = committedAt,
         )
         return DurableLifeIngestCommit(
@@ -363,7 +388,10 @@ class DurableLifeSourceIngestor(
             cursorAfter = checkpoint.cursor,
             evidencePhotons = evidence,
             checkpoint = checkpoint,
-            metadataPhotons = metadataPhotons,
+            metadataPhotons = metadataPhotons.distinctBy { it.id to it.revision },
+            importIndexPhotons = importIndexPhotons.distinctBy { it.id to it.revision },
+            relationshipPhotons = relationshipPhotons.distinctBy { it.id to it.revision },
+            importReceiptPhotons = importReceiptPhotons.distinctBy { it.id to it.revision },
         )
     }
 
@@ -526,6 +554,7 @@ class DurableLifeMemoryRuntime(
         val changed = buildList {
             addAll(commit.evidencePhotons)
             addAll(commit.metadataPhotons)
+            addAll(commit.relationshipPhotons)
             commit.permissionGap?.let(::add)
         }.filterNot { "life-source-gap" in it.tags }
         val snapshot = if (latest == null) rebuild(committedAt) else applyDelta(changed, committedAt)

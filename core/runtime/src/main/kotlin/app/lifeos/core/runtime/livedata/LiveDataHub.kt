@@ -4,7 +4,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RevisionedPhotonRepository
-import app.lifeos.core.runtime.source.SourceMetadataRepository
+import app.lifeos.core.runtime.source.CanonicalSourceImporter
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -23,7 +23,7 @@ fun interface LiveDataPhotonIngress {
 class LiveDataHub(
     private val photons: RevisionedPhotonRepository,
     private val ingress: LiveDataPhotonIngress,
-    private val sourceMetadata: SourceMetadataRepository = SourceMetadataRepository(photons),
+    private val sourceImporter: CanonicalSourceImporter = CanonicalSourceImporter(photons),
 ) {
     private val mutationMutex = Mutex()
 
@@ -99,12 +99,16 @@ class LiveDataHub(
         check(photons.load(photon.id) == photon) {
             "Live-data canonical ingress returned before source Photon became durable"
         }
-        val metadataPhoton = sourceMetadata.commit(photon, delta.metadata)
+        val imported = sourceImporter.import(photon, delta.metadata)
         LiveDataIngestResult.Accepted(
             photonId = photon.id,
             permissionSnapshotId = account.id,
             permissionSnapshotRevision = account.revision,
-            metadataPhotonId = metadataPhoton.id,
+            metadataPhotonId = imported.metadataPhoton.id,
+            importIndexPhotonId = imported.indexPhoton.id,
+            importReceiptPhotonId = imported.receipt.id,
+            relationshipPhotonIds = imported.relationshipPhotons
+                .mapTo(linkedSetOf()) { it.id },
         )
     }
 

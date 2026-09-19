@@ -231,6 +231,9 @@ sealed interface LiveDataIngestResult {
         val permissionSnapshotId: PhotonId,
         val permissionSnapshotRevision: Long,
         val metadataPhotonId: PhotonId = photonId,
+        val importIndexPhotonId: PhotonId? = null,
+        val importReceiptPhotonId: PhotonId? = null,
+        val relationshipPhotonIds: Set<PhotonId> = emptySet(),
     ) : LiveDataIngestResult {
         val sourcePhotonId: PhotonId
             get() = photonId

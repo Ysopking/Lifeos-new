@@ -232,18 +232,12 @@ class SourceImportIndexRepository(
             cursor = PhotonIndexCursor(PhotonIndexOrder.IDENTITY, refs.last())
         }
 
-        val fingerprint = StableCognitiveIds.fingerprint(
-            "source-import-index-backfill/v1",
-            *indexed.map { it.id.value }.distinct().sorted().toTypedArray(),
-        )
-        val createdAt = indexed.maxOfOrNull { it.provenance.createdAt } ?: Instant.EPOCH
         val marker = Photon(
             id = BACKFILL_MARKER_ID,
             revision = 1L,
             content = buildString {
                 appendLine("schema=" + BACKFILL_SCHEMA)
-                appendLine("count=" + indexed.map { it.id }.distinct().size)
-                append("fingerprint=" + fingerprint)
+                append("complete=true")
             },
             mimeType = BACKFILL_MIME_TYPE,
             semanticMass = 0.0,
@@ -252,8 +246,7 @@ class SourceImportIndexRepository(
             provenance = Provenance(
                 source = "canonical-source-import-index",
                 actor = BACKFILL_SCHEMA,
-                createdAt = createdAt,
-                parentIds = indexed.mapTo(linkedSetOf()) { it.id },
+                createdAt = Instant.EPOCH,
             ),
             tags = setOf(
                 "life-memory-management",
