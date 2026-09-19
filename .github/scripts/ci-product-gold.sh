@@ -41,6 +41,7 @@ test -f app/src/androidTest/java/app/lifeos/next/ProductiveWorldPersistenceDevic
 test -f app/src/androidTest/java/app/lifeos/next/Level7ProcessDeathGoldDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/Level7WorldEquationRollbackDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/Level7TruthClosureGoldDeviceTest.kt
+test -f app/src/androidTest/java/app/lifeos/next/SelfObservationGoldDeviceTest.kt
 grep -q 'ProductGoldenChatDeviceTest#seedProductGoldChatRoundTrip' .github/scripts/android-emulator-recovery.sh
 grep -q 'ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' .github/scripts/android-emulator-recovery.sh
 grep -q 'ProductiveWorldPersistenceDeviceTest' .github/scripts/android-emulator-recovery.sh
@@ -50,6 +51,8 @@ grep -q 'Level7WorldEquationRollbackDeviceTest#seedDegradedTrialHead' .github/sc
 grep -q 'Level7WorldEquationRollbackDeviceTest#rollbackAfterProcessDeathRestoresExactV17WorldHead' .github/scripts/android-emulator-recovery.sh
 grep -q 'Level7TruthClosureGoldDeviceTest#seedExactAuthorityChainBeforeProcessDeath' .github/scripts/android-emulator-recovery.sh
 grep -q 'Level7TruthClosureGoldDeviceTest#recoverExactAuthorityChainRollbackAndSealGold' .github/scripts/android-emulator-recovery.sh
+grep -q 'SelfObservationGoldDeviceTest#seedAuthoritativeSelfStateBeforeProcessDeath' .github/scripts/android-emulator-recovery.sh
+grep -q 'SelfObservationGoldDeviceTest#recoverAuthorityFingerprintAndObserveLiveState' .github/scripts/android-emulator-recovery.sh
 grep -q 'ChatMainActivity' app/src/main/AndroidManifest.xml
 
 step "Product Gold 07: immutable candidate evidence"
@@ -86,6 +89,7 @@ printf '%s\n' \
   'level7_novel_domain_gold=PASS' \
   'level7_transfer_gold=PASS' \
   'level7_truth_closure_gold_preflight=PASS' \
+  'self_observation_gold_preflight=PASS' \
   'unit_tests=PASS' \
   'lint_debug=PASS' \
   'assemble_debug=PASS' \

@@ -46,6 +46,38 @@ data class RuntimeTopologyUiEvidence(
     }
 }
 
+data class SelfStateUiEvidence(
+    val authorityFingerprintShort: String,
+    val worldRevision: Long?,
+    val equationVersion: String?,
+    val photonCount: Long?,
+    val memoryNodeCount: Long?,
+    val healthyNodes: Int?,
+    val degradedNodes: Int?,
+    val unknownHealthNodes: Int?,
+    val resourceCapabilityReadiness: Double?,
+    val activeRepairs: Int?,
+    val activeTools: Int?,
+    val liveSources: Int?,
+    val observationBand: String,
+) {
+    init {
+        require(authorityFingerprintShort.isNotBlank())
+        require(worldRevision == null || worldRevision >= 0L)
+        require(equationVersion == null || equationVersion.isNotBlank())
+        require(photonCount == null || photonCount >= 0L)
+        require(memoryNodeCount == null || memoryNodeCount >= 0L)
+        require(healthyNodes == null || healthyNodes >= 0)
+        require(degradedNodes == null || degradedNodes >= 0)
+        require(unknownHealthNodes == null || unknownHealthNodes >= 0)
+        require(resourceCapabilityReadiness == null || resourceCapabilityReadiness in 0.0..1.0)
+        require(activeRepairs == null || activeRepairs >= 0)
+        require(activeTools == null || activeTools >= 0)
+        require(liveSources == null || liveSources >= 0)
+        require(observationBand.isNotBlank())
+    }
+}
+
 data class RuntimeHealthUiModel(
     val level: RuntimeHealthLevel,
     val compactLabel: String,
@@ -54,12 +86,15 @@ data class RuntimeHealthUiModel(
     val readinessSummary: String,
     val topologySummary: String,
     val detailsAvailable: Boolean,
+    val selfStateSummary: String = "Self-State-Evidenz ausstehend",
+    val selfStateObserved: Boolean = false,
 )
 
 fun buildRuntimeHealthUiModel(
     bootStatus: KernelBootstrapStatus,
     readiness: LifeOsReadinessSnapshot?,
     topologyEvidence: RuntimeTopologyUiEvidence?,
+    selfStateEvidence: SelfStateUiEvidence? = null,
 ): RuntimeHealthUiModel {
     val bootLabel = when (bootStatus) {
         KernelBootstrapStatus.CREATED -> "Start"
@@ -85,6 +120,16 @@ fun buildRuntimeHealthUiModel(
             "${topology.unavailableSubsystems} nicht verfügbar · ${topology.unboundSubsystems} ungebunden · " +
             "${topology.degradedSubsystems} eingeschränkt"
     }
+
+    val selfStateSummary = selfStateEvidence?.let { evidence ->
+        buildList {
+            add("Band " + evidence.observationBand)
+            evidence.worldRevision?.let { add("World r" + it) }
+            evidence.equationVersion?.let { add("Equation " + it) }
+            evidence.photonCount?.let { add(it.toString() + " Photonen") }
+            evidence.activeRepairs?.let { add(it.toString() + " Reparaturen") }
+        }.joinToString(" · ")
+    } ?: "Self-State-Evidenz ausstehend"
 
     val evidenceMissing = readiness == null || !topologyObserved
     val readinessDegraded = readiness?.let { snapshot ->
@@ -142,6 +187,8 @@ fun buildRuntimeHealthUiModel(
         readinessSummary = readinessSummary,
         topologySummary = topologySummary,
         detailsAvailable = true,
+        selfStateSummary = selfStateSummary,
+        selfStateObserved = selfStateEvidence != null,
     )
 }
 

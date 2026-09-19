@@ -27,6 +27,7 @@ import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.buildReadinessUiModel
 import app.lifeos.next.ui.components.RuntimeHealthUiModel
 import app.lifeos.next.ui.components.RuntimeTopologyUiEvidence
+import app.lifeos.next.ui.components.SelfStateUiEvidence
 import app.lifeos.next.ui.components.buildRuntimeHealthUiModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -36,6 +37,7 @@ fun RuntimeHealthModalSheet(
     readiness: LifeOsReadinessSnapshot?,
     topology: RuntimeTopologyUiEvidence?,
     onDismiss: () -> Unit,
+    selfState: SelfStateUiEvidence? = null,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         RuntimeHealthContent(
@@ -43,6 +45,7 @@ fun RuntimeHealthModalSheet(
             readiness = readiness,
             topology = topology,
             modifier = Modifier.fillMaxWidth(),
+            selfState = selfState,
         )
     }
 }
@@ -57,6 +60,7 @@ fun SystemRuntimeHealthScreen(
         bootStatus = state.bootStatus,
         readiness = state.readiness,
         topologyEvidence = state.runtimeTopology,
+        selfStateEvidence = state.selfState,
     )
     RuntimeHealthContent(
         health = health,
@@ -64,6 +68,7 @@ fun SystemRuntimeHealthScreen(
         topology = state.runtimeTopology,
         showWebDeepSearchControl = true,
         modifier = modifier.fillMaxSize(),
+        selfState = state.selfState,
     )
 }
 
@@ -74,6 +79,7 @@ fun RuntimeHealthContent(
     topology: RuntimeTopologyUiEvidence?,
     modifier: Modifier = Modifier,
     showWebDeepSearchControl: Boolean = false,
+    selfState: SelfStateUiEvidence? = null,
 ) {
     var showReadinessBlocks by rememberSaveable { mutableStateOf(false) }
     val readinessModel = readiness?.let(::buildReadinessUiModel)
@@ -104,6 +110,70 @@ fun RuntimeHealthContent(
                 "${evidence.capabilityProviders} Provider · ${evidence.generatedProviders} generiert",
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+
+        Spacer(Modifier.height(4.dp))
+        Text("SELF STATE", style = MaterialTheme.typography.titleMedium)
+        if (selfState == null) {
+            Text("Noch keine verifizierte Self-State-Evidenz verfügbar.", style = MaterialTheme.typography.bodySmall)
+        } else {
+            Text("Authority — " + selfState.authorityFingerprintShort, style = MaterialTheme.typography.bodySmall)
+            Text(
+                "World — " + (selfState.worldRevision?.let { "Revision " + it } ?: "nicht beobachtet"),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text("Equation — " + (selfState.equationVersion ?: "nicht beobachtet"), style = MaterialTheme.typography.bodySmall)
+            Text(
+                "PhotonStore — " + (selfState.photonCount?.let { it.toString() + " Photonen" } ?: "nicht beobachtet"),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Memory — " + (selfState.memoryNodeCount?.let { it.toString() + " Knoten" } ?: "nicht beobachtet"),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Runtime — " + (
+                    topology?.takeIf { it.observed }?.let {
+                        it.operationalSubsystems.toString() + "/" + it.registeredSubsystems + " operational"
+                    } ?: "nicht beobachtet"
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Resources — " + (
+                    selfState.resourceCapabilityReadiness?.let {
+                        "Readiness " + "%.0f".format(it * 100.0) + " %"
+                    } ?: "nicht beobachtet"
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Health — " + if (
+                    selfState.healthyNodes != null &&
+                    selfState.degradedNodes != null &&
+                    selfState.unknownHealthNodes != null
+                ) {
+                    selfState.healthyNodes.toString() + " gesund · " +
+                        selfState.degradedNodes + " eingeschränkt · " +
+                        selfState.unknownHealthNodes + " unbekannt"
+                } else {
+                    "nicht beobachtet"
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Recovery — " + (selfState.activeRepairs?.let { it.toString() + " aktiv" } ?: "nicht beobachtet"),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Tools — " + (selfState.activeTools?.let { it.toString() + " aktiv" } ?: "nicht beobachtet"),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Live Sources — " + (selfState.liveSources?.toString() ?: "nicht beobachtet"),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text("WorldFormula band — " + selfState.observationBand, style = MaterialTheme.typography.bodySmall)
         }
 
         Text("A–P Readiness", style = MaterialTheme.typography.titleMedium)

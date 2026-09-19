@@ -128,10 +128,21 @@ run_test \
   'app.lifeos.next.Level7TruthClosureGoldDeviceTest#seedExactAuthorityChainBeforeProcessDeath' \
   "$report_dir/level7-truth-closure-seed.txt"
 
+# M08 self-observation seed. Seal durable authority identity separately from live telemetry.
+run_test \
+  'app.lifeos.next.SelfObservationGoldDeviceTest#seedAuthoritativeSelfStateBeforeProcessDeath' \
+  "$report_dir/self-observation-seed.txt"
+
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
 assert_cold_launcher "$cold_start"
+
+# Check self-observation authority parity before the established Level-7 recovery tests intentionally
+# mutate World/Equation heads as part of their rollback proofs.
+run_test \
+  'app.lifeos.next.SelfObservationGoldDeviceTest#recoverAuthorityFingerprintAndObserveLiveState' \
+  "$report_dir/self-observation-recovered.txt"
 
 run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' \

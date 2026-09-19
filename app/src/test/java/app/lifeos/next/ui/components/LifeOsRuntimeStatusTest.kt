@@ -184,6 +184,34 @@ class LifeOsRuntimeStatusTest {
     }
 
     @Test
+    fun verifiedSelfStateIsProjectedWithoutChangingReadySemantics() {
+        val selfState = healthySelfState()
+        val model = buildRuntimeHealthUiModel(
+            KernelBootstrapStatus.READY,
+            healthyReadiness(),
+            healthyTopology(),
+            selfState,
+        )
+
+        assertEquals(RuntimeHealthLevel.READY, model.level)
+        assertTrue(model.selfStateObserved)
+        assertTrue(model.selfStateSummary.contains("STABLE"))
+        assertTrue(model.selfStateSummary.contains("World r7"))
+    }
+
+    @Test
+    fun missingSelfStateRemainsExplicitlyUnobserved() {
+        val model = buildRuntimeHealthUiModel(
+            KernelBootstrapStatus.READY,
+            healthyReadiness(),
+            healthyTopology(),
+        )
+
+        assertFalse(model.selfStateObserved)
+        assertEquals("Self-State-Evidenz ausstehend", model.selfStateSummary)
+    }
+
+    @Test
     fun userVisibleProjectionNeverClaimsCiReleaseOrGold() {
         val model = buildRuntimeHealthUiModel(
             KernelBootstrapStatus.READY,
@@ -196,6 +224,7 @@ class LifeOsRuntimeStatusTest {
             model.bootLabel,
             model.readinessSummary,
             model.topologySummary,
+            model.selfStateSummary,
         ).joinToString(" ").lowercase()
 
         assertTrue("gold" !in text)
@@ -219,6 +248,22 @@ class LifeOsRuntimeStatusTest {
             },
             LifeOsBlock.entries.associateWith { "verified" },
         )
+
+    private fun healthySelfState(): SelfStateUiEvidence = SelfStateUiEvidence(
+        authorityFingerprintShort = "0123456789abcdef",
+        worldRevision = 7,
+        equationVersion = "eq-v7",
+        photonCount = 42,
+        memoryNodeCount = 12,
+        healthyNodes = 8,
+        degradedNodes = 0,
+        unknownHealthNodes = 0,
+        resourceCapabilityReadiness = 0.9,
+        activeRepairs = 0,
+        activeTools = 2,
+        liveSources = 4,
+        observationBand = "STABLE",
+    )
 
     private fun healthyTopology(): RuntimeTopologyUiEvidence = RuntimeTopologyUiEvidence(
         observed = true,
