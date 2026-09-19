@@ -224,14 +224,17 @@ class DurableGoalPlanRuntime(
     private suspend fun normalizePreparation(
         blueprint: GoalPlanBlueprint,
         preparation: GoalPlanExecutionPreparation,
-        cycleBinding: GoalConvergenceCycleBinding? = cognitiveBindings?.load(blueprint.definition.id)?.cycleBinding,
-    ): DurableGoalPlanAdmission = when (preparation) {
+        cycleBinding: GoalConvergenceCycleBinding? = null,
+    ): DurableGoalPlanAdmission {
+        val effectiveCycleBinding = cycleBinding
+            ?: cognitiveBindings?.load(blueprint.definition.id)?.cycleBinding
+        return when (preparation) {
         is GoalPlanExecutionPreparation.PreparedAction ->
             DurableGoalPlanAdmission.Ready(
                 DurableGoalPlanPermit(
                     blueprint = blueprint,
                     preparation = preparation,
-                    cycleBinding = cycleBinding,
+                    cycleBinding = effectiveCycleBinding,
                 )
             )
         is GoalPlanExecutionPreparation.VerificationCompleted -> {
@@ -247,6 +250,7 @@ class DurableGoalPlanRuntime(
             DurableGoalPlanAdmission.Blocked("v7-replan-required:${preparation.reason}")
         is GoalPlanExecutionPreparation.Waiting ->
             DurableGoalPlanAdmission.Blocked("v7-waiting:${preparation.reason}")
+        }
     }
 
     private suspend fun persistConvergedBinding(
