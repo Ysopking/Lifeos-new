@@ -424,7 +424,7 @@ interface WorldFormulaSnapshotRepository {
     suspend fun load(id: String): WorldFormulaSnapshot?
     @Deprecated(
         message = "WorldFormula snapshots have no global chronological head; use ProductiveWorldHead or a domain-specific authority",
-        level = DeprecationLevel.WARNING,
+        level = DeprecationLevel.ERROR,
     )
     suspend fun loadLatest(): WorldFormulaSnapshot?
     suspend fun loadReport(): WorldFormulaSnapshotLoadReport
