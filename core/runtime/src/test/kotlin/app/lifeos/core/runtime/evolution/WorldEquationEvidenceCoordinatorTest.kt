@@ -5,6 +5,7 @@ import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import app.lifeos.core.runtime.world.WorldFormulaStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlinx.coroutines.test.runTest
 
 class WorldEquationEvidenceCoordinatorTest {
@@ -74,6 +75,55 @@ class WorldEquationEvidenceCoordinatorTest {
         )
 
         assertEquals(WorldEquationLifecycleState.PROMOTABLE, promotable.state)
+    }
+
+    @Test
+    fun repeatedDeterministicCaseCannotCountAsIndependentEvidence() = runTest {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val coefficient = baseline.stableCoefficients().first()
+        val candidate = baseline.copy(
+            version = baseline.version + "-duplicate-case",
+            coefficients = baseline.coefficients.map {
+                if (it.id == coefficient.id) {
+                    it.copy(
+                        multiplier = if (it.multiplier < 0.9) {
+                            it.multiplier + 0.05
+                        } else {
+                            it.multiplier - 0.05
+                        }
+                    )
+                } else it
+            },
+        )
+        val protocol = WorldEquationEvaluationProtocol(
+            version = "duplicate-case-v1",
+            primaryMetric = WorldEquationPrimaryMetric.STABILIZATION_ITERATIONS,
+            minimumIndependentRuns = 2,
+            minimumDistinctWorkloads = 1,
+            minimumActiveObservationsPerChangedCoefficient = 1,
+        )
+        val repository = InMemoryWorldEquationEvidenceRepository()
+        val coordinator = WorldEquationEvidenceCoordinator(
+            repository,
+            WorldEquationPromotionEvaluator(),
+        )
+        coordinator.beginShadow(candidate, baseline, protocol)
+        val first = observation(
+            baseline,
+            candidate,
+            coefficient.id,
+            "run-1",
+            "a",
+        )
+        coordinator.recordObservation(candidate, baseline, first)
+        val repeatedCase = first.copy(
+            runId = "run-2",
+            partition = WorldEquationEvidencePartition.HOLDOUT,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            coordinator.recordObservation(candidate, baseline, repeatedCase)
+        }
     }
 
     private fun observation(

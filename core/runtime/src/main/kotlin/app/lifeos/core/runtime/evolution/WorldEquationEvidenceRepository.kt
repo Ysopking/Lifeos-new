@@ -32,6 +32,12 @@ data class WorldEquationEvidenceRecord(
         require(evidence.observations.map { it.runId }.distinct().size == evidence.observations.size) {
             "World equation evidence requires independent run ids"
         }
+        require(
+            evidence.observations.map { it.caseFingerprint }.distinct().size ==
+                evidence.observations.size
+        ) {
+            "World equation evidence requires distinct deterministic cases"
+        }
         if (state == WorldEquationLifecycleState.ACTIVE) {
             require(activationHeadFingerprint != null) {
                 "ACTIVE world equation evidence requires activation head fingerprint"
@@ -57,6 +63,12 @@ data class WorldEquationEvidenceRecord(
         }
         require(observation.runId !in evidence.observations.map { it.runId }.toSet()) {
             "World equation evidence run id was already recorded"
+        }
+        require(
+            observation.caseFingerprint !in
+                evidence.observations.map { it.caseFingerprint }.toSet()
+        ) {
+            "World equation evidence deterministic case was already recorded"
         }
         require(observation.candidateEquationFingerprint == evidence.candidateEquationFingerprint)
         require(observation.baselineEquationFingerprint == evidence.baselineEquationFingerprint)

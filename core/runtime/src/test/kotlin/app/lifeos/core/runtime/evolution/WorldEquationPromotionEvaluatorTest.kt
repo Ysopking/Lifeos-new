@@ -104,6 +104,69 @@ class WorldEquationPromotionEvaluatorTest {
     }
 
     @Test
+    fun parameterJumpBeyondFrozenBoundIsRejected() {
+        val first = baseline.stableCoefficients().first()
+        val jump = if (first.multiplier >= 0.0) -0.50 else 0.50
+        val largeJumpCandidate = baseline.copy(
+            version = baseline.version + "-large-jump",
+            coefficients = baseline.coefficients.map {
+                if (it.id == first.id) {
+                    it.copy(multiplier = jump)
+                } else {
+                    it
+                }
+            },
+        )
+        val changed = largeJumpCandidate.changedCoefficientIdsComparedWith(baseline)
+        val observations = listOf(
+            WorldEquationShadowObservation(
+                caseFingerprint = "large-jump-case-1",
+                runId = "large-jump-run-1",
+                workloadId = "workload-a",
+                baselineEquationFingerprint = baseline.fingerprint(),
+                candidateEquationFingerprint = largeJumpCandidate.fingerprint(),
+                baseline = metrics(6, changed),
+                candidate = metrics(3, changed),
+            ),
+            WorldEquationShadowObservation(
+                caseFingerprint = "large-jump-case-2",
+                runId = "large-jump-run-2",
+                workloadId = "workload-a",
+                baselineEquationFingerprint = baseline.fingerprint(),
+                candidateEquationFingerprint = largeJumpCandidate.fingerprint(),
+                baseline = metrics(6, changed),
+                candidate = metrics(3, changed),
+            ),
+            WorldEquationShadowObservation(
+                caseFingerprint = "large-jump-case-3",
+                runId = "large-jump-run-3",
+                workloadId = "workload-b",
+                baselineEquationFingerprint = baseline.fingerprint(),
+                candidateEquationFingerprint = largeJumpCandidate.fingerprint(),
+                baseline = metrics(6, changed),
+                candidate = metrics(3, changed),
+                partition = WorldEquationEvidencePartition.HOLDOUT,
+            ),
+        )
+        val evidence = WorldEquationEvidenceSet.empty(
+            candidate = largeJumpCandidate,
+            baseline = baseline,
+            protocol = protocol,
+            policyFingerprint = policy.fingerprint(),
+        ).copy(observations = observations)
+
+        val verdict = evaluator.evaluate(largeJumpCandidate, baseline, evidence)
+
+        assertEquals(WorldEquationPromotionDecision.REJECTED, verdict.decision)
+        assertEquals(
+            WorldEquationGateStatus.FAIL,
+            verdict.gateResults.single {
+                it.gate == WorldEquationEvidenceGate.BOUNDED_PARAMETER_CHANGE
+            }.status,
+        )
+    }
+
+    @Test
     fun policyFingerprintCannotBeSubstituted() {
         val evidence = evidence(
             observations = listOf(

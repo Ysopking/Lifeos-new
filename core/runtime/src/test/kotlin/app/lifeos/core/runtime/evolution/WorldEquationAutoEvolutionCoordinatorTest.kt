@@ -157,7 +157,7 @@ class WorldEquationAutoEvolutionCoordinatorTest {
                 WorldFormulaInputSnapshot(
                     target = WorldTargetRef(WorldNodeKind.GOAL, "auto-test"),
                     vector = WorldFieldVector.EMPTY,
-                    sourceSnapshotFingerprint = "auto-test-input",
+                    sourceSnapshotFingerprint = "auto-test-input-" + runId,
                 )
             ),
             interactions = emptyList(),
