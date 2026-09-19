@@ -38,6 +38,39 @@ class WorldEquationActivationAuthorityTest {
     }
 
     @Test
+    fun rollbackRestoresExactRegisteredPredecessorAfterRehydration() = runBlocking {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
+        val registry = InMemoryWorldEquationRegistry(listOf(baseline, candidate))
+        val heads = MemoryHeadRepository()
+        val first = WorldEquationActivationAuthority(
+            equations = registry,
+            heads = heads,
+            baseline = baseline,
+        )
+
+        assertEquals(baseline.version, first.activeVersion())
+        first.activate(candidate.version, "promotion:test-v2")
+        assertEquals(candidate.version, first.activeVersion())
+
+        val rehydrated = WorldEquationActivationAuthority(
+            equations = registry,
+            heads = heads,
+            baseline = baseline,
+        )
+        val restored = rehydrated.rollbackToPredecessor(
+            expectedCurrentVersion = candidate.version,
+            rollbackDecisionId = "decision:test-rollback",
+        )
+
+        assertEquals(3L, restored.revision)
+        assertEquals(baseline.version, restored.activeEquationVersion)
+        assertEquals(candidate.version, restored.predecessorEquationVersion)
+        assertEquals("rollback:decision:test-rollback", restored.sourcePromotionId)
+        assertEquals(baseline.version, rehydrated.activeVersion())
+    }
+
+    @Test
     fun unregisteredPhysicsCannotBecomeActive() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
         val authority = WorldEquationActivationAuthority(
