@@ -25,7 +25,7 @@ class SegmentPathBindingTest {
             val exact = binding.segmentFile("alpha", 7L)
             binding.validatePath(exact, "alpha", 7L)
 
-            val wrongKey = segments.resolve(SegmentPathBinding.sha256("beta")).resolve(exact.name)
+            val wrongKey = segments.resolve(segmentKeySha256("beta")).resolve(exact.name)
             assertFailsWith<IllegalArgumentException> {
                 binding.validatePath(wrongKey, "alpha", 7L)
             }

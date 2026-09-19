@@ -138,13 +138,13 @@ internal class SegmentPathBinding<K>(
     companion object {
         private val SHA256_REGEX = Regex("[0-9a-f]{64}")
         private const val ATOMIC_BACKUP_SUFFIX = ".bak"
-
-        fun sha256(value: String): String =
-            MessageDigest.getInstance("SHA-256")
-                .digest(value.toByteArray(Charsets.UTF_8))
-                .joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 }
+
+internal fun segmentKeySha256(value: String): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it.toInt() and 0xff) }
 
 internal data class SegmentedLedgerLoadReport<E>(
     val entries: List<E>,
