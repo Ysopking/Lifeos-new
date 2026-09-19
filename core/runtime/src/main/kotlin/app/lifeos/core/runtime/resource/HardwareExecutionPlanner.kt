@@ -25,7 +25,7 @@ class HardwareExecutionPlanner {
         val suspended = budgetPlan.mode == HardwareBudgetMode.SUSPENDED ||
             budgetPlan.effectiveQuota.workUnits == 0L
         val physicalLimit = minOf(hardware.availableProcessors, strategy.maxConcurrentTasks)
-        val capacity = (hardware.computeHeadroom() * priorityBoost(priority)).coerceIn(0.0, 1.0)
+        val capacity = (hardware.executionComputeHeadroom() * priorityBoost(priority)).coerceIn(0.0, 1.0)
         val capacityLimit = if (suspended) 0 else {
             ceil(physicalLimit.toDouble() * capacity)
                 .toInt()
