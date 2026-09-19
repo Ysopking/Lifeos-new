@@ -37,6 +37,7 @@ enum class WorldEquationEvidenceGate {
     CROSS_WORKLOAD_TRANSFER,
     IDENTIFIABILITY,
     NON_DEGENERACY,
+    BOUNDED_PARAMETER_CHANGE,
     SAFETY,
 }
 
@@ -174,6 +175,9 @@ data class WorldEquationEvidenceSet(
         require(candidateEquationFingerprint != baselineEquationFingerprint)
         require(candidatePhysicsFingerprint != baselinePhysicsFingerprint)
         require(observations.map { it.fingerprint() }.distinct().size == observations.size)
+        require(observations.map { it.caseFingerprint }.distinct().size == observations.size) {
+            "WorldEquation evidence cannot count the same deterministic case more than once"
+        }
         require(observations.all {
             it.candidateEquationFingerprint == candidateEquationFingerprint &&
                 it.baselineEquationFingerprint == baselineEquationFingerprint
@@ -308,3 +312,18 @@ internal fun WorldEquationSpec.changedCoefficientIdsComparedWith(
 
 internal fun WorldEquationSpec.absoluteMultiplierNorm(): Double =
     stableCoefficients().sumOf { abs(it.multiplier) }
+
+internal fun WorldEquationSpec.maximumParameterDeltaComparedWith(
+    baseline: WorldEquationSpec,
+): Double {
+    require(schemaFingerprint() == baseline.schemaFingerprint())
+    val baselineById = baseline.stableCoefficients().associateBy { it.id }
+    return stableCoefficients().maxOfOrNull { candidate ->
+        val previous = baselineById.getValue(candidate.id)
+        maxOf(
+            abs(candidate.multiplier - previous.multiplier),
+            abs(candidate.confidenceMultiplier - previous.confidenceMultiplier),
+            abs(candidate.maxAbsoluteContribution - previous.maxAbsoluteContribution),
+        )
+    } ?: 0.0
+}

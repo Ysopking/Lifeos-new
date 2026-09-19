@@ -28,10 +28,7 @@ data class WorldEquationShadowCase(
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
-        "world-equation-shadow-case/v2",
-        workloadId,
-        partition.name,
-        request.observedAt.toString(),
+        "world-equation-shadow-case/v3",
         request.config.fingerprint(),
         request.sourceTaskId?.value.orEmpty(),
         request.photonId?.value.orEmpty(),

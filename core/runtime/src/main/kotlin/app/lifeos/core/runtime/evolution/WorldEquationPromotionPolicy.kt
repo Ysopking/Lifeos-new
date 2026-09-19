@@ -11,6 +11,7 @@ data class WorldEquationPromotionPolicy(
     val minimumImprovedRunFraction: Double,
     val workloadNonInferiorityMargin: Double,
     val minimumCoefficientNormRatio: Double,
+    val maximumSingleParameterDelta: Double = 0.25,
 ) {
     init {
         require(version.isNotBlank())
@@ -19,6 +20,7 @@ data class WorldEquationPromotionPolicy(
         require(minimumImprovedRunFraction.isFinite() && minimumImprovedRunFraction in 0.5..1.0)
         require(workloadNonInferiorityMargin.isFinite() && workloadNonInferiorityMargin >= 0.0)
         require(minimumCoefficientNormRatio.isFinite() && minimumCoefficientNormRatio in 0.0..1.0)
+        require(maximumSingleParameterDelta.isFinite() && maximumSingleParameterDelta in 0.0..1.0)
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
@@ -29,6 +31,7 @@ data class WorldEquationPromotionPolicy(
         java.lang.Double.toHexString(minimumImprovedRunFraction),
         java.lang.Double.toHexString(workloadNonInferiorityMargin),
         java.lang.Double.toHexString(minimumCoefficientNormRatio),
+        java.lang.Double.toHexString(maximumSingleParameterDelta),
     )
 
     companion object {
@@ -39,6 +42,7 @@ data class WorldEquationPromotionPolicy(
             minimumImprovedRunFraction = 0.60,
             workloadNonInferiorityMargin = 0.0,
             minimumCoefficientNormRatio = 0.20,
+            maximumSingleParameterDelta = 0.25,
         )
     }
 }
@@ -242,6 +246,18 @@ class WorldEquationPromotionEvaluator(
                 ";minimum=" + hex(policy.minimumCoefficientNormRatio),
         )
 
+        val maximumParameterDelta = candidate.maximumParameterDeltaComparedWith(baseline)
+        val boundedChange = result(
+            WorldEquationEvidenceGate.BOUNDED_PARAMETER_CHANGE,
+            if (maximumParameterDelta <= policy.maximumSingleParameterDelta) {
+                WorldEquationGateStatus.PASS
+            } else {
+                WorldEquationGateStatus.FAIL
+            },
+            "maximum-parameter-delta=" + hex(maximumParameterDelta) +
+                ";maximum=" + hex(policy.maximumSingleParameterDelta),
+        )
+
         val invalidRuns = observations.count {
             it.candidate.status == WorldFormulaStatus.INVALID_EQUATION
         }
@@ -259,6 +275,7 @@ class WorldEquationPromotionEvaluator(
             transfer,
             identifiability,
             nonDegeneracy,
+            boundedChange,
             safety,
         )
         val decision = when {
