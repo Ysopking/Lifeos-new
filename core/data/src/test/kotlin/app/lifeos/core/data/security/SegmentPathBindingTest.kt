@@ -17,7 +17,7 @@ class SegmentPathBindingTest {
             val binding = SegmentPathBinding<String>(
                 ledgerDomain = "test-ledger/v1",
                 segmentsDirectory = segments,
-                keyFingerprint = SegmentPathBinding::sha256,
+                keyFingerprint = ::segmentKeySha256,
                 segmentPrefix = "event-",
                 segmentSuffix = ".test",
             )
@@ -56,7 +56,7 @@ class SegmentPathBindingTest {
             val binding = SegmentPathBinding<String>(
                 ledgerDomain = "test-ledger/v1",
                 segmentsDirectory = segments,
-                keyFingerprint = SegmentPathBinding::sha256,
+                keyFingerprint = ::segmentKeySha256,
                 segmentPrefix = "event-",
                 segmentSuffix = ".test",
             )
