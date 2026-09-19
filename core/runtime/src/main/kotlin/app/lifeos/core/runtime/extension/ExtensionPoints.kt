@@ -130,6 +130,17 @@ data class ExtensionPointSnapshot private constructor(
                 require(entry.manifest.kind == registration.point.requiredExtensionKind) {
                     "Extension kind ${entry.manifest.kind} cannot provide ${registration.point}"
                 }
+                val expectedContractFingerprint = when (registration.point) {
+                    ExtensionPointKind.WORLD_EQUATION_CANDIDATE ->
+                        entry.worldContract.coefficientSchemaFingerprint.value
+                    ExtensionPointKind.WORLD_SIGNAL_PROJECTOR,
+                    ExtensionPointKind.WORLD_TOPOLOGY,
+                    ExtensionPointKind.WORLD_MODEL_PROJECTION ->
+                        entry.worldContract.projectionContractFingerprint.value
+                }
+                require(registration.contractFingerprint == expectedContractFingerprint) {
+                    "Extension point registration contract does not match frozen extension contract"
+                }
                 if (registration.point == ExtensionPointKind.WORLD_EQUATION_CANDIDATE) {
                     require(
                         entry.manifest.registrationMode ==

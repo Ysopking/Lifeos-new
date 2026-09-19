@@ -10,8 +10,12 @@ import app.lifeos.core.field.world.WorldTransferCoefficient
 import app.lifeos.core.runtime.resource.HardwareStateSnapshot
 
 /**
- * Dedicated World Formula profile for the local device. It keeps hardware observations typed and
- * informational while producing a resource-controller readiness signal that V16 can consume.
+ * Hardware WorldFormula analysis/convergence profile.
+ *
+ * Its controller projection is diagnostic in V1. HardwareAdaptiveResourceOptimizer still derives
+ * hard/effective quotas directly from measured HardwareStateSnapshot. Changing these coefficients
+ * therefore must not be interpreted as changing resource capacity unless a future explicitly
+ * versioned bridge consumes the resulting controller state.
  */
 class HardwareWorldEquationProfile {
     val spec: WorldEquationSpec = WorldEquationSpec(

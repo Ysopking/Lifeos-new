@@ -128,7 +128,7 @@ class WorldFormulaCoordinatorTest {
 
         assertEquals(WorldFormulaExecutionState.COMPLETED, result.state)
         assertTrue(result.persisted)
-        assertEquals(result.snapshot?.id, repository.loadLatest()?.id)
+        assertEquals(result.snapshot, repository.load(requireNotNull(result.snapshot).id))
     }
 
     @Test

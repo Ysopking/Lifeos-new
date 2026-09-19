@@ -99,6 +99,7 @@ class CognitiveSnapshotManagerTest {
             manager = manager,
             journal = journal,
             worlds = InMemoryWorldRepository(world),
+            activeWorldSnapshotId = { world.id },
             dependencyState = {
                 CognitiveSnapshotDependencyState(
                     revision = 9L,

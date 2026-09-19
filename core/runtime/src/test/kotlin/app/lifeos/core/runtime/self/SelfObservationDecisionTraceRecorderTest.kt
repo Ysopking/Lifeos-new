@@ -7,6 +7,7 @@ import app.lifeos.core.runtime.trace.DecisionTraceRepository
 import app.lifeos.core.runtime.trace.DecisionTraceRepositoryLoadReport
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.world.SelfStateWorldBand
+import app.lifeos.core.runtime.world.SelfStateWorldClassificationPolicy
 import app.lifeos.core.runtime.world.SelfStateWorldFormulaAssessment
 import app.lifeos.core.runtime.world.WorldFormulaExecution
 import app.lifeos.core.runtime.world.WorldFormulaExecutionState
@@ -38,6 +39,7 @@ class SelfObservationDecisionTraceRecorderTest {
         analysisId = "a".repeat(64),
         sourceFingerprint = "b".repeat(64),
         authorityFingerprint = authority,
+        classificationPolicyFingerprint = SelfStateWorldClassificationPolicy.V1.fingerprint(),
         band = SelfStateWorldBand.DEGRADED,
         execution = WorldFormulaExecution(
             state = WorldFormulaExecutionState.INVALID,

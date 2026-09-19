@@ -16,36 +16,41 @@ class WorldEquationActivationAuthority(
     private val equations: InMemoryWorldEquationRegistry,
     private val heads: WorldEquationHeadRepository,
     private val baseline: WorldEquationSpec,
+    private val specs: WorldEquationSpecRepository = InMemoryWorldEquationSpecRepository(),
 ) {
     private val mutex = Mutex()
 
-    suspend fun activeVersion(): String = mutex.withLock {
-        val report = heads.loadReport()
-        require(!report.corrupted) {
-            "World equation head recovery required: ${report.message.orEmpty()}"
-        }
-        val head = report.head ?: seedBaseline()
-        requireNotNull(equations.resolve(head.activeEquationVersion)) {
-            "Active world equation version is not registered: ${head.activeEquationVersion}"
-        }
-        head.activeEquationVersion
+    suspend fun activeVersion(): String = activeHead().activeEquationVersion
+
+    suspend fun activeHead(): WorldEquationHead = mutex.withLock {
+        activeHeadLocked()
     }
 
     suspend fun registerCandidate(spec: WorldEquationSpec) = mutex.withLock {
-        equations.register(spec)
+        persistAndRegister(spec)
     }
 
     suspend fun promote(
         candidate: WorldEquationSpec,
         admission: WorldEquationPromotionAdmission,
+        expectedHeadFingerprint: String,
     ): WorldEquationHead = mutex.withLock {
+        require(expectedHeadFingerprint.matches(Regex("[0-9a-f]{64}"))) {
+            "World equation promotion requires an exact current head fingerprint"
+        }
         require(candidate.version == admission.candidateVersion) {
             "World equation promotion admission targets another version"
         }
         require(candidate.fingerprint() == admission.candidateEquationFingerprint) {
+            "World equation promotion admission targets a different artifact"
+        }
+        require(candidate.physicsFingerprint() == admission.candidatePhysicsFingerprint) {
             "World equation promotion admission targets different physics"
         }
-        equations.register(candidate)
+        require(candidate.schemaFingerprint() == admission.equationSchemaFingerprint) {
+            "World equation promotion admission targets a different schema"
+        }
+        persistAndRegister(candidate)
 
         repeat(MAX_CAS_ATTEMPTS) {
             val report = heads.loadReport()
@@ -53,11 +58,20 @@ class WorldEquationActivationAuthority(
                 "World equation head recovery required: ${report.message.orEmpty()}"
             }
             val current = report.head ?: seedBaseline()
-            val currentSpec = requireNotNull(equations.resolve(current.activeEquationVersion)) {
-                "Current active world equation is not registered"
+            require(current.fingerprint == expectedHeadFingerprint) {
+                "World equation promotion head changed since admission intent was prepared"
+            }
+            val currentSpec = requireNotNull(resolveRegistered(current.activeEquationVersion)) {
+                "Current active world equation cannot be recovered"
             }
             require(currentSpec.fingerprint() == admission.baselineEquationFingerprint) {
+                "World equation promotion baseline no longer matches active artifact"
+            }
+            require(currentSpec.physicsFingerprint() == admission.baselinePhysicsFingerprint) {
                 "World equation promotion baseline no longer matches active physics"
+            }
+            require(currentSpec.schemaFingerprint() == admission.equationSchemaFingerprint) {
+                "World equation promotion baseline no longer matches candidate schema"
             }
             if (current.activeEquationVersion == candidate.version) return@withLock current
             val next = WorldEquationHead.create(
@@ -92,8 +106,8 @@ class WorldEquationActivationAuthority(
             val predecessor = requireNotNull(current.predecessorEquationVersion) {
                 "World equation rollback requires a predecessor version"
             }
-            requireNotNull(equations.resolve(predecessor)) {
-                "World equation rollback predecessor is not registered: $predecessor"
+            requireNotNull(resolveRegistered(predecessor)) {
+                "World equation rollback predecessor cannot be recovered: $predecessor"
             }
             val next = WorldEquationHead.create(
                 revision = Math.addExact(current.revision, 1L),
@@ -108,8 +122,23 @@ class WorldEquationActivationAuthority(
         error("World equation rollback CAS did not converge")
     }
 
+    private suspend fun activeHeadLocked(): WorldEquationHead {
+        // Pin the compiled baseline into the immutable durable spec vault even when an older
+        // deployment already seeded the equation head before the spec vault existed.
+        persistAndRegister(baseline)
+        val report = heads.loadReport()
+        require(!report.corrupted) {
+            "World equation head recovery required: ${report.message.orEmpty()}"
+        }
+        val head = report.head ?: seedBaseline()
+        requireNotNull(resolveRegistered(head.activeEquationVersion)) {
+            "Active world equation version cannot be recovered: ${head.activeEquationVersion}"
+        }
+        return head
+    }
+
     private suspend fun seedBaseline(): WorldEquationHead {
-        equations.register(baseline)
+        persistAndRegister(baseline)
         val initial = WorldEquationHead.create(
             revision = 1L,
             activeEquationVersion = baseline.version,
@@ -120,6 +149,24 @@ class WorldEquationActivationAuthority(
         return requireNotNull(heads.load()) {
             "World equation baseline lost during concurrent initialization"
         }
+    }
+
+    private suspend fun persistAndRegister(spec: WorldEquationSpec) {
+        specs.putIfAbsent(spec)
+        val durable = requireNotNull(specs.load(spec.version)) {
+            "Durable world equation spec disappeared after persistence"
+        }
+        require(durable.fingerprint() == spec.fingerprint()) {
+            "Durable world equation spec fingerprint mismatch"
+        }
+        equations.register(durable)
+    }
+
+    private suspend fun resolveRegistered(version: String): WorldEquationSpec? {
+        equations.resolve(version)?.let { return it }
+        val durable = specs.load(version) ?: return null
+        equations.register(durable)
+        return durable
     }
 
     private companion object {

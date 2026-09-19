@@ -121,6 +121,40 @@ class SelfStateWorldEquationProfileTest {
         assertTrue("UNCERTAINTY_ELEVATED" in assessment.reasonCodes)
     }
 
+
+    @Test
+    fun classificationPolicyIsBoundIntoAssessmentIdentity() = runTest {
+        val profile = SelfStateWorldEquationProfile()
+        val repo = InMemoryWorldSnapshotRepository()
+        val baselinePolicy = SelfStateWorldClassificationPolicy.V1
+        val alternatePolicy = baselinePolicy.copy(
+            version = "self-state-world-classification-v1-alt",
+            observeHealthBelow = 0.80,
+        )
+        val baseline = SelfStateWorldFormulaEvaluator(
+            profile,
+            WorldFormulaCoordinator(
+                equations = InMemoryWorldEquationRegistry(listOf(profile.spec)),
+                snapshots = repo,
+                captureCognitiveSnapshots = false,
+            ),
+            baselinePolicy,
+        ).evaluate(projection())
+        val alternate = SelfStateWorldFormulaEvaluator(
+            profile,
+            WorldFormulaCoordinator(
+                equations = InMemoryWorldEquationRegistry(listOf(profile.spec)),
+                snapshots = repo,
+                captureCognitiveSnapshots = false,
+            ),
+            alternatePolicy,
+        ).evaluate(projection())
+
+        assertEquals(baselinePolicy.fingerprint(), baseline.classificationPolicyFingerprint)
+        assertEquals(alternatePolicy.fingerprint(), alternate.classificationPolicyFingerprint)
+        assertTrue(baseline.analysisId != alternate.analysisId)
+    }
+
     private fun projection(
         health: SelfHealthState = SelfHealthState(1, 0, 0, 0, 0, 0),
         world: SelfWorldState = SelfWorldState(1, "world", 1, "eq-v1", "eq", "boot", "boot-fp", "cog"),

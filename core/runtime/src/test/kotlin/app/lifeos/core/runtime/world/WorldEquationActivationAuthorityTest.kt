@@ -25,7 +25,7 @@ class WorldEquationActivationAuthorityTest {
         assertEquals(1L, seeded.revision)
         assertNull(seeded.predecessorEquationVersion)
 
-        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
+        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
         val admission = WorldEquationEvolutionAdmissionGate.admit(
             candidate = candidate,
             baseline = baseline,
@@ -39,6 +39,7 @@ class WorldEquationActivationAuthorityTest {
         val promoted = authority.promote(
             candidate = candidate,
             admission = admission,
+            expectedHeadFingerprint = seeded.fingerprint,
         )
 
         assertEquals(2L, promoted.revision)
@@ -51,16 +52,19 @@ class WorldEquationActivationAuthorityTest {
     @Test
     fun rollbackRestoresExactRegisteredPredecessorAfterRehydration() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
-        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
+        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
         val registry = InMemoryWorldEquationRegistry(listOf(baseline, candidate))
         val heads = MemoryHeadRepository()
+        val specs = InMemoryWorldEquationSpecRepository()
         val first = WorldEquationActivationAuthority(
             equations = registry,
             heads = heads,
             baseline = baseline,
+            specs = specs,
         )
 
         assertEquals(baseline.version, first.activeVersion())
+        val baselineHead = first.activeHead()
         first.promote(
             candidate = candidate,
             admission = WorldEquationEvolutionAdmissionGate.admit(
@@ -73,13 +77,15 @@ class WorldEquationActivationAuthorityTest {
                     promotionDecisionId = "promotion:test-v2",
                 ),
             ),
+            expectedHeadFingerprint = baselineHead.fingerprint,
         )
         assertEquals(candidate.version, first.activeVersion())
 
         val rehydrated = WorldEquationActivationAuthority(
-            equations = registry,
+            equations = InMemoryWorldEquationRegistry(listOf(baseline)),
             heads = heads,
             baseline = baseline,
+            specs = specs,
         )
         val restored = rehydrated.rollbackToPredecessor(
             expectedCurrentVersion = candidate.version,
@@ -96,8 +102,8 @@ class WorldEquationActivationAuthorityTest {
     @Test
     fun promotionAdmissionCannotBeReusedForDifferentPhysics() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
-        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
-        val other = baseline.copy(version = "lifeos-world-cognitive-v3")
+        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
+        val other = changedCandidate(baseline, "lifeos-world-cognitive-v3", delta = 0.08)
         val authority = WorldEquationActivationAuthority(
             equations = InMemoryWorldEquationRegistry(listOf(baseline)),
             heads = MemoryHeadRepository(),
@@ -118,9 +124,113 @@ class WorldEquationActivationAuthorityTest {
             authority.promote(
                 candidate = other,
                 admission = admission,
+                expectedHeadFingerprint = authority.activeHead().fingerprint,
             )
         }
     }
+
+
+
+    @Test
+    fun stalePromotionIntentCannotBeReplayedAfterHeadHistoryChanges() = runBlocking {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
+        val registry = InMemoryWorldEquationRegistry(listOf(baseline, candidate))
+        val heads = MemoryHeadRepository()
+        val specs = InMemoryWorldEquationSpecRepository()
+        val authority = WorldEquationActivationAuthority(
+            equations = registry,
+            heads = heads,
+            baseline = baseline,
+            specs = specs,
+        )
+        val originalHead = authority.activeHead()
+        val admission = WorldEquationEvolutionAdmissionGate.admit(
+            candidate = candidate,
+            baseline = baseline,
+            validation = validation("replay"),
+        )
+        authority.promote(
+            candidate = candidate,
+            admission = admission,
+            expectedHeadFingerprint = originalHead.fingerprint,
+        )
+        authority.rollbackToPredecessor(
+            expectedCurrentVersion = candidate.version,
+            rollbackDecisionId = "decision:replay-rollback",
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            authority.promote(
+                candidate = candidate,
+                admission = admission,
+                expectedHeadFingerprint = originalHead.fingerprint,
+            )
+        }
+    }
+
+    @Test
+    fun versionOnlyChangeIsNotNewPhysics() {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
+
+        assertEquals(baseline.physicsFingerprint(), candidate.physicsFingerprint())
+        assertFailsWith<IllegalArgumentException> {
+            WorldEquationEvolutionAdmissionGate.admit(
+                candidate = candidate,
+                baseline = baseline,
+                validation = validation("version-only"),
+            )
+        }
+    }
+
+    @Test
+    fun explanationOnlyChangeIsNotNewPhysics() {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val first = baseline.stableCoefficients().first()
+        val candidate = baseline.copy(
+            version = "lifeos-world-cognitive-v2",
+            coefficients = baseline.coefficients.map {
+                if (it.id == first.id) it.copy(explanation = it.explanation + " clarified") else it
+            },
+        )
+
+        assertEquals(baseline.physicsFingerprint(), candidate.physicsFingerprint())
+        assertFailsWith<IllegalArgumentException> {
+            WorldEquationEvolutionAdmissionGate.admit(
+                candidate = candidate,
+                baseline = baseline,
+                validation = validation("explanation-only"),
+            )
+        }
+    }
+
+
+    private fun changedCandidate(
+        baseline: app.lifeos.core.field.world.WorldEquationSpec,
+        version: String,
+        delta: Double = 0.05,
+    ): app.lifeos.core.field.world.WorldEquationSpec {
+        val first = baseline.stableCoefficients().first()
+        val nextMultiplier = if (first.multiplier + delta <= 1.0) {
+            first.multiplier + delta
+        } else {
+            first.multiplier - delta
+        }
+        return baseline.copy(
+            version = version,
+            coefficients = baseline.coefficients.map {
+                if (it.id == first.id) it.copy(multiplier = nextMultiplier) else it
+            },
+        )
+    }
+
+    private fun validation(suffix: String) = WorldEquationEvolutionValidation(
+        holdoutEvidenceId = "holdout:$suffix",
+        shadowEvidenceId = "shadow:$suffix",
+        trialEvidenceId = "trial:$suffix",
+        promotionDecisionId = "promotion:$suffix",
+    )
 
     private class MemoryHeadRepository : WorldEquationHeadRepository {
         private var head: WorldEquationHead? = null

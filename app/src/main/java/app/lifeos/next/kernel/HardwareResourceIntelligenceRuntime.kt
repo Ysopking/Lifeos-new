@@ -18,6 +18,7 @@ import app.lifeos.core.runtime.world.HardwareWorldEquationProfile
 import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
 import app.lifeos.core.runtime.world.ResourceAllocationWorldEquationProfile
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
+import app.lifeos.core.runtime.world.WorldFormulaExecutionPolicy
 import app.lifeos.core.runtime.world.WorldFormulaExecution
 import app.lifeos.core.runtime.world.WorldFormulaExecutionState
 import app.lifeos.core.runtime.world.WorldFormulaStatus
@@ -86,10 +87,12 @@ fun interface HardwareExecutionBudgetGate {
 }
 
 /**
- * APK-level V16 bridge. A fresh local hardware observation is projected through the World Formula
- * and persisted before it may influence a resource recommendation. Cross-domain distribution then
- * runs through a second persisted World Formula snapshot. Hard owner/system quotas remain absolute;
- * both stages can only shrink or partition the permitted envelope.
+ * APK-level V16 bridge.
+ *
+ * HardwareWorldEquationProfile is a validity/convergence gate. HardwareAdaptiveResourceOptimizer
+ * remains authoritative for the measured hardware envelope. ResourceAllocationWorldEquationProfile
+ * supplies the actual cross-domain WorldFormula weighting inside that envelope. Hard owner/system
+ * quotas remain absolute.
  */
 class HardwareResourceIntelligenceRuntime internal constructor(
     context: Context,
@@ -105,6 +108,7 @@ class HardwareResourceIntelligenceRuntime internal constructor(
             listOf(profile.spec, allocationProfile.spec)
         ),
         snapshots = EncryptedWorldFormulaSnapshotRepository(context.applicationContext),
+        executionPolicy = WorldFormulaExecutionPolicy.RESOURCE,
     )
     private val budgetBroker = WorldFormulaBudgetBroker(worldFormula, allocationProfile)
     private val cacheMutex = Mutex()

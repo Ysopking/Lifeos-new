@@ -176,9 +176,22 @@ class ExtensionWorldProjectionAdapter(
     }
 
     override fun project(context: WorldProjectionContext): UniversalWorldProjection {
-        val projected = delegate.project(context.inputs)
-            .distinctBy { it.target }
-            .sortedWith(compareBy({ it.target.kind.name }, { it.target.key }))
+        val raw = delegate.project(context.inputs)
+        require(raw.map { it.target }.distinct().size == raw.size) {
+            "World projection provider emitted duplicate targets"
+        }
+        require(raw.all { it.target.kind in descriptor.nodeKinds }) {
+            "World projection provider emitted undeclared node kind"
+        }
+        require(
+            raw.flatMap { it.vector.dimensions() }
+                .all { it in descriptor.signalDimensions }
+        ) {
+            "World projection provider emitted undeclared signal dimension"
+        }
+        val projected = raw.sortedWith(
+            compareBy({ it.target.kind.name }, { it.target.key })
+        )
         return UniversalWorldProjection(
             providerId = descriptor.providerId,
             contextFingerprint = context.fingerprint(),
@@ -249,8 +262,22 @@ class WorldProjectionRegistry(
             "Unknown world projection provider: $providerId"
         }
         val projection = provider.project(context)
+        val descriptor = provider.descriptor
         require(projection.providerId == providerId)
         require(projection.contextFingerprint == context.fingerprint())
+        require(projection.inputs.all { it.target.kind in descriptor.nodeKinds }) {
+            "World projection provider emitted undeclared node kind"
+        }
+        require(
+            projection.inputs
+                .flatMap { it.vector.dimensions() }
+                .all { it in descriptor.signalDimensions }
+        ) {
+            "World projection provider emitted undeclared signal dimension"
+        }
+        require(projection.relations.all { it.kind in descriptor.relationKinds }) {
+            "World projection provider emitted undeclared relation kind"
+        }
         return projection
     }
 }

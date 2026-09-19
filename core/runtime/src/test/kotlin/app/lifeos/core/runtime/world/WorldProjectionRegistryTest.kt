@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.world
 
+import app.lifeos.core.field.world.WorldDimensionValue
 import app.lifeos.core.field.world.WorldFieldVector
 import app.lifeos.core.field.world.WorldNodeKind
 import app.lifeos.core.field.world.WorldSignalDimension
@@ -85,6 +86,57 @@ class WorldProjectionRegistryTest {
         assertFalse(registry.snapshot.directWorldStateMutationAllowed)
         assertFalse(projection.directWorldStateMutationAllowed)
         assertFalse(projection.equationActivationAllowed)
+    }
+
+
+    @Test
+    fun registryRejectsProjectionOutsideDeclaredSignalContract() {
+        val provider = object : UniversalWorldProjectionProvider {
+            override val descriptor = WorldProjectionDescriptor(
+                providerId = "contract-bound",
+                sourceKind = WorldProjectionSourceKind.STRATEGY,
+                nodeKinds = setOf(WorldNodeKind.STRATEGY),
+                signalDimensions = setOf(WorldSignalDimension.STRATEGY_FIT),
+            )
+
+            override fun project(context: WorldProjectionContext): UniversalWorldProjection =
+                UniversalWorldProjection(
+                    providerId = descriptor.providerId,
+                    contextFingerprint = context.fingerprint(),
+                    inputs = listOf(
+                        WorldFormulaInputSnapshot(
+                            target = WorldTargetRef(WorldNodeKind.STRATEGY, "strategy-contract"),
+                            vector = WorldFieldVector(
+                                listOf(
+                                    WorldDimensionValue(
+                                        dimension = WorldSignalDimension.EVIDENCE_SUPPORT,
+                                        value = 0.8,
+                                        confidence = 1.0,
+                                        provenanceFingerprints = setOf("strategy-v1"),
+                                    )
+                                )
+                            ),
+                            sourceSnapshotFingerprint = "strategy-v1",
+                        )
+                    ),
+                    relations = emptyList(),
+                )
+        }
+        val registry = WorldProjectionRegistry(listOf(provider))
+        val context = WorldProjectionContext(
+            frozenSourceSnapshots = mapOf("strategy" to "strategy-v1"),
+            inputs = listOf(
+                WorldFormulaInputSnapshot(
+                    target = WorldTargetRef(WorldNodeKind.STRATEGY, "strategy-input"),
+                    vector = WorldFieldVector.EMPTY,
+                    sourceSnapshotFingerprint = "strategy-v1",
+                )
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            registry.project(provider.descriptor.providerId, context)
+        }
     }
 
     @Test

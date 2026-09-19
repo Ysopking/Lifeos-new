@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
 import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
+import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
 import app.lifeos.core.runtime.world.WorldEquationActivationAuthority
@@ -30,9 +31,27 @@ class Level7WorldEquationRollbackDeviceTest {
         val context = Level7DeviceFixtures.context(instrumentation.targetContext, root)
         val repo = EncryptedProductiveWorldHeadRepository(context)
         val equationRepo = EncryptedWorldEquationHeadRepository(context)
+        val equationSpecs = EncryptedWorldEquationSpecRepository(context)
         val baselineSpec = CognitiveWorldEquationProfile().spec.copy(version = "v17")
-        val trialSpec = baselineSpec.copy(version = "v18")
-        val equations = InMemoryWorldEquationRegistry(listOf(baselineSpec, trialSpec))
+        val firstCoefficient = baselineSpec.stableCoefficients().first()
+        val trialSpec = baselineSpec.copy(
+            version = "v18",
+            coefficients = baselineSpec.coefficients.map {
+                if (it.id == firstCoefficient.id) {
+                    it.copy(
+                        multiplier = if (it.multiplier < 0.9) {
+                            it.multiplier + 0.05
+                        } else {
+                            it.multiplier - 0.05
+                        },
+                    )
+                } else {
+                    it
+                }
+            },
+        )
+        equationSpecs.putIfAbsent(baselineSpec)
+        equationSpecs.putIfAbsent(trialSpec)
         val seededEquation = WorldEquationHead.create(
             revision = 1L,
             activeEquationVersion = "v17",
@@ -95,17 +114,22 @@ class Level7WorldEquationRollbackDeviceTest {
         assertEquals("v18", degraded.equationVersion)
 
         val baselineSpec = CognitiveWorldEquationProfile().spec.copy(version = "v17")
-        val trialSpec = baselineSpec.copy(version = "v18")
         val equationRepo = EncryptedWorldEquationHeadRepository(context)
+        val equationSpecs = EncryptedWorldEquationSpecRepository(context)
         val degradedEquation = requireNotNull(equationRepo.load())
         assertEquals("v18", degradedEquation.activeEquationVersion)
         assertEquals(expected[3], degradedEquation.fingerprint)
         assertEquals(expected[4], degradedEquation.predecessorEquationVersion)
 
         val equationAuthority = WorldEquationActivationAuthority(
-            equations = InMemoryWorldEquationRegistry(listOf(baselineSpec, trialSpec)),
+            equations = InMemoryWorldEquationRegistry(listOf(baselineSpec)),
             heads = equationRepo,
             baseline = baselineSpec,
+            specs = equationSpecs,
+        )
+        assertEquals(
+            "v18",
+            equationAuthority.activeVersion(),
         )
         val restoredEquation = equationAuthority.rollbackToPredecessor(
             expectedCurrentVersion = "v18",

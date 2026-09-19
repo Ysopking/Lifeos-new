@@ -76,6 +76,56 @@ class WorldFormulaBudgetBrokerTest {
         assertEquals(1, snapshots.values.size)
     }
 
+
+    @Test
+    fun `resource weight applies demand confidence once`() = runTest {
+        val profile = ResourceAllocationWorldEquationProfile()
+        val broker = WorldFormulaBudgetBroker(
+            WorldFormulaCoordinator(
+                InMemoryWorldEquationRegistry(listOf(profile.spec)),
+                TestSnapshotRepository(),
+            ),
+            profile,
+        )
+        val pool = ResourceBudgetQuota(
+            elapsedMillis = 1_000,
+            workUnits = 100,
+            memoryBytes = 1_000,
+            ioBytes = 500,
+            networkBytes = 0,
+            candidates = 4,
+        )
+        val plan = assertIs<WorldFormulaBudgetBrokerDecision.Ready>(
+            broker.allocate(
+                pool = pool,
+                hardware = healthyHardware(),
+                demands = listOf(
+                    ResourceBudgetDemand(
+                        domain = ResourceBudgetDomain.GOAL_EXECUTION,
+                        requested = ResourceBudgetUsage(workUnits = 10),
+                        goalRelevance = 1.0,
+                        priority = 1.0,
+                        expectedUtility = 1.0,
+                        confidence = 1.0,
+                    ),
+                    ResourceBudgetDemand(
+                        domain = ResourceBudgetDomain.BACKGROUND,
+                        requested = ResourceBudgetUsage(workUnits = 10),
+                        goalRelevance = 1.0,
+                        priority = 1.0,
+                        expectedUtility = 1.0,
+                        confidence = 0.5,
+                    ),
+                ),
+            )
+        ).plan
+
+        val full = requireNotNull(plan.allocation(ResourceBudgetDomain.GOAL_EXECUTION)).worldWeight
+        val half = requireNotNull(plan.allocation(ResourceBudgetDomain.BACKGROUND)).worldWeight
+        val ratio = half / full
+        assertTrue(ratio in 0.45..0.55, "confidence must attenuate once, ratio=$ratio")
+    }
+
     @Test
     fun `unused demand is returned as unallocated capacity rather than over assigned`() = runTest {
         val profile = ResourceAllocationWorldEquationProfile()

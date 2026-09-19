@@ -422,6 +422,10 @@ data class WorldFormulaSnapshotLoadReport(
 interface WorldFormulaSnapshotRepository {
     suspend fun save(snapshot: WorldFormulaSnapshot)
     suspend fun load(id: String): WorldFormulaSnapshot?
+    @Deprecated(
+        message = "WorldFormula snapshots have no global chronological head; use ProductiveWorldHead or a domain-specific authority",
+        level = DeprecationLevel.ERROR,
+    )
     suspend fun loadLatest(): WorldFormulaSnapshot?
     suspend fun loadReport(): WorldFormulaSnapshotLoadReport
     suspend fun delete(id: String)
@@ -439,6 +443,9 @@ data class WorldFormulaExecution(
     val snapshot: WorldFormulaSnapshot?,
     val persisted: Boolean,
     val message: String,
+    val scope: WorldFormulaExecutionScope = WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE,
+    val productiveCommitAllowed: Boolean =
+        scope == WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE,
 ) {
     init {
         require(message.isNotBlank())

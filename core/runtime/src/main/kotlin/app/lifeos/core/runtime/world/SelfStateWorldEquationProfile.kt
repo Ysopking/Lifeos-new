@@ -23,6 +23,7 @@ data class SelfStateWorldFormulaAssessment(
     val analysisId: String,
     val sourceFingerprint: String,
     val authorityFingerprint: String,
+    val classificationPolicyFingerprint: String,
     val band: SelfStateWorldBand,
     val execution: WorldFormulaExecution,
     val controllerVector: WorldFieldVector?,
@@ -32,6 +33,7 @@ data class SelfStateWorldFormulaAssessment(
         require(analysisId.matches(Regex("[0-9a-f]{64}")))
         require(sourceFingerprint.matches(Regex("[0-9a-f]{64}")))
         require(authorityFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(classificationPolicyFingerprint.matches(Regex("[0-9a-f]{64}")))
         require(reasonCodes == reasonCodes.distinct().sorted())
     }
 }
@@ -388,6 +390,8 @@ class SelfStateWorldEquationProfile {
 class SelfStateWorldFormulaEvaluator(
     private val profile: SelfStateWorldEquationProfile,
     private val coordinator: WorldFormulaCoordinator,
+    private val classificationPolicy: SelfStateWorldClassificationPolicy =
+        SelfStateWorldClassificationPolicy.V1,
 ) {
     suspend fun evaluate(projection: SelfStateProjectionResult): SelfStateWorldFormulaAssessment {
         val prepared = profile.request(projection)
@@ -404,6 +408,7 @@ class SelfStateWorldFormulaEvaluator(
             prepared.sourceFingerprint,
             projection.snapshot.authorityFingerprint,
             profile.spec.fingerprint(),
+            classificationPolicy.fingerprint(),
             execution.status.name,
             band.name,
             controller?.fingerprint().orEmpty(),
@@ -413,6 +418,7 @@ class SelfStateWorldFormulaEvaluator(
             analysisId = analysisId,
             sourceFingerprint = prepared.sourceFingerprint,
             authorityFingerprint = projection.snapshot.authorityFingerprint,
+            classificationPolicyFingerprint = classificationPolicy.fingerprint(),
             band = band,
             execution = execution,
             controllerVector = controller,
@@ -442,8 +448,8 @@ class SelfStateWorldFormulaEvaluator(
             (projection.snapshot.health.unhealthy ?: 0) > 0 ||
             (projection.snapshot.health.quarantined ?: 0) > 0 ||
             (projection.snapshot.health.disabled ?: 0) > 0 ||
-            (health != null && health < 0.35) ||
-            (readiness != null && readiness < 0.25)
+            (health != null && health < classificationPolicy.criticalHealthBelow) ||
+            (readiness != null && readiness < classificationPolicy.criticalReadinessBelow)
         ) return SelfStateWorldBand.CRITICAL
 
         if (
@@ -451,19 +457,19 @@ class SelfStateWorldFormulaEvaluator(
             (projection.snapshot.health.degraded ?: 0) > 0 ||
             execution.status == WorldFormulaStatus.UNRESOLVED ||
             execution.status == WorldFormulaStatus.MAX_ITERATIONS ||
-            (uncertainty != null && uncertainty >= 0.50) ||
-            (health != null && health < 0.65) ||
-            (readiness != null && readiness < 0.50)
+            (uncertainty != null && uncertainty >= classificationPolicy.degradedUncertaintyAtLeast) ||
+            (health != null && health < classificationPolicy.degradedHealthBelow) ||
+            (readiness != null && readiness < classificationPolicy.degradedReadinessBelow)
         ) return SelfStateWorldBand.DEGRADED
 
         if (
             reasons.isNotEmpty() ||
             projection.issues.any { it.kind == SelfObservationIssueKind.UNAVAILABLE } ||
-            (uncertainty != null && uncertainty >= 0.20) ||
-            (health != null && health < 0.85) ||
-            (readiness != null && readiness < 0.75) ||
-            (context != null && context < 0.50) ||
-            (salience != null && salience >= 0.35)
+            (uncertainty != null && uncertainty >= classificationPolicy.observeUncertaintyAtLeast) ||
+            (health != null && health < classificationPolicy.observeHealthBelow) ||
+            (readiness != null && readiness < classificationPolicy.observeReadinessBelow) ||
+            (context != null && context < classificationPolicy.observeContextBelow) ||
+            (salience != null && salience >= classificationPolicy.observeSalienceAtLeast)
         ) return SelfStateWorldBand.OBSERVE
 
         return SelfStateWorldBand.STABLE
@@ -481,19 +487,19 @@ class SelfStateWorldFormulaEvaluator(
         }
         if ((projection.snapshot.health.unknown ?: 0) > 0) add("HEALTH_UNKNOWN_NODES")
         controller?.get(WorldSignalDimension.HEALTH_STABILITY)?.value?.let {
-            if (it < 0.85) add("HEALTH_STABILITY_BELOW_STABLE")
+            if (it < classificationPolicy.observeHealthBelow) add("HEALTH_STABILITY_BELOW_STABLE")
         }
         controller?.get(WorldSignalDimension.CAPABILITY_READINESS)?.value?.let {
-            if (it < 0.75) add("CAPABILITY_READINESS_BELOW_STABLE")
+            if (it < classificationPolicy.observeReadinessBelow) add("CAPABILITY_READINESS_BELOW_STABLE")
         }
         controller?.get(WorldSignalDimension.UNCERTAINTY)?.value?.let {
-            if (it >= 0.20) add("UNCERTAINTY_ELEVATED")
+            if (it >= classificationPolicy.observeUncertaintyAtLeast) add("UNCERTAINTY_ELEVATED")
         }
         controller?.get(WorldSignalDimension.ANALYTIC_SALIENCE)?.value?.let {
-            if (it >= 0.35) add("ANALYTIC_SALIENCE_ELEVATED")
+            if (it >= classificationPolicy.observeSalienceAtLeast) add("ANALYTIC_SALIENCE_ELEVATED")
         }
         controller?.get(WorldSignalDimension.CONTEXT_RELEVANCE)?.value?.let {
-            if (it < 0.50) add("CONTEXT_RELEVANCE_LOW")
+            if (it < classificationPolicy.observeContextBelow) add("CONTEXT_RELEVANCE_LOW")
         }
     }.distinct().sorted()
 }

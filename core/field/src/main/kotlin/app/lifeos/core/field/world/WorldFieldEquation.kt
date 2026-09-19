@@ -35,6 +35,21 @@ data class WorldTransferCoefficient(
         explanation,
     )
 
+    fun schemaFingerprint(): String = StableFieldIds.fingerprint(
+        "world-transfer-coefficient-schema/v1",
+        id.value,
+        sourceDimension.name,
+        targetDimension.name,
+    )
+
+    fun physicsFingerprint(): String = StableFieldIds.fingerprint(
+        "world-transfer-coefficient-physics/v1",
+        schemaFingerprint(),
+        java.lang.Double.toHexString(multiplier),
+        java.lang.Double.toHexString(confidenceMultiplier),
+        java.lang.Double.toHexString(maxAbsoluteContribution),
+    )
+
     companion object {
         fun create(
             semanticKey: String,
@@ -82,6 +97,17 @@ data class WorldEquationSpec(
     fun coefficient(id: WorldCoefficientId): WorldTransferCoefficient? = byId[id]
 
     fun stableCoefficients(): List<WorldTransferCoefficient> = coefficients.sortedBy { it.id.value }
+
+    fun schemaFingerprint(): String = StableFieldIds.fingerprint(
+        "world-equation-schema/v1",
+        *stableCoefficients().map { it.schemaFingerprint() }.toTypedArray(),
+    )
+
+    fun physicsFingerprint(): String = StableFieldIds.fingerprint(
+        "world-equation-physics/v1",
+        schemaFingerprint(),
+        *stableCoefficients().map { it.physicsFingerprint() }.toTypedArray(),
+    )
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
         "world-equation-spec/v1",

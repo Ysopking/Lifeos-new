@@ -153,8 +153,10 @@ class WorldFormulaBudgetBroker(
                 ?: error("World Formula allocation lane missing from final state")
             val salience = laneState[WorldSignalDimension.ANALYTIC_SALIENCE]
             val readiness = laneState[WorldSignalDimension.CAPABILITY_READINESS]
-            val salienceValue = (salience?.value ?: 0.0) * (salience?.confidence ?: 0.0)
-            val readinessValue = (readiness?.value ?: 0.0) * (readiness?.confidence ?: 0.0)
+            // WorldFieldEquation already confidence-weights incoming contribution magnitude.
+            // Confidence remains metadata here; reapplying it would square uncertainty attenuation.
+            val salienceValue = salience?.value ?: 0.0
+            val readinessValue = readiness?.value ?: 0.0
             val weight = (salienceValue * readinessValue).coerceIn(0.0, 1.0)
             demand.domain to weight
         }

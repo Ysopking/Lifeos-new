@@ -30,6 +30,7 @@ import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
 import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
+import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistryHeadRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistrySnapshotRepository
@@ -167,6 +168,7 @@ import app.lifeos.core.runtime.world.SelfStateWorldFormulaEvaluator
 import app.lifeos.core.runtime.world.SelfStateWorldFormulaRuntimeRegistry
 import app.lifeos.core.runtime.world.SelfStateWorldFormulaSnapshotRepository
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
+import app.lifeos.core.runtime.world.WorldFormulaExecutionPolicy
 import app.lifeos.core.runtime.world.WorldEquationActivationAuthority
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
 import app.lifeos.core.runtime.workers.CognitiveWorkerFactory
@@ -421,10 +423,12 @@ class LifeOsKernelFactory(
             listOf(cognitiveWorldEquationProfile.spec)
         )
         val worldEquationHeads = EncryptedWorldEquationHeadRepository(appContext)
+        val worldEquationSpecs = EncryptedWorldEquationSpecRepository(appContext)
         val worldEquationAuthority = WorldEquationActivationAuthority(
             equations = worldEquationRegistry,
             heads = worldEquationHeads,
             baseline = cognitiveWorldEquationProfile.spec,
+            specs = worldEquationSpecs,
         )
         val worldFormulaCoordinator = WorldFormulaCoordinator(
             equations = worldEquationRegistry,
@@ -437,7 +441,7 @@ class LifeOsKernelFactory(
                 coordinator = WorldFormulaCoordinator(
                     equations = InMemoryWorldEquationRegistry(listOf(selfStateWorldEquationProfile.spec)),
                     snapshots = SelfStateWorldFormulaSnapshotRepository(),
-                    captureCognitiveSnapshots = false,
+                    executionPolicy = WorldFormulaExecutionPolicy.SELF_OBSERVATION,
                 ),
             )
         )
@@ -542,6 +546,9 @@ class LifeOsKernelFactory(
                 manager = cognitiveSnapshotManager,
                 journal = cognitiveEventJournal,
                 worlds = worldFormulaSnapshotRepository,
+                activeWorldSnapshotId = {
+                    productiveWorldHeadRepository.load()?.activeSnapshot?.snapshotId
+                },
                 dependencyState = {
                     thoughtGraph.snapshot().let { snapshot ->
                         CognitiveSnapshotDependencyState(
@@ -837,6 +844,21 @@ class LifeOsKernelFactory(
                                 storeId = storeId,
                                 state = if (report.corrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
                                 message = report.message,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "world-equation-spec-store"
+                        override suspend fun probe(): StoreStatus {
+                            val report = bootReadSession.readOnce("world-equation-spec-store") {
+                                worldEquationSpecs.loadReport()
+                            }
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.corrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
+                                message = report.unreadableEntries
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.joinToString(","),
                             )
                         }
                     },

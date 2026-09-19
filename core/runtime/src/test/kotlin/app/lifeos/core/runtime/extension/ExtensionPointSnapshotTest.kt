@@ -62,6 +62,25 @@ class ExtensionPointSnapshotTest {
     }
 
     @Test
+    fun rejectsRegistrationWithMismatchedFrozenContractFingerprint() {
+        val registry = registry()
+        val projection = registry.entries.first {
+            it.manifest.kind == ExtensionKind.WORLD_PROJECTION_PACK
+        }
+        val valid = registration(
+            projection,
+            ExtensionPointKind.WORLD_MODEL_PROJECTION,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            ExtensionPointSnapshot.create(
+                registry,
+                listOf(valid.copy(contractFingerprint = "wrong-contract")),
+            )
+        }
+    }
+
+    @Test
     fun worldEquationPointRemainsCandidateOnly() {
         val registry = registry()
         val equation = registry.entries.first {
@@ -101,7 +120,14 @@ class ExtensionPointSnapshotTest {
         extensionRef = entry.ref,
         providerId = "provider.${entry.manifest.extensionId.value}",
         point = point,
-        contractFingerprint = entry.worldContract.projectionContractFingerprint.value,
+        contractFingerprint = when (point) {
+            ExtensionPointKind.WORLD_EQUATION_CANDIDATE ->
+                entry.worldContract.coefficientSchemaFingerprint.value
+            ExtensionPointKind.WORLD_SIGNAL_PROJECTOR,
+            ExtensionPointKind.WORLD_TOPOLOGY,
+            ExtensionPointKind.WORLD_MODEL_PROJECTION ->
+                entry.worldContract.projectionContractFingerprint.value
+        },
     )
 
     private fun entry(
