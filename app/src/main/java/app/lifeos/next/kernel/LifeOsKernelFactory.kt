@@ -90,6 +90,7 @@ import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
 import app.lifeos.core.runtime.capability.CapabilityContract
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
 import app.lifeos.core.runtime.capability.CapabilityId
+import app.lifeos.core.runtime.capability.CapabilityGapDetector
 import app.lifeos.core.runtime.capability.CapabilityRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolBootStateRehydrator
 import app.lifeos.core.runtime.capability.GeneratedToolLifecycleCoordinator
@@ -505,7 +506,9 @@ class LifeOsKernelFactory(
         val continuousLearning = ContinuousLearningCoordinator(
             sources = listOf(CognitiveEventLearningSource(cognitiveEventJournal)),
             watermarks = learningWatermarks,
-            gapDetector = RegistryLearningCapabilityGapDetector(capabilityRegistry),
+            gapDetector = RegistryLearningCapabilityGapDetector(
+                CapabilityGapDetector(capabilityRegistry)
+            ),
             workSink = DurableLearningWorkSink(taskEngine),
         )
         val bootEngineLearning = BootEngineLearningPhase(continuousLearning)
