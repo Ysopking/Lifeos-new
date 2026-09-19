@@ -107,10 +107,11 @@ internal class AndroidStorageMaintenanceRuntime(
         reconcilePrepared()
         val after = preferences.getString(KEY_ORGANIZATION_CURSOR, null)
         val hardwareSnapshot = hardware.currentHardwareSnapshot()
+        val batteryFraction = hardwareSnapshot.batteryFraction
         val pageSize = when {
             hardwareSnapshot.thermalState.name in CRITICAL_THERMAL -> 64
-            hardwareSnapshot.batteryFraction != null &&
-                hardwareSnapshot.batteryFraction < 0.20 &&
+            batteryFraction != null &&
+                batteryFraction < 0.20 &&
                 hardwareSnapshot.charging != true -> 128
             hardwareSnapshot.charging == true &&
                 hardwareSnapshot.availableProcessors >= 6 -> 1_024
