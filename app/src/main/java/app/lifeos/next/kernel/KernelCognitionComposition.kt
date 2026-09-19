@@ -29,16 +29,19 @@ import app.lifeos.core.runtime.cognition.PhotonBackedCognitiveTriggerSink
 import app.lifeos.core.runtime.cognition.PhotonBackedPhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.PhotonBackedRuntimeEventJournal
 import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
-import app.lifeos.core.runtime.context.DurableContextFieldEnricher
 import app.lifeos.core.runtime.field.AuthoritativeFieldProcessor
 import app.lifeos.core.runtime.field.FieldCutoverAuthority
+import app.lifeos.core.runtime.field.FieldCutoverEligibilityPolicy
+import app.lifeos.core.runtime.field.FieldCutoverReplayCoordinator
 import app.lifeos.core.runtime.field.FieldCutoverRuntimeRouter
 import app.lifeos.core.runtime.field.FieldShadowValidationObserver
 import app.lifeos.core.runtime.field.FieldShadowValidationPolicy
 import app.lifeos.core.runtime.field.FieldShadowValidator
 import app.lifeos.core.runtime.field.PhotonBackedFieldCutoverStateRepository
 import app.lifeos.core.runtime.field.PhotonBackedFieldShadowValidationLedger
-import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
+import app.lifeos.core.runtime.field.ReplayableAuthoritativeFieldProcessor
+import app.lifeos.core.runtime.field.SelectedDomainFieldShadowAdmissionPolicy
+import app.lifeos.core.runtime.field.SelectedDomainFieldShadowProcessor
 import app.lifeos.core.runtime.health.HealthNodeId
 import app.lifeos.core.runtime.health.HealthTaskExecutionObserver
 import app.lifeos.core.runtime.health.RuntimeHealthMonitor
@@ -75,6 +78,7 @@ internal data class KernelCognitionGraph(
     val cognitiveOutcomes: PhotonBackedCognitiveOutcomeJournal,
     val cognitiveTriggers: DurableCognitiveTriggerSink,
     val fieldCutoverAuthority: FieldCutoverAuthority,
+    val fieldCutoverReplay: FieldCutoverReplayCoordinator,
     val leaseRecovery: LeaseRecoveryService,
     val durableRuntime: DurableLifeOsRuntime,
     val supervisor: RuntimeSupervisor,
@@ -90,14 +94,17 @@ internal class KernelCognitionComposition(
     private val authoritativeFieldProcessors: List<AuthoritativeFieldProcessor> = emptyList(),
 ) {
     fun compose(): KernelCognitionGraph {
-        val universalFieldShadow = UniversalFieldRuntimeAdapter(
-            snapshotRepository = world.fieldSnapshotRepository,
-            requestEnricher = DurableContextFieldEnricher(foundation.store),
-            engineProvider = { foundation.learnedFieldCalibration.engine() },
-            healthGate = foundation.healthGate,
-            thoughtGraphProjection = world.fieldThoughtGraphProjection,
-        )
-        val selectedFieldDomains = authoritativeFieldProcessors.mapTo(linkedSetOf()) { it.domainId }
+        val builtInProcessors = productiveAuthoritativeFieldProcessors(foundation, world)
+        val configuredFieldProcessors = buildList {
+            addAll(builtInProcessors)
+            addAll(authoritativeFieldProcessors)
+        }
+        require(configuredFieldProcessors.map { it.domainId }.distinct().size == configuredFieldProcessors.size) {
+            "Field cutover processor domains must be unique"
+        }
+        val replayableProcessors = configuredFieldProcessors
+            .filterIsInstance<ReplayableAuthoritativeFieldProcessor>()
+        val selectedFieldDomains = replayableProcessors.mapTo(linkedSetOf()) { it.domainId }
         val fieldCutoverStates = PhotonBackedFieldCutoverStateRepository(foundation.store)
         val fieldShadowValidationLedger = PhotonBackedFieldShadowValidationLedger(foundation.store)
         val fieldShadowValidator = FieldShadowValidator(
@@ -107,10 +114,35 @@ internal class KernelCognitionComposition(
             ledger = fieldShadowValidationLedger,
             states = fieldCutoverStates,
             validator = fieldShadowValidator,
+            eligibility = FieldCutoverEligibilityPolicy { domainId ->
+                domainId in selectedFieldDomains
+            },
         )
         val fieldCutoverRouter = FieldCutoverRuntimeRouter(
             states = fieldCutoverStates,
-            processors = authoritativeFieldProcessors,
+            processors = configuredFieldProcessors,
+        )
+        val selectedFieldShadow = SelectedDomainFieldShadowProcessor(replayableProcessors)
+        val resourceAllowsFieldWork = {
+            val hardware = foundation.cycleResourceIntelligence.currentHardwareSnapshot()
+            !hardware.shouldSuspendHeavyWork() && hardware.overallCapacity() >= MIN_FIELD_SHADOW_CAPACITY
+        }
+        val fieldShadowAdmission = SelectedDomainFieldShadowAdmissionPolicy(
+            states = fieldCutoverStates,
+            ledger = fieldShadowValidationLedger,
+            validator = fieldShadowValidator,
+            processors = replayableProcessors,
+            hardwareAllowsShadow = resourceAllowsFieldWork,
+        )
+        val fieldCutoverReplay = FieldCutoverReplayCoordinator(
+            photons = foundation.store,
+            fields = foundation.registry,
+            executor = foundation.executor,
+            ledger = fieldShadowValidationLedger,
+            validator = fieldShadowValidator,
+            authority = fieldCutoverAuthority,
+            processors = replayableProcessors,
+            replayAllowed = resourceAllowsFieldWork,
         )
         val fieldShadowValidationObserver = FieldShadowValidationObserver(
             photons = foundation.store,
@@ -222,7 +254,8 @@ internal class KernelCognitionComposition(
             fields = foundation.registry,
             executor = foundation.executor,
             checkpoints = world.checkpointRepository,
-            fieldShadowProcessor = universalFieldShadow,
+            fieldShadowProcessor = selectedFieldShadow,
+            fieldShadowAdmission = fieldShadowAdmission,
             fieldCutoverRouter = fieldCutoverRouter,
             config = CognitiveWorkerConfig(
                 leaseDuration = TASK_LEASE_DURATION,
@@ -326,6 +359,7 @@ internal class KernelCognitionComposition(
             cognitiveOutcomes = cognitiveOutcomes,
             cognitiveTriggers = cognitiveTriggers,
             fieldCutoverAuthority = fieldCutoverAuthority,
+            fieldCutoverReplay = fieldCutoverReplay,
             leaseRecovery = leaseRecovery,
             durableRuntime = durableRuntime,
             supervisor = supervisor,
@@ -337,5 +371,6 @@ internal class KernelCognitionComposition(
         val HEARTBEAT_INTERVAL: Duration = Duration.ofSeconds(10)
         val LEASE_RECOVERY_INTERVAL: Duration = Duration.ofSeconds(30)
         val SCHEDULER_RESCAN_INTERVAL: Duration = Duration.ofSeconds(5)
+        const val MIN_FIELD_SHADOW_CAPACITY = 0.35
     }
 }

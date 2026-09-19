@@ -56,6 +56,8 @@ class LifeOsKernelFactory(
             bootCoordinator = boot.bootCoordinator,
             bootEngineRuntime = world.bootEngineRuntime,
             continuousCognition = cognition.continuousCognition,
+            fieldCutoverAuthority = cognition.fieldCutoverAuthority,
+            fieldCutoverReplay = cognition.fieldCutoverReplay,
             cognitiveModuleSnapshotRepository = foundation.cognitiveModuleSnapshotRepository,
             activeExtensionSnapshotId = {
                 world.extensionRegistryHeadRepository.load()?.activeSnapshotId

@@ -54,7 +54,12 @@ import app.lifeos.core.runtime.evolution.WorldEquationAutoEvolutionCoordinator
 import app.lifeos.core.runtime.evolution.WorldEquationAutoEvolutionResult
 import app.lifeos.core.runtime.evolution.WorldEquationEvaluationProtocol
 import app.lifeos.core.runtime.evolution.WorldEquationShadowCase
+import app.lifeos.core.field.FieldDomainId
 import app.lifeos.core.field.world.WorldEquationSpec
+import app.lifeos.core.runtime.field.FieldCutoverAssessment
+import app.lifeos.core.runtime.field.FieldCutoverAuthority
+import app.lifeos.core.runtime.field.FieldCutoverReplayCoordinator
+import app.lifeos.core.runtime.field.FieldCutoverState
 import app.lifeos.core.runtime.goal.GoalResumeEngine
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.goal.GoalOutcomeLearningHook
@@ -120,6 +125,8 @@ class LifeOsKernel internal constructor(
     private val bootCoordinator: BootCoordinator,
     private val bootEngineRuntime: BootEngineRuntime,
     private val continuousCognition: ContinuousCognitionEngine,
+    private val fieldCutoverAuthority: FieldCutoverAuthority,
+    private val fieldCutoverReplay: FieldCutoverReplayCoordinator,
     private val cognitiveModuleSnapshotRepository: CognitiveModuleSnapshotRepository? = null,
     private val activeExtensionSnapshotId: suspend () -> String? = { null },
     private val bootReadyMaintenanceTrigger: () -> Unit = {},
@@ -236,6 +243,39 @@ class LifeOsKernel internal constructor(
         bootstrapJob ?: scope.launch {
             bootstrap()
         }.also { bootstrapJob = it }
+    }
+
+    suspend fun refreshFieldCutoverEvidence(): List<FieldCutoverAssessment> {
+        requireCognitiveReady()
+        return fieldCutoverReplay.refresh(
+            at = Instant.now(),
+            provenance = "kernel-field-replay-refresh",
+        )
+    }
+
+    suspend fun assessFieldCutover(domainId: FieldDomainId): FieldCutoverAssessment {
+        requireCognitiveReady()
+        return fieldCutoverAuthority.assess(
+            domainId = domainId,
+            at = Instant.now(),
+            provenance = "kernel-field-cutover-assessment",
+        )
+    }
+
+    suspend fun fieldCutoverState(domainId: FieldDomainId): FieldCutoverState =
+        fieldCutoverAuthority.state(domainId, Instant.now())
+
+    suspend fun activateFieldCutover(
+        domainId: FieldDomainId,
+        expectedEvidenceFingerprint: String,
+    ): FieldCutoverState {
+        requireCognitiveReady()
+        return fieldCutoverAuthority.activate(
+            domainId = domainId,
+            expectedEvidenceFingerprint = expectedEvidenceFingerprint,
+            at = Instant.now(),
+            provenance = "kernel-explicit-field-cutover-activation",
+        )
     }
 
     suspend fun startWorldEquationEvolution(
@@ -985,6 +1025,14 @@ class LifeOsKernel internal constructor(
             unreadableFiles = context.photons.unreadableFiles.size,
             warnings = warnings,
         )
+        scope.launch {
+            runCatching {
+                fieldCutoverReplay.refresh(
+                    at = Instant.now(),
+                    provenance = "post-boot-field-replay",
+                )
+            }
+        }
     }
 
     private companion object {
