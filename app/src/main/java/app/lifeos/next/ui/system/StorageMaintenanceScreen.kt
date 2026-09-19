@@ -99,7 +99,12 @@ fun StorageMaintenanceScreen(
                             state.reorganizationCandidateCount +
                             " Neuordnungen"
                     )
-                    Text("Erkennbar freigebbar: " + formatBytes(state.reclaimableBytes))
+                    Text("Erkennbar bereinigbar: " + formatBytes(state.reclaimableBytes))
+                    Text(
+                        "Das Verschieben in den LIFEOS-Papierkorb ist reversibel und gibt noch keinen Speicherplatz frei. Frei wird der Platz erst beim endgültigen Löschen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
 
                     if (!state.authorized) {
                         Button(
