@@ -13,7 +13,6 @@ class LifeOsDestinationTest {
                 LifeOsDestination.CHAT,
                 LifeOsDestination.GOALS,
                 LifeOsDestination.MEMORY,
-                LifeOsDestination.SYSTEM,
             ),
             LifeOsDestination.ordered,
         )
@@ -29,16 +28,24 @@ class LifeOsDestinationTest {
     @Test
     fun chatIsTheSingleDefaultDestination() {
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.default)
+        assertEquals("LIFEOS", LifeOsDestination.CHAT.label)
         assertEquals(1, LifeOsDestination.entries.count { it.isDefault })
     }
 
     @Test
-    fun unknownOrMissingRestoredKeyFailsSafeToChat() {
+    fun primaryRestoredKeysResolveAndUnknownFailsSafeToLifeos() {
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey(null))
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("unknown"))
+        assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("chat"))
+        assertSame(LifeOsDestination.GOALS, LifeOsDestination.fromKey("goals"))
         assertSame(LifeOsDestination.MEMORY, LifeOsDestination.fromKey("memory"))
-        assertSame(LifeOsDestination.ASSETS, LifeOsDestination.fromKey("assets"))
-        assertSame(LifeOsDestination.WHY, LifeOsDestination.fromKey("why"))
-        assertSame(LifeOsDestination.TOOLS, LifeOsDestination.fromKey("tools"))
+    }
+
+    @Test
+    fun technicalDestinationsAreNotPrimaryDuringOverlayMigration() {
+        assertTrue(LifeOsDestination.ASSETS !in LifeOsDestination.ordered)
+        assertTrue(LifeOsDestination.WHY !in LifeOsDestination.ordered)
+        assertTrue(LifeOsDestination.TOOLS !in LifeOsDestination.ordered)
+        assertTrue(LifeOsDestination.SYSTEM !in LifeOsDestination.ordered)
     }
 }

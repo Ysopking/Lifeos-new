@@ -22,7 +22,6 @@ class LifeOsFrontendAccessibilityContractTest {
                 LifeOsDestination.CHAT,
                 LifeOsDestination.GOALS,
                 LifeOsDestination.MEMORY,
-                LifeOsDestination.SYSTEM,
             ),
             LifeOsDestination.ordered,
         )
@@ -37,6 +36,10 @@ class LifeOsFrontendAccessibilityContractTest {
             LifeOsDestination.ordered.all { destination ->
                 LifeOsSemantics.navigationLabel(destination.label).isNotBlank()
             }
+        )
+        assertEquals(
+            "LIFEOS",
+            LifeOsSemantics.navigationLabel(LifeOsDestination.CHAT.label),
         )
         assertTrue(LifeOsStateKind.entries.all { it.visibleLabel.isNotBlank() })
         assertEquals("Runtime: Bereit", LifeOsSemantics.stateText("Runtime", "Bereit"))
