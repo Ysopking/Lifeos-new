@@ -10,21 +10,27 @@ import app.lifeos.core.runtime.health.HealthNodeId
  * after its durable ledger and subsystem executors have been composed.
  */
 object EscalationRuntimeRegistry {
-    @Volatile
-    private var installed: EscalationCoordinator? = null
+    private val slot =
+        app.lifeos.core.runtime.process.NonOwningRuntimeSlot<EscalationCoordinator>(
+            "Central escalation runtime"
+        )
 
     fun install(coordinator: EscalationCoordinator) {
-        installed = coordinator
+        slot.install(coordinator)
     }
 
-    fun currentOrNull(): EscalationCoordinator? = installed
+    fun currentOrNull(): EscalationCoordinator? = slot.currentOrNull()
 
     fun requireCurrent(): EscalationCoordinator =
-        requireNotNull(installed) { "Central escalation runtime is not installed" }
+        slot.currentOrNull() ?: error("Central escalation runtime is not installed")
 
     suspend fun coordinate(trigger: EscalationTrigger): EscalationCoordinationResult =
         requireCurrent().coordinate(trigger)
 
     suspend fun resumeActive(nodeId: HealthNodeId): List<EscalationCoordinationResult> =
         requireCurrent().resumeActive(nodeId)
+
+    internal fun clearForTests() {
+        slot.clear()
+    }
 }

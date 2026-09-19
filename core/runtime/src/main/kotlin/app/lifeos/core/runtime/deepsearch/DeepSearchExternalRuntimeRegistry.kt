@@ -10,8 +10,10 @@ import app.lifeos.core.runtime.capability.GeneratedToolRuntimeProcessRegistry
  * state, authority or persistence of its own.
  */
 object DeepSearchExternalRuntimeRegistry {
-    @Volatile
-    private var installedSources: List<DeepSearchSource> = emptyList()
+    private val slot =
+        app.lifeos.core.runtime.process.NonOwningRuntimeSlot<List<DeepSearchSource>>(
+            "DeepSearch external sources"
+        )
 
     fun install(sources: List<DeepSearchSource>) {
         require(sources.all { it.descriptor.kind == DeepSearchSourceKind.EXTERNAL }) {
@@ -20,13 +22,13 @@ object DeepSearchExternalRuntimeRegistry {
         require(sources.map { it.descriptor.sourceId }.distinct().size == sources.size) {
             "DeepSearch external source ids must be unique"
         }
-        installedSources = sources.sortedBy { it.descriptor.sourceId }
+        slot.install(sources.sortedBy { it.descriptor.sourceId })
     }
 
-    fun sources(): List<DeepSearchSource> = installedSources
+    fun sources(): List<DeepSearchSource> = slot.currentOrNull().orEmpty()
 
     internal fun clearForTests() {
-        installedSources = emptyList()
+        slot.clear()
     }
 }
 
@@ -36,17 +38,19 @@ object DeepSearchExternalRuntimeRegistry {
  * not retain a permission bit; every call delegates to the current authoritative gate.
  */
 object DeepSearchPermissionRuntimeRegistry {
-    @Volatile
-    private var installedGate: DeepSearchPermissionGate? = null
+    private val slot =
+        app.lifeos.core.runtime.process.NonOwningRuntimeSlot<DeepSearchPermissionGate>(
+            "DeepSearch permission gate"
+        )
 
     fun install(gate: DeepSearchPermissionGate) {
-        installedGate = gate
+        slot.install(gate)
     }
 
-    fun currentOrNull(): DeepSearchPermissionGate? = installedGate
+    fun currentOrNull(): DeepSearchPermissionGate? = slot.currentOrNull()
 
     internal fun clearForTests() {
-        installedGate = null
+        slot.clear()
     }
 }
 

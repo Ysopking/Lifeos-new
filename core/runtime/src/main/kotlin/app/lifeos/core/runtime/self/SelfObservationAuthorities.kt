@@ -28,15 +28,21 @@ interface SelfObservationAuthorityReader {
 
 /** Read-only process seam over existing durable authorities. It cannot publish or mutate heads. */
 object SelfObservationAuthorityRuntimeRegistry {
-    @Volatile
-    private var installed: SelfObservationAuthorityReader? = null
+    private val slot =
+        app.lifeos.core.runtime.process.NonOwningRuntimeSlot<SelfObservationAuthorityReader>(
+            "Self-observation authority reader"
+        )
 
     fun install(reader: SelfObservationAuthorityReader) {
-        installed = reader
+        slot.install(reader)
     }
 
-    fun current(): SelfObservationAuthorityReader? = installed
+    fun current(): SelfObservationAuthorityReader? = slot.currentOrNull()
 
     fun requireCurrent(): SelfObservationAuthorityReader =
-        requireNotNull(installed) { "Self-observation authority reader is not installed" }
+        slot.currentOrNull() ?: error("Self-observation authority reader is not installed")
+
+    internal fun clearForTests() {
+        slot.clear()
+    }
 }

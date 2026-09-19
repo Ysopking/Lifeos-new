@@ -217,16 +217,21 @@ class CognitiveSnapshotProducer(
 
 /** Process seam for persisted WorldFormula snapshots and explicit boot-time capture. */
 object CognitiveSnapshotRuntimeRegistry {
-    @Volatile
-    private var installed: CognitiveSnapshotProducer? = null
+    private val slot = app.lifeos.core.runtime.process.NonOwningRuntimeSlot<CognitiveSnapshotProducer>(
+        "Cognitive snapshot producer"
+    )
 
     fun install(producer: CognitiveSnapshotProducer) {
-        installed = producer
+        slot.install(producer)
     }
 
     suspend fun capturePersistedWorld(world: WorldFormulaSnapshot): CognitiveSnapshot? =
-        installed?.capture(world)
+        slot.currentOrNull()?.capture(world)
 
     suspend fun captureLatest(): CognitiveSnapshot? =
-        installed?.captureLatest()
+        slot.currentOrNull()?.captureLatest()
+
+    internal fun clearForTests() {
+        slot.clear()
+    }
 }

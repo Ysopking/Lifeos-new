@@ -4,16 +4,22 @@ fun interface NovelPromotionRuntimeEventSink {
     suspend fun onActivated(result: BoundedNovelPromotionResult)
 }
 
-/** Process hook for observing successful guarded novel-capability activation without owning policy. */
+/** Non-owning process hook for observing successful guarded novel-capability activation. */
 object NovelPromotionRuntimeEventRegistry {
-    @Volatile
-    private var sink: NovelPromotionRuntimeEventSink? = null
+    private val slot =
+        app.lifeos.core.runtime.process.NonOwningRuntimeSlot<NovelPromotionRuntimeEventSink>(
+            "Novel promotion event sink"
+        )
 
     fun install(value: NovelPromotionRuntimeEventSink) {
-        sink = value
+        slot.install(value)
     }
 
     suspend fun publishActivated(result: BoundedNovelPromotionResult) {
-        sink?.onActivated(result)
+        slot.currentOrNull()?.onActivated(result)
+    }
+
+    internal fun clearForTests() {
+        slot.clear()
     }
 }

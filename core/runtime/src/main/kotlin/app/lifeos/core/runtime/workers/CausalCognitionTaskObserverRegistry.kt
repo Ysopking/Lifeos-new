@@ -1,27 +1,24 @@
 package app.lifeos.core.runtime.workers
 
 /**
- * Process seam that lets the new causal Photon runtime observe productive durable task completion
- * without replacing the established worker, checkpoint, retry, lease, or field-shadow pipeline.
+ * Non-owning process seam that lets causal cognition observe durable task completion.
+ *
+ * Re-installation intentionally replaces the previous process object. The observer owns no durable
+ * task/checkpoint state and must be reconstructed from composition after process recreation.
  */
 object CausalCognitionTaskObserverRegistry {
-    @Volatile
-    private var observer: DurableTaskExecutionObserver? = null
+    private val slot =
+        app.lifeos.core.runtime.process.NonOwningRuntimeSlot<DurableTaskExecutionObserver>(
+            "Causal cognition task observer"
+        )
 
     fun install(value: DurableTaskExecutionObserver) {
-        synchronized(this) {
-            check(observer == null || observer === value) {
-                "A different causal cognition task observer is already installed"
-            }
-            observer = value
-        }
+        slot.install(value)
     }
 
-    fun current(): DurableTaskExecutionObserver? = observer
+    fun current(): DurableTaskExecutionObserver? = slot.currentOrNull()
 
     internal fun clearForTests() {
-        synchronized(this) {
-            observer = null
-        }
+        slot.clear()
     }
 }

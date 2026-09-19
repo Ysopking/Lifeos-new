@@ -264,12 +264,18 @@ class WorldEquationPostActivationSafetyMonitor(
 }
 
 object WorldEquationPostActivationSafetyRuntimeRegistry {
-    @Volatile
-    private var installed: WorldEquationPostActivationSafetyObserver? = null
+    private val slot =
+        app.lifeos.core.runtime.process.NonOwningRuntimeSlot<WorldEquationPostActivationSafetyObserver>(
+            "World-equation post-activation safety observer"
+        )
 
     fun install(observer: WorldEquationPostActivationSafetyObserver) {
-        installed = observer
+        slot.install(observer)
     }
 
-    fun current(): WorldEquationPostActivationSafetyObserver? = installed
+    fun current(): WorldEquationPostActivationSafetyObserver? = slot.currentOrNull()
+
+    internal fun clearForTests() {
+        slot.clear()
+    }
 }
