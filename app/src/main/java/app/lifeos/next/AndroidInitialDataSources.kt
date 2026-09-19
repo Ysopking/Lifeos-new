@@ -171,7 +171,7 @@ private class AndroidContactsInitialDataSource(
     }
 }
 
-internal class AndroidCalendarInitialDataSource(
+private class AndroidCalendarInitialDataSource(
     context: Context,
 ) : AndroidPagedInitialDataSource(
     context = context,
@@ -246,6 +246,10 @@ internal class AndroidCalendarInitialDataSource(
         const val ADAPTER_VERSION = "android-calendar/v1"
     }
 }
+
+internal fun androidCalendarInitialDataSource(
+    context: Context,
+): InitialDataSourceAdapter = AndroidCalendarInitialDataSource(context)
 
 private enum class AndroidMediaKind(
     val sourceId: String,
