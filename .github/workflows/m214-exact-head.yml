@@ -1,0 +1,91 @@
+name: M214 Exact Head Gate
+
+on:
+  push:
+    branches:
+      - "optimization/m214-ci-exact-head"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m214-exact-head-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  core-fast:
+    name: M214 Core Fast Exact Head
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind CI to exact source head
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.sha }}
+        run: bash .github/scripts/ci-exact-head-contract.sh
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        with:
+          gradle-version: "9.3.1"
+      - name: Core fast gate
+        shell: bash
+        run: bash .github/scripts/ci-core-fast.sh
+      - name: Upload exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: LIFEOS-M214-core-exact-head
+          path: exact-head-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  android-debug:
+    name: M214 Android Debug Exact Head
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind CI to exact source head
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.sha }}
+        run: bash .github/scripts/ci-exact-head-contract.sh
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        with:
+          gradle-version: "9.3.1"
+      - name: Android debug gate
+        shell: bash
+        run: bash .github/scripts/ci-android-debug.sh
+      - name: Upload exact-head evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: LIFEOS-M214-android-exact-head
+          path: exact-head-evidence/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: LIFEOS-M214-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
