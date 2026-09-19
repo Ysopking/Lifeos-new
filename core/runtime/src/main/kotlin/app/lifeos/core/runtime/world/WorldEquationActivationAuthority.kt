@@ -43,7 +43,13 @@ class WorldEquationActivationAuthority(
             "World equation promotion admission targets another version"
         }
         require(candidate.fingerprint() == admission.candidateEquationFingerprint) {
+            "World equation promotion admission targets a different artifact"
+        }
+        require(candidate.physicsFingerprint() == admission.candidatePhysicsFingerprint) {
             "World equation promotion admission targets different physics"
+        }
+        require(candidate.schemaFingerprint() == admission.equationSchemaFingerprint) {
+            "World equation promotion admission targets a different schema"
         }
         equations.register(candidate)
 
@@ -57,7 +63,13 @@ class WorldEquationActivationAuthority(
                 "Current active world equation is not registered"
             }
             require(currentSpec.fingerprint() == admission.baselineEquationFingerprint) {
+                "World equation promotion baseline no longer matches active artifact"
+            }
+            require(currentSpec.physicsFingerprint() == admission.baselinePhysicsFingerprint) {
                 "World equation promotion baseline no longer matches active physics"
+            }
+            require(currentSpec.schemaFingerprint() == admission.equationSchemaFingerprint) {
+                "World equation promotion baseline no longer matches candidate schema"
             }
             if (current.activeEquationVersion == candidate.version) return@withLock current
             val next = WorldEquationHead.create(

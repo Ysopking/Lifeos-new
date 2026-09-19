@@ -25,7 +25,7 @@ class WorldEquationActivationAuthorityTest {
         assertEquals(1L, seeded.revision)
         assertNull(seeded.predecessorEquationVersion)
 
-        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
+        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
         val admission = WorldEquationEvolutionAdmissionGate.admit(
             candidate = candidate,
             baseline = baseline,
@@ -51,7 +51,7 @@ class WorldEquationActivationAuthorityTest {
     @Test
     fun rollbackRestoresExactRegisteredPredecessorAfterRehydration() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
-        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
+        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
         val registry = InMemoryWorldEquationRegistry(listOf(baseline, candidate))
         val heads = MemoryHeadRepository()
         val first = WorldEquationActivationAuthority(
@@ -96,8 +96,8 @@ class WorldEquationActivationAuthorityTest {
     @Test
     fun promotionAdmissionCannotBeReusedForDifferentPhysics() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
-        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
-        val other = baseline.copy(version = "lifeos-world-cognitive-v3")
+        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
+        val other = changedCandidate(baseline, "lifeos-world-cognitive-v3", delta = 0.08)
         val authority = WorldEquationActivationAuthority(
             equations = InMemoryWorldEquationRegistry(listOf(baseline)),
             heads = MemoryHeadRepository(),
@@ -121,6 +121,70 @@ class WorldEquationActivationAuthorityTest {
             )
         }
     }
+
+
+    @Test
+    fun versionOnlyChangeIsNotNewPhysics() {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
+
+        assertEquals(baseline.physicsFingerprint(), candidate.physicsFingerprint())
+        assertFailsWith<IllegalArgumentException> {
+            WorldEquationEvolutionAdmissionGate.admit(
+                candidate = candidate,
+                baseline = baseline,
+                validation = validation("version-only"),
+            )
+        }
+    }
+
+    @Test
+    fun explanationOnlyChangeIsNotNewPhysics() {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val first = baseline.stableCoefficients().first()
+        val candidate = baseline.copy(
+            version = "lifeos-world-cognitive-v2",
+            coefficients = baseline.coefficients.map {
+                if (it.id == first.id) it.copy(explanation = it.explanation + " clarified") else it
+            },
+        )
+
+        assertEquals(baseline.physicsFingerprint(), candidate.physicsFingerprint())
+        assertFailsWith<IllegalArgumentException> {
+            WorldEquationEvolutionAdmissionGate.admit(
+                candidate = candidate,
+                baseline = baseline,
+                validation = validation("explanation-only"),
+            )
+        }
+    }
+
+
+    private fun changedCandidate(
+        baseline: app.lifeos.core.field.world.WorldEquationSpec,
+        version: String,
+        delta: Double = 0.05,
+    ): app.lifeos.core.field.world.WorldEquationSpec {
+        val first = baseline.stableCoefficients().first()
+        val nextMultiplier = if (first.multiplier + delta <= 1.0) {
+            first.multiplier + delta
+        } else {
+            first.multiplier - delta
+        }
+        return baseline.copy(
+            version = version,
+            coefficients = baseline.coefficients.map {
+                if (it.id == first.id) it.copy(multiplier = nextMultiplier) else it
+            },
+        )
+    }
+
+    private fun validation(suffix: String) = WorldEquationEvolutionValidation(
+        holdoutEvidenceId = "holdout:$suffix",
+        shadowEvidenceId = "shadow:$suffix",
+        trialEvidenceId = "trial:$suffix",
+        promotionDecisionId = "promotion:$suffix",
+    )
 
     private class MemoryHeadRepository : WorldEquationHeadRepository {
         private var head: WorldEquationHead? = null

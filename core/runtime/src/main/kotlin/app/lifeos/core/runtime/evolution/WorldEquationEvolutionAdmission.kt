@@ -30,6 +30,9 @@ data class WorldEquationPromotionAdmission internal constructor(
     val candidateVersion: String,
     val candidateEquationFingerprint: String,
     val baselineEquationFingerprint: String,
+    val candidatePhysicsFingerprint: String,
+    val baselinePhysicsFingerprint: String,
+    val equationSchemaFingerprint: String,
     val validation: WorldEquationEvolutionValidation,
     val fingerprint: String,
 ) {
@@ -38,7 +41,11 @@ data class WorldEquationPromotionAdmission internal constructor(
         require(candidateVersion.isNotBlank())
         require(candidateEquationFingerprint.isNotBlank())
         require(baselineEquationFingerprint.isNotBlank())
+        require(candidatePhysicsFingerprint.isNotBlank())
+        require(baselinePhysicsFingerprint.isNotBlank())
+        require(equationSchemaFingerprint.isNotBlank())
         require(candidateEquationFingerprint != baselineEquationFingerprint)
+        require(candidatePhysicsFingerprint != baselinePhysicsFingerprint)
         require(subject.candidateFingerprint == candidateEquationFingerprint)
         require(subject.baselineFingerprint == baselineEquationFingerprint)
         require(fingerprint == expectedFingerprint())
@@ -52,6 +59,9 @@ data class WorldEquationPromotionAdmission internal constructor(
         candidateVersion,
         candidateEquationFingerprint,
         baselineEquationFingerprint,
+        candidatePhysicsFingerprint,
+        baselinePhysicsFingerprint,
+        equationSchemaFingerprint,
         validation.fingerprint(),
     )
 
@@ -68,6 +78,9 @@ data class WorldEquationPromotionAdmission internal constructor(
                 candidate.version,
                 candidate.fingerprint(),
                 baseline.fingerprint(),
+                candidate.physicsFingerprint(),
+                baseline.physicsFingerprint(),
+                candidate.schemaFingerprint(),
                 validation.fingerprint(),
             )
             return WorldEquationPromotionAdmission(
@@ -75,6 +88,9 @@ data class WorldEquationPromotionAdmission internal constructor(
                 candidateVersion = candidate.version,
                 candidateEquationFingerprint = candidate.fingerprint(),
                 baselineEquationFingerprint = baseline.fingerprint(),
+                candidatePhysicsFingerprint = candidate.physicsFingerprint(),
+                baselinePhysicsFingerprint = baseline.physicsFingerprint(),
+                equationSchemaFingerprint = candidate.schemaFingerprint(),
                 validation = validation,
                 fingerprint = fingerprint,
             )
@@ -91,8 +107,11 @@ object WorldEquationEvolutionAdmissionGate {
         require(candidate.version != baseline.version) {
             "World equation candidate must use a new version"
         }
-        require(candidate.fingerprint() != baseline.fingerprint()) {
-            "World equation promotion requires changed versioned physics"
+        require(candidate.physicsFingerprint() != baseline.physicsFingerprint()) {
+            "World equation promotion requires changed physics"
+        }
+        require(candidate.schemaFingerprint() == baseline.schemaFingerprint()) {
+            "Current WorldEquation activation supports parameter-only changes"
         }
         val subject = ControlledEvolutionSubjectRef.create(
             kind = ControlledEvolutionSubjectKind.WORLD_EQUATION_VERSION,
