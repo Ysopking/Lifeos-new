@@ -468,6 +468,77 @@ class WorldEquationPackShadowEvaluatorTest {
         assertFalse(assessment.productiveActivationAllowed)
     }
 
+    @Test
+    fun structuralCanaryEvidenceCoordinatorIsRecoverySafeAndStopsAtSupported() = runTest {
+        val fixture = fixture()
+        val plan = canaryPlan(fixture)
+        val plans = InMemoryWorldEquationPackStructuralCanaryPlanRepository(listOf(plan))
+        val admission = WorldEquationPackStructuralCanaryAdmissionGate(plans).admit(plan)
+        val protocol = WorldEquationPackStructuralCanaryProtocol(
+            version = "structural-canary-ledger-test-v1",
+            minimumIndependentCases = 2,
+            minimumShadowReferences = 1,
+            minimumHoldoutReferences = 1,
+        )
+        val repository = InMemoryWorldEquationPackStructuralCanaryEvidenceRepository()
+        val coordinator = WorldEquationPackStructuralCanaryEvidenceCoordinator(repository)
+        val initial = coordinator.begin(plan, protocol)
+        assertEquals(WorldEquationPackStructuralCanaryLifecycleState.CANARY, initial.state)
+
+        suspend fun replay(
+            runId: String,
+            workloadId: String,
+            value: Double,
+            partition: WorldEquationPackEvidencePartition,
+        ): WorldEquationPackStructuralCanaryReplay {
+            val case = shadowCase(fixture, runId, workloadId, value, partition)
+            return WorldEquationPackStructuralCanaryReplay(
+                reference = WorldEquationPackShadowEvaluator().evaluate(
+                    fixture.baseline,
+                    fixture.candidate,
+                    case,
+                ),
+                canary = WorldEquationPackStructuralCanaryEvaluator().evaluate(
+                    baseline = fixture.baseline,
+                    candidate = fixture.candidate,
+                    plan = plan,
+                    admission = admission,
+                    case = case,
+                ),
+            )
+        }
+
+        val firstReplay = replay(
+            "run-canary-ledger-shadow",
+            "workload-canary-ledger-a",
+            0.62,
+            WorldEquationPackEvidencePartition.SHADOW,
+        )
+        val afterFirst = coordinator.record(plan, firstReplay)
+        assertEquals(WorldEquationPackStructuralCanaryLifecycleState.CANARY, afterFirst.state)
+
+        val secondReplay = replay(
+            "run-canary-ledger-holdout",
+            "workload-canary-ledger-b",
+            0.84,
+            WorldEquationPackEvidencePartition.HOLDOUT,
+        )
+        val supported = coordinator.record(plan, secondReplay)
+        assertEquals(
+            WorldEquationPackStructuralCanaryLifecycleState.CANARY_SUPPORTED,
+            supported.state,
+        )
+        assertEquals(2, supported.evidence.replays.size)
+        assertFalse(supported.productiveActivationAllowed)
+        assertFalse(supported.productiveWorldMutationAllowed)
+        assertFalse(supported.promotionAdmissionAllowed)
+
+        val recovered = coordinator.begin(plan, protocol)
+        assertEquals(supported, recovered)
+        val duplicate = coordinator.record(plan, secondReplay)
+        assertEquals(supported, duplicate)
+    }
+
     private fun canaryPlan(
         fixture: Fixture,
     ): WorldEquationPackStructuralCanaryPlan {
