@@ -292,7 +292,7 @@ class LiveSourceDeltaCoordinator(
             health.failed(
                 sourceId,
                 now(),
-                app.lifeos.core.runtime.RuntimeFailureCategory.DEPENDENCY,
+                app.lifeos.core.runtime.RuntimeFailureCategory.UNKNOWN,
                 message,
                 true,
             )
@@ -364,7 +364,7 @@ class LiveSourceDeltaCoordinator(
             health.failed(
                 connector.adapter.sourceId,
                 now(),
-                app.lifeos.core.runtime.RuntimeFailureCategory.DEPENDENCY,
+                app.lifeos.core.runtime.RuntimeFailureCategory.UNKNOWN,
                 message,
                 true,
             )
@@ -415,7 +415,7 @@ class LiveSourceDeltaCoordinator(
             health.failed(
                 connector.adapter.sourceId,
                 now(),
-                app.lifeos.core.runtime.RuntimeFailureCategory.DEPENDENCY,
+                app.lifeos.core.runtime.RuntimeFailureCategory.UNKNOWN,
                 message,
                 true,
             )
@@ -440,7 +440,7 @@ class LiveSourceDeltaCoordinator(
             health.failed(
                 connector.adapter.sourceId,
                 now(),
-                app.lifeos.core.runtime.RuntimeFailureCategory.RESOURCE_EXHAUSTED,
+                app.lifeos.core.runtime.RuntimeFailureCategory.UNKNOWN,
                 overflow.message ?: "live source delta capacity exceeded",
                 true,
             )

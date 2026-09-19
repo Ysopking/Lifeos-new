@@ -53,7 +53,7 @@ class LiveSourceM02ReliabilityTest {
         reporter.failed(
             sourceId = source,
             observedAt = at,
-            category = RuntimeFailureCategory.DEPENDENCY,
+            category = RuntimeFailureCategory.UNKNOWN,
             message = "provider unavailable",
             recoverable = true,
         )
