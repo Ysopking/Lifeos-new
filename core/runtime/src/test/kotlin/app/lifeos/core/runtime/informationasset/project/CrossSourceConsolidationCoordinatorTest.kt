@@ -232,8 +232,7 @@ class CrossSourceConsolidationCoordinatorTest {
             when (val result = saveRevision(photon, expected)) {
                 is PhotonRevisionWriteResult.Created,
                 is PhotonRevisionWriteResult.Advanced,
-                is PhotonRevisionWriteResult.Idempotent,
-                -> Unit
+                is PhotonRevisionWriteResult.Idempotent -> Unit
                 is PhotonRevisionWriteResult.Conflict -> error(result.reason)
             }
         }

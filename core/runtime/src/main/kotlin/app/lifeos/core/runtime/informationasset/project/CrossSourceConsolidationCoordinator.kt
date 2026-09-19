@@ -343,8 +343,15 @@ class CrossSourceConsolidationCoordinator(
         require(existing.content == generated.content) {
             "InformationAsset Photon id collides with different revision content"
         }
+        require(existing.phase == generated.phase)
+        require(existing.semanticMass == generated.semanticMass)
+        require(existing.energy == generated.energy)
+        require(existing.confidence == generated.confidence)
         require(existing.relations == generated.relations)
         require(existing.tags == generated.tags)
+        require(existing.provenance.source == generated.provenance.source)
+        require(existing.provenance.actor == generated.provenance.actor)
+        require(existing.provenance.parentIds == generated.provenance.parentIds)
     }
 
     private fun deterministicCreatedAt(revision: InformationAssetRevision): Instant =
