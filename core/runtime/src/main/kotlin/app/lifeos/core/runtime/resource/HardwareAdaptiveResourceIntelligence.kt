@@ -30,7 +30,15 @@ data class HardwareStateSnapshot(
     val batteryFraction: Double? = null,
     val charging: Boolean? = null,
     val thermalState: HardwareThermalState = HardwareThermalState.UNKNOWN,
+    /** Legacy whole-process load input retained for source compatibility. */
     val cpuLoadFraction: Double? = null,
+    /** Preferred measured process CPU load normalized by visible logical processors. */
+    val processCpuLoadFraction: Double? = null,
+    /** Explicit pressure signals are normalized as 0 = idle/free and 1 = saturated. */
+    val memoryPressureFraction: Double? = null,
+    val ioPressureFraction: Double? = null,
+    /** Optional stable platform accelerator identity; null means no trusted accelerator signal. */
+    val acceleratorFingerprint: String? = null,
     val availableMemoryBytes: Long? = null,
     val totalMemoryBytes: Long? = null,
     val availableStorageBytes: Long? = null,
@@ -43,6 +51,21 @@ data class HardwareStateSnapshot(
         }
         require(cpuLoadFraction == null || cpuLoadFraction.isFinite() && cpuLoadFraction in 0.0..1.0) {
             "CPU load fraction must be in 0..1"
+        }
+        require(
+            processCpuLoadFraction == null ||
+                processCpuLoadFraction.isFinite() && processCpuLoadFraction in 0.0..1.0
+        ) { "Process CPU load fraction must be in 0..1" }
+        require(
+            memoryPressureFraction == null ||
+                memoryPressureFraction.isFinite() && memoryPressureFraction in 0.0..1.0
+        ) { "Memory pressure fraction must be in 0..1" }
+        require(
+            ioPressureFraction == null ||
+                ioPressureFraction.isFinite() && ioPressureFraction in 0.0..1.0
+        ) { "IO pressure fraction must be in 0..1" }
+        require(acceleratorFingerprint == null || acceleratorFingerprint.isNotBlank()) {
+            "Accelerator fingerprint must not be blank"
         }
         require((availableMemoryBytes == null) == (totalMemoryBytes == null)) {
             "Memory availability and total must either both be known or both be unknown"
@@ -63,13 +86,17 @@ data class HardwareStateSnapshot(
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
-        "hardware-state-snapshot/v1",
+        "hardware-state-snapshot/v2",
         observedAt.toString(),
         availableProcessors.toString(),
         batteryFraction?.let(java.lang.Double::toHexString).orEmpty(),
         charging?.toString().orEmpty(),
         thermalState.name,
         cpuLoadFraction?.let(java.lang.Double::toHexString).orEmpty(),
+        processCpuLoadFraction?.let(java.lang.Double::toHexString).orEmpty(),
+        memoryPressureFraction?.let(java.lang.Double::toHexString).orEmpty(),
+        ioPressureFraction?.let(java.lang.Double::toHexString).orEmpty(),
+        acceleratorFingerprint.orEmpty(),
         availableMemoryBytes?.toString().orEmpty(),
         totalMemoryBytes?.toString().orEmpty(),
         availableStorageBytes?.toString().orEmpty(),
@@ -86,9 +113,33 @@ data class HardwareStateSnapshot(
         HardwareThermalState.SHUTDOWN -> 0.00
     }
 
-    fun memoryHeadroom(): Double? = ratio(availableMemoryBytes, totalMemoryBytes)
+    fun memoryHeadroom(): Double? =
+        memoryPressureFraction?.let { (1.0 - it).coerceIn(0.0, 1.0) }
+            ?: ratio(availableMemoryBytes, totalMemoryBytes)
+
+    fun ioHeadroom(): Double? =
+        ioPressureFraction?.let { (1.0 - it).coerceIn(0.0, 1.0) }
 
     fun storageHeadroom(): Double? = ratio(availableStorageBytes, totalStorageBytes)
+
+    fun effectiveProcessCpuLoadFraction(): Double? = processCpuLoadFraction ?: cpuLoadFraction
+
+    /**
+     * Stable scheduling identity. Unlike [fingerprint], this deliberately excludes [observedAt] and
+     * quantizes noisy measurements so insignificant sampling jitter does not churn execution plans.
+     */
+    fun executionCapacityFingerprint(): String = StableFieldIds.fingerprint(
+        "hardware-execution-capacity/v1",
+        availableProcessors.toString(),
+        thermalState.name,
+        bucket(effectiveProcessCpuLoadFraction()),
+        bucket(memoryHeadroom()),
+        bucket(ioHeadroom()),
+        bucket(storageHeadroom()),
+        bucket(energyAvailability()),
+        charging?.toString().orEmpty(),
+        acceleratorFingerprint.orEmpty(),
+    )
 
     fun energyAvailability(): Double? = when {
         charging == true -> maxOf(batteryFraction ?: 0.90, 0.90)
@@ -97,8 +148,9 @@ data class HardwareStateSnapshot(
     }
 
     /**
-     * Compute capacity is a conservative proxy until a platform supplies real CPU load. Processor
-     * count contributes static capability while current load and thermal state contribute headroom.
+     * Stable V16 quota-admission capacity. Keep this compatible with the pre-execution-fabric
+     * contract: transient process-load samples must not turn already-supported foreground actions
+     * into admission failures. New measured load belongs to execution topology, not hard authority.
      */
     fun computeHeadroom(): Double {
         val processorCapacity = (availableProcessors.toDouble() / REFERENCE_PROCESSORS)
@@ -107,12 +159,36 @@ data class HardwareStateSnapshot(
         return (processorCapacity * loadHeadroom * thermalHeadroom()).coerceIn(0.0, 1.0)
     }
 
+    /**
+     * Dynamic execution-topology capacity. Unlike [computeHeadroom], this consumes measured process
+     * load and memory pressure so the scheduler can reduce parallelism without revoking V16 budget
+     * admission for a small user-blocking action.
+     */
+    fun executionComputeHeadroom(): Double {
+        val processorCapacity = (availableProcessors.toDouble() / REFERENCE_PROCESSORS)
+            .coerceIn(MIN_PROCESSOR_CAPACITY, 1.0)
+        val measuredLoad = effectiveProcessCpuLoadFraction() ?: UNKNOWN_PROCESS_CPU_LOAD
+        val loadHeadroom = (1.0 - measuredLoad).coerceIn(0.0, 1.0)
+        val memoryBoundary = memoryHeadroom()
+            ?.let { headroom ->
+                if (headroom >= 0.50) 1.0 else (0.50 + headroom).coerceIn(0.50, 1.0)
+            }
+            ?: 1.0
+        return (
+            processorCapacity *
+                loadHeadroom *
+                thermalHeadroom() *
+                memoryBoundary
+            ).coerceIn(0.0, 1.0)
+    }
+
     fun healthStability(): Double {
         val signals = buildList {
             add(thermalHeadroom())
             energyAvailability()?.let(::add)
             memoryHeadroom()?.let(::add)
             storageHeadroom()?.let(::add)
+            ioHeadroom()?.let(::add)
         }
         return signals.minOrNull() ?: thermalHeadroom()
     }
@@ -150,7 +226,7 @@ data class HardwareStateSnapshot(
             WorldDimensionValue(
                 dimension = WorldSignalDimension.CAPABILITY_READINESS,
                 value = capabilityReadiness(),
-                confidence = if (cpuLoadFraction == null) 0.75 else 1.0,
+                confidence = if (effectiveProcessCpuLoadFraction() == null) 0.75 else 1.0,
                 provenanceFingerprints = setOf(provenance),
             ),
             WorldDimensionValue(
@@ -173,9 +249,15 @@ data class HardwareStateSnapshot(
     private fun ratio(available: Long?, total: Long?): Double? =
         if (available == null || total == null) null else available.toDouble() / total.toDouble()
 
+    private fun bucket(value: Double?): String =
+        value?.let { ((it.coerceIn(0.0, 1.0) * CAPACITY_BUCKETS).toInt()).toString() }.orEmpty()
+
     private companion object {
         const val REFERENCE_PROCESSORS = 8.0
         const val MIN_PROCESSOR_CAPACITY = 0.125
+        // Slightly non-zero so unknown process load is never treated as a perfectly idle CPU.
+        const val UNKNOWN_PROCESS_CPU_LOAD = 0.04
+        const val CAPACITY_BUCKETS = 20.0
         const val CRITICAL_BATTERY_FRACTION = 0.02
     }
 }

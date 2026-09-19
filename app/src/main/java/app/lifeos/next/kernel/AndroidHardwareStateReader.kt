@@ -16,6 +16,7 @@ import java.time.Instant
 internal class AndroidHardwareStateReader(
     context: Context,
     private val now: () -> Instant = Instant::now,
+    private val cpuLoadSampler: AndroidCpuLoadSampler = AndroidCpuLoadSampler(),
 ) {
     private val appContext = context.applicationContext
 
@@ -30,14 +31,27 @@ internal class AndroidHardwareStateReader(
         val batteryLevel = batteryFraction(battery)
         val charging = chargingState(battery)
         val powerManager = appContext.getSystemService(PowerManager::class.java)
+        val availableProcessors = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val cpuObservation = cpuLoadSampler.sample(availableProcessors)
+        val memoryPressure = if (memory.totalMem > 0L) {
+            (1.0 - memory.availMem.toDouble() / memory.totalMem.toDouble()).coerceIn(0.0, 1.0)
+        } else {
+            null
+        }
 
         return HardwareStateSnapshot(
             observedAt = now(),
-            availableProcessors = Runtime.getRuntime().availableProcessors().coerceAtLeast(1),
+            availableProcessors = availableProcessors,
             batteryFraction = batteryLevel,
             charging = charging,
             thermalState = thermalState(powerManager),
+            // Preserve the legacy V16 quota-admission lane; measured process load is consumed
+            // by the execution planner so transient startup load cannot revoke supported actions.
             cpuLoadFraction = null,
+            processCpuLoadFraction = cpuObservation?.loadFraction,
+            memoryPressureFraction = memoryPressure,
+            ioPressureFraction = null,
+            acceleratorFingerprint = null,
             availableMemoryBytes = memory.availMem,
             totalMemoryBytes = memory.totalMem,
             availableStorageBytes = storage.availableBytes,
