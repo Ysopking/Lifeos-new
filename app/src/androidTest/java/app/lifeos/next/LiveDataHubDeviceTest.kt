@@ -12,6 +12,7 @@ import app.lifeos.core.runtime.livedata.LiveDataIngestResult
 import app.lifeos.core.runtime.livedata.LiveDataPermission
 import app.lifeos.core.runtime.livedata.LiveDataPermissionState
 import app.lifeos.core.runtime.livedata.LiveDataStreamKind
+import app.lifeos.core.runtime.livedata.canonicalLiveDataMetadata
 import app.lifeos.core.runtime.source.SourceMetadataRepository
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import java.time.Instant
@@ -97,6 +98,17 @@ class LiveDataHubDeviceTest {
             occurredAt = revokeAt,
             observedAt = revokeAt,
             payload = "must-not-enter",
+            metadata = canonicalLiveDataMetadata(
+                connectorId = connector,
+                accountKey = accountKey,
+                kind = LiveDataStreamKind.MESSAGE,
+                externalId = message.externalId,
+                externalVersion = "v2",
+                occurredAt = revokeAt,
+                observedAt = revokeAt,
+                mimeType = message.mimeType,
+                privacyZone = message.metadata.privacyZone,
+            ),
         )
         val blocked = hub.ingest(blockedDelta)
         assertTrue(blocked is LiveDataIngestResult.Blocked)
