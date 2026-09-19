@@ -262,7 +262,7 @@ fun canonicalLiveDataMetadata(
         SourceFileMetadata(
             name = normalized.substringAfterLast('/').ifBlank { "source-file" },
             logicalPath = externalId,
-            parentPath = normalized.substringBeforeLast('/', "").ifBlank { null },
+            parentPath = normalized.substringBeforeLast('/', "").takeIf { it.isNotBlank() },
             mimeType = mimeType,
         )
     } else {

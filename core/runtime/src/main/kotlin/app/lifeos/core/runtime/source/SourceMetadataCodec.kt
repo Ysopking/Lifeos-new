@@ -383,7 +383,7 @@ object SourceMetadataCodec {
 
     private fun DataOutputStream.writeNullableText(value: String?) {
         writeBoolean(value != null)
-        value?.let(::writeText)
+        value?.let { writeText(it) }
     }
 
     private fun DataInputStream.readNullableText(): String? =
@@ -401,7 +401,7 @@ object SourceMetadataCodec {
         require(size in 0..MAX_TEXT_BYTES && size <= available()) {
             "Invalid source metadata text field size"
         }
-        val bytes = ByteArray(size).also(::readFully)
+        val bytes = ByteArray(size).also { readFully(it) }
         return Charsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
@@ -425,7 +425,7 @@ object SourceMetadataCodec {
 
     private fun DataOutputStream.writeNullableInt(value: Int?) {
         writeBoolean(value != null)
-        value?.let(::writeInt)
+        value?.let { writeInt(it) }
     }
 
     private fun DataInputStream.readNullableInt(): Int? =
@@ -433,7 +433,7 @@ object SourceMetadataCodec {
 
     private fun DataOutputStream.writeNullableLong(value: Long?) {
         writeBoolean(value != null)
-        value?.let(::writeLong)
+        value?.let { writeLong(it) }
     }
 
     private fun DataInputStream.readNullableLong(): Long? =

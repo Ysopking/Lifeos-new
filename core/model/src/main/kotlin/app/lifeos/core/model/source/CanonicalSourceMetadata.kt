@@ -44,7 +44,7 @@ enum class SourcePrivacyZone(val restrictiveness: Int) {
 
     companion object {
         fun mostRestrictive(zones: Iterable<SourcePrivacyZone>): SourcePrivacyZone =
-            zones.maxByOrNull(SourcePrivacyZone::restrictiveness) ?: PRIVATE
+            zones.maxByOrNull { it.restrictiveness } ?: PRIVATE
     }
 }
 
