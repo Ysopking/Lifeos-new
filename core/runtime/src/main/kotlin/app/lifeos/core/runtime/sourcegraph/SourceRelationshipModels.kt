@@ -124,6 +124,7 @@ enum class RelationshipEvidenceKind {
     ACCOUNT_ID,
     ACTOR_ID,
     CONTACT_ID,
+    ORGANIZATION_ID,
     EMAIL,
     PHONE,
     CALENDAR_UID,
