@@ -1,6 +1,7 @@
 package app.lifeos.next.kernel
 
 import android.content.Context
+import app.lifeos.core.runtime.field.AuthoritativeFieldProcessor
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 
@@ -13,6 +14,7 @@ class LifeOsKernelFactory(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime? = null,
     private val bootReadyMaintenanceTrigger: () -> Unit = {},
+    private val authoritativeFieldProcessors: List<AuthoritativeFieldProcessor> = emptyList(),
 ) {
     fun create(): LifeOsKernel {
         val foundation = KernelFoundationComposition(
@@ -35,6 +37,7 @@ class LifeOsKernelFactory(
         val cognition = KernelCognitionComposition(
             foundation = foundation,
             world = world,
+            authoritativeFieldProcessors = authoritativeFieldProcessors,
         ).compose()
 
         val boot = KernelBootComposition(
