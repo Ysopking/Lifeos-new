@@ -27,6 +27,19 @@ data class WorldEquationEvidenceRecord(
         ) {
             "World equation post-activation safety observations must be unique"
         }
+        require(
+            postActivationSafetyObservations.map { it.assessmentId }.distinct().size ==
+                postActivationSafetyObservations.size
+        ) {
+            "World equation post-activation safety assessment ids must be unique"
+        }
+        require(
+            postActivationSafetyObservations.zipWithNext().all { (previous, next) ->
+                !next.observedAt.isBefore(previous.observedAt)
+            }
+        ) {
+            "World equation post-activation safety observations must be chronological"
+        }
         require(id == expectedId())
         require(fingerprint == expectedFingerprint())
         require(evidence.observations.map { it.runId }.distinct().size == evidence.observations.size) {
@@ -90,6 +103,17 @@ data class WorldEquationEvidenceRecord(
         require(observation.candidateEquationFingerprint == candidateEquationFingerprint)
         require(observation.id !in postActivationSafetyObservations.map { it.id }.toSet()) {
             "Post-activation safety observation was already recorded"
+        }
+        require(
+            observation.assessmentId !in
+                postActivationSafetyObservations.map { it.assessmentId }.toSet()
+        ) {
+            "Post-activation safety assessment was already recorded"
+        }
+        postActivationSafetyObservations.lastOrNull()?.let { previous ->
+            require(!observation.observedAt.isBefore(previous.observedAt)) {
+                "Post-activation safety observation arrived out of order"
+            }
         }
         return next(
             state = state,
