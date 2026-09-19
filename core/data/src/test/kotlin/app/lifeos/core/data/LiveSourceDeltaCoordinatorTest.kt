@@ -124,7 +124,7 @@ class LiveSourceDeltaCoordinatorTest {
         )
         val repository = MemoryCursorRepository()
         val authority = FakeAuthority(
-            ingest = { LiveDataIngestResult.Blocked(listOf("permission-not-granted:read_calendar")) }
+            ingestHandler = { LiveDataIngestResult.Blocked(listOf("permission-not-granted:read_calendar")) }
         )
         val coordinator = LiveSourceDeltaCoordinator(
             listOf(connector(adapter)),
