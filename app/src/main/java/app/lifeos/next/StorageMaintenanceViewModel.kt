@@ -93,7 +93,37 @@ class StorageMaintenanceViewModel(
     }
 
     fun applyOrganization() {
-        executeMaintenance(includeReorganization = true, organizationOnly = true)
+        if (mutableState.value.busy) return
+        mutableState.update { it.copy(busy = true, error = null, message = null) }
+        viewModelScope.launch {
+            try {
+                val result = owner.storageMaintenance.organizeNextBatch()
+                mutableState.update {
+                    it.copy(
+                        busy = false,
+                        message = buildString {
+                            append("Neuordnung: ")
+                            append(result.maintenance.reorganized)
+                            append(" verschoben, ")
+                            append(result.maintenance.blocked)
+                            append(" blockiert, ")
+                            append(result.maintenance.skipped)
+                            append(" übersprungen · ")
+                            append(result.scannedInventoryEntries)
+                            append(" Indexeinträge geprüft")
+                            if (result.complete) append(" · kompletter Bestand erreicht.")
+                            else append(" · weiterer Batch verfügbar.")
+                        },
+                    )
+                }
+                owner.refreshStorageIntelligence()
+                refreshInternal()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                fail(error)
+            }
+        }
     }
 
     fun restore(recordId: String) {
@@ -150,7 +180,6 @@ class StorageMaintenanceViewModel(
 
     private fun executeMaintenance(
         includeReorganization: Boolean,
-        organizationOnly: Boolean = false,
     ) {
         if (mutableState.value.busy) return
         val snapshot = owner.latestStorageIntelligence
@@ -160,10 +189,8 @@ class StorageMaintenanceViewModel(
             }
             return
         }
-        val selected = if (organizationOnly) {
-            snapshot.cleanupCandidates.filter { it.kind == StorageCleanupKind.REORGANIZE }
-        } else {
-            snapshot.cleanupCandidates.filter { it.kind != StorageCleanupKind.REORGANIZE }
+        val selected = snapshot.cleanupCandidates.filter {
+            it.kind != StorageCleanupKind.REORGANIZE
         }
         if (selected.isEmpty()) {
             mutableState.update {
