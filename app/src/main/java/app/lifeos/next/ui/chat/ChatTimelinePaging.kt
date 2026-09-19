@@ -1,5 +1,7 @@
 package app.lifeos.next.ui.chat
 
+import app.lifeos.core.runtime.scale.RuntimeRetentionBudgets
+
 data class ChatTimelinePage(
     val items: List<ChatTimelineItem>,
     val totalCount: Int,
@@ -10,7 +12,7 @@ data class ChatTimelinePage(
 object ChatTimelinePager {
     const val DEFAULT_PAGE_SIZE = 60
     const val PAGE_STEP = 60
-    const val MAX_VISIBLE_ITEMS = 20_000
+    const val MAX_VISIBLE_ITEMS = RuntimeRetentionBudgets.MAX_PRESENTATION_VISIBLE_ITEMS
 
     fun page(
         timeline: List<ChatTimelineItem>,

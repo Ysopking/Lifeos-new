@@ -1,5 +1,7 @@
 package app.lifeos.next.ui.memory
 
+import app.lifeos.core.runtime.scale.RuntimeRetentionBudgets
+
 data class MemoryWorkspacePageState(
     val nowLimit: Int = DEFAULT_NOW_PAGE,
     val topicAtomLimitPerGroup: Int = DEFAULT_TOPIC_ATOMS_PER_GROUP,
@@ -39,7 +41,7 @@ data class MemoryWorkspacePageState(
         const val CRYSTAL_PAGE_STEP = 24
         const val DEFAULT_EPISODE_PAGE = 40
         const val EPISODE_PAGE_STEP = 40
-        const val MAX_VISIBLE_ITEMS = 20_000
+        const val MAX_VISIBLE_ITEMS = RuntimeRetentionBudgets.MAX_PRESENTATION_VISIBLE_ITEMS
     }
 }
 

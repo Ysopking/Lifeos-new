@@ -34,10 +34,12 @@ class IncrementalPhotonRepositoryBootSourceTest {
         val first = photon("a", 1, "a1")
         repository.installSnapshot(listOf(first))
 
+        val resolutions = mutableListOf<IncrementalBootResolutionEvidence>()
         val source = IncrementalPhotonRepositoryBootSource(
             repository = repository,
             incrementalIndex = repository,
             manifests = manifests,
+            resolutionObserver = IncrementalBootResolutionObserver(resolutions::add),
         )
         val firstLoad = source.load()
         assertEquals(listOf(first), firstLoad.photons)
@@ -50,6 +52,14 @@ class IncrementalPhotonRepositoryBootSourceTest {
         assertEquals(setOf(first.id, second.id), secondLoad.photons.map { it.id }.toSet())
         assertEquals(1, repository.indexReportCalls)
         assertEquals(repository.indexHead(), manifests.loadReport().manifest?.indexHead)
+        assertEquals(
+            listOf(
+                IncrementalBootResolutionMode.SNAPSHOT_FALLBACK,
+                IncrementalBootResolutionMode.JOURNAL_DELTA,
+            ),
+            resolutions.map { it.mode },
+        )
+        assertEquals(listOf(1, 2), resolutions.map { it.targetRefCount })
     }
 
     @Test

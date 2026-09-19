@@ -72,6 +72,7 @@ import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
 import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.core.runtime.query.ProductivePhotonQueryService
+import app.lifeos.core.runtime.scale.RuntimeRetentionBudgets
 import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.SceneGraphPhotonFactory
 import app.lifeos.core.scene.SceneRasterizer
@@ -1056,7 +1057,7 @@ class LifeOsKernel internal constructor(
                     .thenByDescending { it.revision }
                     .thenBy { it.id.value }
             )
-            .take(MAX_BOOTSTRAP_WORKING_SET_PHOTONS)
+            .take(RuntimeRetentionBudgets.MAX_BOOTSTRAP_RETAINED_PHOTONS)
             .sortedWith(
                 compareBy<Photon> { it.provenance.createdAt }
                     .thenBy { it.id.value }
@@ -1065,7 +1066,6 @@ class LifeOsKernel internal constructor(
     }
 
     private companion object {
-        const val MAX_BOOTSTRAP_WORKING_SET_PHOTONS = 4_096
         const val BUILTIN_EXTENSION_SNAPSHOT_ID = "extension-registry:builtin-baseline"
 
         const val PRIVATE_OWNER_ACTOR_ID = "private-owner"

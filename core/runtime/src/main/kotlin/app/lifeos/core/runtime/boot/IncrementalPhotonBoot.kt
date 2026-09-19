@@ -67,11 +67,28 @@ interface IncrementalBootPhotonManifestRepository {
  * index snapshot. Exact Photon revisions are then loaded and the head is rechecked before the
  * manifest advances, closing the race between discovery and hydration.
  */
+enum class IncrementalBootResolutionMode {
+    SNAPSHOT_FALLBACK,
+    JOURNAL_DELTA,
+}
+
+data class IncrementalBootResolutionEvidence(
+    val mode: IncrementalBootResolutionMode,
+    val targetRefCount: Int,
+    val indexFailureCount: Int,
+)
+
+fun interface IncrementalBootResolutionObserver {
+    fun onResolved(evidence: IncrementalBootResolutionEvidence)
+}
+
 class IncrementalPhotonRepositoryBootSource(
     private val repository: RevisionedPhotonRepository,
     private val incrementalIndex: IncrementalPhotonIndexReader,
     private val manifests: IncrementalBootPhotonManifestRepository,
     private val maxHeadRetries: Int = DEFAULT_HEAD_RETRIES,
+    private val resolutionObserver: IncrementalBootResolutionObserver =
+        IncrementalBootResolutionObserver { },
 ) : BootPhotonSource {
     init {
         require(maxHeadRetries in 1..MAX_HEAD_RETRIES)
@@ -85,6 +102,14 @@ class IncrementalPhotonRepositoryBootSource(
             val hydrated = hydrate(target.refs, target.indexFailures)
             val stableHead = incrementalIndex.indexHead()
             if (stableHead != target.head) return@repeat
+
+            resolutionObserver.onResolved(
+                IncrementalBootResolutionEvidence(
+                    mode = target.mode,
+                    targetRefCount = target.refs.size,
+                    indexFailureCount = target.indexFailures.size,
+                )
+            )
 
             if (hydrated.unreadableFiles.isNotEmpty()) {
                 return hydrated
@@ -143,6 +168,7 @@ class IncrementalPhotonRepositoryBootSource(
                     TargetHeads(
                         head = changes.currentHead,
                         refs = refs.values.sortedWith(REF_ORDER),
+                        mode = IncrementalBootResolutionMode.JOURNAL_DELTA,
                     )
                 }
             }
@@ -160,11 +186,13 @@ class IncrementalPhotonRepositoryBootSource(
                     head = after,
                     refs = report.latestRefs.values.sortedWith(REF_ORDER),
                     indexFailures = report.unreadableRevisionFiles,
+                    mode = IncrementalBootResolutionMode.SNAPSHOT_FALLBACK,
                 )
             }
             return TargetHeads(
                 head = after,
                 refs = report.latestRefs.values.sortedWith(REF_ORDER),
+                mode = IncrementalBootResolutionMode.SNAPSHOT_FALLBACK,
             )
         }
         throw IllegalStateException("Photon index did not stabilize during snapshot fallback")
@@ -199,6 +227,7 @@ class IncrementalPhotonRepositoryBootSource(
         val head: PhotonIndexHead,
         val refs: List<PhotonRevisionRef>,
         val indexFailures: List<String> = emptyList(),
+        val mode: IncrementalBootResolutionMode,
     ) {
         init {
             require(refs == refs.sortedWith(REF_ORDER))
