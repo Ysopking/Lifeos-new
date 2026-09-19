@@ -579,6 +579,7 @@ internal object StorageCleanupPlanner {
                     reclaimableBytes = file.sizeBytes,
                     reason = "APK/installer file; owner review before reversible trash",
                     safeToTrashAfterOwnerApproval = true,
+                    expectedModifiedAtMillis = file.modifiedAtMillis,
                 )
             }
             if (file.sizeBytes >= AndroidStorageInventoryStore.LARGE_REVIEW_BYTES) {
