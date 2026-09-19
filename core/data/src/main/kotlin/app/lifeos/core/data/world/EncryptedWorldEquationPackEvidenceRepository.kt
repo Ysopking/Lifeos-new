@@ -1,24 +1,15 @@
 package app.lifeos.core.data.world
 
 import android.content.Context
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import android.util.AtomicFile
+import app.lifeos.core.data.security.VersionedPathBoundVaultSupport
 import app.lifeos.core.runtime.world.WorldEquationPackEvidenceCodec
 import app.lifeos.core.runtime.world.WorldEquationPackEvidenceLoadReport
 import app.lifeos.core.runtime.world.WorldEquationPackEvidenceRecord
 import app.lifeos.core.runtime.world.WorldEquationPackEvidenceRepository
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
 import java.io.IOException
-import java.security.KeyStore
 import java.security.MessageDigest
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -28,7 +19,9 @@ class EncryptedWorldEquationPackEvidenceRepository(
     context: Context,
 ) : WorldEquationPackEvidenceRepository {
     private val directory = context.filesDir.resolve("world-equation-pack-evidence-vault")
-    private val key: SecretKey by lazy { loadOrCreateKey() }
+    private val key: SecretKey by lazy {
+        VersionedPathBoundVaultSupport.loadOrCreateKey(KEY_ALIAS)
+    }
 
     override suspend fun load(
         candidatePackFingerprint: String,
@@ -106,74 +99,32 @@ class EncryptedWorldEquationPackEvidenceRepository(
         target: AtomicFile,
         record: WorldEquationPackEvidenceRecord,
     ) {
-        val plaintext = WorldEquationPackEvidenceCodec.encode(record)
-        val cipher = Cipher.getInstance(TRANSFORMATION).apply {
-            init(Cipher.ENCRYPT_MODE, key)
-            updateAAD(aad(target))
-        }
-        val encrypted = cipher.doFinal(plaintext)
-        val container = ByteArrayOutputStream(encrypted.size + 64).also { output ->
-            DataOutputStream(output).use { data ->
-                data.writeInt(CONTAINER_VERSION)
-                data.writeInt(WorldEquationPackEvidenceCodec.VERSION)
-                data.writeInt(cipher.iv.size)
-                data.write(cipher.iv)
-                data.writeInt(encrypted.size)
-                data.write(encrypted)
-            }
-        }.toByteArray()
-        require(container.size <= MAX_CONTAINER_BYTES) {
-            "Structural pack evidence container too large"
-        }
-        val stream = target.startWrite()
-        try {
-            stream.write(container)
-            target.finishWrite(stream)
-        } catch (error: Exception) {
-            target.failWrite(stream)
-            throw error
-        }
+        val container = VersionedPathBoundVaultSupport.encrypt(
+            plaintext = WorldEquationPackEvidenceCodec.encode(record),
+            key = key,
+            containerVersion = CONTAINER_VERSION,
+            codecVersion = WorldEquationPackEvidenceCodec.VERSION,
+            maxPlaintextBytes = WorldEquationPackEvidenceCodec.MAX_ENCODED_BYTES,
+            associatedData = aad(target),
+        )
+        VersionedPathBoundVaultSupport.atomicWrite(target, container)
     }
 
     private fun readValidated(
         target: AtomicFile,
     ): WorldEquationPackEvidenceRecord {
-        val container = target.openRead().use { input ->
-            val output = ByteArrayOutputStream()
-            val buffer = ByteArray(8192)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                require(output.size() + count <= MAX_CONTAINER_BYTES) {
-                    "Structural pack evidence file too large"
-                }
-                output.write(buffer, 0, count)
-            }
-            output.toByteArray()
-        }
-        val record = DataInputStream(ByteArrayInputStream(container)).use { data ->
-            require(data.readInt() == CONTAINER_VERSION) {
-                "Unsupported structural pack evidence container"
-            }
-            require(data.readInt() == WorldEquationPackEvidenceCodec.VERSION) {
-                "Unsupported structural pack evidence codec"
-            }
-            val ivLength = data.readInt()
-            require(ivLength in 12..32) {
-                "Invalid structural pack evidence IV length"
-            }
-            val iv = ByteArray(ivLength).also(data::readFully)
-            val encryptedLength = data.readInt()
-            require(encryptedLength > 0 && encryptedLength == data.available()) {
-                "Malformed structural pack evidence ciphertext length"
-            }
-            val encrypted = ByteArray(encryptedLength).also(data::readFully)
-            val cipher = Cipher.getInstance(TRANSFORMATION).apply {
-                init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
-                updateAAD(aad(target))
-            }
-            WorldEquationPackEvidenceCodec.decode(cipher.doFinal(encrypted))
-        }
+        val plaintext = VersionedPathBoundVaultSupport.decrypt(
+            container = VersionedPathBoundVaultSupport.readAtomic(
+                target = target,
+                maxPlaintextBytes = WorldEquationPackEvidenceCodec.MAX_ENCODED_BYTES,
+            ),
+            key = key,
+            expectedContainerVersion = CONTAINER_VERSION,
+            expectedCodecVersion = WorldEquationPackEvidenceCodec.VERSION,
+            maxPlaintextBytes = WorldEquationPackEvidenceCodec.MAX_ENCODED_BYTES,
+            associatedData = aad(target),
+        )
+        val record = WorldEquationPackEvidenceCodec.decode(plaintext)
         require(target.baseFile == targetFor(record.candidatePackFingerprint).baseFile) {
             "Structural pack evidence payload does not match physical path"
         }
@@ -206,34 +157,10 @@ class EncryptedWorldEquationPackEvidenceRepository(
         }
     }
 
-    private fun loadOrCreateKey(): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
-        return KeyGenerator.getInstance(
-            KeyProperties.KEY_ALGORITHM_AES,
-            "AndroidKeyStore",
-        ).run {
-            init(
-                KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-                )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setKeySize(256)
-                    .build(),
-            )
-            generateKey()
-        }
-    }
-
     private companion object {
         val processMutex = Mutex()
         const val KEY_ALIAS = "lifeos.world.equation.pack.evidence.v1"
-        const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val CONTAINER_VERSION = 1
         const val FILE_SUFFIX = ".wepke"
-        const val MAX_CONTAINER_BYTES =
-            WorldEquationPackEvidenceCodec.MAX_ENCODED_BYTES + 1024
     }
 }
