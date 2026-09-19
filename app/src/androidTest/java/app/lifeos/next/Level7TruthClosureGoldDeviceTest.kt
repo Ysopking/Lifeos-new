@@ -109,7 +109,13 @@ class Level7TruthClosureGoldDeviceTest {
         val committed = evaluated.committed(promotedWorld.revision)
         assertTrue(cycleRepo.compareAndSet(evaluated.fingerprint, committed))
 
-        val planId = GoalPlanId("plan-b200-truth-closure")
+        val planId = GoalPlanId(
+            GoalPlanId.PREFIX + StableFieldIds.fingerprint(
+                "level7-b200-plan/v1",
+                candidateSpec.version,
+                promotedWorld.fingerprint,
+            )
+        )
         val sourceGoalId = PhotonId("goal-b200-truth-closure")
         val cycleBinding = GoalConvergenceCycleBinding(
             cycleId = committed.cycleId,
