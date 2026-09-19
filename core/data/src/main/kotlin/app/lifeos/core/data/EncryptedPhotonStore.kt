@@ -10,7 +10,12 @@ import app.lifeos.core.data.photon.PhotonIndexDeltaOperation
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonCodec
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.IncrementalPhotonIndexReader
+import app.lifeos.core.model.PhotonIndexChange
+import app.lifeos.core.model.PhotonIndexChangeOperation
+import app.lifeos.core.model.PhotonIndexChanges
 import app.lifeos.core.model.PhotonIndexEntry
+import app.lifeos.core.model.PhotonIndexHead
 import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonIndexReport
@@ -48,7 +53,9 @@ import kotlinx.coroutines.withContext
  * be the only copy of a fact. Legacy v1/v2 <id>.photon heads are migrated idempotently into the
  * revision directory before the new index is published.
  */
-class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
+class EncryptedPhotonStore(context: Context) :
+    RevisionedPhotonRepository,
+    IncrementalPhotonIndexReader {
     private val directory = context.filesDir.resolve(ROOT_DIRECTORY)
     private val revisionDirectory = directory.resolve(REVISION_DIRECTORY)
     private val indexFile = directory.resolve(INDEX_FILE)
@@ -178,6 +185,86 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
             )
         }
     }
+
+    override suspend fun indexHead(): PhotonIndexHead = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            ensureIndexLocked().publicHead()
+        }
+    }
+
+    override suspend fun changesSince(head: PhotonIndexHead): PhotonIndexChanges =
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                val index = ensureIndexLocked()
+                val current = index.publicHead()
+                if (
+                    head.snapshotGeneration != current.snapshotGeneration ||
+                    head.snapshotFingerprint != current.snapshotFingerprint
+                ) {
+                    return@withLock PhotonIndexChanges.SnapshotRequired(
+                        currentHead = current,
+                        reason = "snapshot-generation-or-fingerprint-changed",
+                    )
+                }
+                if (head.lastJournalSequence > current.lastJournalSequence) {
+                    return@withLock PhotonIndexChanges.SnapshotRequired(
+                        currentHead = current,
+                        reason = "checkpoint-sequence-ahead-of-index",
+                    )
+                }
+                if (head.lastJournalSequence == current.lastJournalSequence) {
+                    return@withLock PhotonIndexChanges.Incremental(
+                        fromHead = head,
+                        currentHead = current,
+                        changes = emptyList(),
+                    )
+                }
+
+                val deltas = try {
+                    indexJournal.loadAfter(
+                        sequence = head.lastJournalSequence,
+                        snapshotGeneration = current.snapshotGeneration,
+                        snapshotFingerprint = current.snapshotFingerprint,
+                    )
+                } catch (_: Exception) {
+                    return@withLock PhotonIndexChanges.SnapshotRequired(
+                        currentHead = current,
+                        reason = "journal-history-unavailable",
+                    )
+                }
+                if (
+                    deltas.isEmpty() ||
+                    deltas.first().sequence != head.lastJournalSequence + 1L ||
+                    deltas.last().sequence != current.lastJournalSequence
+                ) {
+                    return@withLock PhotonIndexChanges.SnapshotRequired(
+                        currentHead = current,
+                        reason = "journal-history-incomplete",
+                    )
+                }
+                PhotonIndexChanges.Incremental(
+                    fromHead = head,
+                    currentHead = current,
+                    changes = deltas.map { delta ->
+                        PhotonIndexChange(
+                            sequence = delta.sequence,
+                            operation = when (delta.operation) {
+                                PhotonIndexDeltaOperation.CREATE ->
+                                    PhotonIndexChangeOperation.CREATE
+                                PhotonIndexDeltaOperation.ADVANCE ->
+                                    PhotonIndexChangeOperation.ADVANCE
+                                PhotonIndexDeltaOperation.TOMBSTONE ->
+                                    PhotonIndexChangeOperation.TOMBSTONE
+                            },
+                            ref = delta.ref,
+                            previousHeadRef = delta.previousHeadRef,
+                            newEntry = delta.newEntry,
+                        )
+                    },
+                )
+            }
+        }
+
 
     /**
      * Compatibility view: exactly one current live revision per PhotonId.
@@ -1082,6 +1169,12 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
         }
 
         fun head(id: PhotonId): PhotonIndexEntry? = headsById[id]
+
+        fun publicHead(): PhotonIndexHead = PhotonIndexHead(
+            snapshotGeneration = snapshotGeneration,
+            snapshotFingerprint = snapshotFingerprint,
+            lastJournalSequence = lastJournalSequence,
+        )
 
         fun candidateEntries(query: PhotonIndexQuery): Collection<PhotonIndexEntry> {
             val candidateSets = mutableListOf<Set<PhotonRevisionRef>>()

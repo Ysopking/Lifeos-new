@@ -114,6 +114,84 @@ interface PhotonIndexReader {
     suspend fun indexReport(): PhotonIndexReport
 }
 
+data class PhotonIndexHead(
+    val snapshotGeneration: Long,
+    val snapshotFingerprint: String,
+    val lastJournalSequence: Long,
+) {
+    init {
+        require(snapshotGeneration >= 0L)
+        require(snapshotFingerprint.matches(Regex("[0-9a-f]{64}"))) {
+            "Photon index head fingerprint must be lowercase SHA-256"
+        }
+        require(lastJournalSequence >= 0L)
+    }
+}
+
+enum class PhotonIndexChangeOperation {
+    CREATE,
+    ADVANCE,
+    TOMBSTONE,
+}
+
+data class PhotonIndexChange(
+    val sequence: Long,
+    val operation: PhotonIndexChangeOperation,
+    val ref: PhotonRevisionRef,
+    val previousHeadRef: PhotonRevisionRef?,
+    val newEntry: PhotonIndexEntry,
+) {
+    init {
+        require(sequence > 0L)
+        require(newEntry.ref == ref)
+        when (operation) {
+            PhotonIndexChangeOperation.CREATE -> require(previousHeadRef == null)
+            PhotonIndexChangeOperation.ADVANCE -> {
+                val previous = requireNotNull(previousHeadRef)
+                require(previous.photonId == ref.photonId)
+                require(previous.revision + 1L == ref.revision)
+            }
+            PhotonIndexChangeOperation.TOMBSTONE -> require(previousHeadRef == ref)
+        }
+    }
+}
+
+sealed interface PhotonIndexChanges {
+    val currentHead: PhotonIndexHead
+
+    data class Incremental(
+        val fromHead: PhotonIndexHead,
+        override val currentHead: PhotonIndexHead,
+        val changes: List<PhotonIndexChange>,
+    ) : PhotonIndexChanges {
+        init {
+            require(changes == changes.sortedBy { it.sequence })
+            require(changes.map { it.sequence }.distinct().size == changes.size)
+            require(changes.firstOrNull()?.sequence == fromHead.lastJournalSequence + 1L || changes.isEmpty())
+            require(changes.lastOrNull()?.sequence == currentHead.lastJournalSequence || changes.isEmpty())
+            if (changes.isEmpty()) {
+                require(fromHead == currentHead)
+            }
+        }
+    }
+
+    data class SnapshotRequired(
+        override val currentHead: PhotonIndexHead,
+        val reason: String,
+    ) : PhotonIndexChanges {
+        init { require(reason.isNotBlank()) }
+    }
+}
+
+/**
+ * Optional extension for generation-aware incremental consumers. Implementations must return
+ * SnapshotRequired rather than silently skipping journal history that has already been compacted.
+ */
+interface IncrementalPhotonIndexReader {
+    suspend fun indexHead(): PhotonIndexHead
+    suspend fun changesSince(head: PhotonIndexHead): PhotonIndexChanges
+}
+
 fun Collection<PhotonIndexEntry>.canonicalPhotonIndexOrder(): List<PhotonIndexEntry> =
     sortedWith(
         compareBy<PhotonIndexEntry> { it.ref.photonId.value }
