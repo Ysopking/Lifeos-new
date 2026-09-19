@@ -6,6 +6,8 @@ import app.lifeos.core.runtime.artifact.ArtifactCoordinator
 import app.lifeos.core.runtime.artifact.ArtifactGenerationCoordinator
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewCoordinator
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewRepository
+import app.lifeos.core.runtime.livedata.LiveDataHub
+import app.lifeos.core.runtime.livedata.LiveDataPhotonIngress
 
 /**
  * Single productive Android ingress for Photons that must become immediately visible to the live
@@ -35,6 +37,19 @@ class CanonicalPhotonIngress(
     }
 
     /**
+     * Productive M01 live-data hub. Connector/account state and external deltas use the same
+     * revisioned Photon store and canonical cognition ingress as every other Origin Photon.
+     */
+    val liveData: LiveDataHub by lazy {
+        LiveDataHub(
+            photons = kernel.photonStore,
+            ingress = LiveDataPhotonIngress { photon ->
+                ingest(photon, PhotonIngressMode.ORIGIN)
+            },
+        )
+    }
+
+    /**
      * Productive document/code/image generation provenance for callers that intentionally publish
      * immediately. Owner-reviewed image generation uses a separate staging coordinator instead.
      */
@@ -57,6 +72,7 @@ class CanonicalPhotonIngress(
     }
 
     init {
+        LiveDataHubRuntimeRegistry.install(liveData)
         ownerAssetReview?.let { reviews ->
             OwnerAssetReviewRuntimeRegistry.install(reviews)
             ImageArtifactLifecycleRuntimeRegistry.install(
