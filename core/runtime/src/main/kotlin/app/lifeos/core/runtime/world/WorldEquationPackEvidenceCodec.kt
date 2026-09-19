@@ -168,7 +168,7 @@ object WorldEquationPackEvidenceCodec {
         data.writeNullableString(metrics.finalStateFingerprint)
         require(metrics.activeCoefficientIds.size <= MAX_ACTIVE_COEFFICIENTS)
         data.writeInt(metrics.activeCoefficientIds.size)
-        metrics.activeCoefficientIds.map { it.value }.sorted().forEach(data::writeString)
+        metrics.activeCoefficientIds.map { it.value }.sorted().forEach { data.writeString(it) }
     }
 
     private fun readMetrics(
@@ -218,7 +218,9 @@ object WorldEquationPackEvidenceCodec {
         require(length in 0..MAX_STRING_BYTES) {
             "Invalid structural pack evidence string length"
         }
-        return ByteArray(length).also(::readFully).toString(Charsets.UTF_8)
+        val bytes = ByteArray(length)
+        readFully(bytes)
+        return bytes.toString(Charsets.UTF_8)
     }
 
     private fun DataOutputStream.writeNullableString(value: String?) {
