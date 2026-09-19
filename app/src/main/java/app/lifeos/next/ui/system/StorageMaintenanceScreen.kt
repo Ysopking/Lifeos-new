@@ -124,10 +124,10 @@ fun StorageMaintenanceScreen(
                         }
                         OutlinedButton(
                             onClick = model::applyOrganization,
-                            enabled = !state.busy && state.reorganizationCandidateCount > 0,
+                            enabled = !state.busy && state.indexedFiles > 0,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("Dateien neu einordnen")
+                            Text("Dateien neu einordnen · nächster Batch")
                         }
                     }
                 }
