@@ -24,6 +24,9 @@ bash .github/scripts/ci-action-pin-contract.sh
 step "gate 00b: language semantic architecture contract"
 bash .github/scripts/ci-language-semantic-contract.sh
 
+step "gate 00c: Gradle wrapper integrity contract"
+bash .github/scripts/ci-gradle-wrapper-contract.sh
+
 step "gate 01: core model tests"
 ./gradlew :core:model:test --stacktrace
 
