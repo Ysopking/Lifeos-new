@@ -7,6 +7,7 @@ import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
 import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
 import app.lifeos.core.runtime.world.WorldEquationActivationAuthority
+import app.lifeos.core.runtime.world.WorldEquationHead
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -32,16 +33,20 @@ class Level7WorldEquationRollbackDeviceTest {
         val baselineSpec = CognitiveWorldEquationProfile().spec.copy(version = "v17")
         val trialSpec = baselineSpec.copy(version = "v18")
         val equations = InMemoryWorldEquationRegistry(listOf(baselineSpec, trialSpec))
-        val equationAuthority = WorldEquationActivationAuthority(
-            equations = equations,
-            heads = equationRepo,
-            baseline = baselineSpec,
+        val seededEquation = WorldEquationHead.create(
+            revision = 1L,
+            activeEquationVersion = "v17",
+            predecessorEquationVersion = null,
+            sourcePromotionId = "bootstrap:device-v17",
         )
-        assertEquals("v17", equationAuthority.activeVersion())
-        val promotedEquation = equationAuthority.activate(
-            version = "v18",
-            promotionId = "trial:v18",
+        assertTrue(equationRepo.compareAndSet(null, seededEquation))
+        val promotedEquation = WorldEquationHead.create(
+            revision = 2L,
+            activeEquationVersion = "v18",
+            predecessorEquationVersion = "v17",
+            sourcePromotionId = "trial:v18",
         )
+        assertTrue(equationRepo.compareAndSet(1L, promotedEquation))
         assertEquals("v18", promotedEquation.activeEquationVersion)
 
         val v17 = Level7DeviceFixtures.worldHead(
