@@ -252,7 +252,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             context = this,
             hardware = hardwareResourceIntelligence,
         )
-        storageMaintenance = AndroidStorageMaintenanceRuntime(this)
+        storageMaintenance = AndroidStorageMaintenanceRuntime(
+            context = this,
+            hardware = hardwareResourceIntelligence,
+        )
         LifeOsIntegratedCognitionSuiteRegistry.install(LifeOsIntegratedCognitionSuite())
 
         LifeOsStartupComposition.start(
