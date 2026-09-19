@@ -5,6 +5,7 @@ import app.lifeos.core.field.world.WorldSignalDimension
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -128,6 +129,39 @@ class HardwareAdaptiveResourceIntelligenceTest {
             input.vector[WorldSignalDimension.HEALTH_STABILITY]!!
                 .provenanceFingerprints.contains(hardware.fingerprint())
         )
+    }
+
+    @Test
+    fun executionCapacityFingerprintIgnoresClockAndBucketsInsignificantJitter() {
+        val first = HardwareStateSnapshot(
+            observedAt = Instant.parse("2026-09-11T12:00:00Z"),
+            availableProcessors = 8,
+            thermalState = HardwareThermalState.NOMINAL,
+            processCpuLoadFraction = 0.201,
+            availableMemoryBytes = 800,
+            totalMemoryBytes = 1_000,
+        )
+        val second = first.copy(
+            observedAt = Instant.parse("2026-09-11T12:00:05Z"),
+            processCpuLoadFraction = 0.209,
+        )
+
+        assertNotEquals(first.fingerprint(), second.fingerprint())
+        assertEquals(first.executionCapacityFingerprint(), second.executionCapacityFingerprint())
+    }
+
+    @Test
+    fun unknownCpuLoadIsConservativeInsteadOfFullyIdle() {
+        val unknownLoad = HardwareStateSnapshot(
+            observedAt = Instant.parse("2026-09-11T12:00:00Z"),
+            availableProcessors = 8,
+            thermalState = HardwareThermalState.NOMINAL,
+            availableMemoryBytes = 1_000,
+            totalMemoryBytes = 1_000,
+        )
+        val explicitIdle = unknownLoad.copy(processCpuLoadFraction = 0.0)
+
+        assertTrue(unknownLoad.computeHeadroom() < explicitIdle.computeHeadroom())
     }
 
     private fun ResourceBudgetQuota.asRequestedUsage(): ResourceBudgetUsage = ResourceBudgetUsage(
