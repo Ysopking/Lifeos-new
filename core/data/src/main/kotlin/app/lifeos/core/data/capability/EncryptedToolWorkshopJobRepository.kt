@@ -8,6 +8,7 @@ import app.lifeos.core.data.security.LedgerLongCodec
 import app.lifeos.core.data.security.SegmentPathBinding
 import app.lifeos.core.data.security.SegmentRevisionPolicy
 import app.lifeos.core.data.security.SegmentRevisionScope
+import app.lifeos.core.data.security.segmentKeySha256
 import app.lifeos.core.runtime.capability.ToolWorkshopJobEvent
 import app.lifeos.core.runtime.capability.ToolWorkshopJobEventLogCodec
 import app.lifeos.core.runtime.capability.ToolWorkshopJobRepository
@@ -41,7 +42,7 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
     private val pathBinding = SegmentPathBinding<String>(
         ledgerDomain = "tool-workshop-job-ledger/v2",
         segmentsDirectory = jobsDirectory,
-        keyFingerprint = SegmentPathBinding::sha256,
+        keyFingerprint = ::segmentKeySha256,
         segmentPrefix = EVENT_PREFIX,
         segmentSuffix = EVENT_SUFFIX,
     )

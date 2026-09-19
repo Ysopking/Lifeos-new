@@ -8,6 +8,7 @@ import app.lifeos.core.data.security.LedgerLongCodec
 import app.lifeos.core.data.security.SegmentPathBinding
 import app.lifeos.core.data.security.SegmentRevisionPolicy
 import app.lifeos.core.data.security.SegmentRevisionScope
+import app.lifeos.core.data.security.segmentKeySha256
 import app.lifeos.core.runtime.health.SelfHealingEvent
 import app.lifeos.core.runtime.health.SelfHealingEventLogCodec
 import app.lifeos.core.runtime.health.SelfHealingRepository
@@ -41,7 +42,7 @@ class EncryptedSelfHealingRepository(context: Context) : SelfHealingRepository {
     private val pathBinding = SegmentPathBinding<String>(
         ledgerDomain = "self-healing-ledger/v2",
         segmentsDirectory = incidentsDirectory,
-        keyFingerprint = SegmentPathBinding::sha256,
+        keyFingerprint = ::segmentKeySha256,
         segmentPrefix = EVENT_PREFIX,
         segmentSuffix = EVENT_SUFFIX,
     )

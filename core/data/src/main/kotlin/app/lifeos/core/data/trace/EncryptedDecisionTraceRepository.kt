@@ -6,6 +6,7 @@ import app.lifeos.core.data.security.EncryptedSegmentedLedger
 import app.lifeos.core.data.security.SegmentPathBinding
 import app.lifeos.core.data.security.SegmentRevisionPolicy
 import app.lifeos.core.data.security.SegmentRevisionScope
+import app.lifeos.core.data.security.segmentKeySha256
 import app.lifeos.core.runtime.trace.DecisionTrace
 import app.lifeos.core.runtime.trace.DecisionTraceLogCodec
 import app.lifeos.core.runtime.trace.DecisionTraceRepository
@@ -38,7 +39,7 @@ class EncryptedDecisionTraceRepository(context: Context) : DecisionTraceReposito
     private val pathBinding = SegmentPathBinding<String>(
         ledgerDomain = "decision-trace-ledger/v2",
         segmentsDirectory = tracesDirectory,
-        keyFingerprint = SegmentPathBinding::sha256,
+        keyFingerprint = ::segmentKeySha256,
         segmentPrefix = REVISION_PREFIX,
         segmentSuffix = REVISION_SUFFIX,
     )
