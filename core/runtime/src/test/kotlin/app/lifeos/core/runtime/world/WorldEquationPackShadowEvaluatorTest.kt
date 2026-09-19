@@ -539,6 +539,59 @@ class WorldEquationPackShadowEvaluatorTest {
         assertEquals(supported, duplicate)
     }
 
+    @Test
+    fun structuralCanaryEvidenceCodecRoundTripsNestedReplayAndRejectsTrailingBytes() = runTest {
+        val fixture = fixture()
+        val plan = canaryPlan(fixture)
+        val plans = InMemoryWorldEquationPackStructuralCanaryPlanRepository(listOf(plan))
+        val admission = WorldEquationPackStructuralCanaryAdmissionGate(plans).admit(plan)
+        val protocol = WorldEquationPackStructuralCanaryProtocol(
+            version = "structural-canary-codec-test-v1",
+            minimumIndependentCases = 2,
+            minimumShadowReferences = 1,
+            minimumHoldoutReferences = 1,
+        )
+        val repository = InMemoryWorldEquationPackStructuralCanaryEvidenceRepository()
+        val coordinator = WorldEquationPackStructuralCanaryEvidenceCoordinator(repository)
+        coordinator.begin(plan, protocol)
+
+        val case = shadowCase(
+            fixture,
+            "run-canary-codec",
+            "workload-canary-codec",
+            0.73,
+            WorldEquationPackEvidencePartition.SHADOW,
+        )
+        val record = coordinator.record(
+            plan,
+            WorldEquationPackStructuralCanaryReplay(
+                reference = WorldEquationPackShadowEvaluator().evaluate(
+                    fixture.baseline,
+                    fixture.candidate,
+                    case,
+                ),
+                canary = WorldEquationPackStructuralCanaryEvaluator().evaluate(
+                    baseline = fixture.baseline,
+                    candidate = fixture.candidate,
+                    plan = plan,
+                    admission = admission,
+                    case = case,
+                ),
+            ),
+        )
+
+        val encoded = WorldEquationPackStructuralCanaryEvidenceCodec.encode(record)
+        assertEquals(
+            record,
+            WorldEquationPackStructuralCanaryEvidenceCodec.decode(encoded),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            WorldEquationPackStructuralCanaryEvidenceCodec.decode(
+                encoded + byteArrayOf(1),
+            )
+        }
+    }
+
     private fun canaryPlan(
         fixture: Fixture,
     ): WorldEquationPackStructuralCanaryPlan {
