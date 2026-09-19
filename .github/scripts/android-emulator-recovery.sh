@@ -186,6 +186,12 @@ run_test \
   'app.lifeos.next.LiveSourceCursorRepositoryDeviceTest#cursorSurvivesRepositoryReconstructionAndRejectsStaleWriter' \
   "$report_dir/m02-live-source-cursor-recovery.txt"
 
+# M02 durable snapshot-diff baseline. Prove encrypted inventory fingerprints survive repository
+# reconstruction and reject stale writers before real Calendar/Files adapters consume this path.
+run_test \
+  'app.lifeos.next.LiveSourceSnapshotRepositoryDeviceTest#snapshotSurvivesRepositoryReconstructionAndRejectsStaleWriter' \
+  "$report_dir/m02-live-source-snapshot-recovery.txt"
+
 # M01 Live Data Hub. Prove explicit current account permission state gates canonical external
 # message ingestion through the real encrypted PhotonStore and rejects a subsequent revocation.
 run_test \
