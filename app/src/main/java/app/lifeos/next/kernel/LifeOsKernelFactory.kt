@@ -16,6 +16,7 @@ import app.lifeos.core.data.cognition.EncryptedCognitiveModuleSnapshotRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.evolution.EncryptedEvolutionStore
+import app.lifeos.core.data.evolution.EncryptedWorldEquationEvidenceRepository
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.learning.EncryptedLearningAdaptationRepository
@@ -129,6 +130,9 @@ import app.lifeos.core.runtime.evolution.NovelCapabilityAdmissionGate
 import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryCoordinator
 import app.lifeos.core.runtime.evolution.NovelCapabilityCanaryReadinessGate
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationEvolutionAdmissionGate
+import app.lifeos.core.runtime.evolution.WorldEquationPromotionEvaluator
+import app.lifeos.core.runtime.evolution.WorldEquationPromotionPolicy
 import app.lifeos.core.runtime.field.FieldThoughtGraphProjectionCoordinator
 import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.health.CircuitBreaker
@@ -424,11 +428,20 @@ class LifeOsKernelFactory(
         )
         val worldEquationHeads = EncryptedWorldEquationHeadRepository(appContext)
         val worldEquationSpecs = EncryptedWorldEquationSpecRepository(appContext)
+        val worldEquationEvidence = EncryptedWorldEquationEvidenceRepository(appContext)
+        val worldEquationPromotionEvaluator = WorldEquationPromotionEvaluator(
+            WorldEquationPromotionPolicy.V1
+        )
+        val worldEquationAdmissionGate = WorldEquationEvolutionAdmissionGate(
+            evidence = worldEquationEvidence,
+            evaluator = worldEquationPromotionEvaluator,
+        )
         val worldEquationAuthority = WorldEquationActivationAuthority(
             equations = worldEquationRegistry,
             heads = worldEquationHeads,
             baseline = cognitiveWorldEquationProfile.spec,
             specs = worldEquationSpecs,
+            admissionVerifier = worldEquationAdmissionGate,
         )
         val worldFormulaCoordinator = WorldFormulaCoordinator(
             equations = worldEquationRegistry,
