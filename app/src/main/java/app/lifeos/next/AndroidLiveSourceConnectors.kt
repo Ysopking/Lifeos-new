@@ -11,7 +11,7 @@ import app.lifeos.core.data.SourceDelta
 import app.lifeos.core.data.SourceDeltaKind
 import app.lifeos.core.data.SourceInventory
 import app.lifeos.core.data.SourceInventoryItem
-import app.lifeos.core.data.SourcePrivacyZone
+import app.lifeos.core.model.source.SourcePrivacyZone
 import app.lifeos.core.model.StableCognitiveIds
 import app.lifeos.core.runtime.life.InitialDataSourceAdapter
 import app.lifeos.core.runtime.life.InitialDataSourceStatus

@@ -8,7 +8,7 @@ import app.lifeos.core.data.LiveSourceSnapshotLoadResult
 import app.lifeos.core.data.LiveSourceSnapshotState
 import app.lifeos.core.data.LiveSourceSnapshotWriteResult
 import app.lifeos.core.data.SourceInventoryItem
-import app.lifeos.core.data.SourcePrivacyZone
+import app.lifeos.core.model.source.SourcePrivacyZone
 import java.time.Instant
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals

@@ -4,7 +4,7 @@ import app.lifeos.core.data.LiveSourceId
 import app.lifeos.core.data.LiveSourcePriority
 import app.lifeos.core.data.SourceDelta
 import app.lifeos.core.data.SourceDeltaKind
-import app.lifeos.core.data.SourcePrivacyZone
+import app.lifeos.core.model.source.SourcePrivacyZone
 import app.lifeos.core.runtime.life.InitialDataSourceAdapter
 import app.lifeos.core.runtime.life.InitialDataSourcePage
 import app.lifeos.core.runtime.life.InitialDataSourceStatus

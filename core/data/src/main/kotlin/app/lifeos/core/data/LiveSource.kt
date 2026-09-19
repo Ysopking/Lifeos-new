@@ -1,12 +1,13 @@
 package app.lifeos.core.data
 
+import app.lifeos.core.model.source.SourcePrivacyZone
+
 @JvmInline
 value class LiveSourceId(val value: String) { init { require(value.isNotBlank()) } }
 @JvmInline
 value class SourceCursor(val value: String) { init { require(value.isNotBlank()) } }
 
 enum class SourceDeltaKind { CREATED, UPDATED, DELETED, MOVED, OBSERVED }
-enum class SourcePrivacyZone { PRIVATE, SENSITIVE, SHAREABLE, EPHEMERAL }
 
 data class SourceInventoryItem(
     val externalKey: String,
