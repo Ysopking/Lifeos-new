@@ -2,8 +2,7 @@ package app.lifeos.next.ui.memory
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
-import app.lifeos.next.ui.perf.PhotonRevisionKey
-import app.lifeos.next.ui.perf.canonicalPhotonRevisionKey
+import app.lifeos.next.ui.perf.canonicalPhotonRevisionFingerprint
 import java.util.Locale
 
 /**
@@ -14,7 +13,7 @@ import java.util.Locale
  * normalization so search correctness is never traded for cache size.
  */
 class MemorySearchIndex private constructor(
-    private val revisionKey: List<PhotonRevisionKey>,
+    private val revisionFingerprint: String,
     private val latest: List<Photon>,
     private val latestById: Map<PhotonId, Photon>,
     private val normalizedTextById: Map<PhotonId, String>,
@@ -37,7 +36,7 @@ class MemorySearchIndex private constructor(
         matchesSource(photon.id, normalizedQuery)
 
     fun hasSameRevisionSet(photons: Iterable<Photon>): Boolean =
-        revisionKey == canonicalPhotonRevisionKey(photons)
+        revisionFingerprint == canonicalPhotonRevisionFingerprint(photons)
 
     companion object {
         const val DEFAULT_MAX_INDEXED_SOURCES = 4096
@@ -73,7 +72,7 @@ class MemorySearchIndex private constructor(
                 .take(maxIndexedSources)
                 .associate { photon -> photon.id to photon.normalizedSearchText() }
             return MemorySearchIndex(
-                revisionKey = canonicalPhotonRevisionKey(snapshot),
+                revisionFingerprint = canonicalPhotonRevisionFingerprint(snapshot),
                 latest = latest,
                 latestById = latestById,
                 normalizedTextById = indexed,

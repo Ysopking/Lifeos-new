@@ -91,6 +91,27 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
                 selectedSource = resolved,
             )
         }
+        if (resolved != null) return
+
+        viewModelScope.launch {
+            val exact = runCatching {
+                kernel.productivePhotonQueries.exact(setOf(photonId), limit = 1).singleOrNull()
+            }.getOrNull()
+            val loaded = exact?.let { photon ->
+                MemoryWorkspaceProjector.resolveSource(
+                    photonId = photonId,
+                    photons = listOf(photon),
+                    snapshot = latestSnapshot,
+                )
+            }
+            mutableState.update { current ->
+                if (current.selectedSourceId != photonId) {
+                    current
+                } else {
+                    current.copy(selectedSource = loaded)
+                }
+            }
+        }
     }
 
     fun dismissSourceDetails() {
@@ -101,6 +122,9 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
 
     suspend fun loadImagePreview(photonId: PhotonId): PhotonImagePreviewState {
         val photon = searchIndex.source(photonId)
+            ?: runCatching {
+                kernel.productivePhotonQueries.exact(setOf(photonId), limit = 1).singleOrNull()
+            }.getOrNull()
             ?: return PhotonImagePreviewState.Failed("Quell-Photon ist nicht verfügbar.")
         return imagePreviewLoader.load(photon)
     }
