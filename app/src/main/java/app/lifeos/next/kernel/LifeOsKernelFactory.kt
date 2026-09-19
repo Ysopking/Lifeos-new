@@ -30,6 +30,7 @@ import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
 import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
+import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistryHeadRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistrySnapshotRepository
@@ -421,10 +422,12 @@ class LifeOsKernelFactory(
             listOf(cognitiveWorldEquationProfile.spec)
         )
         val worldEquationHeads = EncryptedWorldEquationHeadRepository(appContext)
+        val worldEquationSpecs = EncryptedWorldEquationSpecRepository(appContext)
         val worldEquationAuthority = WorldEquationActivationAuthority(
             equations = worldEquationRegistry,
             heads = worldEquationHeads,
             baseline = cognitiveWorldEquationProfile.spec,
+            specs = worldEquationSpecs,
         )
         val worldFormulaCoordinator = WorldFormulaCoordinator(
             equations = worldEquationRegistry,
@@ -837,6 +840,21 @@ class LifeOsKernelFactory(
                                 storeId = storeId,
                                 state = if (report.corrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
                                 message = report.message,
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "world-equation-spec-store"
+                        override suspend fun probe(): StoreStatus {
+                            val report = bootReadSession.readOnce("world-equation-spec-store") {
+                                worldEquationSpecs.loadReport()
+                            }
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.corrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
+                                message = report.unreadableEntries
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.joinToString(","),
                             )
                         }
                     },

@@ -54,10 +54,12 @@ class WorldEquationActivationAuthorityTest {
         val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
         val registry = InMemoryWorldEquationRegistry(listOf(baseline, candidate))
         val heads = MemoryHeadRepository()
+        val specs = InMemoryWorldEquationSpecRepository()
         val first = WorldEquationActivationAuthority(
             equations = registry,
             heads = heads,
             baseline = baseline,
+            specs = specs,
         )
 
         assertEquals(baseline.version, first.activeVersion())
@@ -77,9 +79,10 @@ class WorldEquationActivationAuthorityTest {
         assertEquals(candidate.version, first.activeVersion())
 
         val rehydrated = WorldEquationActivationAuthority(
-            equations = registry,
+            equations = InMemoryWorldEquationRegistry(listOf(baseline)),
             heads = heads,
             baseline = baseline,
+            specs = specs,
         )
         val restored = rehydrated.rollbackToPredecessor(
             expectedCurrentVersion = candidate.version,
