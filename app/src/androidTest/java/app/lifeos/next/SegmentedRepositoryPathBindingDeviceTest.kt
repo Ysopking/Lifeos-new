@@ -11,6 +11,7 @@ import app.lifeos.core.data.capability.EncryptedToolWorkshopStageArtifactReposit
 import app.lifeos.core.data.escalation.EncryptedEscalationRepository
 import app.lifeos.core.data.health.EncryptedSelfHealingRepository
 import app.lifeos.core.data.trace.EncryptedDecisionTraceRepository
+import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.capability.CapabilityGapType
 import app.lifeos.core.runtime.capability.CapabilityId
@@ -39,6 +40,7 @@ import app.lifeos.core.runtime.health.SelfHealingEventType
 import app.lifeos.core.runtime.health.SelfHealingIncidentId
 import app.lifeos.core.runtime.trace.DecisionTrace
 import app.lifeos.core.runtime.trace.DecisionTraceId
+import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
@@ -53,6 +55,29 @@ import org.junit.runner.RunWith
 class SegmentedRepositoryPathBindingDeviceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val now = Instant.parse("2026-09-18T18:20:00Z")
+
+
+    @Test
+    fun worldEquationSpecVaultRejectsValidCiphertextAtWrongVersionPath() = runBlocking {
+        withIsolatedFiles("world-equation-spec") { context, root ->
+            val repository = EncryptedWorldEquationSpecRepository(context)
+            val spec = CognitiveWorldEquationProfile().spec
+            repository.putIfAbsent(spec)
+
+            val vault = root.resolve("world-equation-spec-vault")
+            val original = vault.listFiles().orEmpty().single { it.name.endsWith(".weqspec") }
+            val relocated = vault.resolve(
+                "0000000000000000000000000000000000000000000000000000000000000000.weqspec"
+            )
+            original.copyTo(relocated)
+            assertTrue(original.delete())
+
+            val report = repository.loadReport()
+            assertTrue(report.specs.isEmpty())
+            assertEquals(listOf(relocated.name), report.unreadableEntries)
+            assertTrue(runCatching { repository.load(spec.version) }.getOrNull() == null)
+        }
+    }
 
     @Test
     fun generatedToolArtifactLoadAllRejectsValidCiphertextAtWrongPath() = runBlocking {
