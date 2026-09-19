@@ -39,6 +39,28 @@ class SelfStateFingerprintTest {
     }
 
     @Test
+    fun photonHeadRevisionChurnDoesNotRewriteDurableAuthorityIdentity() {
+        val first = snapshot().copy(
+            photon = SelfPhotonState(
+                latestRevisionCount = 1,
+                livePhotonCount = 1,
+                tombstonedPhotonCount = 0,
+                indexFingerprint = "stable-index-identity",
+                headFingerprint = "head-revision-1",
+            )
+        )
+        val second = first.copy(
+            photon = first.photon.copy(
+                latestRevisionCount = 2,
+                headFingerprint = "head-revision-2",
+            )
+        )
+
+        assertEquals(first.authorityFingerprint, second.authorityFingerprint)
+        assertNotEquals(first.stateFingerprint, second.stateFingerprint)
+    }
+
+    @Test
     fun rebuildableMemoryTopologyAndToolChangesDoNotRewriteDurableAuthorityIdentity() {
         val first = snapshot()
         val second = first.copy(

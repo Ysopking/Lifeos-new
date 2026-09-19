@@ -104,7 +104,8 @@ class SelfStateProjector {
             },
             livePhotonCount = photonReport?.livePhotonCount?.toLong(),
             tombstonedPhotonCount = photonReport?.tombstonedPhotonCount?.toLong(),
-            indexFingerprint = photonReport?.takeUnless { photonCorrupt }?.let(::photonIndexFingerprint),
+            indexFingerprint = photonReport?.takeUnless { photonCorrupt }?.let(::photonIndexIdentityFingerprint),
+            headFingerprint = photonReport?.takeUnless { photonCorrupt }?.let(::photonIndexHeadFingerprint),
         )
 
         val memorySnapshot = value(SelfObservationDomain.MEMORY, inputs.memory, issues)
@@ -237,19 +238,42 @@ class SelfStateProjector {
         }
     }
 
-    private fun photonIndexFingerprint(report: PhotonIndexReport): String = StableFieldIds.fingerprint(
-        "lifeos-self-photon-index/v1",
-        report.formatVersion.toString(),
-        report.entryCount.toString(),
-        report.livePhotonCount.toString(),
-        report.tombstonedPhotonCount.toString(),
-        *report.latestRefs.entries
-            .sortedBy { it.key.value }
-            .map { entry ->
-                "head:" + entry.key.value + ":" + entry.value.revision.toString()
-            }
-            .toTypedArray(),
-    )
+    /**
+     * Restart-stable identity of the canonical Photon population.
+     *
+     * Revision numbers and total historical entry count are deliberately excluded: productive
+     * startup readers can legitimately re-observe the same canonical Photon identities and advance
+     * their revisions after process death. Exact head-state drift is captured separately by
+     * [photonIndexHeadFingerprint].
+     */
+    private fun photonIndexIdentityFingerprint(report: PhotonIndexReport): String =
+        StableFieldIds.fingerprint(
+            "lifeos-self-photon-index-identity/v1",
+            report.formatVersion.toString(),
+            report.livePhotonCount.toString(),
+            report.tombstonedPhotonCount.toString(),
+            *report.latestRefs.keys
+                .map { it.value }
+                .sorted()
+                .map { "id:" + it }
+                .toTypedArray(),
+        )
+
+    /** Exact current Photon index head, including historical entry count and live revisions. */
+    private fun photonIndexHeadFingerprint(report: PhotonIndexReport): String =
+        StableFieldIds.fingerprint(
+            "lifeos-self-photon-index-head/v1",
+            report.formatVersion.toString(),
+            report.entryCount.toString(),
+            report.livePhotonCount.toString(),
+            report.tombstonedPhotonCount.toString(),
+            *report.latestRefs.entries
+                .sortedBy { it.key.value }
+                .map { entry ->
+                    "head:" + entry.key.value + ":" + entry.value.revision.toString()
+                }
+                .toTypedArray(),
+        )
 
     private fun cognitiveSnapshotFingerprint(
         snapshot: app.lifeos.core.runtime.CognitiveSnapshot,

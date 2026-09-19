@@ -20,12 +20,14 @@ data class SelfPhotonState(
     val livePhotonCount: Long?,
     val tombstonedPhotonCount: Long?,
     val indexFingerprint: String?,
+    val headFingerprint: String? = null,
 ) {
     init {
         validateCount(latestRevisionCount, "latestRevisionCount")
         validateCount(livePhotonCount, "livePhotonCount")
         validateCount(tombstonedPhotonCount, "tombstonedPhotonCount")
         validateOptionalFingerprint(indexFingerprint, "indexFingerprint")
+        validateOptionalFingerprint(headFingerprint, "headFingerprint")
     }
 }
 

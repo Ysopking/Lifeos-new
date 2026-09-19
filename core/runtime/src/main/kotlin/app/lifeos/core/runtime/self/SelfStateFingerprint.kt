@@ -39,6 +39,8 @@ object SelfStateFingerprint {
             add("photon.latest=" + encode(snapshot.photon.latestRevisionCount))
             add("photon.live=" + encode(snapshot.photon.livePhotonCount))
             add("photon.tombstoned=" + encode(snapshot.photon.tombstonedPhotonCount))
+            add("photon.index-identity=" + encode(snapshot.photon.indexFingerprint))
+            add("photon.index-head=" + encode(snapshot.photon.headFingerprint))
 
             add("world.cognition.snapshot=" + encode(snapshot.world.cognitiveSnapshotFingerprint))
 
