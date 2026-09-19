@@ -65,6 +65,7 @@ import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
+import app.lifeos.core.runtime.self.SelfObservationCapture
 import app.lifeos.core.runtime.self.SelfObservationCoordinator
 import app.lifeos.core.runtime.self.SelfObservationTrigger
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
@@ -462,9 +463,11 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             liveSourceSnapshot = { latestLiveSourceSync },
             liveSourceFailure = { liveSourceSyncFailure },
         )
-        selfObservationCoordinator = SelfObservationCoordinator {
-            selfObservationRuntime.capture()
-        }
+        selfObservationCoordinator = SelfObservationCoordinator(
+            capture = SelfObservationCapture {
+                selfObservationRuntime.capture()
+            }
+        )
         startSelfObservation(selfObservationHealthGraph)
         startContinuousLiveSourceRefresh()
 
