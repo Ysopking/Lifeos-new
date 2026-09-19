@@ -2,6 +2,7 @@ package app.lifeos.next
 
 import android.content.Context
 import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
+import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
 import app.lifeos.next.kernel.PrivateOwnerEffectAuthority
 import java.io.File
 import java.nio.file.Files
@@ -44,6 +45,12 @@ internal data class StorageMaintenanceBatchResult(
     val skipped: Int get() = actions.count { it.status == StorageMaintenanceStatus.SKIPPED }
 }
 
+internal data class StorageOrganizationBatchResult(
+    val maintenance: StorageMaintenanceBatchResult,
+    val scannedInventoryEntries: Int,
+    val complete: Boolean,
+)
+
 /**
  * Owner-gated execution layer for storage-intelligence proposals.
  *
@@ -54,10 +61,15 @@ internal data class StorageMaintenanceBatchResult(
  */
 internal class AndroidStorageMaintenanceRuntime(
     private val context: Context,
+    private val hardware: HardwareResourceIntelligenceRuntime,
+    private val inventory: AndroidStorageInventoryStore = AndroidStorageInventoryStore(context),
     private val store: AndroidStorageMaintenanceStore = AndroidStorageMaintenanceStore(context),
     private val roots: () -> List<SharedStorageRoot> = { SharedStorageRoots.discover(context) },
     private val now: () -> Instant = Instant::now,
 ) {
+    private val preferences =
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
     suspend fun applyCandidates(
         candidates: List<StorageCleanupCandidate>,
         includeReorganization: Boolean,
@@ -89,6 +101,49 @@ internal class AndroidStorageMaintenanceRuntime(
                 actions += action
             }
         return StorageMaintenanceBatchResult(actions)
+    }
+
+    suspend fun organizeNextBatch(): StorageOrganizationBatchResult {
+        reconcilePrepared()
+        val after = preferences.getString(KEY_ORGANIZATION_CURSOR, null)
+        val hardwareSnapshot = hardware.currentHardwareSnapshot()
+        val pageSize = when {
+            hardwareSnapshot.thermalState.name in CRITICAL_THERMAL -> 64
+            hardwareSnapshot.batteryFraction != null &&
+                hardwareSnapshot.batteryFraction < 0.20 &&
+                hardwareSnapshot.charging != true -> 128
+            hardwareSnapshot.charging == true &&
+                hardwareSnapshot.availableProcessors >= 6 -> 1_024
+            hardwareSnapshot.availableProcessors >= 4 -> 512
+            else -> 256
+        }
+        val page = inventory.loadPage(afterPosition = after, limit = pageSize)
+        val candidates = page.entries.mapNotNull { entry ->
+            val target = StorageCleanupPlanner.suggestedDirectory(entry) ?: return@mapNotNull null
+            val normalized = entry.relativePath.replace('\\', '/')
+            if (normalized.startsWith(target.trimEnd('/') + "/")) return@mapNotNull null
+            StorageCleanupCandidate(
+                volumeId = entry.volumeId,
+                relativePath = entry.relativePath,
+                kind = StorageCleanupKind.REORGANIZE,
+                reclaimableBytes = 0L,
+                reason = "full-inventory category organization candidate",
+                safeToTrashAfterOwnerApproval = false,
+                suggestedDirectory = target,
+                expectedModifiedAtMillis = entry.modifiedAtMillis,
+            )
+        }
+        val actions = candidates.map { candidate -> reorganize(candidate) }
+        if (page.complete) {
+            preferences.edit().remove(KEY_ORGANIZATION_CURSOR).apply()
+        } else {
+            preferences.edit().putString(KEY_ORGANIZATION_CURSOR, page.nextPosition).apply()
+        }
+        return StorageOrganizationBatchResult(
+            maintenance = StorageMaintenanceBatchResult(actions),
+            scannedInventoryEntries = page.entries.size,
+            complete = page.complete,
+        )
     }
 
     suspend fun restore(recordId: String): StorageMaintenanceActionResult {
@@ -468,6 +523,9 @@ internal class AndroidStorageMaintenanceRuntime(
     }
 
     private companion object {
+        const val PREFS = "lifeos-storage-maintenance"
+        const val KEY_ORGANIZATION_CURSOR = "organization-cursor"
+        val CRITICAL_THERMAL = setOf("CRITICAL", "EMERGENCY", "SHUTDOWN")
         val DEFAULT_TRASH_RETENTION: Duration = Duration.ofDays(30)
         val REVERSIBLE_TRASH_KINDS = setOf(
             StorageCleanupKind.EXACT_DUPLICATE,
