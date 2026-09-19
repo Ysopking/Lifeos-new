@@ -63,7 +63,14 @@ class WorldEquationEvidenceCoordinatorTest {
         val promotable = coordinator.recordObservation(
             candidate,
             baseline,
-            observation(baseline, candidate, coefficient.id, "run-3", "b"),
+            observation(
+                baseline,
+                candidate,
+                coefficient.id,
+                "run-3",
+                "b",
+                WorldEquationEvidencePartition.HOLDOUT,
+            ),
         )
 
         assertEquals(WorldEquationLifecycleState.PROMOTABLE, promotable.state)
@@ -75,10 +82,12 @@ class WorldEquationEvidenceCoordinatorTest {
         coefficientId: WorldCoefficientId,
         runId: String,
         workloadId: String,
+        partition: WorldEquationEvidencePartition = WorldEquationEvidencePartition.SHADOW,
     ) = WorldEquationShadowObservation(
         caseFingerprint = "case:" + runId,
         runId = runId,
         workloadId = workloadId,
+        partition = partition,
         baselineEquationFingerprint = baseline.fingerprint(),
         candidateEquationFingerprint = candidate.fingerprint(),
         baseline = WorldEquationRunMetrics(

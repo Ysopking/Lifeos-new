@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.world
 import app.lifeos.core.field.world.WorldEquationSpec
 import app.lifeos.core.runtime.evolution.InMemoryWorldEquationEvidenceRepository
 import app.lifeos.core.runtime.evolution.WorldEquationEvidenceCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationEvidencePartition
 import app.lifeos.core.runtime.evolution.WorldEquationEvaluationProtocol
 import app.lifeos.core.runtime.evolution.WorldEquationEvolutionAdmissionGate
 import app.lifeos.core.runtime.evolution.WorldEquationPrimaryMetric
@@ -221,7 +222,13 @@ class WorldEquationActivationAuthorityTest {
         coordinator.recordObservation(
             candidate,
             baseline,
-            observation(baseline, candidate, activeId, "run-2"),
+            observation(
+                baseline,
+                candidate,
+                activeId,
+                "run-2",
+                WorldEquationEvidencePartition.HOLDOUT,
+            ),
         )
         val gate = WorldEquationEvolutionAdmissionGate(repository, evaluator)
         return AdmissionFixture(
@@ -235,10 +242,12 @@ class WorldEquationActivationAuthorityTest {
         candidate: WorldEquationSpec,
         activeId: app.lifeos.core.field.world.WorldCoefficientId,
         runId: String,
+        partition: WorldEquationEvidencePartition = WorldEquationEvidencePartition.SHADOW,
     ) = WorldEquationShadowObservation(
         caseFingerprint = "case:" + runId,
         runId = runId,
         workloadId = "activation-test-workload",
+        partition = partition,
         baselineEquationFingerprint = baseline.fingerprint(),
         candidateEquationFingerprint = candidate.fingerprint(),
         baseline = WorldEquationRunMetrics(

@@ -57,6 +57,7 @@ class WorldEquationAutoEvolutionCoordinatorTest {
                 caseFingerprint = case.fingerprint(),
                 runId = case.runId,
                 workloadId = case.workloadId,
+                partition = case.partition,
                 baselineEquationFingerprint = base.fingerprint(),
                 candidateEquationFingerprint = cand.fingerprint(),
                 baseline = metrics(5, activeCoefficient),
@@ -85,7 +86,10 @@ class WorldEquationAutoEvolutionCoordinatorTest {
             coordinator.observe(candidate, shadowCase("run-1"))
         )
         val promoted = assertIs<WorldEquationAutoEvolutionResult.Promoted>(
-            coordinator.observe(candidate, shadowCase("run-2"))
+            coordinator.observe(
+                candidate,
+                shadowCase("run-2", WorldEquationEvidencePartition.HOLDOUT),
+            )
         )
 
         assertEquals(candidate.version, promoted.head.activeEquationVersion)
@@ -94,9 +98,13 @@ class WorldEquationAutoEvolutionCoordinatorTest {
         assertEquals(candidate.version, authority.activeVersion())
     }
 
-    private fun shadowCase(runId: String) = WorldEquationShadowCase(
+    private fun shadowCase(
+        runId: String,
+        partition: WorldEquationEvidencePartition = WorldEquationEvidencePartition.SHADOW,
+    ) = WorldEquationShadowCase(
         runId = runId,
         workloadId = "auto-test-workload",
+        partition = partition,
         request = WorldFormulaRequest(
             inputs = listOf(
                 WorldFormulaInputSnapshot(

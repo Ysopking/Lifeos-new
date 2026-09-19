@@ -35,7 +35,7 @@ class WorldEquationPromotionEvaluatorTest {
             observations = listOf(
                 observation("run-1", "workload-a", 5, 3),
                 observation("run-2", "workload-a", 6, 4),
-                observation("run-3", "workload-b", 5, 4),
+                observation("run-3", "workload-b", 5, 4, WorldEquationEvidencePartition.HOLDOUT),
             )
         )
 
@@ -50,7 +50,7 @@ class WorldEquationPromotionEvaluatorTest {
         val evidence = evidence(
             observations = listOf(
                 observation("run-1", "workload-a", 5, 3),
-                observation("run-2", "workload-b", 5, 3),
+                observation("run-2", "workload-b", 5, 3, WorldEquationEvidencePartition.HOLDOUT),
             )
         )
 
@@ -66,7 +66,7 @@ class WorldEquationPromotionEvaluatorTest {
             observations = listOf(
                 observation("run-1", "workload-a", 3, 5),
                 observation("run-2", "workload-a", 3, 5),
-                observation("run-3", "workload-b", 3, 5),
+                observation("run-3", "workload-b", 3, 5, WorldEquationEvidencePartition.HOLDOUT),
             )
         )
 
@@ -82,7 +82,7 @@ class WorldEquationPromotionEvaluatorTest {
             observations = listOf(
                 observation("run-1", "workload-a", 5, 3),
                 observation("run-2", "workload-a", 6, 4),
-                observation("run-3", "workload-b", 5, 4),
+                observation("run-3", "workload-b", 5, 4, WorldEquationEvidencePartition.HOLDOUT),
             ),
             policyFingerprint = "wrong-policy",
         )
@@ -107,6 +107,7 @@ class WorldEquationPromotionEvaluatorTest {
         workloadId: String,
         baselineIterations: Int,
         candidateIterations: Int,
+        partition: WorldEquationEvidencePartition = WorldEquationEvidencePartition.SHADOW,
     ): WorldEquationShadowObservation {
         val changed = candidate.changedCoefficientIdsComparedWith(baseline)
         return WorldEquationShadowObservation(
@@ -115,6 +116,7 @@ class WorldEquationPromotionEvaluatorTest {
             workloadId = workloadId,
             baselineEquationFingerprint = baseline.fingerprint(),
             candidateEquationFingerprint = candidate.fingerprint(),
+            partition = partition,
             baseline = metrics(baselineIterations, changed),
             candidate = metrics(candidateIterations, changed),
         )
