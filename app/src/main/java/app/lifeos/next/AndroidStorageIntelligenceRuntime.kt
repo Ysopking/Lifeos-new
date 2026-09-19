@@ -634,17 +634,27 @@ internal object StorageCleanupPlanner {
             )
     }
 
-    internal fun suggestedDirectory(file: StorageIndexedFile): String? = when (file.category) {
-        AndroidFileCategory.IMAGE -> "Pictures/LIFEOS"
-        AndroidFileCategory.VIDEO -> "Movies/LIFEOS"
-        AndroidFileCategory.AUDIO -> "Music/LIFEOS"
-        AndroidFileCategory.DOCUMENT -> "Documents/LIFEOS"
-        AndroidFileCategory.ARCHIVE -> "Documents/LIFEOS/Archives"
-        AndroidFileCategory.BACKUP -> "Documents/LIFEOS/Backups"
-        AndroidFileCategory.DATABASE,
-        AndroidFileCategory.WHATSAPP,
-        AndroidFileCategory.UNKNOWN,
-        -> null
+    internal fun suggestedDirectory(file: StorageIndexedFile): String? {
+        if (!isOrganizationEligible(file.relativePath)) return null
+        return when (file.category) {
+            AndroidFileCategory.IMAGE -> "Pictures/LIFEOS"
+            AndroidFileCategory.VIDEO -> "Movies/LIFEOS"
+            AndroidFileCategory.AUDIO -> "Music/LIFEOS"
+            AndroidFileCategory.DOCUMENT -> "Documents/LIFEOS"
+            AndroidFileCategory.ARCHIVE -> "Documents/LIFEOS/Archives"
+            AndroidFileCategory.BACKUP -> "Documents/LIFEOS/Backups"
+            AndroidFileCategory.DATABASE,
+            AndroidFileCategory.WHATSAPP,
+            AndroidFileCategory.UNKNOWN,
+            -> null
+        }
+    }
+
+    private fun isOrganizationEligible(relativePath: String): Boolean {
+        val normalized = relativePath.replace('\\', '/').trimStart('/')
+        if ('/' !in normalized) return true
+        val top = normalized.substringBefore('/').lowercase()
+        return top in ORGANIZATION_INBOX_ROOTS
     }
 
     private fun alreadyIn(path: String, directory: String): Boolean {
@@ -693,6 +703,14 @@ internal object StorageCleanupPlanner {
     )
     private const val TEMP_MIN_AGE_MILLIS = 7L * 24L * 60L * 60L * 1000L
     private const val INSTALLER_MIN_AGE_MILLIS = 30L * 24L * 60L * 60L * 1000L
+    private val ORGANIZATION_INBOX_ROOTS = setOf(
+        "download",
+        "downloads",
+        "bluetooth",
+        "received",
+        "share",
+        "shared",
+    )
 }
 
 internal data class SharedStorageRoot(
