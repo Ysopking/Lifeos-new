@@ -330,6 +330,144 @@ class WorldEquationPackShadowEvaluatorTest {
         }
     }
 
+    @Test
+    fun structuralCanaryReplayEvidenceSupportsOnlyDeterministicSandboxReplays() = runTest {
+        val fixture = fixture()
+        val plan = canaryPlan(fixture)
+        val plans = InMemoryWorldEquationPackStructuralCanaryPlanRepository(listOf(plan))
+        val admission = WorldEquationPackStructuralCanaryAdmissionGate(plans).admit(plan)
+        val shadowEvaluator = WorldEquationPackShadowEvaluator()
+        val canaryEvaluator = WorldEquationPackStructuralCanaryEvaluator()
+
+        suspend fun replay(
+            runId: String,
+            workloadId: String,
+            value: Double,
+            partition: WorldEquationPackEvidencePartition,
+        ): WorldEquationPackStructuralCanaryReplay {
+            val case = shadowCase(fixture, runId, workloadId, value, partition)
+            val reference = shadowEvaluator.evaluate(
+                fixture.baseline,
+                fixture.candidate,
+                case,
+            )
+            val canary = canaryEvaluator.evaluate(
+                baseline = fixture.baseline,
+                candidate = fixture.candidate,
+                plan = plan,
+                admission = admission,
+                case = case,
+            )
+            return WorldEquationPackStructuralCanaryReplay(reference, canary)
+        }
+
+        val evidence = WorldEquationPackStructuralCanaryEvidenceSet(
+            planFingerprint = plan.fingerprint,
+            candidatePackFingerprint = fixture.candidate.candidate.fingerprint(),
+            protocol = WorldEquationPackStructuralCanaryProtocol(
+                version = "structural-canary-replay-test-v1",
+                minimumIndependentCases = 2,
+                minimumShadowReferences = 1,
+                minimumHoldoutReferences = 1,
+            ),
+            replays = listOf(
+                replay(
+                    "run-canary-evidence-shadow",
+                    "workload-canary-a",
+                    0.63,
+                    WorldEquationPackEvidencePartition.SHADOW,
+                ),
+                replay(
+                    "run-canary-evidence-holdout",
+                    "workload-canary-b",
+                    0.81,
+                    WorldEquationPackEvidencePartition.HOLDOUT,
+                ),
+            ),
+        )
+
+        val assessment = WorldEquationPackStructuralCanaryEvidenceEvaluator()
+            .evaluate(evidence)
+
+        assertEquals(
+            WorldEquationPackStructuralCanaryDecision.CANARY_SUPPORTED,
+            assessment.decision,
+        )
+        assertTrue(
+            assessment.gates.all {
+                it.status == WorldEquationPackStructuralCanaryGateStatus.PASS
+            }
+        )
+        assertFalse(assessment.productiveActivationAllowed)
+        assertFalse(assessment.productiveWorldMutationAllowed)
+        assertFalse(assessment.promotionAdmissionAllowed)
+    }
+
+    @Test
+    fun structuralCanaryReplayMismatchIsRejected() = runTest {
+        val fixture = fixture()
+        val plan = canaryPlan(fixture)
+        val plans = InMemoryWorldEquationPackStructuralCanaryPlanRepository(listOf(plan))
+        val admission = WorldEquationPackStructuralCanaryAdmissionGate(plans).admit(plan)
+        val case = shadowCase(
+            fixture,
+            "run-canary-mismatch",
+            "workload-canary-mismatch",
+            0.67,
+            WorldEquationPackEvidencePartition.SHADOW,
+        )
+        val reference = WorldEquationPackShadowEvaluator().evaluate(
+            fixture.baseline,
+            fixture.candidate,
+            case,
+        )
+        val original = WorldEquationPackStructuralCanaryEvaluator().evaluate(
+            baseline = fixture.baseline,
+            candidate = fixture.candidate,
+            plan = plan,
+            admission = admission,
+            case = case,
+        )
+        val changedMetrics = original.metrics.copy(
+            terminalDelta = if (original.metrics.terminalDelta == 0.5) 0.4 else 0.5,
+        )
+        val changed = WorldEquationPackStructuralCanaryObservation.create(
+            case = case,
+            plan = plan,
+            admission = admission,
+            candidate = fixture.candidate.candidate,
+            metrics = changedMetrics,
+        )
+        val evidence = WorldEquationPackStructuralCanaryEvidenceSet(
+            planFingerprint = plan.fingerprint,
+            candidatePackFingerprint = fixture.candidate.candidate.fingerprint(),
+            protocol = WorldEquationPackStructuralCanaryProtocol(
+                version = "structural-canary-mismatch-test-v1",
+                minimumIndependentCases = 2,
+                minimumShadowReferences = 1,
+                minimumHoldoutReferences = 1,
+            ),
+            replays = listOf(
+                WorldEquationPackStructuralCanaryReplay(reference, changed)
+            ),
+        )
+
+        val assessment = WorldEquationPackStructuralCanaryEvidenceEvaluator()
+            .evaluate(evidence)
+
+        assertEquals(
+            WorldEquationPackStructuralCanaryDecision.REJECTED,
+            assessment.decision,
+        )
+        assertEquals(
+            WorldEquationPackStructuralCanaryGateStatus.FAIL,
+            assessment.gates.single {
+                it.gate == WorldEquationPackStructuralCanaryGate.DETERMINISTIC_REPLAY
+            }.status,
+        )
+        assertFalse(assessment.productiveActivationAllowed)
+    }
+
     private fun canaryPlan(
         fixture: Fixture,
     ): WorldEquationPackStructuralCanaryPlan {
