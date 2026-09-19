@@ -128,6 +128,12 @@ run_test \
   'app.lifeos.next.Level7TruthClosureGoldDeviceTest#seedExactAuthorityChainBeforeProcessDeath' \
   "$report_dir/level7-truth-closure-seed.txt"
 
+# WF evidence-bound auto-evolution. Exercise encrypted evidence persistence, recovery of a head that
+# committed before its evidence record was sealed ACTIVE, and independent persistent safety rollback.
+run_test \
+  'app.lifeos.next.WorldEquationAutoEvolutionRecoveryDeviceTest#promotedHeadRecoversEvidenceThenPersistentSafetyRegressionRollsBack' \
+  "$report_dir/world-equation-auto-evolution-recovery.txt"
+
 # M08 self-observation seed. Seal durable authority identity separately from live telemetry.
 run_test \
   'app.lifeos.next.SelfObservationGoldDeviceTest#seedAuthoritativeSelfStateBeforeProcessDeath' \

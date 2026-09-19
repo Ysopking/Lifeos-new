@@ -1,7 +1,9 @@
 package app.lifeos.core.runtime.world
 
 import app.lifeos.core.field.world.WorldEquationSpec
+import app.lifeos.core.runtime.evolution.RejectingWorldEquationPromotionAdmissionVerifier
 import app.lifeos.core.runtime.evolution.WorldEquationPromotionAdmission
+import app.lifeos.core.runtime.evolution.WorldEquationPromotionAdmissionVerifier
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -17,6 +19,8 @@ class WorldEquationActivationAuthority(
     private val heads: WorldEquationHeadRepository,
     private val baseline: WorldEquationSpec,
     private val specs: WorldEquationSpecRepository = InMemoryWorldEquationSpecRepository(),
+    private val admissionVerifier: WorldEquationPromotionAdmissionVerifier =
+        RejectingWorldEquationPromotionAdmissionVerifier,
 ) {
     private val mutex = Mutex()
 
@@ -24,6 +28,18 @@ class WorldEquationActivationAuthority(
 
     suspend fun activeHead(): WorldEquationHead = mutex.withLock {
         activeHeadLocked()
+    }
+
+    suspend fun activeSpec(): WorldEquationSpec = mutex.withLock {
+        val head = activeHeadLocked()
+        requireNotNull(resolveRegistered(head.activeEquationVersion)) {
+            "Active world equation version cannot be recovered: " + head.activeEquationVersion
+        }
+    }
+
+    suspend fun resolveSpec(version: String): WorldEquationSpec? = mutex.withLock {
+        require(version.isNotBlank())
+        resolveRegistered(version)
     }
 
     suspend fun registerCandidate(spec: WorldEquationSpec) = mutex.withLock {
@@ -64,6 +80,11 @@ class WorldEquationActivationAuthority(
             val currentSpec = requireNotNull(resolveRegistered(current.activeEquationVersion)) {
                 "Current active world equation cannot be recovered"
             }
+            admissionVerifier.verify(
+                candidate = candidate,
+                baseline = currentSpec,
+                admission = admission,
+            )
             require(currentSpec.fingerprint() == admission.baselineEquationFingerprint) {
                 "World equation promotion baseline no longer matches active artifact"
             }

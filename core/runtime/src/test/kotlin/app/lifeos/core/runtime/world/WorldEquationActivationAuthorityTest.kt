@@ -1,7 +1,17 @@
 package app.lifeos.core.runtime.world
 
+import app.lifeos.core.field.world.WorldEquationSpec
+import app.lifeos.core.runtime.evolution.InMemoryWorldEquationEvidenceRepository
+import app.lifeos.core.runtime.evolution.WorldEquationEvidenceCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationEvidencePartition
+import app.lifeos.core.runtime.evolution.WorldEquationEvaluationProtocol
 import app.lifeos.core.runtime.evolution.WorldEquationEvolutionAdmissionGate
-import app.lifeos.core.runtime.evolution.WorldEquationEvolutionValidation
+import app.lifeos.core.runtime.evolution.WorldEquationPrimaryMetric
+import app.lifeos.core.runtime.evolution.WorldEquationPromotionAdmission
+import app.lifeos.core.runtime.evolution.WorldEquationPromotionEvaluator
+import app.lifeos.core.runtime.evolution.WorldEquationPromotionPolicy
+import app.lifeos.core.runtime.evolution.WorldEquationRunMetrics
+import app.lifeos.core.runtime.evolution.WorldEquationShadowObservation
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -10,14 +20,17 @@ import kotlin.test.assertNull
 
 class WorldEquationActivationAuthorityTest {
     @Test
-    fun baselineIsSeededThenPromotedPhysicsBecomesActiveByCas() = runBlocking {
+    fun baselineIsSeededThenEvidenceBoundPhysicsBecomesActiveByCas() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
+        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
+        val fixture = admissionFixture(baseline, candidate)
         val registry = InMemoryWorldEquationRegistry(listOf(baseline))
         val heads = MemoryHeadRepository()
         val authority = WorldEquationActivationAuthority(
             equations = registry,
             heads = heads,
             baseline = baseline,
+            admissionVerifier = fixture.gate,
         )
 
         assertEquals(baseline.version, authority.activeVersion())
@@ -25,27 +38,19 @@ class WorldEquationActivationAuthorityTest {
         assertEquals(1L, seeded.revision)
         assertNull(seeded.predecessorEquationVersion)
 
-        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
-        val admission = WorldEquationEvolutionAdmissionGate.admit(
-            candidate = candidate,
-            baseline = baseline,
-            validation = WorldEquationEvolutionValidation(
-                holdoutEvidenceId = "holdout:test-v2",
-                shadowEvidenceId = "shadow:test-v2",
-                trialEvidenceId = "trial:test-v2",
-                promotionDecisionId = "promotion:test-v2",
-            ),
-        )
         val promoted = authority.promote(
             candidate = candidate,
-            admission = admission,
+            admission = fixture.admission,
             expectedHeadFingerprint = seeded.fingerprint,
         )
 
         assertEquals(2L, promoted.revision)
         assertEquals(candidate.version, promoted.activeEquationVersion)
         assertEquals(baseline.version, promoted.predecessorEquationVersion)
-        assertEquals("promotion:test-v2", promoted.sourcePromotionId)
+        assertEquals(
+            fixture.admission.validation.promotionDecisionId,
+            promoted.sourcePromotionId,
+        )
         assertEquals(candidate.version, authority.activeVersion())
     }
 
@@ -53,6 +58,7 @@ class WorldEquationActivationAuthorityTest {
     fun rollbackRestoresExactRegisteredPredecessorAfterRehydration() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
         val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
+        val fixture = admissionFixture(baseline, candidate)
         val registry = InMemoryWorldEquationRegistry(listOf(baseline, candidate))
         val heads = MemoryHeadRepository()
         val specs = InMemoryWorldEquationSpecRepository()
@@ -61,22 +67,14 @@ class WorldEquationActivationAuthorityTest {
             heads = heads,
             baseline = baseline,
             specs = specs,
+            admissionVerifier = fixture.gate,
         )
 
         assertEquals(baseline.version, first.activeVersion())
         val baselineHead = first.activeHead()
         first.promote(
             candidate = candidate,
-            admission = WorldEquationEvolutionAdmissionGate.admit(
-                candidate = candidate,
-                baseline = baseline,
-                validation = WorldEquationEvolutionValidation(
-                    holdoutEvidenceId = "holdout:test-v2",
-                    shadowEvidenceId = "shadow:test-v2",
-                    trialEvidenceId = "trial:test-v2",
-                    promotionDecisionId = "promotion:test-v2",
-                ),
-            ),
+            admission = fixture.admission,
             expectedHeadFingerprint = baselineHead.fingerprint,
         )
         assertEquals(candidate.version, first.activeVersion())
@@ -104,37 +102,28 @@ class WorldEquationActivationAuthorityTest {
         val baseline = CognitiveWorldEquationProfile().spec
         val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
         val other = changedCandidate(baseline, "lifeos-world-cognitive-v3", delta = 0.08)
+        val fixture = admissionFixture(baseline, candidate)
         val authority = WorldEquationActivationAuthority(
             equations = InMemoryWorldEquationRegistry(listOf(baseline)),
             heads = MemoryHeadRepository(),
             baseline = baseline,
-        )
-        val admission = WorldEquationEvolutionAdmissionGate.admit(
-            candidate = candidate,
-            baseline = baseline,
-            validation = WorldEquationEvolutionValidation(
-                holdoutEvidenceId = "holdout:test-v2",
-                shadowEvidenceId = "shadow:test-v2",
-                trialEvidenceId = "trial:test-v2",
-                promotionDecisionId = "promotion:test-v2",
-            ),
+            admissionVerifier = fixture.gate,
         )
 
         assertFailsWith<IllegalArgumentException> {
             authority.promote(
                 candidate = other,
-                admission = admission,
+                admission = fixture.admission,
                 expectedHeadFingerprint = authority.activeHead().fingerprint,
             )
         }
     }
 
-
-
     @Test
     fun stalePromotionIntentCannotBeReplayedAfterHeadHistoryChanges() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
         val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
+        val fixture = admissionFixture(baseline, candidate)
         val registry = InMemoryWorldEquationRegistry(listOf(baseline, candidate))
         val heads = MemoryHeadRepository()
         val specs = InMemoryWorldEquationSpecRepository()
@@ -143,16 +132,12 @@ class WorldEquationActivationAuthorityTest {
             heads = heads,
             baseline = baseline,
             specs = specs,
+            admissionVerifier = fixture.gate,
         )
         val originalHead = authority.activeHead()
-        val admission = WorldEquationEvolutionAdmissionGate.admit(
-            candidate = candidate,
-            baseline = baseline,
-            validation = validation("replay"),
-        )
         authority.promote(
             candidate = candidate,
-            admission = admission,
+            admission = fixture.admission,
             expectedHeadFingerprint = originalHead.fingerprint,
         )
         authority.rollbackToPredecessor(
@@ -163,29 +148,29 @@ class WorldEquationActivationAuthorityTest {
         assertFailsWith<IllegalArgumentException> {
             authority.promote(
                 candidate = candidate,
-                admission = admission,
+                admission = fixture.admission,
                 expectedHeadFingerprint = originalHead.fingerprint,
             )
         }
     }
 
     @Test
-    fun versionOnlyChangeIsNotNewPhysics() {
+    fun versionOnlyChangeIsNotNewPhysics() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
         val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
+        val gate = WorldEquationEvolutionAdmissionGate(
+            InMemoryWorldEquationEvidenceRepository(),
+            WorldEquationPromotionEvaluator(),
+        )
 
         assertEquals(baseline.physicsFingerprint(), candidate.physicsFingerprint())
         assertFailsWith<IllegalArgumentException> {
-            WorldEquationEvolutionAdmissionGate.admit(
-                candidate = candidate,
-                baseline = baseline,
-                validation = validation("version-only"),
-            )
+            gate.admit(candidate, baseline)
         }
     }
 
     @Test
-    fun explanationOnlyChangeIsNotNewPhysics() {
+    fun explanationOnlyChangeIsNotNewPhysics() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
         val first = baseline.stableCoefficients().first()
         val candidate = baseline.copy(
@@ -194,23 +179,100 @@ class WorldEquationActivationAuthorityTest {
                 if (it.id == first.id) it.copy(explanation = it.explanation + " clarified") else it
             },
         )
+        val gate = WorldEquationEvolutionAdmissionGate(
+            InMemoryWorldEquationEvidenceRepository(),
+            WorldEquationPromotionEvaluator(),
+        )
 
         assertEquals(baseline.physicsFingerprint(), candidate.physicsFingerprint())
         assertFailsWith<IllegalArgumentException> {
-            WorldEquationEvolutionAdmissionGate.admit(
-                candidate = candidate,
-                baseline = baseline,
-                validation = validation("explanation-only"),
-            )
+            gate.admit(candidate, baseline)
         }
     }
 
+    private suspend fun admissionFixture(
+        baseline: WorldEquationSpec,
+        candidate: WorldEquationSpec,
+    ): AdmissionFixture {
+        val repository = InMemoryWorldEquationEvidenceRepository()
+        val policy = WorldEquationPromotionPolicy(
+            version = "activation-test-policy-v1",
+            primaryImprovementMargin = 0.0,
+            statusNonInferiorityMargin = 0.0,
+            minimumImprovedRunFraction = 0.60,
+            workloadNonInferiorityMargin = 0.0,
+            minimumCoefficientNormRatio = 0.20,
+        )
+        val evaluator = WorldEquationPromotionEvaluator(policy)
+        val coordinator = WorldEquationEvidenceCoordinator(repository, evaluator)
+        val protocol = WorldEquationEvaluationProtocol(
+            version = "activation-test-protocol-v1",
+            primaryMetric = WorldEquationPrimaryMetric.STABILIZATION_ITERATIONS,
+            minimumIndependentRuns = 2,
+            minimumDistinctWorkloads = 1,
+            minimumActiveObservationsPerChangedCoefficient = 1,
+        )
+        coordinator.beginShadow(candidate, baseline, protocol)
+        val activeId = baseline.stableCoefficients().first().id
+        coordinator.recordObservation(
+            candidate,
+            baseline,
+            observation(baseline, candidate, activeId, "run-1"),
+        )
+        coordinator.recordObservation(
+            candidate,
+            baseline,
+            observation(
+                baseline,
+                candidate,
+                activeId,
+                "run-2",
+                WorldEquationEvidencePartition.HOLDOUT,
+            ),
+        )
+        val gate = WorldEquationEvolutionAdmissionGate(repository, evaluator)
+        return AdmissionFixture(
+            gate = gate,
+            admission = gate.admit(candidate, baseline),
+        )
+    }
+
+    private fun observation(
+        baseline: WorldEquationSpec,
+        candidate: WorldEquationSpec,
+        activeId: app.lifeos.core.field.world.WorldCoefficientId,
+        runId: String,
+        partition: WorldEquationEvidencePartition = WorldEquationEvidencePartition.SHADOW,
+    ) = WorldEquationShadowObservation(
+        caseFingerprint = "case:" + runId,
+        runId = runId,
+        workloadId = "activation-test-workload",
+        partition = partition,
+        baselineEquationFingerprint = baseline.fingerprint(),
+        candidateEquationFingerprint = candidate.fingerprint(),
+        baseline = WorldEquationRunMetrics(
+            status = WorldFormulaStatus.CONVERGED,
+            iterationCount = 5,
+            conflictCount = 0,
+            anomalyCount = 0,
+            terminalDelta = 0.0,
+            activeCoefficientIds = setOf(activeId),
+        ),
+        candidate = WorldEquationRunMetrics(
+            status = WorldFormulaStatus.CONVERGED,
+            iterationCount = 3,
+            conflictCount = 0,
+            anomalyCount = 0,
+            terminalDelta = 0.0,
+            activeCoefficientIds = setOf(activeId),
+        ),
+    )
 
     private fun changedCandidate(
-        baseline: app.lifeos.core.field.world.WorldEquationSpec,
+        baseline: WorldEquationSpec,
         version: String,
         delta: Double = 0.05,
-    ): app.lifeos.core.field.world.WorldEquationSpec {
+    ): WorldEquationSpec {
         val first = baseline.stableCoefficients().first()
         val nextMultiplier = if (first.multiplier + delta <= 1.0) {
             first.multiplier + delta
@@ -225,11 +287,9 @@ class WorldEquationActivationAuthorityTest {
         )
     }
 
-    private fun validation(suffix: String) = WorldEquationEvolutionValidation(
-        holdoutEvidenceId = "holdout:$suffix",
-        shadowEvidenceId = "shadow:$suffix",
-        trialEvidenceId = "trial:$suffix",
-        promotionDecisionId = "promotion:$suffix",
+    private data class AdmissionFixture(
+        val gate: WorldEquationEvolutionAdmissionGate,
+        val admission: WorldEquationPromotionAdmission,
     )
 
     private class MemoryHeadRepository : WorldEquationHeadRepository {
