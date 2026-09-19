@@ -413,7 +413,7 @@ internal class AndroidStorageIntelligenceRuntime(
                 metadataFileBudget = 64,
                 fingerprintByteBudget = 0L,
                 parallelReaders = 1,
-                chunkBytes = MIN_CHUNK_BYTES,
+                chunkBytes = CANONICAL_CHUNK_BYTES,
                 worldFormulaBound = false,
             )
 
@@ -428,23 +428,23 @@ internal class AndroidStorageIntelligenceRuntime(
                         cpuIdle.coerceIn(0.25, 1.0)
                     ).toInt()
                     .coerceIn(1, MAX_PARALLEL_READERS)
-                val memoryPerReader = (quota.memoryBytes / parallelism.coerceAtLeast(1))
-                    .coerceAtLeast(MIN_CHUNK_BYTES)
-                val preferredChunk = when {
-                    snapshot.charging == true && memory >= 0.60 && compute >= 0.60 -> BOOST_CHUNK_BYTES
-                    memory >= 0.35 && compute >= 0.35 -> NORMAL_CHUNK_BYTES
-                    else -> MIN_CHUNK_BYTES
+                val maxReadersByMemory = (
+                    quota.memoryBytes / (CANONICAL_CHUNK_BYTES * 2L)
+                    ).toInt().coerceAtLeast(1)
+                val boundedParallelism = minOf(parallelism, maxReadersByMemory)
+                    .coerceIn(1, MAX_PARALLEL_READERS)
+                val fingerprintBudget = if (quota.memoryBytes < CANONICAL_CHUNK_BYTES) {
+                    0L
+                } else {
+                    quota.ioBytes.coerceIn(0L, 2L * 1024L * 1024L * 1024L)
                 }
-                val chunk = minOf(preferredChunk, memoryPerReader / 4L)
-                    .coerceIn(MIN_CHUNK_BYTES, BOOST_CHUNK_BYTES)
                 HardwareStorageProcessingProfile(
                     metadataFileBudget = quota.candidates
                         .coerceIn(64L, 8_192L)
                         .toInt(),
-                    fingerprintByteBudget = quota.ioBytes
-                        .coerceIn(0L, 2L * 1024L * 1024L * 1024L),
-                    parallelReaders = parallelism,
-                    chunkBytes = chunk,
+                    fingerprintByteBudget = fingerprintBudget,
+                    parallelReaders = boundedParallelism,
+                    chunkBytes = CANONICAL_CHUNK_BYTES,
                     worldFormulaBound = true,
                 )
             }
@@ -510,9 +510,7 @@ internal class AndroidStorageIntelligenceRuntime(
         const val KEY_CURSOR = "cursor"
         const val HASH_CANDIDATES_PER_READER = 8
         const val MAX_PARALLEL_READERS = 8
-        const val MIN_CHUNK_BYTES = 1L * 1024L * 1024L
-        const val NORMAL_CHUNK_BYTES = 4L * 1024L * 1024L
-        const val BOOST_CHUNK_BYTES = 16L * 1024L * 1024L
+        const val CANONICAL_CHUNK_BYTES = 4L * 1024L * 1024L
     }
 }
 
