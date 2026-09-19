@@ -7,20 +7,17 @@ object SelfStateFingerprint {
     /**
      * Restart-stable durable authority identity.
      *
-     * Only exact persisted authority heads belong here. Rebuildable cognitive snapshots, memory
-     * projections, process topology and generated-tool runtime status remain part of
-     * [stateFingerprint] instead; they may legitimately change while a process is rehydrating and
-     * must not manufacture an authority change after process death.
+     * Only exact persisted control-plane authority heads belong here. PhotonStore is itself a
+     * mutable append/revision authority: startup can legitimately append or advance canonical
+     * Photons while restoring the same store. Its population/head evidence therefore belongs to
+     * [stateFingerprint] and is recovery-checked by monotonic continuity rather than hash equality.
+     * Rebuildable cognitive snapshots, memory projections, process topology and generated-tool
+     * runtime status likewise remain state evidence.
      */
     fun authorityFingerprint(
-        photon: SelfPhotonState,
-        memory: SelfMemoryState,
         world: SelfWorldState,
-        runtime: SelfRuntimeState,
-        tools: SelfToolState,
     ): String = StableFieldIds.fingerprint(
-        "lifeos-self-authority/v2",
-        "photon.index=" + encode(photon.indexFingerprint),
+        "lifeos-self-authority/v3",
         "world.revision=" + encode(world.worldHeadRevision),
         "world.fingerprint=" + encode(world.worldHeadFingerprint),
         "equation.revision=" + encode(world.worldEquationRevision),

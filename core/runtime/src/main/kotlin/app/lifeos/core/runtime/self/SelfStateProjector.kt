@@ -239,11 +239,11 @@ class SelfStateProjector {
     }
 
     /**
-     * Restart-stable identity of the canonical Photon population.
+     * Canonical identity of the current live Photon population at capture time.
      *
-     * Revision numbers and total historical entry count are deliberately excluded: productive
-     * startup readers can legitimately re-observe the same canonical Photon identities and advance
-     * their revisions after process death. Exact head-state drift is captured separately by
+     * Revision numbers and total historical entry count are deliberately excluded so revision-only
+     * churn remains distinguishable from population changes. This is state evidence, not the
+     * restart-stable control-plane authority seal. Exact head-state drift is captured separately by
      * [photonIndexHeadFingerprint].
      */
     private fun photonIndexIdentityFingerprint(report: PhotonIndexReport): String =

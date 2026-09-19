@@ -26,7 +26,8 @@ class SelfStateFingerprintTest {
         val unavailable = snapshot(indexFingerprint = null)
         val literal = snapshot(indexFingerprint = "<unavailable>")
 
-        assertNotEquals(unavailable.authorityFingerprint, literal.authorityFingerprint)
+        assertEquals(unavailable.authorityFingerprint, literal.authorityFingerprint)
+        assertNotEquals(unavailable.stateFingerprint, literal.stateFingerprint)
     }
 
     @Test
@@ -39,19 +40,21 @@ class SelfStateFingerprintTest {
     }
 
     @Test
-    fun photonHeadRevisionChurnDoesNotRewriteDurableAuthorityIdentity() {
+    fun photonPopulationAndHeadDriftDoNotRewriteControlPlaneAuthorityIdentity() {
         val first = snapshot().copy(
             photon = SelfPhotonState(
                 latestRevisionCount = 1,
                 livePhotonCount = 1,
                 tombstonedPhotonCount = 0,
-                indexFingerprint = "stable-index-identity",
+                indexFingerprint = "population-a",
                 headFingerprint = "head-revision-1",
             )
         )
         val second = first.copy(
             photon = first.photon.copy(
-                latestRevisionCount = 2,
+                latestRevisionCount = 3,
+                livePhotonCount = 2,
+                indexFingerprint = "population-b",
                 headFingerprint = "head-revision-2",
             )
         )

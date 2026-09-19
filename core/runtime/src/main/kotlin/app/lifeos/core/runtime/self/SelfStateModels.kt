@@ -183,11 +183,7 @@ data class LifeOsSelfStateSnapshot(
 ) {
     val authorityFingerprint: String
         get() = SelfStateFingerprint.authorityFingerprint(
-            photon = photon,
-            memory = memory,
             world = world,
-            runtime = runtime,
-            tools = tools,
         )
 
     val stateFingerprint: String
