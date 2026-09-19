@@ -63,6 +63,17 @@ object ProjectSemanticKeys {
     const val MILESTONE = "project.milestone"
     const val RISK = "project.risk"
     const val NEXT_ACTION = "project.next-action"
+    const val DECISION = "project.decision"
+    const val REQUIREMENT = "project.requirement"
+    const val DOCUMENT = "project.document"
+    const val CONVERSATION = "project.conversation"
+    const val REPOSITORY = "project.repository"
+    const val ISSUE = "project.issue"
+    const val PARTICIPANT = "project.participant"
+    const val EVENT = "project.event"
+    const val ARTIFACT = "project.artifact"
+    const val OUTPUT = "project.output"
+    const val BLOCKER = "project.blocker"
 
     val CORE: Set<String> = linkedSetOf(
         OBJECTIVE,
@@ -140,6 +151,7 @@ class ProjectInformationAssetValidationProfile : InformationAssetValidationProfi
             ProjectSemanticKeys.STATUS,
             ProjectSemanticKeys.MILESTONE,
             ProjectSemanticKeys.NEXT_ACTION,
+            ProjectSemanticKeys.BLOCKER,
         )
 
         val ACCEPTED_AUTHORITIES: Set<SourceAuthority> = setOf(

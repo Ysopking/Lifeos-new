@@ -15,6 +15,10 @@ class StructuredRelationshipCoordinator(
     private val resolvers: List<DirectedSourceRelationshipResolver> = listOf(
         ConversationRelationshipResolver(),
         DocumentRelationshipResolver(),
+        ProjectRelationshipResolver(),
+        DecisionRelationshipResolver(),
+        GoalTaskRelationshipResolver(),
+        EventRelationshipResolver(),
     ),
 ) {
     init {
@@ -94,6 +98,6 @@ class StructuredRelationshipCoordinator(
 
     companion object {
         const val RESOLVER_ID = "structured-relationship-coordinator"
-        const val RESOLVER_VERSION = "m207/v1"
+        const val RESOLVER_VERSION = "m208/v1"
     }
 }
