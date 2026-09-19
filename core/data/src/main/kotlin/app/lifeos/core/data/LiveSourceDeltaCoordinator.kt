@@ -797,6 +797,7 @@ class LiveSourceDeltaCoordinator(
                         it.connectorIdentityFingerprint == next.connectorIdentityFingerprint &&
                             it.bootstrapped == next.bootstrapped &&
                             it.cursor == next.cursor &&
+                            it.baselineFingerprint == next.baselineFingerprint &&
                             it.lastObservationRevision >= next.lastObservationRevision
                     }
                     else -> null
