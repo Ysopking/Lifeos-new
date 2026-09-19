@@ -11,7 +11,9 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.source.SourceMetadataPhotonFactory
 import app.lifeos.core.runtime.source.SourceMetadataRepository
+import app.lifeos.core.runtime.sourcegraph.PhotonBackedSourceRelationshipRepository
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.Base64
@@ -476,9 +478,9 @@ class DurableLifeMemoryRuntime(
         val storedAuthoritative = all.filterNot(::isLifeMemoryManagementPhoton)
         val authoritative = ActiveLifeSourceProjection.filter(storedAuthoritative, all)
         val graphEvidence = authoritative.filterNot { "causal-ledger" in it.tags }
-        val memoryEvidence = graphEvidence.filterNot { "life-source-gap" in it.tags }
+        val memoryEvidence = graphEvidence.filter(::isSemanticLifeMemoryEvidence)
         authoritativeById.clear()
-        authoritativeById.putAll(memoryEvidence.associateBy { it.id })
+        authoritativeById.putAll(graphEvidence.associateBy { it.id })
         val durableAccess = accessStore.snapshot()
         val effectiveAccess = rebuildableRelevance(durableAccess, memoryEvidence, all)
         val graph = graphProjector.project(graphEvidence)
@@ -523,6 +525,7 @@ class DurableLifeMemoryRuntime(
         val commit = ingestor.ingest(descriptor, records, nextPosition, authorized, committedAt)
         val changed = buildList {
             addAll(commit.evidencePhotons)
+            addAll(commit.metadataPhotons)
             commit.permissionGap?.let(::add)
         }.filterNot { "life-source-gap" in it.tags }
         val snapshot = if (latest == null) rebuild(committedAt) else applyDelta(changed, committedAt)
@@ -580,16 +583,18 @@ class DurableLifeMemoryRuntime(
             authoritativeById[photon.id] = photon
         }
         val graphEvidence = authoritativeById.values.filterNot { "causal-ledger" in it.tags }
+        val memoryEvidence = graphEvidence.filter(::isSemanticLifeMemoryEvidence)
+        val memoryIds = memoryEvidence.mapTo(hashSetOf()) { it.id }
         val effectiveAccess = accessLedger ?: current.accessLedger
         val graph = graphProjector.project(graphEvidence)
         val raw = memoryEngine.projectDelta(
             current = current.memory,
-            allCurrentPhotons = authoritativeById.values,
-            changed = changed.filter { it.id in authoritativeById },
+            allCurrentPhotons = memoryEvidence,
+            changed = changed.filter { it.id in memoryIds },
             accessChanges = effectiveAccess,
             now = at,
         )
-        val memory = stabilize(raw, authoritativeById.values.toList())
+        val memory = stabilize(raw, memoryEvidence)
         memory.derivedPhotons.forEach { saveIdempotent(it) }
         return DurableLifeMemorySnapshot(
             graph = graph,
@@ -674,6 +679,11 @@ class DurableLifeMemoryRuntime(
         else check(existing == photon) { "Conflicting durable memory projection identity: ${photon.id.value}" }
     }
 }
+
+private fun isSemanticLifeMemoryEvidence(photon: Photon): Boolean =
+    "life-source-gap" !in photon.tags &&
+        SourceMetadataPhotonFactory.ROOT_TAG !in photon.tags &&
+        PhotonBackedSourceRelationshipRepository.ROOT_TAG !in photon.tags
 
 fun isLifeMemoryManagementPhoton(photon: Photon): Boolean =
     "life-memory-management" in photon.tags ||

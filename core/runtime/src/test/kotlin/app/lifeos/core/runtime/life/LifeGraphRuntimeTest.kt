@@ -27,6 +27,8 @@ class LifeGraphRuntimeTest {
         assertEquals(2, first.entities.size)
         assertEquals(1, first.events.size)
         assertEquals(1, first.relationships.size)
+        assertEquals("CO_OCCURRENCE", first.relationships.single().type)
+        assertTrue(first.relationships.single().confidence <= 0.25)
     }
 
     @Test

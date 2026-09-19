@@ -2,11 +2,29 @@ package app.lifeos.core.runtime.life
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.StableCognitiveIds
 import app.lifeos.core.model.source.CanonicalSourceMetadata
+import app.lifeos.core.runtime.source.SourceMetadataPhotonFactory
+import app.lifeos.core.runtime.sourcegraph.PhotonBackedSourceRelationshipRepository
+import app.lifeos.core.runtime.sourcegraph.SourceRelationshipState
+import app.lifeos.core.runtime.sourcegraph.SourceRelationshipType
 import java.time.Instant
 
-enum class LifeEntityType { PERSON, ORGANIZATION, PROJECT, ACCOUNT, LOCATION, DOCUMENT }
+enum class LifeEntityType {
+    PERSON,
+    ORGANIZATION,
+    PROJECT,
+    ACCOUNT,
+    LOCATION,
+    DOCUMENT,
+    CONVERSATION,
+    EVENT,
+    GOAL,
+    TASK,
+    ARTIFACT,
+    REPOSITORY,
+}
 
 data class LifeEntity(
     val id: String,
@@ -33,7 +51,29 @@ data class LifeGraphRelationship(
     val type: String,
     val sourcePhotonIds: Set<PhotonId>,
     val confidence: Double,
-)
+    val canonicalType: SourceRelationshipType? = null,
+    val canonicalState: SourceRelationshipState? = null,
+    val sourceRevisionRefs: Set<PhotonRevisionRef> = emptySet(),
+    val evidenceFingerprint: String? = null,
+) {
+    init {
+        require(confidence.isFinite() && confidence in 0.0..1.0)
+        if (canonicalType != null) {
+            require(type == canonicalType.name) {
+                "Canonical relationship text/type mismatch"
+            }
+            requireNotNull(canonicalState) {
+                "Canonical relationship requires ledger state"
+            }
+            require(sourceRevisionRefs.isNotEmpty()) {
+                "Canonical relationship requires exact source revision refs"
+            }
+            require(!evidenceFingerprint.isNullOrBlank()) {
+                "Canonical relationship requires evidence fingerprint"
+            }
+        }
+    }
+}
 
 data class LifeGraphSnapshot(
     val entities: List<LifeEntity>,
@@ -49,9 +89,12 @@ data class LifeGraphSnapshot(
  */
 class LifeGraphProjector {
     fun project(photons: Collection<Photon>): LifeGraphSnapshot {
-        val canonical = photons.groupBy { it.id }.map { (_, revisions) -> revisions.maxBy { it.revision } }
-            .filterNot { "causal-ledger" in it.tags || "life-memory-management" in it.tags }
+        val latest = photons.groupBy { it.id }.map { (_, revisions) -> revisions.maxBy { it.revision } }
             .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
+        val canonicalProjection = CanonicalLifeGraphProjection.project(latest)
+        val canonical = latest
+            .filterNot { "causal-ledger" in it.tags || "life-memory-management" in it.tags }
+            .filterNot(::isCanonicalProjectionInfrastructure)
         val byId = canonical.associateBy { it.id }
         val aliases = resolveAliases(canonical)
 
@@ -121,7 +164,7 @@ class LifeGraphProjector {
                                 toEntityId = ids[right],
                                 type = "CO_OCCURRENCE",
                                 sourcePhotonIds = setOf(photon.id),
-                                confidence = photon.confidence,
+                                confidence = minOf(photon.confidence, MAX_COOCCURRENCE_CONFIDENCE),
                             )
                         )
                     }
@@ -148,13 +191,18 @@ class LifeGraphProjector {
                 )
             }
         }
-        val relationships = (coOccurrence + explicitRelationships)
+        val legacyRelationships = (coOccurrence + explicitRelationships)
             .groupBy { Triple(it.fromEntityId, it.toEntityId, it.type) }
             .map { (key, matches) ->
                 val sources = matches.flatMap { it.sourcePhotonIds }.toSortedSet(compareBy { it.value })
+                val confidence = if (key.third == CO_OCCURRENCE_TYPE) {
+                    matches.maxOf { it.confidence }.coerceAtMost(MAX_COOCCURRENCE_CONFIDENCE)
+                } else {
+                    matches.maxOf { it.confidence }
+                }
                 LifeGraphRelationship(
                     id = "relation-" + StableCognitiveIds.fingerprint(
-                        "life-relation-aggregate/v1",
+                        "life-relation-aggregate/v2",
                         key.first,
                         key.second,
                         key.third,
@@ -164,23 +212,39 @@ class LifeGraphProjector {
                     toEntityId = key.second,
                     type = key.third,
                     sourcePhotonIds = sources,
-                    confidence = matches.map { it.confidence }.average().coerceIn(0.0, 1.0),
+                    confidence = confidence,
                 )
-            }.sortedBy { it.id }
+            }
+        val allEntities = (entities + canonicalProjection.entities)
+            .distinctBy { it.id }
+            .sortedBy { it.id }
+        val relationships = (legacyRelationships + canonicalProjection.relationships)
+            .distinctBy { it.id }
+            .sortedWith(
+                compareBy<LifeGraphRelationship> { it.fromEntityId }
+                    .thenBy { it.toEntityId }
+                    .thenBy { it.type }
+                    .thenBy { it.id }
+            )
 
         val fingerprint = StableCognitiveIds.fingerprint(
-            "life-graph/v2",
+            "life-graph/v3",
             *buildList {
-                entities.forEach { entity ->
-                    add("e:${entity.id}:${java.lang.Double.toHexString(entity.confidence)}:${entity.aliases.joinToString(",")}")
+                allEntities.forEach { entity ->
+                    add("e:${entity.id}:${entity.type.name}:${java.lang.Double.toHexString(entity.confidence)}:${entity.aliases.joinToString(",")}")
                 }
                 events.forEach { add("v:${it.id}") }
                 relationships.forEach { relationship ->
-                    add("r:${relationship.id}:${java.lang.Double.toHexString(relationship.confidence)}")
+                    add(
+                        "r:${relationship.id}:${relationship.type}:" +
+                            "${relationship.canonicalState?.name.orEmpty()}:" +
+                            "${relationship.evidenceFingerprint.orEmpty()}:" +
+                            java.lang.Double.toHexString(relationship.confidence)
+                    )
                 }
             }.toTypedArray(),
         )
-        return LifeGraphSnapshot(entities, events, relationships, fingerprint)
+        return LifeGraphSnapshot(allEntities, events, relationships, fingerprint)
     }
 
     private data class AliasEvidence(
@@ -263,10 +327,18 @@ class LifeGraphProjector {
     private fun entityId(type: LifeEntityType, label: String): String =
         "entity-" + StableCognitiveIds.fingerprint("life-entity/v1", type.name, label.lowercase())
 
+    private fun isCanonicalProjectionInfrastructure(photon: Photon): Boolean =
+        (photon.mimeType == SourceMetadataPhotonFactory.MIME_TYPE &&
+            SourceMetadataPhotonFactory.ROOT_TAG in photon.tags) ||
+            (photon.mimeType == PhotonBackedSourceRelationshipRepository.MIME_TYPE &&
+                PhotonBackedSourceRelationshipRepository.ROOT_TAG in photon.tags)
+
     private fun List<Double>.averageOrOne(): Double = if (isEmpty()) 1.0 else average()
 
     private companion object {
         const val MIN_ALIAS_CONFIDENCE = 0.5
+        const val MAX_COOCCURRENCE_CONFIDENCE = 0.25
+        const val CO_OCCURRENCE_TYPE = "CO_OCCURRENCE"
         const val ALIAS_PREFIX = "entity-alias:"
         const val RELATIONSHIP_PREFIX = "entity-relationship:"
         val ENTITY_PREFIXES = linkedMapOf(
@@ -276,6 +348,12 @@ class LifeGraphProjector {
             "account:" to LifeEntityType.ACCOUNT,
             "location:" to LifeEntityType.LOCATION,
             "document:" to LifeEntityType.DOCUMENT,
+            "conversation:" to LifeEntityType.CONVERSATION,
+            "event:" to LifeEntityType.EVENT,
+            "goal:" to LifeEntityType.GOAL,
+            "task:" to LifeEntityType.TASK,
+            "artifact:" to LifeEntityType.ARTIFACT,
+            "repository:" to LifeEntityType.REPOSITORY,
         )
     }
 }
