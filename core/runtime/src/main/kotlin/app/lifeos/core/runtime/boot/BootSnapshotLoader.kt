@@ -5,8 +5,16 @@ import app.lifeos.core.field.FieldSnapshotLoadReport
 import app.lifeos.core.field.FieldSnapshotRepository
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexCursor
+import app.lifeos.core.model.PhotonIndexEntry
+import app.lifeos.core.model.PhotonIndexOrder
+import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonLoadReport
+import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.PhotonRevisionRef
+import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.model.canonicalPhotonIndexOrder
 import app.lifeos.core.model.checkpoint.CheckpointLoadReport
 import app.lifeos.core.model.checkpoint.CheckpointSnapshotRepository
 import app.lifeos.core.model.checkpoint.TaskCheckpoint
@@ -48,14 +56,138 @@ data class BootSnapshotReadFailure(
 }
 
 fun interface BootPhotonSource { suspend fun load(): PhotonLoadReport }
+
+data class BootPhotonCatalog(
+    val entries: List<PhotonIndexEntry>,
+    val loadedPhotons: List<Photon>,
+    val hotRefs: List<PhotonRevisionRef>,
+    val warmRefs: List<PhotonRevisionRef>,
+    val deferredWarmRefs: List<PhotonRevisionRef>,
+    val coldRefs: List<PhotonRevisionRef>,
+    val unreadableFiles: List<String> = emptyList(),
+) {
+    init {
+        require(entries == entries.canonicalPhotonIndexOrder())
+        require(entries.none { !it.latest || it.tombstoned })
+        require(loadedPhotons == loadedPhotons.sortedWith(compareBy<Photon>({ it.id.value }, { it.revision })))
+        require(unreadableFiles == unreadableFiles.distinct().sorted())
+        val catalogRefs = entries.mapTo(linkedSetOf()) { it.ref }
+        val tierRefs = hotRefs + warmRefs + deferredWarmRefs + coldRefs
+        require(tierRefs.size == tierRefs.distinct().size) { "Boot Photon tiers must not overlap" }
+        require(tierRefs.toSet() == catalogRefs) { "Boot Photon tiers must cover the catalog" }
+        val admittedRefs = (hotRefs + warmRefs).toSet()
+        val loadedRefs = loadedPhotons.mapTo(linkedSetOf()) { PhotonRevisionRef(it.id, it.revision) }
+        require(loadedRefs.all { it in admittedRefs }) {
+            "Boot may only load payloads admitted into HOT or WARM tiers"
+        }
+    }
+
+    companion object {
+        fun fromLegacy(report: PhotonLoadReport): BootPhotonCatalog {
+            val loaded = report.photons.sortedWith(compareBy<Photon>({ it.id.value }, { it.revision }))
+            val entries = loaded.map(::bootIndexEntry).canonicalPhotonIndexOrder()
+            return BootPhotonCatalog(
+                entries = entries,
+                loadedPhotons = loaded,
+                hotRefs = entries.map { it.ref },
+                warmRefs = emptyList(),
+                deferredWarmRefs = emptyList(),
+                coldRefs = emptyList(),
+                unreadableFiles = report.unreadableFiles.distinct().sorted(),
+            )
+        }
+    }
+}
+
+fun interface IndexedBootPhotonSource { suspend fun load(): BootPhotonCatalog }
+
 fun interface BootTaskSource { suspend fun load(): TaskLoadReport }
 fun interface BootCheckpointSource { suspend fun load(): CheckpointLoadReport }
 fun interface BootCapabilityStateSource { suspend fun load(): List<CapabilityDescriptor> }
 fun interface BootToolStateSource { suspend fun load(): List<GeneratedToolRecord> }
 fun interface BootFieldSnapshotSource { suspend fun load(): FieldSnapshotLoadReport }
 
-class PhotonRepositoryBootSource(private val repository: PhotonRepository) : BootPhotonSource {
-    override suspend fun load(): PhotonLoadReport = repository.loadReport()
+class PhotonRepositoryBootSource(
+    private val repository: RevisionedPhotonRepository,
+    private val warmPayloadBudget: Int = DEFAULT_WARM_PAYLOAD_BUDGET,
+) : IndexedBootPhotonSource {
+    init {
+        require(warmPayloadBudget in 0..MAX_WARM_PAYLOAD_BUDGET)
+    }
+
+    override suspend fun load(): BootPhotonCatalog {
+        val entries = loadLatestEntries()
+        val hotEntries = entries.filter(::isHotBootEntry)
+        val coldEntries = entries.filter { it.phase == PhotonPhase.ARCHIVED && it !in hotEntries }
+        val warmCandidates = entries
+            .filter { it !in hotEntries && it !in coldEntries }
+            .sortedWith(
+                compareByDescending<PhotonIndexEntry> { it.createdAt }
+                    .thenByDescending { it.ref.revision }
+                    .thenBy { it.ref.photonId.value }
+            )
+        val admittedWarm = warmCandidates.take(warmPayloadBudget)
+        val deferredWarm = warmCandidates.drop(warmPayloadBudget)
+        val loadRefs = (hotEntries + admittedWarm)
+            .map { it.ref }
+            .distinct()
+            .sortedWith(compareBy({ it.photonId.value }, { it.revision }))
+
+        val failures = repository.indexReport().unreadableRevisionFiles.toMutableList()
+        val loaded = buildList {
+            loadRefs.forEach { exactRef ->
+                val photon = try {
+                    repository.load(exactRef)
+                } catch (_: Exception) {
+                    failures += "revisions/${exactRef.stableKey}"
+                    null
+                }
+                if (photon == null) {
+                    failures += "revisions/${exactRef.stableKey}"
+                } else {
+                    require(PhotonRevisionRef(photon.id, photon.revision) == exactRef) {
+                        "Boot source loaded a different Photon revision"
+                    }
+                    add(photon)
+                }
+            }
+        }.sortedWith(compareBy<Photon>({ it.id.value }, { it.revision }))
+
+        return BootPhotonCatalog(
+            entries = entries,
+            loadedPhotons = loaded,
+            hotRefs = hotEntries.map { it.ref }.sortedWith(compareBy({ it.photonId.value }, { it.revision })),
+            warmRefs = admittedWarm.map { it.ref }.sortedWith(compareBy({ it.photonId.value }, { it.revision })),
+            deferredWarmRefs = deferredWarm.map { it.ref }.sortedWith(compareBy({ it.photonId.value }, { it.revision })),
+            coldRefs = coldEntries.map { it.ref }.sortedWith(compareBy({ it.photonId.value }, { it.revision })),
+            unreadableFiles = failures.distinct().sorted(),
+        )
+    }
+
+    private suspend fun loadLatestEntries(): List<PhotonIndexEntry> {
+        val entries = mutableListOf<PhotonIndexEntry>()
+        var cursor: PhotonIndexCursor? = null
+        while (true) {
+            val page = repository.queryEntries(
+                PhotonIndexQuery(
+                    latestOnly = true,
+                    includeTombstoned = false,
+                    order = PhotonIndexOrder.IDENTITY,
+                    after = cursor,
+                    limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
+                )
+            )
+            entries += page
+            if (page.size < PhotonIndexQuery.HARD_PAGE_LIMIT) break
+            cursor = PhotonIndexCursor(PhotonIndexOrder.IDENTITY, page.last().ref)
+        }
+        return entries.canonicalPhotonIndexOrder()
+    }
+
+    private companion object {
+        const val DEFAULT_WARM_PAYLOAD_BUDGET = 128
+        const val MAX_WARM_PAYLOAD_BUDGET = 1024
+    }
 }
 
 class TaskRepositoryBootSource(private val repository: TaskSnapshotRepository) : BootTaskSource {
@@ -117,9 +249,21 @@ data class DurableBootSnapshot(
     val tools: List<GeneratedToolRecord>,
     val fieldSnapshots: List<FieldSnapshot>,
     val readFailures: List<BootSnapshotReadFailure>,
+    val photonEntries: List<PhotonIndexEntry> = emptyList(),
+    val hotPhotonRefs: List<PhotonRevisionRef> = emptyList(),
+    val warmPhotonRefs: List<PhotonRevisionRef> = emptyList(),
+    val deferredWarmPhotonRefs: List<PhotonRevisionRef> = emptyList(),
+    val coldPhotonRefs: List<PhotonRevisionRef> = emptyList(),
 ) {
     init {
         require(photons == photons.sortedWith(compareBy<Photon>({ it.id.value }, { it.revision })))
+        if (photonEntries.isNotEmpty()) {
+            require(photonEntries == photonEntries.canonicalPhotonIndexOrder())
+            val catalogRefs = photonEntries.mapTo(linkedSetOf()) { it.ref }
+            val tierRefs = hotPhotonRefs + warmPhotonRefs + deferredWarmPhotonRefs + coldPhotonRefs
+            require(tierRefs.size == tierRefs.distinct().size)
+            require(tierRefs.toSet() == catalogRefs)
+        }
         require(tasks == tasks.sortedBy { it.id.value })
         require(checkpoints == checkpoints.sortedWith(
             compareBy<TaskCheckpoint>({ it.taskId.value }, { it.sequence }, { it.id.value })
@@ -146,21 +290,45 @@ data class DurableBootSnapshot(
  * process configuration registries, but no ViewModel/UI state is accepted by this contract.
  */
 class BootSnapshotLoader(
-    private val photons: BootPhotonSource,
+    private val photons: BootPhotonSource? = null,
     private val tasks: BootTaskSource,
     private val checkpoints: BootCheckpointSource,
     private val capabilities: BootCapabilityStateSource,
     private val tools: BootToolStateSource,
     private val fieldSnapshots: BootFieldSnapshotSource,
+    private val indexedPhotons: IndexedBootPhotonSource? = null,
     private val now: () -> Instant = Instant::now,
 ) {
+    init {
+        require((photons == null) != (indexedPhotons == null)) {
+            "BootSnapshotLoader requires exactly one Photon source"
+        }
+    }
     suspend fun load(): DurableBootSnapshot {
         val failures = mutableListOf<BootSnapshotReadFailure>()
 
-        val photonReport = readSource(BootSnapshotSource.PHOTON, PhotonLoadReport(emptyList(), emptyList()), failures) {
-            photons.load()
+        val photonCatalog = if (indexedPhotons != null) {
+            readSource(
+                BootSnapshotSource.PHOTON,
+                BootPhotonCatalog(
+                    entries = emptyList(),
+                    loadedPhotons = emptyList(),
+                    hotRefs = emptyList(),
+                    warmRefs = emptyList(),
+                    deferredWarmRefs = emptyList(),
+                    coldRefs = emptyList(),
+                ),
+                failures,
+            ) { indexedPhotons.load() }
+        } else {
+            val report = readSource(
+                BootSnapshotSource.PHOTON,
+                PhotonLoadReport(emptyList(), emptyList()),
+                failures,
+            ) { requireNotNull(photons).load() }
+            BootPhotonCatalog.fromLegacy(report)
         }
-        failures += photonReport.unreadableFiles.map {
+        failures += photonCatalog.unreadableFiles.map {
             BootSnapshotReadFailure(BootSnapshotSource.PHOTON, it, "unreadable-entry")
         }
 
@@ -193,12 +361,14 @@ class BootSnapshotLoader(
             BootSnapshotReadFailure(BootSnapshotSource.FIELD, it, "unreadable-entry")
         }
 
-        val canonicalPhotons = photonReport.photons.sortedWith(compareBy<Photon>({ it.id.value }, { it.revision }))
+        val canonicalPhotons = photonCatalog.loadedPhotons
+            .sortedWith(compareBy<Photon>({ it.id.value }, { it.revision }))
+        val canonicalPhotonEntries = photonCatalog.entries.canonicalPhotonIndexOrder()
         val canonicalTasks = taskReport.tasks.sortedBy { it.id.value }
         val canonicalCheckpoints = checkpointReport.checkpoints.sortedWith(
             compareBy<TaskCheckpoint>({ it.taskId.value }, { it.sequence }, { it.id.value })
         )
-        val canonicalContexts = projectContexts(canonicalPhotons)
+        val canonicalContexts = projectContexts(canonicalPhotonEntries)
         val canonicalCapabilities = capabilityState.sortedWith(capabilityComparator)
         val canonicalWorkerLeases = projectWorkerLeases(canonicalTasks)
         val canonicalTools = toolState.sortedBy { it.manifest.toolId }
@@ -207,7 +377,7 @@ class BootSnapshotLoader(
 
         return DurableBootSnapshot(
             generationId = fingerprintGeneration(
-                canonicalPhotons,
+                canonicalPhotonEntries,
                 canonicalTasks,
                 canonicalCheckpoints,
                 canonicalContexts,
@@ -227,6 +397,12 @@ class BootSnapshotLoader(
             tools = canonicalTools,
             fieldSnapshots = canonicalFields,
             readFailures = canonicalFailures,
+            photonEntries = canonicalPhotonEntries,
+            hotPhotonRefs = photonCatalog.hotRefs.sortedWith(compareBy({ it.photonId.value }, { it.revision })),
+            warmPhotonRefs = photonCatalog.warmRefs.sortedWith(compareBy({ it.photonId.value }, { it.revision })),
+            deferredWarmPhotonRefs = photonCatalog.deferredWarmRefs
+                .sortedWith(compareBy({ it.photonId.value }, { it.revision })),
+            coldPhotonRefs = photonCatalog.coldRefs.sortedWith(compareBy({ it.photonId.value }, { it.revision })),
         )
     }
 
@@ -290,9 +466,28 @@ class BootReadSession(
     }
 }
 
-private fun projectContexts(photons: List<Photon>): List<BootContextProjection> = buildList {
-    photons.forEach { photon ->
-        val tags = photon.tags
+private fun isHotBootEntry(entry: PhotonIndexEntry): Boolean =
+    "hot" in entry.tags ||
+        entry.phase == PhotonPhase.ACTIVE ||
+        entry.phase == PhotonPhase.REFLECTING ||
+        "context:active" in entry.tags ||
+        entry.tags.any { it.startsWith("context:active:") }
+
+private fun bootIndexEntry(photon: Photon): PhotonIndexEntry = PhotonIndexEntry(
+    ref = PhotonRevisionRef(photon.id, photon.revision),
+    createdAt = photon.provenance.createdAt,
+    phase = photon.phase,
+    mimeType = photon.mimeType,
+    tags = photon.tags,
+    semanticMass = photon.semanticMass,
+    confidence = photon.confidence,
+    contentFingerprint = sha256(photon.content),
+    latest = true,
+)
+
+private fun projectContexts(entries: List<PhotonIndexEntry>): List<BootContextProjection> = buildList {
+    entries.forEach { entry ->
+        val tags = entry.tags
         tags.sorted().forEach { tag ->
             val parsed = parseContextTag(tag) ?: return@forEach
             val active = "context:active" in tags ||
@@ -301,9 +496,9 @@ private fun projectContexts(photons: List<Photon>): List<BootContextProjection> 
                 BootContextProjection(
                     kind = parsed.kind,
                     contextId = parsed.contextId,
-                    sourcePhotonId = photon.id,
-                    sourcePhotonRevision = photon.revision,
-                    sourceCreatedAt = photon.provenance.createdAt,
+                    sourcePhotonId = entry.ref.photonId,
+                    sourcePhotonRevision = entry.ref.revision,
+                    sourceCreatedAt = entry.createdAt,
                     explicitlyActive = active,
                 )
             )
@@ -334,7 +529,7 @@ private fun projectWorkerLeases(tasks: List<LifeTask>): List<BootWorkerLease> = 
 }.sortedWith(workerLeaseComparator)
 
 private fun fingerprintGeneration(
-    photons: List<Photon>,
+    photonEntries: List<PhotonIndexEntry>,
     tasks: List<LifeTask>,
     checkpoints: List<TaskCheckpoint>,
     contexts: List<BootContextProjection>,
@@ -353,18 +548,18 @@ private fun fingerprintGeneration(
         digest.update('\n'.code.toByte())
     }
 
-    part("lifeos-boot-generation/v1")
-    photons.forEach { photon ->
-        part("photon"); part(photon.id.value); part(photon.revision.toString()); part(photon.phase.name)
-        part(sha256(photon.content)); part(photon.mimeType)
-        part(java.lang.Double.toHexString(photon.semanticMass)); part(java.lang.Double.toHexString(photon.energy))
-        part(java.lang.Double.toHexString(photon.confidence)); part(photon.provenance.source)
-        part(photon.provenance.actor); part(photon.provenance.createdAt.toString())
-        photon.provenance.parentIds.map { it.value }.sorted().forEach(::part)
-        photon.relations.sortedWith(compareBy({ it.target.value }, { it.type.name }, { it.weight })).forEach {
-            part("relation:${it.target.value}:${it.type.name}:${java.lang.Double.toHexString(it.weight)}")
-        }
-        photon.tags.sorted().forEach { part("tag:$it") }
+    part("lifeos-boot-generation/v2")
+    photonEntries.forEach { entry ->
+        part("photon-head")
+        part(entry.ref.photonId.value)
+        part(entry.ref.revision.toString())
+        part(entry.createdAt.toString())
+        part(entry.phase.name)
+        part(entry.mimeType)
+        part(java.lang.Double.toHexString(entry.semanticMass))
+        part(java.lang.Double.toHexString(entry.confidence))
+        part(entry.contentFingerprint)
+        entry.tags.sorted().forEach { part("tag:$it") }
     }
     tasks.forEach { task ->
         part("task"); part(task.id.value); part(task.type.name); part(task.state.name); part(task.priority.name)
