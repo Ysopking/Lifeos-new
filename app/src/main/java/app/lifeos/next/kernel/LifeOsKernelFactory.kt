@@ -133,6 +133,9 @@ import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationCoordin
 import app.lifeos.core.runtime.evolution.WorldEquationEvolutionAdmissionGate
 import app.lifeos.core.runtime.evolution.WorldEquationPromotionEvaluator
 import app.lifeos.core.runtime.evolution.WorldEquationPromotionPolicy
+import app.lifeos.core.runtime.evolution.WorldEquationEvidenceCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationPostActivationSafetyMonitor
+import app.lifeos.core.runtime.evolution.WorldEquationPostActivationSafetyRuntimeRegistry
 import app.lifeos.core.runtime.field.FieldThoughtGraphProjectionCoordinator
 import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.health.CircuitBreaker
@@ -432,6 +435,10 @@ class LifeOsKernelFactory(
         val worldEquationPromotionEvaluator = WorldEquationPromotionEvaluator(
             WorldEquationPromotionPolicy.V1
         )
+        val worldEquationEvidenceCoordinator = WorldEquationEvidenceCoordinator(
+            repository = worldEquationEvidence,
+            evaluator = worldEquationPromotionEvaluator,
+        )
         val worldEquationAdmissionGate = WorldEquationEvolutionAdmissionGate(
             evidence = worldEquationEvidence,
             evaluator = worldEquationPromotionEvaluator,
@@ -443,6 +450,12 @@ class LifeOsKernelFactory(
             specs = worldEquationSpecs,
             admissionVerifier = worldEquationAdmissionGate,
         )
+        val worldEquationSafetyMonitor = WorldEquationPostActivationSafetyMonitor(
+            evidence = worldEquationEvidence,
+            evidenceCoordinator = worldEquationEvidenceCoordinator,
+            authority = worldEquationAuthority,
+        )
+        WorldEquationPostActivationSafetyRuntimeRegistry.install(worldEquationSafetyMonitor)
         val worldFormulaCoordinator = WorldFormulaCoordinator(
             equations = worldEquationRegistry,
             snapshots = worldFormulaSnapshotRepository,
@@ -742,6 +755,9 @@ class LifeOsKernelFactory(
                     worldEquationAuthority.activeVersion()
                 },
                 RuntimeStateRehydrationStep {
+                    worldEquationSafetyMonitor.reconcile()
+                },
+                RuntimeStateRehydrationStep {
                     val head = worldModelRepository.loadHead()
                     if (head != null) {
                         val snapshot = requireNotNull(
@@ -865,6 +881,21 @@ class LifeOsKernelFactory(
                         override suspend fun probe(): StoreStatus {
                             val report = bootReadSession.readOnce("world-equation-spec-store") {
                                 worldEquationSpecs.loadReport()
+                            }
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.corrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
+                                message = report.unreadableEntries
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.joinToString(","),
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "world-equation-evidence-store"
+                        override suspend fun probe(): StoreStatus {
+                            val report = bootReadSession.readOnce("world-equation-evidence-store") {
+                                worldEquationEvidence.loadReport()
                             }
                             return StoreStatus(
                                 storeId = storeId,

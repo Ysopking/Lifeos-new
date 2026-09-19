@@ -46,6 +46,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchMissionLedger
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRuntimeRegistry
 import app.lifeos.core.runtime.deepsearch.DeepSearchResultPhotonPersistence
 import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
+import app.lifeos.core.runtime.evolution.WorldEquationPostActivationSafetyRuntimeRegistry
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.ProtectionCoordinatorProcessRegistry
@@ -596,6 +597,13 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                 )
                 lastSelfObservationTraceIdentity = traceIdentity
             }
+
+            WorldEquationPostActivationSafetyRuntimeRegistry.current()?.observe(
+                assessmentId = assessment.analysisId,
+                authorityFingerprint = assessment.authorityFingerprint,
+                band = assessment.band,
+                observedAt = cycle.snapshot.capturedAt,
+            )
 
             val previousBand = lastSelfObservationWorldBand
             if (assessment.band != previousBand) {

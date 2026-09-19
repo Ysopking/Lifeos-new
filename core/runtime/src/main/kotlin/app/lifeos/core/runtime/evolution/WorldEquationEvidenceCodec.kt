@@ -1,7 +1,9 @@
 package app.lifeos.core.runtime.evolution
 
 import app.lifeos.core.field.world.WorldCoefficientId
+import app.lifeos.core.runtime.world.SelfStateWorldBand
 import app.lifeos.core.runtime.world.WorldFormulaStatus
+import java.time.Instant
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -13,6 +15,7 @@ object WorldEquationEvidenceCodec {
     private const val MAX_STRING_BYTES = 1024 * 1024
     private const val MAX_OBSERVATIONS = 10_000
     private const val MAX_ACTIVE_COEFFICIENTS = 4096
+    private const val MAX_SAFETY_OBSERVATIONS = 10_000
 
     fun encode(record: WorldEquationEvidenceRecord): ByteArray {
         val output = ByteArrayOutputStream()
@@ -25,6 +28,16 @@ object WorldEquationEvidenceCodec {
             data.writeNullableString(record.latestVerdictId)
             data.writeNullableString(record.activationHeadFingerprint)
             data.writeNullableString(record.rollbackDecisionId)
+            require(record.postActivationSafetyObservations.size <= MAX_SAFETY_OBSERVATIONS)
+            data.writeInt(record.postActivationSafetyObservations.size)
+            record.postActivationSafetyObservations.forEach { observation ->
+                data.writeString(observation.id)
+                data.writeString(observation.candidateEquationFingerprint)
+                data.writeString(observation.assessmentId)
+                data.writeString(observation.authorityFingerprint)
+                data.writeString(observation.band.name)
+                data.writeString(observation.observedAt.toString())
+            }
             data.writeString(record.fingerprint)
         }
         return output.toByteArray().also {
@@ -49,6 +62,26 @@ object WorldEquationEvidenceCodec {
             val verdictId = data.readNullableString()
             val activationHead = data.readNullableString()
             val rollbackDecision = data.readNullableString()
+            val safetyCount = data.readInt()
+            require(safetyCount in 0..MAX_SAFETY_OBSERVATIONS) {
+                "Invalid WorldEquation safety observation count"
+            }
+            val safetyObservations = buildList(safetyCount) {
+                repeat(safetyCount) {
+                    val storedSafetyId = data.readString()
+                    val observation = WorldEquationPostActivationSafetyObservation.create(
+                        candidateEquationFingerprint = data.readString(),
+                        assessmentId = data.readString(),
+                        authorityFingerprint = data.readString(),
+                        band = SelfStateWorldBand.valueOf(data.readString()),
+                        observedAt = Instant.parse(data.readString()),
+                    )
+                    require(observation.id == storedSafetyId) {
+                        "WorldEquation safety observation id does not match content"
+                    }
+                    add(observation)
+                }
+            }
             val storedFingerprint = data.readString()
             require(data.available() == 0) {
                 "Trailing WorldEquation evidence bytes"
@@ -60,6 +93,7 @@ object WorldEquationEvidenceCodec {
                 latestVerdictId = verdictId,
                 activationHeadFingerprint = activationHead,
                 rollbackDecisionId = rollbackDecision,
+                postActivationSafetyObservations = safetyObservations,
             ).also {
                 require(it.id == storedId) {
                     "WorldEquation evidence id does not match content"

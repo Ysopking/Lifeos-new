@@ -94,6 +94,23 @@ class WorldEquationEvidenceCoordinator(
         )
     }
 
+    suspend fun recordPostActivationSafetyObservation(
+        candidateEquationFingerprint: String,
+        observation: WorldEquationPostActivationSafetyObservation,
+    ): WorldEquationEvidenceRecord {
+        val current = requireNotNull(repository.load(candidateEquationFingerprint)) {
+            "WorldEquation evidence is missing"
+        }
+        require(current.state == WorldEquationLifecycleState.ACTIVE)
+        current.postActivationSafetyObservations
+            .firstOrNull { it.id == observation.id }
+            ?.let { return current }
+        return save(
+            current,
+            current.appendPostActivationSafetyObservation(observation),
+        )
+    }
+
     suspend fun quarantine(
         candidateEquationFingerprint: String,
         verdictId: String,
@@ -105,6 +122,7 @@ class WorldEquationEvidenceCoordinator(
             current.transition(
                 nextState = WorldEquationLifecycleState.QUARANTINED,
                 verdictId = verdictId,
+                rollbackDecisionId = verdictId,
             ),
         )
     }
@@ -115,6 +133,9 @@ class WorldEquationEvidenceCoordinator(
     ): WorldEquationEvidenceRecord {
         val current = requireNotNull(repository.load(candidateEquationFingerprint))
         require(current.state == WorldEquationLifecycleState.QUARANTINED)
+        require(current.rollbackDecisionId == rollbackDecisionId) {
+            "WorldEquation rollback decision does not match quarantined evidence"
+        }
         return save(
             current,
             current.transition(

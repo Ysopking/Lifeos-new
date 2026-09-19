@@ -12,6 +12,7 @@ data class WorldEquationEvidenceRecord(
     val latestVerdictId: String?,
     val activationHeadFingerprint: String?,
     val rollbackDecisionId: String?,
+    val postActivationSafetyObservations: List<WorldEquationPostActivationSafetyObservation>,
     val fingerprint: String,
 ) {
     init {
@@ -20,6 +21,12 @@ data class WorldEquationEvidenceRecord(
         require(latestVerdictId == null || latestVerdictId.isNotBlank())
         require(activationHeadFingerprint == null || activationHeadFingerprint.matches(Regex("[0-9a-f]{64}")))
         require(rollbackDecisionId == null || rollbackDecisionId.isNotBlank())
+        require(
+            postActivationSafetyObservations.map { it.id }.distinct().size ==
+                postActivationSafetyObservations.size
+        ) {
+            "World equation post-activation safety observations must be unique"
+        }
         require(id == expectedId())
         require(fingerprint == expectedFingerprint())
         require(evidence.observations.map { it.runId }.distinct().size == evidence.observations.size) {
@@ -59,6 +66,24 @@ data class WorldEquationEvidenceRecord(
                 observations = (evidence.observations + observation)
                     .sortedWith(compareBy({ it.runId }, { it.workloadId }, { it.fingerprint() })),
             ),
+        )
+    }
+
+    fun appendPostActivationSafetyObservation(
+        observation: WorldEquationPostActivationSafetyObservation,
+    ): WorldEquationEvidenceRecord {
+        require(state == WorldEquationLifecycleState.ACTIVE) {
+            "Post-activation safety observations require ACTIVE WorldEquation evidence"
+        }
+        require(observation.candidateEquationFingerprint == candidateEquationFingerprint)
+        require(observation.id !in postActivationSafetyObservations.map { it.id }.toSet()) {
+            "Post-activation safety observation was already recorded"
+        }
+        return next(
+            state = state,
+            evidence = evidence,
+            postActivationSafetyObservations =
+                postActivationSafetyObservations + observation,
         )
     }
 
@@ -110,6 +135,8 @@ data class WorldEquationEvidenceRecord(
         latestVerdictId: String? = this.latestVerdictId,
         activationHeadFingerprint: String? = this.activationHeadFingerprint,
         rollbackDecisionId: String? = this.rollbackDecisionId,
+        postActivationSafetyObservations: List<WorldEquationPostActivationSafetyObservation> =
+            this.postActivationSafetyObservations,
     ): WorldEquationEvidenceRecord = create(
         revision = Math.addExact(revision, 1L),
         state = state,
@@ -117,6 +144,7 @@ data class WorldEquationEvidenceRecord(
         latestVerdictId = latestVerdictId,
         activationHeadFingerprint = activationHeadFingerprint,
         rollbackDecisionId = rollbackDecisionId,
+        postActivationSafetyObservations = postActivationSafetyObservations,
     )
 
     private fun expectedId(): String = stableId(evidence)
@@ -130,6 +158,7 @@ data class WorldEquationEvidenceRecord(
         latestVerdictId.orEmpty(),
         activationHeadFingerprint.orEmpty(),
         rollbackDecisionId.orEmpty(),
+        *postActivationSafetyObservations.map { it.fingerprint() }.toTypedArray(),
     )
 
     companion object {
@@ -140,6 +169,8 @@ data class WorldEquationEvidenceRecord(
             latestVerdictId: String? = null,
             activationHeadFingerprint: String? = null,
             rollbackDecisionId: String? = null,
+            postActivationSafetyObservations: List<WorldEquationPostActivationSafetyObservation> =
+                emptyList(),
         ): WorldEquationEvidenceRecord {
             val id = stableId(evidence)
             val fingerprint = StableFieldIds.fingerprint(
@@ -151,6 +182,7 @@ data class WorldEquationEvidenceRecord(
                 latestVerdictId.orEmpty(),
                 activationHeadFingerprint.orEmpty(),
                 rollbackDecisionId.orEmpty(),
+                *postActivationSafetyObservations.map { it.fingerprint() }.toTypedArray(),
             )
             return WorldEquationEvidenceRecord(
                 id = id,
@@ -160,6 +192,7 @@ data class WorldEquationEvidenceRecord(
                 latestVerdictId = latestVerdictId,
                 activationHeadFingerprint = activationHeadFingerprint,
                 rollbackDecisionId = rollbackDecisionId,
+                postActivationSafetyObservations = postActivationSafetyObservations.toList(),
                 fingerprint = fingerprint,
             )
         }
