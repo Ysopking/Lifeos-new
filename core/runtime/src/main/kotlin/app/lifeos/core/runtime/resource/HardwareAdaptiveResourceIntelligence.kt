@@ -157,7 +157,11 @@ data class HardwareStateSnapshot(
             .coerceIn(MIN_PROCESSOR_CAPACITY, 1.0)
         val measuredLoad = effectiveProcessCpuLoadFraction() ?: UNKNOWN_PROCESS_CPU_LOAD
         val loadHeadroom = (1.0 - measuredLoad).coerceIn(0.0, 1.0)
-        val memoryBoundary = memoryHeadroom() ?: UNKNOWN_MEMORY_HEADROOM
+        val memoryBoundary = memoryHeadroom()
+            ?.let { (0.50 + 0.50 * it).coerceIn(0.0, 1.0) }
+            // Unknown memory is already conservatively constrained by the independent memory quota.
+            // Avoid applying the same uncertainty twice to compute capacity.
+            ?: 1.0
         return (
             processorCapacity *
                 loadHeadroom *
@@ -239,8 +243,8 @@ data class HardwareStateSnapshot(
     private companion object {
         const val REFERENCE_PROCESSORS = 8.0
         const val MIN_PROCESSOR_CAPACITY = 0.125
-        const val UNKNOWN_PROCESS_CPU_LOAD = 0.35
-        const val UNKNOWN_MEMORY_HEADROOM = 0.70
+        // Slightly non-zero so unknown process load is never treated as a perfectly idle CPU.
+        const val UNKNOWN_PROCESS_CPU_LOAD = 0.04
         const val CAPACITY_BUCKETS = 20.0
         const val CRITICAL_BATTERY_FRACTION = 0.02
     }
