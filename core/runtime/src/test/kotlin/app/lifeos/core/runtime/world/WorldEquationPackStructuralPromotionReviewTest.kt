@@ -6,6 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.test.runTest
 
 class WorldEquationPackStructuralPromotionReviewTest {
     @Test
@@ -58,6 +59,44 @@ class WorldEquationPackStructuralPromotionReviewTest {
                 record = running,
             )
         }
+    }
+
+    @Test
+    fun promotionReviewCodecAndRepositoryPreserveImmutableIdentity() = runTest {
+        val validation = validationBundle()
+        val plan = WorldEquationPackStructuralCanaryPlan.create(
+            validation = validation,
+            maximumCases = 20,
+            maximumConsecutiveFailures = 2,
+        )
+        val record = supportedRecord(validation, plan)
+        val review = WorldEquationPackStructuralPromotionReviewGate().build(
+            validation = validation,
+            plan = plan,
+            record = record,
+        )
+
+        val encoded = WorldEquationPackStructuralPromotionReviewCodec.encode(review)
+        assertEquals(
+            review,
+            WorldEquationPackStructuralPromotionReviewCodec.decode(encoded),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            WorldEquationPackStructuralPromotionReviewCodec.decode(
+                encoded + byteArrayOf(1),
+            )
+        }
+
+        val repository = InMemoryWorldEquationPackStructuralPromotionReviewRepository()
+        val coordinator = WorldEquationPackStructuralPromotionReviewCoordinator(repository)
+        val durable = coordinator.buildAndPersist(validation, plan, record)
+        val repeated = coordinator.buildAndPersist(validation, plan, record)
+        assertEquals(review, durable)
+        assertEquals(durable, repeated)
+        assertEquals(durable, coordinator.recover(durable.fingerprint))
+        assertEquals(listOf(durable), repository.loadReport().bundles)
+        assertTrue(durable.ownerApprovalRequired)
+        assertFalse(durable.productiveActivationAllowed)
     }
 
     private fun supportedRecord(
