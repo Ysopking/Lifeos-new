@@ -121,7 +121,7 @@ class CanonicalPhotonIngress(
         }
 
         val submission = kernel.persistAndIngest(photon, mode)
-        check(submission.processingQueued) {
+        check(submission.processingQueued || submission.processingDeferred) {
             submission.processingFailure ?: "Photon cognitive work was not durabilized"
         }
         return submission

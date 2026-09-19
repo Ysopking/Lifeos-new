@@ -695,7 +695,8 @@ class LifeOsKernel internal constructor(
             PhotonSubmissionResult(
                 photon = photon,
                 processingQueued = durable,
-                processingFailure = if (durable) null else "Cognitive work was not durabilized",
+                processingDeferred = !durable,
+                processingFailure = null,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
