@@ -30,6 +30,18 @@ class WorldEquationActivationAuthority(
         activeHeadLocked()
     }
 
+    suspend fun activeSpec(): WorldEquationSpec = mutex.withLock {
+        val head = activeHeadLocked()
+        requireNotNull(resolveRegistered(head.activeEquationVersion)) {
+            "Active world equation version cannot be recovered: " + head.activeEquationVersion
+        }
+    }
+
+    suspend fun resolveSpec(version: String): WorldEquationSpec? = mutex.withLock {
+        require(version.isNotBlank())
+        resolveRegistered(version)
+    }
+
     suspend fun registerCandidate(spec: WorldEquationSpec) = mutex.withLock {
         persistAndRegister(spec)
     }

@@ -32,9 +32,10 @@ sealed interface WorldEquationAutoEvolutionResult {
 /**
  * Evidence-bound parameter-only WorldEquation evolution loop.
  *
- * Candidate specs may be persisted before activation, but productive head mutation is possible only
- * after the durable evidence record reaches PROMOTABLE and the admission gate recomputes every hard
- * gate immediately before WorldEquationActivationAuthority CAS.
+ * Baseline selection is authority-owned: callers never supply the productive baseline. Candidate
+ * specs may be persisted before activation, but productive head mutation is possible only after the
+ * durable evidence record reaches PROMOTABLE and the admission gate recomputes every hard gate
+ * immediately before WorldEquationActivationAuthority CAS.
  */
 class WorldEquationAutoEvolutionCoordinator(
     private val evidence: WorldEquationEvidenceRepository,
@@ -45,14 +46,11 @@ class WorldEquationAutoEvolutionCoordinator(
 ) {
     suspend fun start(
         candidate: WorldEquationSpec,
-        baseline: WorldEquationSpec,
         protocol: WorldEquationEvaluationProtocol,
     ): WorldEquationAutoEvolutionResult {
-        val head = authority.activeHead()
-        if (head.activeEquationVersion != baseline.version) {
-            return WorldEquationAutoEvolutionResult.Blocked(
-                "world-equation-baseline-is-not-active"
-            )
+        val baseline = authority.activeSpec()
+        require(candidate.version != baseline.version) {
+            "WorldEquation candidate version must differ from active baseline"
         }
         authority.registerCandidate(candidate)
         val record = evidenceCoordinator.beginShadow(candidate, baseline, protocol)
@@ -61,9 +59,21 @@ class WorldEquationAutoEvolutionCoordinator(
 
     suspend fun observe(
         candidate: WorldEquationSpec,
-        baseline: WorldEquationSpec,
         case: WorldEquationShadowCase,
     ): WorldEquationAutoEvolutionResult {
+        val recordBefore = requireNotNull(evidence.load(candidate.fingerprint())) {
+            "WorldEquation evidence is missing"
+        }
+        val baseline = requireNotNull(authority.resolveSpec(recordBefore.evidence.baselineVersion)) {
+            "WorldEquation evidence baseline cannot be recovered"
+        }
+        require(
+            baseline.fingerprint() == recordBefore.evidence.baselineEquationFingerprint &&
+                baseline.physicsFingerprint() == recordBefore.evidence.baselinePhysicsFingerprint
+        ) {
+            "Recovered WorldEquation baseline differs from frozen evidence"
+        }
+
         val headBefore = authority.activeHead()
         if (headBefore.activeEquationVersion != baseline.version) {
             return WorldEquationAutoEvolutionResult.Blocked(
@@ -84,7 +94,6 @@ class WorldEquationAutoEvolutionCoordinator(
 
     suspend fun promoteIfEligible(
         candidate: WorldEquationSpec,
-        baseline: WorldEquationSpec,
     ): WorldEquationAutoEvolutionResult {
         val record = requireNotNull(evidence.load(candidate.fingerprint())) {
             "WorldEquation evidence is missing"
@@ -94,6 +103,11 @@ class WorldEquationAutoEvolutionCoordinator(
                 "world-equation-evidence-not-promotable:" + record.state.name.lowercase()
             )
         }
+        val baseline = requireNotNull(authority.resolveSpec(record.evidence.baselineVersion)) {
+            "WorldEquation evidence baseline cannot be recovered"
+        }
+        require(baseline.fingerprint() == record.evidence.baselineEquationFingerprint)
+        require(baseline.physicsFingerprint() == record.evidence.baselinePhysicsFingerprint)
         return promote(candidate, baseline, observation = null)
     }
 
@@ -105,7 +119,7 @@ class WorldEquationAutoEvolutionCoordinator(
         return when {
             head.activeEquationVersion == candidate.version &&
                 record.state == WorldEquationLifecycleState.PROMOTABLE ->
-                evidenceCoordinator.markActive(candidate, head.fingerprint)
+                evidenceCoordinator.markActive(candidate.fingerprint(), head.fingerprint)
             head.activeEquationVersion == candidate.version &&
                 record.state == WorldEquationLifecycleState.ACTIVE -> {
                 require(record.activationHeadFingerprint == head.fingerprint) {
@@ -135,7 +149,7 @@ class WorldEquationAutoEvolutionCoordinator(
             expectedHeadFingerprint = expectedHead.fingerprint,
         )
         val activeRecord = evidenceCoordinator.markActive(
-            candidate = candidate,
+            candidateEquationFingerprint = candidate.fingerprint(),
             activationHeadFingerprint = promotedHead.fingerprint,
         )
         return WorldEquationAutoEvolutionResult.Promoted(

@@ -197,10 +197,30 @@ class WorldEquationPostActivationSafetyMonitor(
     }
 
     suspend fun reconcile() {
-        val report = evidence.loadReport()
+        var report = evidence.loadReport()
         require(!report.corrupted) {
             "WorldEquation safety evidence recovery required"
         }
+
+        val activeHead = authority.activeHead()
+        val promotedButUnsealed = report.records.filter {
+            it.state == WorldEquationLifecycleState.PROMOTABLE &&
+                it.evidence.candidateVersion == activeHead.activeEquationVersion
+        }
+        require(promotedButUnsealed.size <= 1) {
+            "Multiple PROMOTABLE evidence records match the active WorldEquation head"
+        }
+        promotedButUnsealed.singleOrNull()?.let { record ->
+            evidenceCoordinator.markActive(
+                candidateEquationFingerprint = record.candidateEquationFingerprint,
+                activationHeadFingerprint = activeHead.fingerprint,
+            )
+            report = evidence.loadReport()
+            require(!report.corrupted) {
+                "WorldEquation safety evidence recovery required"
+            }
+        }
+
         report.records
             .filter { it.state == WorldEquationLifecycleState.QUARANTINED }
             .forEach { record ->

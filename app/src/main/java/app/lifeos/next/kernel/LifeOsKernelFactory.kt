@@ -134,6 +134,8 @@ import app.lifeos.core.runtime.evolution.WorldEquationEvolutionAdmissionGate
 import app.lifeos.core.runtime.evolution.WorldEquationPromotionEvaluator
 import app.lifeos.core.runtime.evolution.WorldEquationPromotionPolicy
 import app.lifeos.core.runtime.evolution.WorldEquationEvidenceCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationAutoEvolutionCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationShadowEvaluator
 import app.lifeos.core.runtime.evolution.WorldEquationPostActivationSafetyMonitor
 import app.lifeos.core.runtime.evolution.WorldEquationPostActivationSafetyRuntimeRegistry
 import app.lifeos.core.runtime.field.FieldThoughtGraphProjectionCoordinator
@@ -449,6 +451,13 @@ class LifeOsKernelFactory(
             baseline = cognitiveWorldEquationProfile.spec,
             specs = worldEquationSpecs,
             admissionVerifier = worldEquationAdmissionGate,
+        )
+        val worldEquationAutoEvolution = WorldEquationAutoEvolutionCoordinator(
+            evidence = worldEquationEvidence,
+            evidenceCoordinator = worldEquationEvidenceCoordinator,
+            shadow = WorldEquationShadowEvaluator(),
+            admissionGate = worldEquationAdmissionGate,
+            authority = worldEquationAuthority,
         )
         val worldEquationSafetyMonitor = WorldEquationPostActivationSafetyMonitor(
             evidence = worldEquationEvidence,
@@ -1181,6 +1190,7 @@ class LifeOsKernelFactory(
             goalCapabilityRouter = goalCapabilityRouter,
             privateGeneratedToolRuntime = privateGeneratedToolRuntime,
             evolutionRuntime = evolutionResources,
+            worldEquationAutoEvolution = worldEquationAutoEvolution,
             localReminderScheduler = AndroidLocalReminderScheduler(appContext),
             sceneCompiler = sceneCompiler,
             sceneRasterizer = sceneRasterizer,

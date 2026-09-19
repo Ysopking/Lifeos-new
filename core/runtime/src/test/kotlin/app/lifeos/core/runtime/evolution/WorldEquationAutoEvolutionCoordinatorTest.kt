@@ -79,13 +79,13 @@ class WorldEquationAutoEvolutionCoordinatorTest {
         )
 
         assertIs<WorldEquationAutoEvolutionResult.Started>(
-            coordinator.start(candidate, baseline, protocol)
+            coordinator.start(candidate, protocol)
         )
         assertIs<WorldEquationAutoEvolutionResult.Observed>(
-            coordinator.observe(candidate, baseline, shadowCase("run-1"))
+            coordinator.observe(candidate, shadowCase("run-1"))
         )
         val promoted = assertIs<WorldEquationAutoEvolutionResult.Promoted>(
-            coordinator.observe(candidate, baseline, shadowCase("run-2"))
+            coordinator.observe(candidate, shadowCase("run-2"))
         )
 
         assertEquals(candidate.version, promoted.head.activeEquationVersion)

@@ -80,8 +80,14 @@ class WorldEquationEvidenceCoordinator(
     suspend fun markActive(
         candidate: WorldEquationSpec,
         activationHeadFingerprint: String,
+    ): WorldEquationEvidenceRecord =
+        markActive(candidate.fingerprint(), activationHeadFingerprint)
+
+    suspend fun markActive(
+        candidateEquationFingerprint: String,
+        activationHeadFingerprint: String,
     ): WorldEquationEvidenceRecord {
-        val current = requireNotNull(repository.load(candidate.fingerprint()))
+        val current = requireNotNull(repository.load(candidateEquationFingerprint))
         require(current.state == WorldEquationLifecycleState.PROMOTABLE) {
             "Only PROMOTABLE WorldEquation evidence may become ACTIVE"
         }

@@ -50,6 +50,11 @@ import app.lifeos.core.runtime.cognition.PhotonDeltaType
 import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
 import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
+import app.lifeos.core.runtime.evolution.WorldEquationAutoEvolutionCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationAutoEvolutionResult
+import app.lifeos.core.runtime.evolution.WorldEquationEvaluationProtocol
+import app.lifeos.core.runtime.evolution.WorldEquationShadowCase
+import app.lifeos.core.field.world.WorldEquationSpec
 import app.lifeos.core.runtime.goal.GoalResumeEngine
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.goal.GoalOutcomeLearningHook
@@ -108,6 +113,7 @@ class LifeOsKernel internal constructor(
     private val goalCapabilityRouter: LanguageGoalCapabilityRouter,
     private val privateGeneratedToolRuntime: PrivateGeneratedToolRuntimeResources,
     private val evolutionRuntime: EvolutionRuntimeResources,
+    private val worldEquationAutoEvolution: WorldEquationAutoEvolutionCoordinator,
     private val localReminderScheduler: LocalReminderScheduler,
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
@@ -230,6 +236,29 @@ class LifeOsKernel internal constructor(
         bootstrapJob ?: scope.launch {
             bootstrap()
         }.also { bootstrapJob = it }
+    }
+
+    suspend fun startWorldEquationEvolution(
+        candidate: WorldEquationSpec,
+        protocol: WorldEquationEvaluationProtocol,
+    ): WorldEquationAutoEvolutionResult {
+        requireCognitiveReady()
+        return worldEquationAutoEvolution.start(candidate, protocol)
+    }
+
+    suspend fun observeWorldEquationEvolution(
+        candidate: WorldEquationSpec,
+        case: WorldEquationShadowCase,
+    ): WorldEquationAutoEvolutionResult {
+        requireCognitiveReady()
+        return worldEquationAutoEvolution.observe(candidate, case)
+    }
+
+    suspend fun promoteWorldEquationIfEligible(
+        candidate: WorldEquationSpec,
+    ): WorldEquationAutoEvolutionResult {
+        requireCognitiveReady()
+        return worldEquationAutoEvolution.promoteIfEligible(candidate)
     }
 
     fun retryBootstrap(): Job = synchronized(startLock) {
