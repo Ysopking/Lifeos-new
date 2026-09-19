@@ -161,7 +161,37 @@ class HardwareAdaptiveResourceIntelligenceTest {
         )
         val explicitIdle = unknownLoad.copy(processCpuLoadFraction = 0.0)
 
-        assertTrue(unknownLoad.computeHeadroom() < explicitIdle.computeHeadroom())
+        assertTrue(
+            unknownLoad.executionComputeHeadroom() <
+                explicitIdle.executionComputeHeadroom()
+        )
+    }
+
+    @Test
+    fun measuredProcessLoadContractsExecutionWithoutRevokingLegacyQuotaAdmission() {
+        val idle = HardwareStateSnapshot(
+            observedAt = Instant.parse("2026-09-11T12:00:00Z"),
+            availableProcessors = 8,
+            thermalState = HardwareThermalState.NOMINAL,
+            processCpuLoadFraction = 0.0,
+            availableMemoryBytes = 800,
+            totalMemoryBytes = 1_000,
+        )
+        val busy = idle.copy(processCpuLoadFraction = 0.95)
+        val requested = ResourceBudgetUsage(
+            elapsedMillis = 1_500,
+            workUnits = 2,
+            memoryBytes = 8,
+            ioBytes = 1,
+            candidates = 1,
+        )
+
+        val idleAdmission = optimizer.plan(hardQuota, requested, idle)
+        val busyAdmission = optimizer.plan(hardQuota, requested, busy)
+
+        assertEquals(idleAdmission.effectiveQuota, busyAdmission.effectiveQuota)
+        assertTrue(busyAdmission.requestedFits)
+        assertTrue(busy.executionComputeHeadroom() < idle.executionComputeHeadroom())
     }
 
     private fun ResourceBudgetQuota.asRequestedUsage(): ResourceBudgetUsage = ResourceBudgetUsage(
