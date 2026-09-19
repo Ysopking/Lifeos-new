@@ -15,7 +15,32 @@ class LifeOsThemeContractTest {
     @Test
     fun positiveAnimatorScalePreservesMotion() {
         assertEquals(LifeOsMotionMode.STANDARD, LifeOsMotionPolicy.modeFor(1f))
-        assertEquals(LifeOsTokens.Motion.standardMs, LifeOsMotionPolicy.durationMs(LifeOsTokens.Motion.standardMs, 1f))
+        assertEquals(
+            LifeOsTokens.Motion.standardMs,
+            LifeOsMotionPolicy.durationMs(LifeOsTokens.Motion.standardMs, 1f),
+        )
+    }
+
+    @Test
+    fun designTokensPreserveResponsiveHierarchy() {
+        val spacing = listOf(
+            LifeOsTokens.Spacing.xSmall,
+            LifeOsTokens.Spacing.small,
+            LifeOsTokens.Spacing.medium,
+            LifeOsTokens.Spacing.large,
+            LifeOsTokens.Spacing.xLarge,
+            LifeOsTokens.Spacing.xxLarge,
+        )
+        assertTrue(spacing.zipWithNext().all { (left, right) -> left < right })
+
+        assertTrue(LifeOsTokens.Radius.small.value > 0f)
+        assertTrue(LifeOsTokens.Radius.medium > LifeOsTokens.Radius.small)
+        assertTrue(LifeOsTokens.Radius.large >= LifeOsTokens.Radius.medium)
+        assertTrue(LifeOsTokens.Layout.readingMaxWidth < LifeOsTokens.Layout.workspaceMaxWidth)
+        assertTrue(LifeOsTokens.Layout.inspectorWidth < LifeOsTokens.Layout.readingMaxWidth)
+        assertTrue(LifeOsTokens.Size.minimumTouchTarget.value >= 48f)
+        assertTrue(LifeOsTokens.Size.minimumTouchTarget > LifeOsTokens.Size.navigationIcon)
+        assertTrue(LifeOsTokens.Size.minimumTouchTarget > LifeOsTokens.Size.actionIcon)
     }
 
     @Test
