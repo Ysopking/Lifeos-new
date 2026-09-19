@@ -5,6 +5,14 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.source.CanonicalSourceMetadata
+import app.lifeos.core.model.source.SourceAccountRef
+import app.lifeos.core.model.source.SourceExternalObjectRef
+import app.lifeos.core.model.source.SourceMetadataOrigin
+import app.lifeos.core.model.source.SourceObjectKind
+import app.lifeos.core.model.source.SourcePrivacyZone
+import app.lifeos.core.model.source.SourceProviderRef
+import app.lifeos.core.model.source.SourceTimestamps
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
@@ -50,6 +58,51 @@ class DurableLifeMemoryRuntimeTest {
         assertEquals(1, backing.loadAll().count { "life-source-evidence" in it.tags })
         assertEquals("cursor-1", recovered.cursorAfter.position)
         assertNotNull(backing.loadAll().singleOrNull { "life-source-checkpoint" in it.tags })
+    }
+
+    @Test
+    fun crashAfterSourceBeforeMetadataDoesNotAdvanceCursorAndRetryRepairsCompanion() = runTest {
+        val backing = MemoryPhotonRepository()
+        val repository = FailMetadataOnceRepository(backing)
+        val descriptor = LifeSourceDescriptor("mail", "adapter-v3")
+        val record = LifeSourceRecord(
+            sourceId = "mail",
+            recordId = "message-42",
+            observedAt = now.minusSeconds(30),
+            payload = "Hello",
+            tags = setOf("message"),
+            metadata = sourceMetadata("message-42", "v1"),
+        )
+        val ingestor = DurableLifeSourceIngestor(repository)
+
+        assertFailsWith<IllegalStateException> {
+            ingestor.ingest(
+                descriptor,
+                listOf(record),
+                "cursor-1",
+                authorized = true,
+                committedAt = now,
+            )
+        }
+
+        assertEquals(1, backing.loadAll().count { "life-source-evidence" in it.tags })
+        assertTrue(backing.loadAll().none { "source-metadata" in it.tags })
+        assertNull(backing.loadAll().singleOrNull { "life-source-checkpoint" in it.tags })
+
+        repository.failMetadata = false
+        val recovered = ingestor.ingest(
+            descriptor,
+            listOf(record),
+            "cursor-1",
+            authorized = true,
+            committedAt = now.plusSeconds(1),
+        )
+
+        assertEquals("cursor-1", recovered.cursorAfter.position)
+        assertEquals(1, recovered.metadataPhotons.size)
+        assertEquals(1, backing.loadAll().count { "source-metadata" in it.tags })
+        val checkpoint = requireNotNull(backing.loadAll().singleOrNull { "life-source-checkpoint" in it.tags })
+        assertTrue(recovered.metadataPhotons.single().id in checkpoint.provenance.parentIds)
     }
 
     @Test
@@ -208,6 +261,27 @@ class DurableLifeMemoryRuntimeTest {
         }
     }
 
+    private fun sourceMetadata(
+        externalId: String,
+        version: String,
+    ): CanonicalSourceMetadata = CanonicalSourceMetadata(
+        objectKind = SourceObjectKind.EMAIL,
+        origin = SourceMetadataOrigin.CONNECTOR,
+        privacyZone = SourcePrivacyZone.SENSITIVE,
+        externalObject = SourceExternalObjectRef(
+            provider = SourceProviderRef("mail"),
+            account = SourceAccountRef("mail", "account-1"),
+            objectKind = SourceObjectKind.EMAIL,
+            externalId = externalId,
+            externalVersion = version,
+        ),
+        timestamps = SourceTimestamps(
+            occurredAt = now.minusSeconds(30),
+            observedAt = now.minusSeconds(20),
+            importedAt = now.minusSeconds(10),
+        ),
+    )
+
     private fun photon(
         id: String,
         createdAt: Instant,
@@ -231,6 +305,24 @@ class DurableLifeMemoryRuntimeTest {
         override suspend fun loadReport(): PhotonLoadReport = PhotonLoadReport(data.values.toList(), emptyList())
         override suspend fun loadAll(): List<Photon> = data.values.toList()
         override suspend fun delete(id: PhotonId) { data.remove(id) }
+    }
+
+    private class FailMetadataOnceRepository(
+        private val delegate: MemoryPhotonRepository,
+    ) : PhotonRepository {
+        var failMetadata: Boolean = true
+
+        override suspend fun save(photon: Photon) {
+            if (failMetadata && "source-metadata" in photon.tags) {
+                throw IllegalStateException("simulated metadata crash")
+            }
+            delegate.save(photon)
+        }
+
+        override suspend fun load(id: PhotonId): Photon? = delegate.load(id)
+        override suspend fun loadReport(): PhotonLoadReport = delegate.loadReport()
+        override suspend fun loadAll(): List<Photon> = delegate.loadAll()
+        override suspend fun delete(id: PhotonId) = delegate.delete(id)
     }
 
     private class FailCheckpointOnceRepository(

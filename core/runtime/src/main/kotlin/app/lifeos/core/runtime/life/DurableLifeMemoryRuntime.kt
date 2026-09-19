@@ -11,6 +11,7 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.source.SourceMetadataRepository
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.Base64
@@ -53,6 +54,7 @@ data class DurableLifeIngestCommit(
     val cursorAfter: LifeSourceCursor,
     val evidencePhotons: List<Photon>,
     val checkpoint: DurableLifeSourceCheckpoint,
+    val metadataPhotons: List<Photon> = emptyList(),
     val permissionGap: Photon? = null,
 )
 
@@ -297,6 +299,7 @@ class PhotonBackedMemoryAccessLedgerStore(
 class DurableLifeSourceIngestor(
     private val photons: PhotonRepository,
     private val checkpoints: PhotonBackedLifeSourceCheckpointStore = PhotonBackedLifeSourceCheckpointStore(photons),
+    private val sourceMetadata: SourceMetadataRepository = SourceMetadataRepository(photons),
 ) {
     suspend fun ingest(
         descriptor: LifeSourceDescriptor,
@@ -325,20 +328,31 @@ class DurableLifeSourceIngestor(
             require(duplicates.distinct().size == 1) { "Conflicting duplicate life source record: $recordId" }
             duplicates.single()
         }.sortedWith(compareBy<LifeSourceRecord> { it.observedAt }.thenBy { it.recordId })
-        val evidence = canonicalRecords.map { record -> sourceRecordPhoton(descriptor, record) }
-        evidence.forEach { saveIdempotent(it) }
+        val evidence = mutableListOf<Photon>()
+        val metadataPhotons = mutableListOf<Photon>()
+        canonicalRecords.forEach { record ->
+            val sourcePhoton = sourceRecordPhoton(descriptor, record)
+            saveIdempotent(sourcePhoton)
+            evidence += sourcePhoton
+            record.metadata?.let { metadata ->
+                metadataPhotons += sourceMetadata.commit(sourcePhoton, metadata)
+            }
+        }
+        val committedIds = (evidence + metadataPhotons)
+            .map { it.id.value }
+            .sorted()
         val batchFingerprint = StableCognitiveIds.fingerprint(
-            "life-source-ingest-batch/v2",
+            "life-source-ingest-batch/v3",
             descriptor.fingerprint,
             before.position.orEmpty(),
             nextPosition.orEmpty(),
-            *evidence.map { it.id.value }.toTypedArray(),
+            *committedIds.toTypedArray(),
         )
         val checkpoint = checkpoints.commit(
             previous = before,
             nextPosition = nextPosition,
             batchFingerprint = batchFingerprint,
-            evidenceIds = evidence.mapTo(linkedSetOf()) { it.id },
+            evidenceIds = (evidence + metadataPhotons).mapTo(linkedSetOf()) { it.id },
             committedAt = committedAt,
         )
         return DurableLifeIngestCommit(
@@ -347,6 +361,7 @@ class DurableLifeSourceIngestor(
             cursorAfter = checkpoint.cursor,
             evidencePhotons = evidence,
             checkpoint = checkpoint,
+            metadataPhotons = metadataPhotons,
         )
     }
 

@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.life
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.model.source.CanonicalSourceMetadata
 import java.time.Instant
 
 enum class LifeEntityType { PERSON, ORGANIZATION, PROJECT, ACCOUNT, LOCATION, DOCUMENT }
@@ -302,6 +303,7 @@ data class LifeSourceRecord(
     val mimeType: String = "text/plain",
     val tags: Set<String> = emptySet(),
     val confidence: Double = 1.0,
+    val metadata: CanonicalSourceMetadata? = null,
 ) {
     init {
         require(sourceId.isNotBlank())

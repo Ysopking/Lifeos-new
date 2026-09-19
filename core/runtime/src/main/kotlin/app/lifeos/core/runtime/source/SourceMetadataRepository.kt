@@ -1,32 +1,42 @@
 package app.lifeos.core.runtime.source
 
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.PhotonRevisionWriteResult
 import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.model.source.CanonicalSourceMetadata
 
 class SourceMetadataRepository(
-    private val photons: RevisionedPhotonRepository,
+    private val photons: PhotonRepository,
 ) {
     suspend fun commit(
         sourcePhoton: Photon,
         metadata: CanonicalSourceMetadata,
     ): Photon {
         val sourceRef = PhotonRevisionRef(sourcePhoton.id, sourcePhoton.revision)
-        check(photons.load(sourceRef) == sourcePhoton) {
+        val durableSource = if (photons is RevisionedPhotonRepository) {
+            photons.load(sourceRef)
+        } else {
+            photons.load(sourceRef.photonId)?.takeIf { it.revision == sourceRef.revision }
+        }
+        check(durableSource == sourcePhoton) {
             "Source metadata cannot commit before its exact source revision is durable"
         }
 
         val companion = SourceMetadataPhotonFactory.create(sourcePhoton, metadata)
         val existing = photons.load(companion.id)
         if (existing == null) {
-            when (val result = photons.saveRevision(companion, expectedPreviousRevision = null)) {
-                is PhotonRevisionWriteResult.Created -> Unit
-                is PhotonRevisionWriteResult.Idempotent -> check(result.photon == companion)
-                is PhotonRevisionWriteResult.Advanced,
-                is PhotonRevisionWriteResult.Conflict,
-                -> error("Unexpected source metadata companion write result: $result")
+            if (photons is RevisionedPhotonRepository) {
+                when (val result = photons.saveRevision(companion, expectedPreviousRevision = null)) {
+                    is PhotonRevisionWriteResult.Created -> Unit
+                    is PhotonRevisionWriteResult.Idempotent -> check(result.photon == companion)
+                    is PhotonRevisionWriteResult.Advanced,
+                    is PhotonRevisionWriteResult.Conflict,
+                    -> error("Unexpected source metadata companion write result: $result")
+                }
+            } else {
+                photons.save(companion)
             }
         } else {
             check(existing == companion) {
