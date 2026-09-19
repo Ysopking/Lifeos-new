@@ -620,7 +620,7 @@ internal object StorageCleanupPlanner {
             )
     }
 
-    private fun suggestedDirectory(file: StorageIndexedFile): String? = when (file.category) {
+    internal fun suggestedDirectory(file: StorageIndexedFile): String? = when (file.category) {
         AndroidFileCategory.IMAGE -> "Pictures/LIFEOS"
         AndroidFileCategory.VIDEO -> "Movies/LIFEOS"
         AndroidFileCategory.AUDIO -> "Music/LIFEOS"
