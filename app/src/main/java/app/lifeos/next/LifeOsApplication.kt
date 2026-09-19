@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Environment
 import app.lifeos.core.data.EncryptedLiveSourceCursorRepository
 import app.lifeos.core.data.EncryptedLiveSourceSnapshotRepository
+import app.lifeos.core.data.goal.EncryptedGoalCognitiveCycleBindingRepository
 import app.lifeos.core.data.HealthGraphLiveSourceHealthReporter
 import app.lifeos.core.data.LiveDataHubAuthority
 import app.lifeos.core.data.LiveSourceDeltaCoordinator
@@ -409,6 +410,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                                 photonIngress.ingestWithReceipt(photon, PhotonIngressMode.DERIVED)
                             },
                             outcomeLookup = kernel.productivePhotonQueries,
+                            cognitiveBindings = EncryptedGoalCognitiveCycleBindingRepository(this),
+                            outcomeLearning = kernel.goalOutcomeLearning,
                             traces = goalDecisionTraceRecorder,
                         )
                     )
