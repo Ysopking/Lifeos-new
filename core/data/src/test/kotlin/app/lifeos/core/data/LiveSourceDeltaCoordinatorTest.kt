@@ -143,6 +143,115 @@ class LiveSourceDeltaCoordinatorTest {
     }
 
     @Test
+    fun cursorlessSnapshotDiffSurvivesCoordinatorReconstruction() = runBlocking {
+        val adapter = FakeAdapter(
+            sourceId = sourceId,
+            inventoryResult = SourceInventory(
+                listOf(SourceInventoryItem("event-a", "v1")),
+                null,
+            ),
+        )
+        val cursors = MemoryCursorRepository()
+        val snapshots = MemorySnapshotRepository()
+        val authority = FakeAuthority()
+        val first = LiveSourceDeltaCoordinator(
+            connectors = listOf(connector(adapter)),
+            cursors = cursors,
+            hub = authority,
+            snapshots = snapshots,
+            now = { at },
+        )
+
+        val bootstrapped = assertIs<LiveSourceSyncResult.Bootstrapped>(first.sync(sourceId))
+        assertEquals(null, bootstrapped.state.cursor)
+        assertEquals(0L, bootstrapped.state.lastObservationRevision)
+
+        adapter.inventoryResult = SourceInventory(
+            listOf(
+                SourceInventoryItem("event-b", "v1"),
+                SourceInventoryItem("event-a", "v2"),
+            ),
+            null,
+        )
+        val reconstructed = LiveSourceDeltaCoordinator(
+            connectors = listOf(connector(adapter)),
+            cursors = cursors,
+            hub = authority,
+            snapshots = snapshots,
+            now = { at.plusSeconds(1) },
+        )
+
+        val advanced = assertIs<LiveSourceSyncResult.Advanced>(reconstructed.sync(sourceId))
+
+        assertEquals(2, advanced.observedDeltaCount)
+        assertEquals(2, advanced.coalescedDeltaCount)
+        assertEquals(2, advanced.acceptedDeltaCount)
+        assertEquals(listOf("event-a", "event-b"), authority.deltas.map { it.externalId })
+        assertEquals(2L, advanced.state.lastObservationRevision)
+        assertEquals(null, advanced.state.cursor)
+
+        val durableSnapshot = assertIs<LiveSourceSnapshotLoadResult.Loaded>(
+            snapshots.load(sourceId)
+        ).state
+        assertEquals(2L, durableSnapshot.lastObservationRevision)
+        assertEquals(listOf("event-a", "event-b"), durableSnapshot.items.map { it.externalKey })
+        assertEquals(durableSnapshot.inventoryFingerprint, advanced.state.baselineFingerprint)
+    }
+
+    @Test
+    fun snapshotAheadOfCursorIsReconciledAfterProcessDeathWithoutReplay() = runBlocking {
+        val adapter = FakeAdapter(
+            sourceId = sourceId,
+            inventoryResult = SourceInventory(
+                listOf(SourceInventoryItem("event-a", "v1")),
+                null,
+            ),
+        )
+        val cursors = MemoryCursorRepository()
+        val snapshots = MemorySnapshotRepository()
+        val authority = FakeAuthority()
+        val first = LiveSourceDeltaCoordinator(
+            connectors = listOf(connector(adapter)),
+            cursors = cursors,
+            hub = authority,
+            snapshots = snapshots,
+            now = { at },
+        )
+        assertIs<LiveSourceSyncResult.Bootstrapped>(first.sync(sourceId))
+
+        val baseline = assertIs<LiveSourceSnapshotLoadResult.Loaded>(
+            snapshots.load(sourceId)
+        ).state
+        val committedBeforeCrash = baseline.replace(
+            nextItems = listOf(SourceInventoryItem("event-a", "v2")),
+            nextObservationRevision = 1L,
+            at = at.plusSeconds(1),
+        )
+        assertIs<LiveSourceSnapshotWriteResult.Saved>(
+            snapshots.compareAndSet(sourceId, baseline.revision, committedBeforeCrash)
+        )
+        adapter.inventoryResult = SourceInventory(
+            listOf(SourceInventoryItem("event-a", "v2")),
+            null,
+        )
+
+        val reconstructed = LiveSourceDeltaCoordinator(
+            connectors = listOf(connector(adapter)),
+            cursors = cursors,
+            hub = authority,
+            snapshots = snapshots,
+            now = { at.plusSeconds(2) },
+        )
+        val recovered = assertIs<LiveSourceSyncResult.Advanced>(reconstructed.sync(sourceId))
+
+        assertEquals(0, recovered.observedDeltaCount)
+        assertEquals(0, recovered.acceptedDeltaCount)
+        assertEquals(1L, recovered.state.lastObservationRevision)
+        assertEquals(committedBeforeCrash.inventoryFingerprint, recovered.state.baselineFingerprint)
+        assertTrue(authority.deltas.isEmpty())
+    }
+
+    @Test
     fun changedAccountIdentityFailsClosedWithoutReadingSource() = runBlocking {
         val adapter = FakeAdapter(
             sourceId = sourceId,
@@ -227,7 +336,7 @@ class LiveSourceDeltaCoordinatorTest {
 
     private class FakeAdapter(
         override val sourceId: LiveSourceId,
-        private val inventoryResult: SourceInventory = SourceInventory(emptyList(), null),
+        var inventoryResult: SourceInventory = SourceInventory(emptyList(), null),
         private val changeResult: SourceChangeSet = SourceChangeSet(emptyList(), SourceCursor("next")),
     ) : LiveSourceAdapter {
         var inventoryCalls = 0
@@ -264,6 +373,27 @@ class LiveSourceDeltaCoordinatorTest {
             }
             states[sourceId] = next
             return LiveSourceCursorWriteResult.Saved(next)
+        }
+    }
+
+    private class MemorySnapshotRepository : LiveSourceSnapshotRepository {
+        private val states = linkedMapOf<LiveSourceId, LiveSourceSnapshotState>()
+
+        override suspend fun load(sourceId: LiveSourceId): LiveSourceSnapshotLoadResult =
+            states[sourceId]?.let(LiveSourceSnapshotLoadResult::Loaded)
+                ?: LiveSourceSnapshotLoadResult.Missing
+
+        override suspend fun compareAndSet(
+            sourceId: LiveSourceId,
+            expectedRevision: Long?,
+            next: LiveSourceSnapshotState,
+        ): LiveSourceSnapshotWriteResult {
+            val current = states[sourceId]
+            if (current?.revision != expectedRevision) {
+                return LiveSourceSnapshotWriteResult.Conflict(current?.revision)
+            }
+            states[sourceId] = next
+            return LiveSourceSnapshotWriteResult.Saved(next)
         }
     }
 
