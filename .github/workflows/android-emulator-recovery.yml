@@ -3,49 +3,19 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - ".github/workflows/android-emulator-recovery.yml"
-      - ".github/scripts/android-emulator-recovery.sh"
-      - ".github/scripts/ci-emulator-preflight.sh"
-      - "app/src/androidTest/**"
-      - "app/src/main/java/app/lifeos/next/ChatMainActivity.kt"
-      - "app/src/main/java/app/lifeos/next/LifeOsChatViewModel.kt"
-      - "app/src/main/java/app/lifeos/next/ui/**"
-      - "app/src/main/java/app/lifeos/next/LifeOsApplication.kt"
-      - "app/src/main/java/app/lifeos/next/LifeOsStartupComposition.kt"
-      - "app/src/main/java/app/lifeos/next/LifeOsRuntimeWiring.kt"
-      - "app/src/main/java/app/lifeos/next/kernel/**"
-      - "core/language/src/main/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/ThoughtMatrix*.kt"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/artifact/**"
-      - "core/runtime/src/test/kotlin/app/lifeos/core/runtime/artifact/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/checkpoints/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/thought/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/workers/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/evolution/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/goal/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/deepsearch/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/resource/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/world/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/trace/**"
-      - "core/runtime/src/main/kotlin/app/lifeos/core/runtime/hardening/**"
-      - "core/runtime/src/test/kotlin/app/lifeos/core/runtime/hardening/**"
-      - "core/data/src/main/kotlin/app/lifeos/core/data/thought/**"
-      - "core/data/src/main/kotlin/app/lifeos/core/data/capability/**"
-      - "core/data/src/main/kotlin/app/lifeos/core/data/evolution/**"
-      - "core/data/src/main/kotlin/app/lifeos/core/data/goal/**"
-      - "core/data/src/main/kotlin/app/lifeos/core/data/deepsearch/**"
-      - "core/data/src/main/kotlin/app/lifeos/core/data/resource/**"
-      - "core/data/src/main/kotlin/app/lifeos/core/data/world/**"
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
 permissions:
   contents: read
 concurrency:
-  group: android-emulator-recovery-${{ github.ref }}
-  cancel-in-progress: true
+  group: android-emulator-recovery-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   android-emulator-recovery:
+    name: Android Emulator Recovery
     runs-on: ubuntu-latest
     timeout-minutes: 32
     steps:

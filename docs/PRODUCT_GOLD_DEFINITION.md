@@ -52,6 +52,10 @@ For the exact candidate SHA all required jobs must be green:
 - LIFEOS Product Gold;
 - BuildStudio Candidate Host Gate for any candidate that participates in mutation/promotion evidence.
 
+For changes entering `main`, the exact candidate is the immutable merge-queue candidate SHA.
+A required exact-head run must not be cancelled by a later `main` push. A repository head may
+be called Product Gold only when that exact head has its own complete required-check seal.
+
 ## Release state
 
 `2.0.0-rc1` means the integrated private product is release-candidate quality but Product Gold is not yet asserted for arbitrary BuildStudio host execution.

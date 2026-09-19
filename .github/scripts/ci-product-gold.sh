@@ -78,6 +78,9 @@ printf 'source_head_sha=%s\n' "$source_head_sha" | tee -a "$evidence_dir/candida
 printf 'checkout_sha=%s\n' "$checkout_sha" | tee -a "$evidence_dir/candidate.txt"
 printf 'workflow_run_id=%s\n' "${GOLD_RUN_ID:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'workflow_job=%s\n' "${GOLD_JOB:-local}" | tee -a "$evidence_dir/candidate.txt"
+printf 'event_name=%s\n' "${GITHUB_EVENT_NAME:-local}" | tee -a "$evidence_dir/candidate.txt"
+printf 'git_ref=%s\n' "${GITHUB_REF:-local}" | tee -a "$evidence_dir/candidate.txt"
+printf 'git_ref_name=%s\n' "${GITHUB_REF_NAME:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'product_gold_requires_emulator=true\n' | tee -a "$evidence_dir/candidate.txt"
 printf '%s\n' \
   'security_static=PASS' \
