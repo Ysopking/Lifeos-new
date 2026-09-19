@@ -1,43 +1,89 @@
 package app.lifeos.core.data.capability
 
 import android.content.Context
+import app.lifeos.core.data.security.EncryptedCasHeadStore
 import app.lifeos.core.data.security.EncryptedLedgerVaultSupport
+import app.lifeos.core.data.security.EncryptedSegmentedLedger
+import app.lifeos.core.data.security.LedgerLongCodec
+import app.lifeos.core.data.security.SegmentPathBinding
+import app.lifeos.core.data.security.SegmentRevisionPolicy
+import app.lifeos.core.data.security.SegmentRevisionScope
 import app.lifeos.core.runtime.capability.ToolWorkshopJobEvent
 import app.lifeos.core.runtime.capability.ToolWorkshopJobEventLogCodec
 import app.lifeos.core.runtime.capability.ToolWorkshopJobRepository
 import app.lifeos.core.runtime.capability.ToolWorkshopJobRepositoryLoadReport
 import java.io.File
-import java.nio.ByteBuffer
-import java.security.MessageDigest
 import javax.crypto.SecretKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/** Per-job segmented encrypted ToolWorkshop ledger with a tiny global revision head. */
+/**
+ * Global-revision ToolWorkshop ledger on the shared segmented persistence core.
+ *
+ * Event segments are keyed by deterministic job id while the revision stream remains global.
+ * The encrypted head is a recoverable acceleration structure, never a second source of truth.
+ */
 class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepository {
     private val directory = context.filesDir.resolve(ROOT_DIRECTORY)
     private val jobsDirectory = directory.resolve("jobs")
     private val headFile = directory.resolve("head.twj")
     private val legacyFile = directory.resolve(FILE_NAME)
-    private val key: SecretKey by lazy { EncryptedLedgerVaultSupport.loadOrCreateKey(KEY_ALIAS) }
-
-    override suspend fun loadReport(): ToolWorkshopJobRepositoryLoadReport = withContext(Dispatchers.IO) {
-        processMutex.withLock {
-            ensureMigrated()
-            val unreadable = mutableListOf<String>()
-            val events = eventFiles().mapNotNull { file ->
-                runCatching { readValidatedEvent(file) }
-                    .onFailure { unreadable += file.relativeTo(directory).path }
-                    .getOrNull()
-            }
-            if (unreadable.isEmpty()) {
-                readHeadOrRecover()
-            }
-            ToolWorkshopJobRepositoryLoadReport(events.sortedBy { it.revision }, unreadable.sorted())
-        }
+    private val key: SecretKey by lazy {
+        EncryptedLedgerVaultSupport.loadOrCreateKey(KEY_ALIAS)
     }
+    private val revisionPolicy = SegmentRevisionPolicy<String, ToolWorkshopJobEvent>(
+        scope = SegmentRevisionScope.GLOBAL,
+        keyOf = { event -> event.definition.id.value },
+        revisionOf = { event -> event.revision },
+    )
+    private val pathBinding = SegmentPathBinding<String>(
+        ledgerDomain = "tool-workshop-job-ledger/v2",
+        segmentsDirectory = jobsDirectory,
+        keyFingerprint = SegmentPathBinding::sha256,
+        segmentPrefix = EVENT_PREFIX,
+        segmentSuffix = EVENT_SUFFIX,
+    )
+    private val segmented: EncryptedSegmentedLedger<String, ToolWorkshopJobEvent> by lazy {
+        EncryptedSegmentedLedger(
+            rootDirectory = directory,
+            segmentsDirectory = jobsDirectory,
+            key = key,
+            maxPlaintextBytes = ToolWorkshopJobEventLogCodec.MAX_PAYLOAD_BYTES,
+            pathBinding = pathBinding,
+            revisionPolicy = revisionPolicy,
+            encode = ToolWorkshopJobEventLogCodec::encodeSegment,
+            decode = ToolWorkshopJobEventLogCodec::decodeSegment,
+            entryComparator = compareBy<ToolWorkshopJobEvent> { it.revision },
+        )
+    }
+    private val headStore: EncryptedCasHeadStore<Long> by lazy {
+        EncryptedCasHeadStore(
+            file = headFile,
+            key = key,
+            domain = "tool-workshop-job-head/v2",
+            maxPlaintextBytes = HEAD_MAX_PLAINTEXT_BYTES,
+            encode = LedgerLongCodec::encode,
+            decode = LedgerLongCodec::decode,
+            validate = { require(it >= 0L) },
+        )
+    }
+
+    override suspend fun loadReport(): ToolWorkshopJobRepositoryLoadReport =
+        withContext(Dispatchers.IO) {
+            processMutex.withLock {
+                ensureMigrated()
+                val report = segmented.loadReport()
+                if (report.unreadableEntries.isEmpty()) {
+                    reconcileHead(report.entries)
+                }
+                ToolWorkshopJobRepositoryLoadReport(
+                    events = report.entries,
+                    unreadableEntries = report.unreadableEntries,
+                )
+            }
+        }
 
     override suspend fun append(
         expectedRevision: Long,
@@ -46,163 +92,62 @@ class EncryptedToolWorkshopJobRepository(context: Context) : ToolWorkshopJobRepo
         processMutex.withLock {
             require(expectedRevision >= 0L)
             ensureMigrated()
-            requireReadableEventHistory()
-            val currentRevision = readHeadOrRecover()
+            val report = segmented.loadReport()
+            require(report.unreadableEntries.isEmpty()) {
+                "ToolWorkshop job ledger contains unreadable segments"
+            }
+            val currentRevision = reconcileHead(report.entries)
             if (currentRevision != expectedRevision) return@withLock false
-            require(event.revision == expectedRevision + 1L) {
-                "ToolWorkshop job append revision mismatch"
+            revisionPolicy.requireAppend(expectedRevision, event)
+            if (!segmented.append(expectedRevision, event)) return@withLock false
+            check(headStore.compareAndSet(expectedRevision, event.revision)) {
+                "ToolWorkshop durable head CAS diverged from appended segment"
             }
-            val target = eventFile(event)
-            if (exists(target)) {
-                require(readValidatedEvent(target) == event) { "ToolWorkshop job event revision collision" }
-            } else {
-                writeEvent(target, event)
-            }
-            writeHead(event.revision)
             true
         }
     }
 
     private fun ensureMigrated() {
-        ensureDirectory()
-        if (exists(headFile) || eventFiles().isNotEmpty()) return
-        if (!exists(legacyFile)) {
-            writeHead(0L)
-            return
+        segmented.migrateIfEmpty {
+            if (!exists(legacyFile)) {
+                emptyList()
+            } else {
+                ToolWorkshopJobEventLogCodec.decode(
+                    decryptLegacy(legacyFile, ToolWorkshopJobEventLogCodec.MAX_PAYLOAD_BYTES)
+                )
+            }
         }
-        val legacy = ToolWorkshopJobEventLogCodec.decode(
-            decrypt(legacyFile, ToolWorkshopJobEventLogCodec.MAX_PAYLOAD_BYTES)
-        )
-        legacy.sortedBy { it.revision }.forEachIndexed { index, event ->
-            require(event.revision == index.toLong() + 1L)
-            writeEvent(eventFile(event), event)
-        }
-        writeHead(legacy.lastOrNull()?.revision ?: 0L)
     }
 
-    private fun readEvent(file: File): ToolWorkshopJobEvent {
-        val event = ToolWorkshopJobEventLogCodec.decodeSegment(
-            decrypt(file, ToolWorkshopJobEventLogCodec.MAX_PAYLOAD_BYTES)
-        )
-        return event
-    }
-
-    private fun readValidatedEvent(file: File): ToolWorkshopJobEvent {
-        val event = readEvent(file)
-        require(event.revision == segmentRevision(file)) {
-            "ToolWorkshop event payload revision does not match segment path"
-        }
-        val jobDirectory = requireNotNull(file.parentFile) {
-            "ToolWorkshop event segment has no job directory"
-        }
-        require(jobDirectory.parentFile == jobsDirectory) {
-            "ToolWorkshop event segment is not stored under the job directory"
-        }
-        require(jobDirectory.name == sha256(event.definition.id.value)) {
-            "ToolWorkshop event job does not match segment path"
-        }
-        return event
-    }
-
-    private fun requireReadableEventHistory() {
-        eventFiles().forEach { file -> readValidatedEvent(file) }
-    }
-
-    private fun writeEvent(file: File, event: ToolWorkshopJobEvent) {
-        file.parentFile?.let { check(it.isDirectory || it.mkdirs()) }
-        writeEncrypted(
-            file,
-            ToolWorkshopJobEventLogCodec.encodeSegment(event),
-            ToolWorkshopJobEventLogCodec.MAX_PAYLOAD_BYTES,
-        )
-    }
-
-    private fun readHeadOrRecover(): Long {
-        val files = eventFiles()
-        val byRevision = files.groupBy(::segmentRevision)
-        require(byRevision.values.all { it.size == 1 }) {
-            "ToolWorkshop contains duplicate global event revisions"
-        }
-        val revisions = byRevision.keys.sorted()
-        val recovered = revisions.lastOrNull() ?: 0L
-        require(revisions == if (recovered == 0L) emptyList() else (1L..recovered).toList()) {
-            "ToolWorkshop event segments are not contiguous"
-        }
-
-        val storedHead = if (exists(headFile)) runCatching(::readHead).getOrNull() else null
-        require(storedHead == null || storedHead <= recovered) {
+    private fun reconcileHead(events: List<ToolWorkshopJobEvent>): Long {
+        revisionPolicy.validateHistory(events)
+        val recovered = events.lastOrNull()?.revision ?: 0L
+        val stored = if (headStore.exists()) runCatching { headStore.load() }.getOrNull() else null
+        require(stored == null || stored <= recovered) {
             "ToolWorkshop head points past durable event tail"
         }
-        if (storedHead != recovered) writeHead(recovered)
+        if (stored != recovered) headStore.write(recovered)
         return recovered
     }
 
-    private fun segmentRevision(file: File): Long =
-        requireNotNull(
-            file.name.removePrefix(EVENT_PREFIX).removeSuffix(EVENT_SUFFIX).toLongOrNull()
-        ) { "Invalid ToolWorkshop event segment name: ${file.name}" }
-
-    private fun readHead(): Long {
-        val bytes = decrypt(headFile, 64)
-        require(bytes.size == Long.SIZE_BYTES)
-        return ByteBuffer.wrap(bytes).long.also { require(it >= 0L) }
-    }
-
-    private fun writeHead(revision: Long) {
-        writeEncrypted(
-            headFile,
-            ByteBuffer.allocate(Long.SIZE_BYTES).putLong(revision).array(),
-            64,
-        )
-    }
-
-    private fun eventFile(event: ToolWorkshopJobEvent): File {
-        val jobKey = sha256(event.definition.id.value)
-        return jobsDirectory.resolve(jobKey)
-            .resolve("$EVENT_PREFIX${event.revision.toString().padStart(20, '0')}$EVENT_SUFFIX")
-    }
-
-    private fun eventFiles(): List<File> {
-        ensureDirectory()
-        return jobsDirectory.walkTopDown()
-            .filter { it.isFile && it.name.startsWith(EVENT_PREFIX) && it.name.endsWith(EVENT_SUFFIX) }
-            .sortedBy { it.path }
-            .toList()
-    }
-
-    private fun decrypt(file: File, maxPlaintextBytes: Int): ByteArray =
+    private fun decryptLegacy(file: File, maxPlaintextBytes: Int): ByteArray =
         EncryptedLedgerVaultSupport.decrypt(
-            EncryptedLedgerVaultSupport.readAtomic(file, maxPlaintextBytes),
-            key,
-            maxPlaintextBytes,
+            container = EncryptedLedgerVaultSupport.readAtomic(file, maxPlaintextBytes),
+            key = key,
+            maxPlaintextBytes = maxPlaintextBytes,
         )
-
-    private fun writeEncrypted(file: File, plaintext: ByteArray, maxPlaintextBytes: Int) {
-        EncryptedLedgerVaultSupport.atomicWrite(
-            file,
-            EncryptedLedgerVaultSupport.encrypt(plaintext, key, maxPlaintextBytes),
-        )
-    }
-
-    private fun sha256(value: String): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest(value.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
-
-    private fun ensureDirectory() {
-        check(directory.isDirectory || directory.mkdirs()) { "ToolWorkshop job vault unavailable" }
-        check(jobsDirectory.isDirectory || jobsDirectory.mkdirs()) { "ToolWorkshop job directory unavailable" }
-    }
 
     private fun exists(target: File): Boolean =
-        target.exists() || File("${target.path}.bak").exists()
+        target.exists() || File(target.path + ATOMIC_BACKUP_SUFFIX).exists()
 
     private companion object {
         const val ROOT_DIRECTORY = "tool-workshop-job-ledger"
         const val FILE_NAME = "tool-workshop.twj"
         const val EVENT_PREFIX = "event-"
         const val EVENT_SUFFIX = ".twj"
+        const val ATOMIC_BACKUP_SUFFIX = ".bak"
         const val KEY_ALIAS = "lifeos.tool.workshop.job.v1"
+        const val HEAD_MAX_PLAINTEXT_BYTES = 64
         val processMutex = Mutex()
     }
 }
