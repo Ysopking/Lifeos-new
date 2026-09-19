@@ -14,6 +14,17 @@ import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.model.source.CanonicalSourceMetadata
+import app.lifeos.core.model.source.SourceAccountRef
+import app.lifeos.core.model.source.SourceActorMetadata
+import app.lifeos.core.model.source.SourceExternalObjectRef
+import app.lifeos.core.model.source.SourceFileMetadata
+import app.lifeos.core.model.source.SourceMetadataOrigin
+import app.lifeos.core.model.source.SourceObjectKind
+import app.lifeos.core.model.source.SourcePrivacyZone
+import app.lifeos.core.model.source.SourceProviderRef
+import app.lifeos.core.model.source.SourceTechnicalMetadata
+import app.lifeos.core.model.source.SourceTimestamps
 import app.lifeos.core.runtime.life.InitialDataSourceAdapter
 import app.lifeos.core.runtime.life.InitialDataSourcePage
 import app.lifeos.core.runtime.life.InitialDataSourceStatus
@@ -138,10 +149,12 @@ private class AndroidContactsInitialDataSource(
                         "android-contact-data-row/v1",
                         contactId.toString(), name, mime, data1, data2, data3, data4,
                     )
+                    val observedAt = instantFromMillis(updatedMillis)
+                    val externalId = "data-$rowId"
                     val record = LifeSourceRecord(
                         sourceId = SOURCE_ID,
-                        recordId = "data-$rowId-$state",
-                        observedAt = instantFromMillis(updatedMillis),
+                        recordId = "$externalId-$state",
+                        observedAt = observedAt,
                         payload = buildString {
                             appendLine("contact_id=$contactId")
                             appendLine("name=$name")
@@ -156,6 +169,42 @@ private class AndroidContactsInitialDataSource(
                             add("contact")
                             if (name.isNotBlank()) add("person:$name")
                         },
+                        metadata = CanonicalSourceMetadata(
+                            objectKind = SourceObjectKind.CONTACT,
+                            origin = SourceMetadataOrigin.PLATFORM,
+                            privacyZone = SourcePrivacyZone.SENSITIVE,
+                            externalObject = SourceExternalObjectRef(
+                                provider = SourceProviderRef("android-contacts"),
+                                account = SourceAccountRef(
+                                    providerId = "android-contacts",
+                                    accountId = "device-contacts",
+                                ),
+                                objectKind = SourceObjectKind.CONTACT,
+                                externalId = externalId,
+                                externalVersion = state,
+                            ),
+                            timestamps = SourceTimestamps(
+                                modifiedAt = observedAt,
+                                observedAt = observedAt,
+                                importedAt = observedAt,
+                            ),
+                            actor = SourceActorMetadata(
+                                actorId = contactId.toString(),
+                                displayName = name.takeIf { it.isNotBlank() },
+                                address = data1.takeIf { it.isNotBlank() },
+                                role = "contact",
+                            ),
+                            technical = SourceTechnicalMetadata(
+                                format = mime.takeIf { it.isNotBlank() },
+                                producer = ADAPTER_VERSION,
+                                attributes = mapOf(
+                                    "android:contact-id" to contactId.toString(),
+                                    "android:data-mime" to mime,
+                                    "android:data-type" to data2,
+                                    "android:data-label" to data3,
+                                ),
+                            ),
+                        ),
                     )
                     add(rowId to record)
                 }
@@ -211,10 +260,12 @@ private class AndroidCalendarInitialDataSource(
                         calendarId.toString(), title, description, location,
                         start.toString(), end.toString(), allDay.toString(), status.toString(), zone,
                     )
+                    val occurredAt = instantFromMillis(start)
+                    val externalId = "event-$rowId"
                     val record = LifeSourceRecord(
                         sourceId = SOURCE_ID,
-                        recordId = "event-$rowId-$state",
-                        observedAt = instantFromMillis(start),
+                        recordId = "$externalId-$state",
+                        observedAt = occurredAt,
                         payload = buildString {
                             appendLine("calendar_id=$calendarId")
                             appendLine("title=$title")
@@ -232,6 +283,36 @@ private class AndroidCalendarInitialDataSource(
                             add("calendar-event")
                             if (location.isNotBlank()) add("location:$location")
                         },
+                        metadata = CanonicalSourceMetadata(
+                            objectKind = SourceObjectKind.CALENDAR_EVENT,
+                            origin = SourceMetadataOrigin.PLATFORM,
+                            privacyZone = SourcePrivacyZone.SENSITIVE,
+                            externalObject = SourceExternalObjectRef(
+                                provider = SourceProviderRef("android-calendar"),
+                                account = SourceAccountRef(
+                                    providerId = "android-calendar",
+                                    accountId = "device-local-calendar",
+                                ),
+                                objectKind = SourceObjectKind.CALENDAR_EVENT,
+                                externalId = externalId,
+                                externalVersion = state,
+                            ),
+                            timestamps = SourceTimestamps(
+                                occurredAt = occurredAt,
+                                observedAt = occurredAt,
+                                importedAt = occurredAt,
+                            ),
+                            technical = SourceTechnicalMetadata(
+                                format = "android-calendar-event",
+                                producer = ADAPTER_VERSION,
+                                attributes = mapOf(
+                                    "android:calendar-id" to calendarId.toString(),
+                                    "android:calendar-all-day" to allDay.toString(),
+                                    "android:calendar-status" to status.toString(),
+                                    "android:calendar-timezone" to zone,
+                                ),
+                            ),
+                        ),
                     )
                     add(rowId to record)
                 }
@@ -308,10 +389,12 @@ private class AndroidMediaInitialDataSource(
                         kind.name, name, mime, size.toString(), added.toString(), modified.toString(),
                         width.toString(), height.toString(), relativePath, duration.toString(), itemUri,
                     )
+                    val observedAt = instantFromSeconds(if (modified > 0L) modified else added)
+                    val externalId = "media-$rowId"
                     val record = LifeSourceRecord(
                         sourceId = kind.sourceId,
-                        recordId = "media-$rowId-$state",
-                        observedAt = instantFromSeconds(if (modified > 0L) modified else added),
+                        recordId = "$externalId-$state",
+                        observedAt = observedAt,
                         payload = buildString {
                             appendLine("uri=$itemUri")
                             appendLine("name=$name")
@@ -331,6 +414,47 @@ private class AndroidMediaInitialDataSource(
                             add("document")
                             if (name.isNotBlank()) add("document:$name")
                         },
+                        metadata = CanonicalSourceMetadata(
+                            objectKind = kind.sourceObjectKind(),
+                            origin = SourceMetadataOrigin.PLATFORM,
+                            privacyZone = SourcePrivacyZone.PRIVATE,
+                            externalObject = SourceExternalObjectRef(
+                                provider = SourceProviderRef(kind.sourceId),
+                                account = SourceAccountRef(
+                                    providerId = kind.sourceId,
+                                    accountId = "device-media",
+                                ),
+                                objectKind = kind.sourceObjectKind(),
+                                externalId = externalId,
+                                externalVersion = state,
+                            ),
+                            timestamps = SourceTimestamps(
+                                createdAt = instantFromSeconds(added),
+                                modifiedAt = instantFromSeconds(modified),
+                                observedAt = observedAt,
+                                importedAt = observedAt,
+                            ),
+                            file = SourceFileMetadata(
+                                name = name.ifBlank { "media-$rowId" },
+                                extension = name.substringAfterLast('.', "")
+                                    .lowercase()
+                                    .takeIf { it.isNotBlank() },
+                                logicalPath = (relativePath + name).takeIf { it.isNotBlank() },
+                                parentPath = relativePath.takeIf { it.isNotBlank() },
+                                byteCount = size.coerceAtLeast(0L),
+                                mimeType = mime.ifBlank { "application/octet-stream" },
+                            ),
+                            technical = SourceTechnicalMetadata(
+                                format = mime.ifBlank { "application/octet-stream" },
+                                producer = kind.adapterVersion,
+                                attributes = mapOf(
+                                    "android:media-uri" to itemUri,
+                                    "android:media-width" to width.toString(),
+                                    "android:media-height" to height.toString(),
+                                    "android:media-duration-ms" to duration.toString(),
+                                ),
+                            ),
+                        ),
                     )
                     add(rowId to record)
                 }
@@ -339,6 +463,12 @@ private class AndroidMediaInitialDataSource(
         val next = nextPosition(rows, limit)
         return InitialDataSourcePage(rows.map { it.second }, next, complete = next == null)
     }
+}
+
+private fun AndroidMediaKind.sourceObjectKind(): SourceObjectKind = when (this) {
+    AndroidMediaKind.IMAGE -> SourceObjectKind.IMAGE
+    AndroidMediaKind.VIDEO -> SourceObjectKind.VIDEO
+    AndroidMediaKind.AUDIO -> SourceObjectKind.AUDIO
 }
 
 private fun mediaPermission(kind: AndroidMediaKind): String =
