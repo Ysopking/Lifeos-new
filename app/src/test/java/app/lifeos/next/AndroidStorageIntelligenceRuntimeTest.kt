@@ -162,6 +162,23 @@ class AndroidStorageIntelligenceRuntimeTest {
     }
 
     @Test
+    fun `camera and established media folders are never reorganized`() {
+        val files = listOf(
+            indexed("DCIM/Camera/photo.jpg", 100, AndroidFileCategory.IMAGE, null),
+            indexed("Pictures/Album/cover.jpg", 100, AndroidFileCategory.IMAGE, null),
+            indexed("Music/Artist/song.mp3", 100, AndroidFileCategory.AUDIO, null),
+        )
+
+        val candidates = StorageCleanupPlanner.plan(
+            duplicateGroups = emptyList(),
+            reviewEntries = files,
+            nowMillis = 2_000_000_000_000L,
+        )
+
+        assertTrue(candidates.none { it.kind == StorageCleanupKind.REORGANIZE })
+    }
+
+    @Test
     fun `normal documents receive organization suggestions but not deletion authority`() {
         val file = indexed(
             "Download/report.pdf",
