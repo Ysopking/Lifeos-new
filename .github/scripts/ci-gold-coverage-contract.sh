@@ -80,23 +80,47 @@ for suite in \
   grep -Fq "$suite" "$emulator_gate" || { echo "missing-emulator-gold-suite:$suite" >&2; exit 1; }
 done
 
-core_fast_workflow=".github/workflows/core-fast.yml"
-grep -Fq 'push:' "$core_fast_workflow" || { echo "core-fast-missing-push-trigger" >&2; exit 1; }
-if grep -Fq 'branches-ignore: [main]' "$core_fast_workflow"; then
-  echo "core-fast-main-push-disabled" >&2
-  exit 1
-fi
-grep -Fq '".github/workflows/**"' "$core_fast_workflow" || {
-  echo "core-fast-workflow-change-coverage-missing" >&2
-  exit 1
+require_exact_head_workflow() {
+  local workflow="$1"
+  local stable_job_name="$2"
+
+  grep -Fq 'push:' "$workflow" || {
+    echo "exact-head-push-trigger-missing:$workflow" >&2
+    exit 1
+  }
+
+  grep -Fq 'pull_request:' "$workflow" || {
+    echo "exact-head-pr-trigger-missing:$workflow" >&2
+    exit 1
+  }
+
+  grep -Fq 'merge_group:' "$workflow" || {
+    echo "exact-head-merge-group-trigger-missing:$workflow" >&2
+    exit 1
+  }
+
+  grep -Fq 'github.event.pull_request.number || github.sha' "$workflow" || {
+    echo "exact-head-concurrency-key-missing:$workflow" >&2
+    exit 1
+  }
+
+  grep -Fq "github.event_name == 'pull_request'" "$workflow" || {
+    echo "exact-head-cancel-policy-missing:$workflow" >&2
+    exit 1
+  }
+
+  grep -Fq "name: $stable_job_name" "$workflow" || {
+    echo "stable-required-check-name-missing:$workflow" >&2
+    exit 1
+  }
 }
 
-recovery_workflow=".github/workflows/android-emulator-recovery.yml"
-grep -Fq 'push:' "$recovery_workflow" || { echo "emulator-recovery-missing-push-trigger" >&2; exit 1; }
-grep -Fq 'branches: [main]' "$recovery_workflow" || { echo "emulator-recovery-main-push-disabled" >&2; exit 1; }
+require_exact_head_workflow ".github/workflows/core-fast.yml" "Core Fast Gate"
+require_exact_head_workflow ".github/workflows/android.yml" "Android Debug CI"
+require_exact_head_workflow ".github/workflows/android-emulator-recovery.yml" "Android Emulator Recovery"
+require_exact_head_workflow ".github/workflows/product-gold.yml" "LIFEOS Product Gold"
 
 product_gold_workflow=".github/workflows/product-gold.yml"
-grep -Fq 'push:' "$product_gold_workflow" || { echo "product-gold-missing-push-trigger" >&2; exit 1; }
 grep -Fq 'CANDIDATE_SHA: ${{ github.sha }}' "$product_gold_workflow" || {
   echo "product-gold-candidate-sha-not-bound-to-checkout-ref" >&2
   exit 1
