@@ -30,6 +30,31 @@ class AndroidStorageIntelligenceRuntimeTest {
         }
     }
 
+
+    @Test
+    fun `nested pager resume stays inside active subtree before advancing`() {
+        val root = Files.createTempDirectory("lifeos-storage-nested-resume").toFile()
+        try {
+            root.resolve("a").mkdirs()
+            root.resolve("b").mkdirs()
+            root.resolve("a/1.txt").writeText("1")
+            root.resolve("a/2.txt").writeText("2")
+            root.resolve("b/1.txt").writeText("3")
+
+            val first = StorageTreePager.page(root, null, 1)
+            assertEquals(listOf("a/1.txt"), first.files.map { it.relativePath })
+
+            val second = StorageTreePager.page(root, first.nextPosition, 1)
+            assertEquals(listOf("a/2.txt"), second.files.map { it.relativePath })
+
+            val third = StorageTreePager.page(root, second.nextPosition, 1)
+            assertEquals(listOf("b/1.txt"), third.files.map { it.relativePath })
+            assertTrue(third.complete)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test
     fun `lifeos trash is excluded from the all-files inventory`() {
         val root = Files.createTempDirectory("lifeos-storage-trash").toFile()
