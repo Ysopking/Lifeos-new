@@ -7,10 +7,10 @@ object SelfStateFingerprint {
     /**
      * Restart-stable durable authority identity.
      *
-     * Only exact persisted authority heads belong here. Rebuildable memory projections, process
-     * topology and generated-tool runtime status remain part of [stateFingerprint] instead; they
-     * may legitimately change while a process is rehydrating and must not manufacture an authority
-     * change after process death.
+     * Only exact persisted authority heads belong here. Rebuildable cognitive snapshots, memory
+     * projections, process topology and generated-tool runtime status remain part of
+     * [stateFingerprint] instead; they may legitimately change while a process is rehydrating and
+     * must not manufacture an authority change after process death.
      */
     fun authorityFingerprint(
         photon: SelfPhotonState,
@@ -28,7 +28,6 @@ object SelfStateFingerprint {
         "equation.fingerprint=" + encode(world.worldEquationFingerprint),
         "boot.id=" + encode(world.bootCycleId),
         "boot.fingerprint=" + encode(world.bootCycleFingerprint),
-        "cognition.snapshot=" + encode(world.cognitiveSnapshotFingerprint),
     )
 
     fun stateFingerprint(snapshot: LifeOsSelfStateSnapshot): String = StableFieldIds.fingerprint(
@@ -40,6 +39,8 @@ object SelfStateFingerprint {
             add("photon.latest=" + encode(snapshot.photon.latestRevisionCount))
             add("photon.live=" + encode(snapshot.photon.livePhotonCount))
             add("photon.tombstoned=" + encode(snapshot.photon.tombstonedPhotonCount))
+
+            add("world.cognition.snapshot=" + encode(snapshot.world.cognitiveSnapshotFingerprint))
 
             add("memory.authoritative=" + encode(snapshot.memory.authoritativePhotonCount))
             add("memory.nodes=" + encode(snapshot.memory.graphNodeCount))

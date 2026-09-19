@@ -65,6 +65,19 @@ class SelfStateFingerprintTest {
     }
 
     @Test
+    fun rebuildableCognitiveSnapshotDoesNotRewriteDurableAuthorityIdentity() {
+        val first = snapshot()
+        val second = first.copy(
+            world = first.world.copy(
+                cognitiveSnapshotFingerprint = "cog-rehydrated",
+            )
+        )
+
+        assertEquals(first.authorityFingerprint, second.authorityFingerprint)
+        assertNotEquals(first.stateFingerprint, second.stateFingerprint)
+    }
+
+    @Test
     fun operationalOnlyChangeDoesNotRewriteAuthorityIdentity() {
         val first = snapshot(operational = setOf("world"))
         val second = snapshot(operational = setOf("world", "health"))
