@@ -663,6 +663,9 @@ class LifeOsKernelFactory(
                     extensionRegistryRehydrator.rehydrate()
                 },
                 RuntimeStateRehydrationStep {
+                    worldEquationAuthority.activeVersion()
+                },
+                RuntimeStateRehydrationStep {
                     val head = worldModelRepository.loadHead()
                     if (head != null) {
                         val snapshot = requireNotNull(
@@ -750,6 +753,19 @@ class LifeOsKernelFactory(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
                                 message = if (report.unreadableEntries.isEmpty()) null else "unreadable:${report.unreadableEntries.size}",
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "world-equation-head"
+                        override suspend fun probe(): StoreStatus {
+                            val report = bootReadSession.readOnce("world-equation-head") {
+                                worldEquationHeads.loadReport()
+                            }
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.corrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
+                                message = report.message,
                             )
                         }
                     },
