@@ -84,6 +84,10 @@ jobs:
             'escalation_functional_gold=PASS' \
             'm216_scale_recovery=PASS' >> product-gold-evidence/gates.txt
           printf 'product_gold=PASS\n' >> product-gold-evidence/gates.txt
+      - name: Seal final LIFEOS gold manifest
+        if: github.ref_name == 'optimization/m216e-final-gold-seal'
+        shell: bash
+        run: bash .github/scripts/seal-lifeos-gold-manifest.sh
       - name: Upload Product Gold debug APK
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
