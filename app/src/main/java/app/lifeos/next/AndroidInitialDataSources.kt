@@ -171,7 +171,7 @@ private class AndroidContactsInitialDataSource(
     }
 }
 
-private class AndroidCalendarInitialDataSource(
+internal class AndroidCalendarInitialDataSource(
     context: Context,
 ) : AndroidPagedInitialDataSource(
     context = context,
