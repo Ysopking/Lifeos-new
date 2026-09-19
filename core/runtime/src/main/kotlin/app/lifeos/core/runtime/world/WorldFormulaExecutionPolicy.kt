@@ -5,6 +5,7 @@ enum class WorldFormulaExecutionScope {
     RESOURCE,
     SELF_OBSERVATION,
     SHADOW,
+    STRUCTURAL_CANARY,
     COUNTERFACTUAL,
 }
 
@@ -52,6 +53,13 @@ data class WorldFormulaExecutionPolicy(
 
         val SHADOW = WorldFormulaExecutionPolicy(
             scope = WorldFormulaExecutionScope.SHADOW,
+            captureCognitiveSnapshots = false,
+            emitCognitiveTriggers = false,
+            productiveCommitAllowed = false,
+        )
+
+        val STRUCTURAL_CANARY = WorldFormulaExecutionPolicy(
+            scope = WorldFormulaExecutionScope.STRUCTURAL_CANARY,
             captureCognitiveSnapshots = false,
             emitCognitiveTriggers = false,
             productiveCommitAllowed = false,

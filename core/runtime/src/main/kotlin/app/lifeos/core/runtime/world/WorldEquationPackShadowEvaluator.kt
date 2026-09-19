@@ -3,7 +3,6 @@ package app.lifeos.core.runtime.world
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.field.world.WorldCoefficientId
 import app.lifeos.core.field.world.WorldDimensionValue
-import app.lifeos.core.field.world.WorldFieldVector
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.math.abs
@@ -144,7 +143,9 @@ fun interface WorldEquationPackShadowRunner {
  * before execution. Both executions are hard-bound to SHADOW scope with a process-local snapshot
  * repository; no ProductiveWorldHead, cognitive snapshot or trigger path is reachable.
  */
-class WorldEquationPackShadowEvaluator : WorldEquationPackShadowRunner {
+class WorldEquationPackShadowEvaluator(
+    private val materializer: WorldEquationPackCaseMaterializer = WorldEquationPackCaseMaterializer(),
+) : WorldEquationPackShadowRunner {
     override suspend fun evaluate(
         baseline: WorldEquationPack,
         candidate: WorldEquationPackCandidate,
@@ -157,8 +158,8 @@ class WorldEquationPackShadowEvaluator : WorldEquationPackShadowRunner {
             "Structural shadow evaluation rejects parameter-only candidates"
         }
 
-        val baselineMaterialized = materialize(baseline, case)
-        val candidateMaterialized = materialize(candidate.candidate, case)
+        val baselineMaterialized = materializer.materialize(baseline, case)
+        val candidateMaterialized = materializer.materialize(candidate.candidate, case)
         val baselineMetrics = evaluateMaterialized(baseline, baselineMaterialized)
         val candidateMetrics = evaluateMaterialized(candidate.candidate, candidateMaterialized)
 
@@ -174,72 +175,9 @@ class WorldEquationPackShadowEvaluator : WorldEquationPackShadowRunner {
         )
     }
 
-    private fun materialize(
-        pack: WorldEquationPack,
-        case: WorldEquationPackShadowCase,
-    ): MaterializedCase {
-        val selected = case.request.inputs.mapNotNull { input ->
-            val inputFingerprint = input.fingerprint()
-            val providerId = case.providerIdByInputFingerprint.getValue(inputFingerprint)
-            if (providerId !in pack.projectionContract.requiredProviderIds) return@mapNotNull null
-            if (input.target.kind !in pack.requiredNodeKinds) return@mapNotNull null
-
-            val pruned = WorldFieldVector(
-                input.vector.stableValues()
-                    .filter { it.dimension in pack.requiredDimensions }
-            )
-            providerId to input.copy(vector = pruned)
-        }
-
-        val inputs = selected.map { it.second }
-        val byTarget = inputs.associateBy { it.target }
-        val schemaByCoefficient = pack.interactionSchema.stableEntries()
-            .associateBy { it.coefficientId }
-
-        val interactions = case.request.interactions.filter { interaction ->
-            val source = byTarget[interaction.source] ?: return@filter false
-            val target = byTarget[interaction.target] ?: return@filter false
-            val schema = schemaByCoefficient[interaction.coefficientId] ?: return@filter false
-            val coefficient = pack.equation.coefficient(interaction.coefficientId) ?: return@filter false
-
-            source.target.kind in schema.sourceNodeKinds &&
-                target.target.kind in schema.targetNodeKinds &&
-                interaction.sourceDimension in pack.requiredDimensions &&
-                interaction.targetDimension in pack.requiredDimensions &&
-                coefficient.sourceDimension == interaction.sourceDimension &&
-                coefficient.targetDimension == interaction.targetDimension
-        }.sortedBy { it.fingerprint() }
-
-        val materializationFingerprint = StableFieldIds.fingerprint(
-            "world-equation-pack-materialization/v1",
-            *buildList {
-                selected.sortedBy { it.second.fingerprint() }.forEach { pair ->
-                    add("input:" + pair.first + ":" + pair.second.fingerprint())
-                }
-                interactions.forEach { add("interaction:" + it.fingerprint()) }
-            }.toTypedArray(),
-        )
-
-        if (inputs.isEmpty()) {
-            return MaterializedCase(
-                request = null,
-                materializationFingerprint = materializationFingerprint,
-            )
-        }
-
-        return MaterializedCase(
-            request = case.request.copy(
-                inputs = inputs.sortedBy { it.fingerprint() },
-                interactions = interactions,
-                equationVersion = pack.equation.version,
-            ),
-            materializationFingerprint = materializationFingerprint,
-        )
-    }
-
     private suspend fun evaluateMaterialized(
         pack: WorldEquationPack,
-        materialized: MaterializedCase,
+        materialized: WorldEquationPackMaterializedCase,
     ): WorldEquationPackRunMetrics {
         val request = materialized.request ?: return invalidMetrics(
             materialized.materializationFingerprint
@@ -290,11 +228,6 @@ class WorldEquationPackShadowEvaluator : WorldEquationPackShadowRunner {
             graphFingerprint = null,
             finalStateFingerprint = null,
         )
-
-    private data class MaterializedCase(
-        val request: WorldFormulaRequest?,
-        val materializationFingerprint: String,
-    )
 
     private class ShadowSnapshotRepository : WorldFormulaSnapshotRepository {
         private val mutex = Mutex()
