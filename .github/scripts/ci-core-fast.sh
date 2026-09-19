@@ -12,7 +12,7 @@ step "preflight: Java"
 java -version
 
 step "preflight: Gradle"
-gradle --version
+./gradlew --version
 
 step "preflight: Android SDK"
 printf 'ANDROID_HOME=%s\n' "${ANDROID_HOME:-}"
@@ -24,31 +24,34 @@ bash .github/scripts/ci-action-pin-contract.sh
 step "gate 00b: language semantic architecture contract"
 bash .github/scripts/ci-language-semantic-contract.sh
 
+step "gate 00c: Gradle wrapper integrity contract"
+bash .github/scripts/ci-gradle-wrapper-contract.sh
+
 step "gate 01: core model tests"
-gradle :core:model:test --stacktrace
+./gradlew :core:model:test --stacktrace
 
 step "gate 02: core field tests"
-gradle :core:field:test --stacktrace
+./gradlew :core:field:test --stacktrace
 
 step "gate 03: core runtime tests"
-gradle :core:runtime:test --stacktrace
+./gradlew :core:runtime:test --stacktrace
 
 step "gate 04: core language tests"
-gradle :core:language:test --stacktrace
+./gradlew :core:language:test --stacktrace
 
 step "gate 05: core scene tests"
-gradle :core:scene:test --stacktrace
+./gradlew :core:scene:test --stacktrace
 
 step "gate 06: core data debug unit tests"
-gradle :core:data:testDebugUnitTest --stacktrace
+./gradlew :core:data:testDebugUnitTest --stacktrace
 
 step "gate 07: BuildStudio authorized host tests"
-gradle :host:buildstudio:test --stacktrace
+./gradlew :host:buildstudio:test --stacktrace
 
 step "gate 08: app debug unit tests"
-gradle :app:testDebugUnitTest --stacktrace
+./gradlew :app:testDebugUnitTest --stacktrace
 
 step "gate 09: app debug Kotlin compile"
-gradle :app:compileDebugKotlin --stacktrace
+./gradlew :app:compileDebugKotlin --stacktrace
 
 step "core fast gate complete"
