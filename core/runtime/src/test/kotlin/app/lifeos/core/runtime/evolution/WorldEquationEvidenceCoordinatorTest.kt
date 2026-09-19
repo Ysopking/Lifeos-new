@@ -78,6 +78,78 @@ class WorldEquationEvidenceCoordinatorTest {
     }
 
     @Test
+    fun rollbackDecisionNeverOverwritesFrozenPromotionVerdict() = runTest {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val coefficient = baseline.stableCoefficients().first()
+        val candidate = baseline.copy(
+            version = baseline.version + "-rollback-verdict",
+            coefficients = baseline.coefficients.map {
+                if (it.id == coefficient.id) {
+                    it.copy(
+                        multiplier = if (it.multiplier < 0.9) {
+                            it.multiplier + 0.05
+                        } else {
+                            it.multiplier - 0.05
+                        }
+                    )
+                } else it
+            },
+        )
+        val protocol = WorldEquationEvaluationProtocol(
+            version = "rollback-verdict-v1",
+            primaryMetric = WorldEquationPrimaryMetric.STABILIZATION_ITERATIONS,
+            minimumIndependentRuns = 2,
+            minimumDistinctWorkloads = 1,
+            minimumActiveObservationsPerChangedCoefficient = 1,
+        )
+        val repository = InMemoryWorldEquationEvidenceRepository()
+        val coordinator = WorldEquationEvidenceCoordinator(
+            repository,
+            WorldEquationPromotionEvaluator(),
+        )
+        coordinator.beginShadow(candidate, baseline, protocol)
+        coordinator.recordObservation(
+            candidate,
+            baseline,
+            observation(baseline, candidate, coefficient.id, "run-1", "a"),
+        )
+        val promotable = coordinator.recordObservation(
+            candidate,
+            baseline,
+            observation(
+                baseline,
+                candidate,
+                coefficient.id,
+                "run-2",
+                "a",
+                WorldEquationEvidencePartition.HOLDOUT,
+            ),
+        )
+        assertEquals(WorldEquationLifecycleState.PROMOTABLE, promotable.state)
+        val promotionVerdict = requireNotNull(promotable.latestVerdictId)
+
+        val active = coordinator.markActive(
+            candidate,
+            "a".repeat(64),
+        )
+        assertEquals(promotionVerdict, active.latestVerdictId)
+
+        val quarantined = coordinator.quarantine(
+            candidate.fingerprint(),
+            "rollback:decision-1",
+        )
+        assertEquals(promotionVerdict, quarantined.latestVerdictId)
+        assertEquals("rollback:decision-1", quarantined.rollbackDecisionId)
+
+        val rolledBack = coordinator.markRolledBack(
+            candidate.fingerprint(),
+            "rollback:decision-1",
+        )
+        assertEquals(promotionVerdict, rolledBack.latestVerdictId)
+        assertEquals("rollback:decision-1", rolledBack.rollbackDecisionId)
+    }
+
+    @Test
     fun repeatedDeterministicCaseCannotCountAsIndependentEvidence() = runTest {
         val baseline = CognitiveWorldEquationProfile().spec
         val coefficient = baseline.stableCoefficients().first()
