@@ -27,15 +27,15 @@ class ProjectDecisionGoalEventRelationshipResolverTest {
 
     @Test
     fun explicitProjectIdConfirmsWhileNameAloneStaysCandidate() {
-        val left = input("left", SourceObjectKind.DOCUMENT, project = SourceProjectHint(explicitProjectId = "p-1", projectName = "LifeOS"))
+        val left = input("left", SourceObjectKind.OTHER, project = SourceProjectHint(explicitProjectId = "p-1", projectName = "LifeOS"))
         val right = input("right", SourceObjectKind.PROJECT, project = SourceProjectHint(explicitProjectId = "p-1", projectName = "LifeOS"))
         val confirmed = ProjectRelationshipResolver().resolve(left, right)
             .single { it.type == SourceRelationshipType.SAME_PROJECT }
         assertEquals(SourceRelationshipState.CONFIRMED, policy.evaluate(confirmed.type, confirmed.evidence).state)
         assertTrue(ProjectRelationshipResolver().resolve(left, right).any { it.type == SourceRelationshipType.BELONGS_TO_PROJECT })
 
-        val nameOnlyLeft = input("name-a", SourceObjectKind.DOCUMENT, project = SourceProjectHint(projectName = "LifeOS"))
-        val nameOnlyRight = input("name-b", SourceObjectKind.DOCUMENT, project = SourceProjectHint(projectName = "LifeOS"))
+        val nameOnlyLeft = input("name-a", SourceObjectKind.OTHER, project = SourceProjectHint(projectName = "LifeOS"))
+        val nameOnlyRight = input("name-b", SourceObjectKind.OTHER, project = SourceProjectHint(projectName = "LifeOS"))
         val candidate = ProjectRelationshipResolver().resolve(nameOnlyLeft, nameOnlyRight)
             .single { it.type == SourceRelationshipType.SAME_PROJECT }
         assertEquals(SourceRelationshipState.CANDIDATE, policy.evaluate(candidate.type, candidate.evidence).state)
@@ -44,7 +44,7 @@ class ProjectDecisionGoalEventRelationshipResolverTest {
     @Test
     fun repositoryIssueAndNameCanBecomeMergeEligibleWithoutPretendingDeterminism() {
         val hint = SourceProjectHint(projectName = "LifeOS", repository = "Ysopking/Lifeos-new", issue = "42")
-        val left = input("a", SourceObjectKind.DOCUMENT, project = hint)
+        val left = input("a", SourceObjectKind.OTHER, project = hint)
         val right = input("b", SourceObjectKind.CONVERSATION, project = hint)
         val same = ProjectRelationshipResolver().resolve(left, right)
             .single { it.type == SourceRelationshipType.SAME_PROJECT }
