@@ -2,7 +2,7 @@ name: LIFEOS Product Gold
 
 on:
   push:
-    branches: [main]
+    branches: [main, "optimization/m216d-product-gold", "optimization/m216e-final-gold-seal"]
   pull_request:
     branches: [main]
   merge_group:
@@ -22,12 +22,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
-      CANDIDATE_SHA: ${{ github.sha }}
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       GOLD_RUN_ID: ${{ github.run_id }}
       GOLD_JOB: product-gold
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind Product Gold to exact source head
+        shell: bash
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        run: bash .github/scripts/ci-exact-head-contract.sh
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
@@ -71,7 +81,8 @@ jobs:
             'world_equation_auto_evolution_recovery=PASS' \
             'self_observation_gold=PASS' \
             'level7_functional_gold=PASS' \
-            'escalation_functional_gold=PASS' >> product-gold-evidence/gates.txt
+            'escalation_functional_gold=PASS' \
+            'm216_scale_recovery=PASS' >> product-gold-evidence/gates.txt
           printf 'product_gold=PASS\n' >> product-gold-evidence/gates.txt
       - name: Upload Product Gold debug APK
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
