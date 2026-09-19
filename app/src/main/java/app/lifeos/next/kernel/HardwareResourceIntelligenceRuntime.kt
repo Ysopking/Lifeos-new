@@ -87,10 +87,12 @@ fun interface HardwareExecutionBudgetGate {
 }
 
 /**
- * APK-level V16 bridge. A fresh local hardware observation is projected through the World Formula
- * and persisted before it may influence a resource recommendation. Cross-domain distribution then
- * runs through a second persisted World Formula snapshot. Hard owner/system quotas remain absolute;
- * both stages can only shrink or partition the permitted envelope.
+ * APK-level V16 bridge.
+ *
+ * HardwareWorldEquationProfile is a validity/convergence gate. HardwareAdaptiveResourceOptimizer
+ * remains authoritative for the measured hardware envelope. ResourceAllocationWorldEquationProfile
+ * supplies the actual cross-domain WorldFormula weighting inside that envelope. Hard owner/system
+ * quotas remain absolute.
  */
 class HardwareResourceIntelligenceRuntime internal constructor(
     context: Context,
