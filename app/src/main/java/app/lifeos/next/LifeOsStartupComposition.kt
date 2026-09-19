@@ -2,11 +2,9 @@ package app.lifeos.next
 
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.topology.SubsystemStartupOwner
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.runBlocking
 
 /** Ordered process lifecycle stages exposed to the unified LIFEOS runtime topology. */
 internal enum class LifeOsStartupStage(
@@ -142,7 +140,7 @@ internal data class LifeOsStartupHooks(
 )
 
 internal object LifeOsStartupComposition {
-    fun start(hooks: LifeOsStartupHooks) = runBlocking {
+    suspend fun start(hooks: LifeOsStartupHooks) {
         LifeOsStartupStageGraph.layers.forEachIndexed { layerIndex, layer ->
             val completed = executeLayer(layer, hooks)
             completed.sortedBy { it.stage.ordinal }.forEach { spec ->
@@ -159,7 +157,7 @@ internal object LifeOsStartupComposition {
         return if (mayParallelize) {
             coroutineScope {
                 layer.map { spec ->
-                    async(Dispatchers.Default) {
+                    async {
                         actionFor(spec.stage, hooks).invoke()
                         spec
                     }
