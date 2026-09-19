@@ -5,6 +5,12 @@ import android.app.Application
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import app.lifeos.core.data.EncryptedLiveSourceCursorRepository
+import app.lifeos.core.data.EncryptedLiveSourceSnapshotRepository
+import app.lifeos.core.data.HealthGraphLiveSourceHealthReporter
+import app.lifeos.core.data.LiveDataHubAuthority
+import app.lifeos.core.data.LiveSourceDeltaCoordinator
+import app.lifeos.core.data.LiveSourceSyncSnapshot
 import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
@@ -131,6 +137,14 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     var initialDataBootstrapFailure: String? = null
         private set
 
+    @Volatile
+    var latestLiveSourceSync: LiveSourceSyncSnapshot? = null
+        private set
+
+    @Volatile
+    var liveSourceSyncFailure: String? = null
+        private set
+
     internal lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
         private set
 
@@ -138,10 +152,12 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         private set
 
     private lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
+    private lateinit var liveSourceCoordinator: LiveSourceDeltaCoordinator
     private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val liveSourceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
 
@@ -406,6 +422,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             )
         )
 
+        installLiveSources()
+
         initialDataSources = AndroidInitialDataSourceCatalog(this)
         initialDataBootstrap = InitialDataBootstrapRuntime(
             photons = lifePhotonRepository,
@@ -413,6 +431,36 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             sources = initialDataSources.sources + AndroidSharedFilesInitialDataSource(this),
         )
         refreshInitialDataBootstrap()
+        refreshLiveSources()
+    }
+
+    private fun installLiveSources() {
+        val healthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
+            "Live sources require the productive HealthGraph"
+        }
+        liveSourceCoordinator = LiveSourceDeltaCoordinator(
+            connectors = AndroidLiveSourceConnectors.create(this),
+            cursors = EncryptedLiveSourceCursorRepository(this),
+            hub = LiveDataHubAuthority.from(photonIngress.liveData),
+            snapshots = EncryptedLiveSourceSnapshotRepository(this),
+            maxInventoryItems = 16_384,
+            maxRawDeltas = 16_384,
+            coalescedCapacity = 16_384,
+            health = HealthGraphLiveSourceHealthReporter(healthGraph),
+        )
+    }
+
+    fun refreshLiveSources() {
+        if (!::liveSourceCoordinator.isInitialized) return
+        liveSourceScope.launch {
+            try {
+                latestLiveSourceSync = liveSourceCoordinator.syncAll()
+                liveSourceSyncFailure = null
+            } catch (error: Exception) {
+                liveSourceSyncFailure =
+                    error.message ?: error::class.simpleName ?: "live-source-sync-failed"
+            }
+        }
     }
 
     fun initialDataPermissionsToRequest(): List<String> = initialDataSources.missingRuntimePermissions()
