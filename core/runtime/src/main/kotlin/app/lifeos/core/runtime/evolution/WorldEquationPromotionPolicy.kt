@@ -175,13 +175,15 @@ class WorldEquationPromotionEvaluator(
             val minimumSeen = changed.minOf { id ->
                 observations.count { id in it.candidate.activeCoefficientIds }
             }
+            val status = when {
+                minimumSeen >= protocol.minimumActiveObservationsPerChangedCoefficient ->
+                    WorldEquationGateStatus.PASS
+                !enoughRuns -> WorldEquationGateStatus.INCONCLUSIVE
+                else -> WorldEquationGateStatus.FAIL
+            }
             result(
                 WorldEquationEvidenceGate.IDENTIFIABILITY,
-                if (minimumSeen >= protocol.minimumActiveObservationsPerChangedCoefficient) {
-                    WorldEquationGateStatus.PASS
-                } else {
-                    WorldEquationGateStatus.FAIL
-                },
+                status,
                 "minimum-active-observations=" + minimumSeen + "/" +
                     protocol.minimumActiveObservationsPerChangedCoefficient,
             )

@@ -48,9 +48,14 @@ class WorldEquationEvidenceRepositoryTest {
         assertTrue(repository.compareAndSet(candidate.fingerprint(), 1L, shadow))
         assertEquals(shadow, repository.load(candidate.fingerprint()))
 
-        val changedPolicy = shadow.copy(
+        val changedPolicy = WorldEquationEvidenceRecord.create(
             revision = 3L,
+            state = shadow.state,
             evidence = shadow.evidence.copy(policyFingerprint = "replacement-policy"),
+            latestVerdictId = shadow.latestVerdictId,
+            activationHeadFingerprint = shadow.activationHeadFingerprint,
+            rollbackDecisionId = shadow.rollbackDecisionId,
+            postActivationSafetyObservations = shadow.postActivationSafetyObservations,
         )
         assertFailsWith<IllegalArgumentException> {
             repository.compareAndSet(candidate.fingerprint(), 2L, changedPolicy)
@@ -73,6 +78,13 @@ class WorldEquationEvidenceRepositoryTest {
         assertTrue(repository.compareAndSet(candidate.fingerprint(), null, initial))
         val shadow = initial.transition(WorldEquationLifecycleState.SHADOW)
         assertTrue(repository.compareAndSet(candidate.fingerprint(), 1L, shadow))
-        assertFalse(repository.compareAndSet(candidate.fingerprint(), 1L, shadow.copy(revision = 3L)))
+        val validNextRevision = shadow.recordVerdict("verdict:stale-write")
+        assertFalse(
+            repository.compareAndSet(
+                candidate.fingerprint(),
+                1L,
+                validNextRevision,
+            )
+        )
     }
 }
