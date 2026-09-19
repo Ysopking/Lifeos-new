@@ -3,7 +3,10 @@ package app.lifeos.core.runtime.boot
 import app.lifeos.core.field.FieldSnapshotLoadReport
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonIndexEntry
 import app.lifeos.core.model.PhotonLoadReport
+import app.lifeos.core.model.PhotonPhase
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.checkpoint.CheckpointId
 import app.lifeos.core.model.checkpoint.CheckpointLoadReport
@@ -132,6 +135,60 @@ class BootSnapshotLoaderTest {
             snapshot.readFailures.map { it.source }.toSet(),
         )
         assertTrue(snapshot.readFailures.any { it.reason == "source-exception:IllegalStateException" })
+    }
+
+    @Test
+    fun indexedBootKeepsColdHistoryAsMetadataWithoutLoadingColdPayload() = runTest {
+        val hot = photon("hot", "active", revision = 3).copy(phase = PhotonPhase.ACTIVE)
+        val hotRef = PhotonRevisionRef(hot.id, hot.revision)
+        val coldRef = PhotonRevisionRef(PhotonId("cold"), 9)
+        val entries = listOf(
+            PhotonIndexEntry(
+                ref = coldRef,
+                createdAt = t0.minusSeconds(60),
+                phase = PhotonPhase.ARCHIVED,
+                mimeType = "text/plain",
+                tags = setOf("history"),
+                semanticMass = 1.0,
+                confidence = 0.8,
+                contentFingerprint = "c".repeat(64),
+                latest = true,
+            ),
+            PhotonIndexEntry(
+                ref = hotRef,
+                createdAt = hot.provenance.createdAt,
+                phase = hot.phase,
+                mimeType = hot.mimeType,
+                tags = hot.tags,
+                semanticMass = hot.semanticMass,
+                confidence = hot.confidence,
+                contentFingerprint = "a".repeat(64),
+                latest = true,
+            ),
+        ).sortedWith(compareBy<PhotonIndexEntry>({ it.ref.photonId.value }, { it.ref.revision }))
+
+        val snapshot = BootSnapshotLoader(
+            tasks = BootTaskSource { TaskLoadReport(emptyList(), emptyList()) },
+            checkpoints = BootCheckpointSource { CheckpointLoadReport(emptyList(), emptyList()) },
+            capabilities = BootCapabilityStateSource { emptyList() },
+            tools = BootToolStateSource { emptyList() },
+            fieldSnapshots = BootFieldSnapshotSource { FieldSnapshotLoadReport(emptyList(), emptyList()) },
+            indexedPhotons = IndexedBootPhotonSource {
+                BootPhotonCatalog(
+                    entries = entries,
+                    loadedPhotons = listOf(hot),
+                    hotRefs = listOf(hotRef),
+                    warmRefs = emptyList(),
+                    deferredWarmRefs = emptyList(),
+                    coldRefs = listOf(coldRef),
+                )
+            },
+            now = { t0 },
+        ).load()
+
+        assertEquals(listOf("hot"), snapshot.photons.map { it.id.value })
+        assertEquals(listOf(coldRef), snapshot.coldPhotonRefs)
+        assertEquals(2, snapshot.photonEntries.size)
     }
 
     @Test

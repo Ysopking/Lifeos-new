@@ -6,6 +6,7 @@ import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import kotlinx.coroutines.test.runTest
@@ -37,7 +38,7 @@ class PhotonRehydratorTest {
 
         assertEquals(listOf(active), result.hot)
         assertEquals(listOf(orphan), result.warm)
-        assertEquals(listOf(archived.id), result.cold)
+        assertEquals(listOf(PhotonRevisionRef(archived.id, archived.revision)), result.cold)
         assertEquals(listOf("broken.photon"), result.unreadableFiles)
         assertEquals(PhotonIntegrityState.ORPHANED, result.assessments.single { it.photonId == orphan.id }.state)
     }
