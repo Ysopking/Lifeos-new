@@ -10,7 +10,12 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionState
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
+import app.lifeos.core.runtime.goal.GoalCognitiveCycleBindingRecord
+import app.lifeos.core.runtime.goal.GoalCognitiveCycleBindingRepository
+import app.lifeos.core.runtime.goal.GoalCognitiveCycleBindingState
+import app.lifeos.core.runtime.goal.GoalConvergenceCycleBinding
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionSource
+import app.lifeos.core.runtime.goal.GoalOutcomeLearningHook
 import app.lifeos.core.runtime.goal.ProductiveConvergenceNotReadyException
 import app.lifeos.core.runtime.goal.GoalPlanBlueprint
 import app.lifeos.core.runtime.goal.GoalPlanBuildResult
@@ -40,6 +45,7 @@ sealed interface DurableGoalPlanAdmission {
 data class DurableGoalPlanPermit(
     val blueprint: GoalPlanBlueprint,
     val preparation: GoalPlanExecutionPreparation.PreparedAction,
+    val cycleBinding: GoalConvergenceCycleBinding? = null,
 ) {
     val goalPhotonId: PhotonId get() = blueprint.definition.sourceGoalPhotonId
 }
@@ -54,12 +60,20 @@ class DurableGoalPlanRuntime(
     private val convergence: GoalConvergenceDecisionSource,
     private val persistDerivedOutcome: suspend (Photon) -> PhotonSubmissionResult? = { null },
     private val outcomeLookup: GoalOutcomeLookup,
+    private val cognitiveBindings: GoalCognitiveCycleBindingRepository? = null,
+    private val outcomeLearning: GoalOutcomeLearningHook? = null,
     private val builder: GoalPlanBuilder = GoalPlanBuilder(),
     private val coordinator: GoalPlanExecutionCoordinator = GoalPlanExecutionCoordinator(ledger),
     private val projector: GoalStepDecisionProjector = GoalStepDecisionProjector(),
     private val traces: GoalDecisionTraceRecorder? = null,
     private val now: () -> Instant = Instant::now,
 ) {
+    init {
+        require(outcomeLearning == null || cognitiveBindings != null) {
+            "Goal outcome learning requires durable cognitive-cycle bindings"
+        }
+    }
+
     suspend fun prepare(context: GoalActionContext): DurableGoalPlanAdmission {
         val built = builder.build(
             goal = context.goal,
@@ -82,7 +96,11 @@ class DurableGoalPlanRuntime(
                 val persistedOutcome = recoverPersistedOutcome(context)
                 if (persistedOutcome != null) {
                     completeWithPersistedOutcome(
-                        DurableGoalPlanPermit(blueprint, recovered),
+                        DurableGoalPlanPermit(
+                            blueprint = blueprint,
+                            preparation = recovered,
+                            cycleBinding = cognitiveBindings?.load(blueprint.definition.id)?.cycleBinding,
+                        ),
                         persistedOutcome,
                     )
                     return DurableGoalPlanAdmission.Completed(
@@ -96,6 +114,12 @@ class DurableGoalPlanRuntime(
         if (actionState == GoalStepState.COMPLETED) {
             val persistedOutcome = recoverPersistedOutcome(context)
             if (persistedOutcome != null) {
+                ensureOutcomeLearning(
+                    blueprint = blueprint,
+                    outcomePhoton = persistedOutcome,
+                    succeeded = true,
+                    explicitBinding = cognitiveBindings?.load(blueprint.definition.id)?.cycleBinding,
+                )
                 return DurableGoalPlanAdmission.Completed(
                     blueprint.definition.id.value,
                     persistedOutcome,
@@ -104,8 +128,8 @@ class DurableGoalPlanRuntime(
             return normalizePreparation(blueprint, coordinator.prepareNext(blueprint, emptyMap(), now()))
         }
 
-        val checkpoint = try {
-            convergence.decide(
+        val convergenceResult = try {
+            convergence.decideBound(
                 goal = context.goal,
                 routing = context.routing,
                 sourcePhoton = context.sourcePhoton,
@@ -118,6 +142,7 @@ class DurableGoalPlanRuntime(
                 "productive-convergence:${blocked.reason}"
             )
         }
+        val checkpoint = convergenceResult.checkpoint
         traces?.recordConvergence(blueprint.definition, checkpoint)
         val decision = checkpoint.decision
         if (actionState in CONVERGENCE_MUTABLE_STATES) {
@@ -138,13 +163,21 @@ class DurableGoalPlanRuntime(
                 "v7-step-not-ready:${state.stepStates.getValue(actionStep.stepId).name.lowercase()}",
             )
         }
+        val cycleBinding = convergenceResult.cycleBinding
+        if (cycleBinding != null) {
+            persistConvergedBinding(
+                blueprint = blueprint,
+                binding = cycleBinding,
+            )
+        }
         return normalizePreparation(
-            blueprint,
-            coordinator.prepareNext(
+            blueprint = blueprint,
+            preparation = coordinator.prepareNext(
                 blueprint = blueprint,
                 decisions = mapOf(actionStep.stepId to decision),
                 at = now(),
             ),
+            cycleBinding = cycleBinding,
         )
     }
 
@@ -175,6 +208,12 @@ class DurableGoalPlanRuntime(
             outcome = outcomePhoton,
             succeeded = true,
         )
+        ensureOutcomeLearning(
+            blueprint = permit.blueprint,
+            outcomePhoton = outcomePhoton,
+            succeeded = true,
+            explicitBinding = permit.cycleBinding,
+        )
         // The verification step is internal and may complete immediately once the persisted outcome exists.
         val verification = coordinator.prepareNext(permit.blueprint, emptyMap(), now())
         if (verification is GoalPlanExecutionPreparation.VerificationCompleted) {
@@ -185,9 +224,16 @@ class DurableGoalPlanRuntime(
     private suspend fun normalizePreparation(
         blueprint: GoalPlanBlueprint,
         preparation: GoalPlanExecutionPreparation,
+        cycleBinding: GoalConvergenceCycleBinding? = cognitiveBindings?.load(blueprint.definition.id)?.cycleBinding,
     ): DurableGoalPlanAdmission = when (preparation) {
         is GoalPlanExecutionPreparation.PreparedAction ->
-            DurableGoalPlanAdmission.Ready(DurableGoalPlanPermit(blueprint, preparation))
+            DurableGoalPlanAdmission.Ready(
+                DurableGoalPlanPermit(
+                    blueprint = blueprint,
+                    preparation = preparation,
+                    cycleBinding = cycleBinding,
+                )
+            )
         is GoalPlanExecutionPreparation.VerificationCompleted -> {
             when (val next = coordinator.prepareNext(blueprint, emptyMap(), now())) {
                 GoalPlanExecutionPreparation.PlanCompleted ->
@@ -201,6 +247,89 @@ class DurableGoalPlanRuntime(
             DurableGoalPlanAdmission.Blocked("v7-replan-required:${preparation.reason}")
         is GoalPlanExecutionPreparation.Waiting ->
             DurableGoalPlanAdmission.Blocked("v7-waiting:${preparation.reason}")
+    }
+
+    private suspend fun persistConvergedBinding(
+        blueprint: GoalPlanBlueprint,
+        binding: GoalConvergenceCycleBinding,
+    ): GoalCognitiveCycleBindingRecord? {
+        val repository = cognitiveBindings ?: return null
+        val planId = blueprint.definition.id
+        val existing = repository.load(planId)
+        if (existing != null) {
+            require(existing.sourceGoalPhotonId == blueprint.definition.sourceGoalPhotonId)
+            require(existing.sourceGoalPhotonRevision == blueprint.definition.sourceGoalPhotonRevision)
+            require(existing.cycleBinding == binding) {
+                "Goal plan already belongs to another cognitive cycle"
+            }
+            return existing
+        }
+        val created = GoalCognitiveCycleBindingRecord.converged(
+            planId = planId,
+            sourceGoalPhotonId = blueprint.definition.sourceGoalPhotonId,
+            sourceGoalPhotonRevision = blueprint.definition.sourceGoalPhotonRevision,
+            cycleBinding = binding,
+        )
+        if (repository.compareAndSet(planId, null, created)) return created
+        val raced = requireNotNull(repository.load(planId)) {
+            "Goal cognitive-cycle binding disappeared after concurrent creation"
+        }
+        require(raced.cycleBinding == binding) {
+            "Concurrent goal cognitive-cycle binding belongs to another cycle"
+        }
+        return raced
+    }
+
+    private suspend fun ensureOutcomeLearning(
+        blueprint: GoalPlanBlueprint,
+        outcomePhoton: Photon,
+        succeeded: Boolean,
+        explicitBinding: GoalConvergenceCycleBinding?,
+    ) {
+        val repository = cognitiveBindings ?: return
+        val learning = outcomeLearning ?: return
+        val planId = blueprint.definition.id
+        var record = repository.load(planId)
+            ?: explicitBinding?.let { persistConvergedBinding(blueprint, it) }
+            ?: return
+
+        require(record.sourceGoalPhotonId == blueprint.definition.sourceGoalPhotonId)
+        require(record.sourceGoalPhotonRevision == blueprint.definition.sourceGoalPhotonRevision)
+        explicitBinding?.let {
+            require(record.cycleBinding == it) {
+                "Goal outcome learning cycle lineage mismatch"
+            }
+        }
+
+        if (record.state < GoalCognitiveCycleBindingState.OUTCOME_RECORDED) {
+            val next = record.recordOutcome(outcomePhoton)
+            record = if (repository.compareAndSet(planId, record.revision, next)) {
+                next
+            } else {
+                requireNotNull(repository.load(planId))
+            }
+        }
+        require(record.outcomePhotonId == outcomePhoton.id)
+        require(record.outcomePhotonRevision == outcomePhoton.revision)
+
+        if (record.state == GoalCognitiveCycleBindingState.LEARNED) return
+
+        val receipt = learning.learn(
+            binding = record.cycleBinding,
+            outcome = outcomePhoton,
+            succeeded = succeeded,
+        )
+        val learned = record.markLearned(
+            outcomeWorldSnapshotId = receipt.outcomeWorldSnapshotId,
+            learningWatermarkRevision = receipt.learningWatermarkRevision,
+        )
+        if (!repository.compareAndSet(planId, record.revision, learned)) {
+            val raced = requireNotNull(repository.load(planId))
+            require(raced.state == GoalCognitiveCycleBindingState.LEARNED) {
+                "Goal cognitive-cycle learning completion lost a CAS race"
+            }
+            require(raced.outcomeWorldSnapshotId == receipt.outcomeWorldSnapshotId)
+        }
     }
 
     /**
