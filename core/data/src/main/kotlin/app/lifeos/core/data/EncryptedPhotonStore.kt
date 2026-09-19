@@ -4,6 +4,9 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
+import app.lifeos.core.data.photon.EncryptedPhotonIndexJournal
+import app.lifeos.core.data.photon.PhotonIndexDelta
+import app.lifeos.core.data.photon.PhotonIndexDeltaOperation
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonCodec
 import app.lifeos.core.model.PhotonId
@@ -50,6 +53,12 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
     private val revisionDirectory = directory.resolve(REVISION_DIRECTORY)
     private val indexFile = directory.resolve(INDEX_FILE)
     private val key: SecretKey by lazy { loadOrCreateKey() }
+    private val indexJournal: EncryptedPhotonIndexJournal by lazy {
+        EncryptedPhotonIndexJournal(
+            rootDirectory = directory,
+            key = key,
+        )
+    }
     private val mutex = Mutex()
 
     @Volatile
@@ -216,11 +225,27 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
             if (head.tombstoned) return@withLock
 
             writeTombstoneLocked(id, head.ref.revision)
+            val tombstonedHead = head.copy(tombstoned = true)
+            val sequence = Math.addExact(index.lastJournalSequence, 1L)
+            indexJournal.append(
+                PhotonIndexDelta(
+                    sequence = sequence,
+                    operation = PhotonIndexDeltaOperation.TOMBSTONE,
+                    ref = head.ref,
+                    previousHeadRef = head.ref,
+                    newEntry = tombstonedHead,
+                    snapshotGeneration = index.snapshotGeneration,
+                    snapshotFingerprint = index.snapshotFingerprint,
+                )
+            )
             val updatedEntries = index.entries.toMutableMap()
-            updatedEntries[head.ref] = head.copy(tombstoned = true)
-            val updated = index.copy(entries = updatedEntries)
-            writeIndexLocked(updated)
-            cachedIndex = updated
+            updatedEntries[head.ref] = tombstonedHead
+            val updated = index.copy(
+                entries = updatedEntries,
+                unreadableRevisionFiles = emptyList(),
+                lastJournalSequence = sequence,
+            )
+            cachedIndex = maybeCompactIndexLocked(updated)
         }
     }
 
@@ -292,14 +317,35 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
             AtomicFile(tombstoneFile(photon.id)).delete()
         }
 
+        val newHead = indexEntry(photon, latest = true, tombstoned = false)
+        val sequence = Math.addExact(index.lastJournalSequence, 1L)
+        indexJournal.append(
+            PhotonIndexDelta(
+                sequence = sequence,
+                operation = if (head == null) {
+                    PhotonIndexDeltaOperation.CREATE
+                } else {
+                    PhotonIndexDeltaOperation.ADVANCE
+                },
+                ref = ref,
+                previousHeadRef = head?.ref,
+                newEntry = newHead,
+                snapshotGeneration = index.snapshotGeneration,
+                snapshotFingerprint = index.snapshotFingerprint,
+            )
+        )
+
         val entries = index.entries.toMutableMap()
         if (head != null) {
             entries[head.ref] = head.copy(latest = false, tombstoned = false)
         }
-        entries[ref] = indexEntry(photon, latest = true, tombstoned = false)
-        val updated = IndexState(entries = entries, unreadableRevisionFiles = emptyList())
-        writeIndexLocked(updated)
-        cachedIndex = updated
+        entries[ref] = newHead
+        val updated = index.copy(
+            entries = entries,
+            unreadableRevisionFiles = emptyList(),
+            lastJournalSequence = sequence,
+        )
+        cachedIndex = maybeCompactIndexLocked(updated)
 
         return if (previous == null) {
             PhotonRevisionWriteResult.Created(photon)
@@ -318,12 +364,32 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
             null
         }
         if (loaded != null) {
-            val reconciled = reconcileIndexTailLocked(loaded)
-            cachedIndex = reconciled
-            return reconciled
+            val replayed = runCatching { replayIndexJournalLocked(loaded) }.getOrNull()
+            if (replayed != null) {
+                val reconciled = reconcileIndexTailLocked(replayed)
+                val published = if (reconciled.entries != replayed.entries ||
+                    reconciled.unreadableRevisionFiles != replayed.unreadableRevisionFiles
+                ) {
+                    compactIndexLocked(reconciled)
+                } else {
+                    replayed
+                }
+                cachedIndex = published
+                return published
+            }
         }
 
-        return rebuildIndexLocked().also { cachedIndex = it }
+        val rebuilt = rebuildIndexLocked()
+        indexJournal.clear()
+        val published = compactIndexLocked(
+            rebuilt.copy(
+                snapshotGeneration = 0L,
+                lastJournalSequence = 0L,
+            )
+        )
+        cleanupLegacyHeadsLocked()
+        cachedIndex = published
+        return published
     }
 
     /**
@@ -400,9 +466,10 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
             }
 
         if (!changed) return index
-        val reconciled = IndexState(entries = entries, unreadableRevisionFiles = emptyList())
-        writeIndexLocked(reconciled)
-        return reconciled
+        return index.copy(
+            entries = entries,
+            unreadableRevisionFiles = emptyList(),
+        )
     }
 
     /**
@@ -452,13 +519,17 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
             )
         }
 
-        val rebuilt = IndexState(
+        return IndexState(
             entries = entries,
             unreadableRevisionFiles = failures.distinct().sorted(),
+            snapshotGeneration = 0L,
+            snapshotFingerprint = indexSnapshotFingerprint(
+                generation = 0L,
+                entries = entries,
+                failures = failures.distinct().sorted(),
+            ),
+            lastJournalSequence = 0L,
         )
-        writeIndexLocked(rebuilt)
-        cleanupLegacyHeadsLocked()
-        return rebuilt
     }
 
     private fun migrateLegacyHeadsLocked() {
@@ -489,7 +560,20 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
             maxPlaintextBytes = MAX_INDEX_PLAINTEXT_BYTES,
         )
         return DataInputStream(ByteArrayInputStream(plaintext)).use { input ->
-            require(input.readInt() == INDEX_FORMAT_VERSION) { "Unsupported Photon index version" }
+            val formatVersion = input.readInt()
+            require(formatVersion in LEGACY_INDEX_FORMAT_VERSION..INDEX_FORMAT_VERSION) {
+                "Unsupported Photon index version"
+            }
+            val snapshotGeneration = if (formatVersion >= 2) {
+                input.readLong().also { require(it >= 0L) }
+            } else {
+                0L
+            }
+            val lastJournalSequence = if (formatVersion >= 2) {
+                input.readLong().also { require(it >= 0L) }
+            } else {
+                0L
+            }
             val count = input.readInt()
             require(count in 0..MAX_INDEX_ENTRIES) { "Invalid Photon index entry count" }
             val entries = linkedMapOf<PhotonRevisionRef, PhotonIndexEntry>()
@@ -528,7 +612,18 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
             val failures = buildList { repeat(failureCount) { add(input.text()) } }
             require(input.available() == 0) { "Trailing Photon index bytes" }
             validateIndex(entries.values)
-            IndexState(entries, failures)
+            val normalizedFailures = failures.distinct().sorted()
+            IndexState(
+                entries = entries,
+                unreadableRevisionFiles = normalizedFailures,
+                snapshotGeneration = snapshotGeneration,
+                snapshotFingerprint = indexSnapshotFingerprint(
+                    generation = snapshotGeneration,
+                    entries = entries,
+                    failures = normalizedFailures,
+                ),
+                lastJournalSequence = lastJournalSequence,
+            )
         }
     }
 
@@ -537,6 +632,8 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
         val plaintext = ByteArrayOutputStream().let { output ->
             DataOutputStream(output).use { data ->
                 data.writeInt(INDEX_FORMAT_VERSION)
+                data.writeLong(index.snapshotGeneration)
+                data.writeLong(index.lastJournalSequence)
                 val ordered = index.entries.values.canonicalPhotonIndexOrder()
                 data.writeInt(ordered.size)
                 ordered.forEach { entry ->
@@ -568,6 +665,109 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
                 maxPlaintextBytes = MAX_INDEX_PLAINTEXT_BYTES,
             ),
         )
+    }
+
+    private fun replayIndexJournalLocked(snapshot: IndexState): IndexState {
+        var state = snapshot
+        indexJournal.loadAfter(
+            sequence = snapshot.lastJournalSequence,
+            snapshotGeneration = snapshot.snapshotGeneration,
+            snapshotFingerprint = snapshot.snapshotFingerprint,
+        ).forEach { delta ->
+            val entries = state.entries.toMutableMap()
+            val currentHead = state.head(delta.ref.photonId)
+            when (delta.operation) {
+                PhotonIndexDeltaOperation.CREATE -> {
+                    require(currentHead == null) {
+                        "Photon index CREATE delta found an existing head"
+                    }
+                }
+
+                PhotonIndexDeltaOperation.ADVANCE -> {
+                    val previousRef = requireNotNull(delta.previousHeadRef)
+                    require(currentHead?.ref == previousRef) {
+                        "Photon index ADVANCE delta predecessor mismatch"
+                    }
+                    entries[previousRef] = requireNotNull(entries[previousRef]).copy(
+                        latest = false,
+                        tombstoned = false,
+                    )
+                }
+
+                PhotonIndexDeltaOperation.TOMBSTONE -> {
+                    require(currentHead?.ref == delta.ref) {
+                        "Photon index TOMBSTONE delta head mismatch"
+                    }
+                }
+            }
+            entries[delta.ref] = delta.newEntry
+            validateIndex(entries.values)
+            state = state.copy(
+                entries = entries,
+                unreadableRevisionFiles = emptyList(),
+                lastJournalSequence = delta.sequence,
+            )
+        }
+        return state
+    }
+
+    private fun maybeCompactIndexLocked(index: IndexState): IndexState {
+        val stats = indexJournal.stats()
+        return if (
+            stats.segmentCount >= INDEX_JOURNAL_COMPACTION_SEGMENTS ||
+            stats.totalBytes >= INDEX_JOURNAL_COMPACTION_BYTES
+        ) {
+            compactIndexLocked(index)
+        } else {
+            index
+        }
+    }
+
+    private fun compactIndexLocked(index: IndexState): IndexState {
+        val generation = Math.addExact(index.snapshotGeneration, 1L)
+        val failures = index.unreadableRevisionFiles.distinct().sorted()
+        val compacted = index.copy(
+            unreadableRevisionFiles = failures,
+            snapshotGeneration = generation,
+            snapshotFingerprint = indexSnapshotFingerprint(
+                generation = generation,
+                entries = index.entries,
+                failures = failures,
+            ),
+        )
+        writeIndexLocked(compacted)
+        indexJournal.deleteThrough(compacted.lastJournalSequence)
+        return compacted
+    }
+
+    private fun indexSnapshotFingerprint(
+        generation: Long,
+        entries: Map<PhotonRevisionRef, PhotonIndexEntry>,
+        failures: List<String>,
+    ): String {
+        val bytes = ByteArrayOutputStream().let { output ->
+            DataOutputStream(output).use { data ->
+                data.writeLong(generation)
+                entries.values.canonicalPhotonIndexOrder().forEach { entry ->
+                    data.text(entry.ref.photonId.value)
+                    data.writeLong(entry.ref.revision)
+                    data.writeLong(entry.createdAt.epochSecond)
+                    data.writeInt(entry.createdAt.nano)
+                    data.text(entry.phase.name)
+                    data.text(entry.mimeType)
+                    data.writeInt(entry.tags.size)
+                    entry.tags.sorted().forEach { tag -> data.text(tag) }
+                    data.writeDouble(entry.semanticMass)
+                    data.writeDouble(entry.confidence)
+                    data.text(entry.contentFingerprint)
+                    data.writeBoolean(entry.latest)
+                    data.writeBoolean(entry.tombstoned)
+                }
+                failures.distinct().sorted().forEach { failure -> data.text(failure) }
+            }
+            output.toByteArray()
+        }
+        return sha256(bytes)
     }
 
     private fun validateIndex(entries: Collection<PhotonIndexEntry>) {
@@ -848,7 +1048,18 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
     private data class IndexState(
         val entries: Map<PhotonRevisionRef, PhotonIndexEntry>,
         val unreadableRevisionFiles: List<String> = emptyList(),
+        val snapshotGeneration: Long,
+        val snapshotFingerprint: String,
+        val lastJournalSequence: Long,
     ) {
+        init {
+            require(snapshotGeneration >= 0L)
+            require(lastJournalSequence >= 0L)
+            require(snapshotFingerprint.matches(Regex("[0-9a-f]{64}"))) {
+                "Photon index snapshot fingerprint must be lowercase SHA-256"
+            }
+        }
+
         private val latestEntries: List<PhotonIndexEntry> =
             entries.values.filter { it.latest }
 
@@ -932,7 +1143,8 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
 
         const val PHOTON_FORMAT_VERSION = PhotonCodec.VERSION
-        const val INDEX_FORMAT_VERSION = 1
+        const val LEGACY_INDEX_FORMAT_VERSION = 1
+        const val INDEX_FORMAT_VERSION = 2
         const val INDEX_CONTAINER_VERSION = 1
         const val TOMBSTONE_FORMAT_VERSION = 1
         const val TOMBSTONE_CONTAINER_VERSION = 1
@@ -942,6 +1154,8 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
         const val MAX_INDEX_CONTAINER_BYTES = MAX_INDEX_PLAINTEXT_BYTES + 64 * 1024
         const val MAX_INDEX_ENTRIES = 250_000
         const val MAX_INDEX_TEXT_BYTES = 4 * 1024 * 1024
+        const val INDEX_JOURNAL_COMPACTION_SEGMENTS = 512
+        const val INDEX_JOURNAL_COMPACTION_BYTES = 4L * 1024L * 1024L
         const val MAX_TAGS = 10_000
         const val MAX_TOMBSTONE_BYTES = 8 * 1024
         const val MAX_TOMBSTONE_CONTAINER_BYTES = MAX_TOMBSTONE_BYTES + 1024

@@ -38,4 +38,46 @@ class PhotonIndexRecoveryTest {
         assertEquals(second, recovered.load(PhotonRevisionRef(id, 2)))
         assertTrue(recovered.indexReport().unreadableRevisionFiles.isEmpty())
     }
+    @Test
+    fun corruptJournalFallsBackToRevisionTruth() = runBlocking {
+        val id = PhotonId("o202_corrupt_journal")
+        val first = testPhoton(id, 1, "one")
+        val second = testPhoton(id, 2, "two")
+        EncryptedPhotonStore(context).apply {
+            saveRevision(first, null)
+            saveRevision(second, 1)
+        }
+
+        val journal = context.filesDir.resolve("photon-vault/index-journal")
+        val segment = journal.listFiles()
+            ?.firstOrNull { it.name.endsWith(".pidx") }
+            ?: error("Expected Photon index journal segment")
+        segment.writeBytes(byteArrayOf(7, 6, 5, 4, 3, 2, 1))
+
+        val recovered = EncryptedPhotonStore(context)
+        assertEquals(second, recovered.load(id))
+        assertEquals(first, recovered.load(PhotonRevisionRef(id, 1)))
+        assertEquals(second, recovered.load(PhotonRevisionRef(id, 2)))
+        assertTrue(recovered.indexReport().unreadableRevisionFiles.isEmpty())
+    }
+
+    @Test
+    fun journalSegmentIsBoundToItsPhysicalSequencePath() = runBlocking {
+        val id = PhotonId("o202_path_bound_journal")
+        val first = testPhoton(id, 1, "one")
+        EncryptedPhotonStore(context).saveRevision(first, null)
+
+        val journal = context.filesDir.resolve("photon-vault/index-journal")
+        val segment = journal.listFiles()
+            ?.firstOrNull { it.name.endsWith(".pidx") }
+            ?: error("Expected Photon index journal segment")
+        val moved = journal.resolve("delta-0000000000000002.pidx")
+        assertTrue(segment.renameTo(moved))
+
+        val recovered = EncryptedPhotonStore(context)
+        assertEquals(first, recovered.load(id))
+        assertEquals(first, recovered.load(PhotonRevisionRef(id, 1)))
+        assertTrue(recovered.indexReport().unreadableRevisionFiles.isEmpty())
+    }
+
 }
