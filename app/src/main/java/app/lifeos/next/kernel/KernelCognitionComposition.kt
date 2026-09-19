@@ -31,8 +31,13 @@ import app.lifeos.core.runtime.cognition.PhotonBackedRuntimeEventJournal
 import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
 import app.lifeos.core.runtime.context.DurableContextFieldEnricher
 import app.lifeos.core.runtime.field.AuthoritativeFieldProcessor
+import app.lifeos.core.runtime.field.FieldCutoverAuthority
 import app.lifeos.core.runtime.field.FieldCutoverRuntimeRouter
+import app.lifeos.core.runtime.field.FieldShadowValidationObserver
+import app.lifeos.core.runtime.field.FieldShadowValidationPolicy
+import app.lifeos.core.runtime.field.FieldShadowValidator
 import app.lifeos.core.runtime.field.PhotonBackedFieldCutoverStateRepository
+import app.lifeos.core.runtime.field.PhotonBackedFieldShadowValidationLedger
 import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.health.HealthNodeId
 import app.lifeos.core.runtime.health.HealthTaskExecutionObserver
@@ -69,6 +74,7 @@ internal data class KernelCognitionGraph(
     val photonTransactions: PhotonBackedPhotonTransactionJournal,
     val cognitiveOutcomes: PhotonBackedCognitiveOutcomeJournal,
     val cognitiveTriggers: DurableCognitiveTriggerSink,
+    val fieldCutoverAuthority: FieldCutoverAuthority,
     val leaseRecovery: LeaseRecoveryService,
     val durableRuntime: DurableLifeOsRuntime,
     val supervisor: RuntimeSupervisor,
@@ -91,9 +97,26 @@ internal class KernelCognitionComposition(
             healthGate = foundation.healthGate,
             thoughtGraphProjection = world.fieldThoughtGraphProjection,
         )
+        val selectedFieldDomains = authoritativeFieldProcessors.mapTo(linkedSetOf()) { it.domainId }
+        val fieldCutoverStates = PhotonBackedFieldCutoverStateRepository(foundation.store)
+        val fieldShadowValidationLedger = PhotonBackedFieldShadowValidationLedger(foundation.store)
+        val fieldShadowValidator = FieldShadowValidator(
+            policy = FieldShadowValidationPolicy(selectedDomains = selectedFieldDomains),
+        )
+        val fieldCutoverAuthority = FieldCutoverAuthority(
+            ledger = fieldShadowValidationLedger,
+            states = fieldCutoverStates,
+            validator = fieldShadowValidator,
+        )
         val fieldCutoverRouter = FieldCutoverRuntimeRouter(
-            states = PhotonBackedFieldCutoverStateRepository(foundation.store),
+            states = fieldCutoverStates,
             processors = authoritativeFieldProcessors,
+        )
+        val fieldShadowValidationObserver = FieldShadowValidationObserver(
+            photons = foundation.store,
+            snapshots = world.fieldSnapshotRepository,
+            ledger = fieldShadowValidationLedger,
+            validator = fieldShadowValidator,
         )
         val schedulerSignal = ConflatedTaskSchedulerSignal()
         val taskEngine = DurableTaskEngine(world.taskRepository, schedulerSignal)
@@ -219,6 +242,7 @@ internal class KernelCognitionComposition(
             val observer = CompositeDurableTaskExecutionObserver(
                 listOf(
                     durableStateBridge,
+                    fieldShadowValidationObserver,
                     PhotonTransactionObserver(photonTransactions),
                     OutcomeTriggerObserver(
                         outcomes = cognitiveOutcomes,
@@ -301,6 +325,7 @@ internal class KernelCognitionComposition(
             photonTransactions = photonTransactions,
             cognitiveOutcomes = cognitiveOutcomes,
             cognitiveTriggers = cognitiveTriggers,
+            fieldCutoverAuthority = fieldCutoverAuthority,
             leaseRecovery = leaseRecovery,
             durableRuntime = durableRuntime,
             supervisor = supervisor,
