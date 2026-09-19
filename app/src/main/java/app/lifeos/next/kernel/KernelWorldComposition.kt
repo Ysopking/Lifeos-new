@@ -1,6 +1,7 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
+import app.lifeos.core.data.boot.EncryptedIncrementalBootPhotonManifestRepository
 import app.lifeos.core.data.checkpoint.EncryptedCheckpointRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.evolution.EncryptedWorldEquationEvidenceRepository
@@ -23,7 +24,7 @@ import app.lifeos.core.runtime.boot.CapabilityRegistryBootSource
 import app.lifeos.core.runtime.boot.CheckpointRepositoryBootSource
 import app.lifeos.core.runtime.boot.FieldSnapshotRepositoryBootSource
 import app.lifeos.core.runtime.boot.GeneratedToolRegistryBootSource
-import app.lifeos.core.runtime.boot.PhotonRepositoryBootSource
+import app.lifeos.core.runtime.boot.IncrementalPhotonRepositoryBootSource
 import app.lifeos.core.runtime.boot.TaskRepositoryBootSource
 import app.lifeos.core.runtime.convergence.DefaultProductiveConvergenceAuthority
 import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
@@ -91,7 +92,11 @@ internal class KernelWorldComposition(
         val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
         val bootReadSession = BootReadSession(
             BootSnapshotLoader(
-                photons = PhotonRepositoryBootSource(foundation.store),
+                photons = IncrementalPhotonRepositoryBootSource(
+                    repository = foundation.store,
+                    incrementalIndex = foundation.store,
+                    manifests = EncryptedIncrementalBootPhotonManifestRepository(appContext),
+                ),
                 tasks = TaskRepositoryBootSource(taskRepository),
                 checkpoints = CheckpointRepositoryBootSource(checkpointRepository),
                 capabilities = CapabilityRegistryBootSource(foundation.capabilityRegistry),
