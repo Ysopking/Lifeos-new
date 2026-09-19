@@ -16,6 +16,12 @@ data class WorldFormulaExecutionPolicy(
 ) {
     init {
         if (scope != WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE) {
+            require(!captureCognitiveSnapshots) {
+                "Non-productive WorldFormula scopes cannot capture cognitive snapshots"
+            }
+            require(!emitCognitiveTriggers) {
+                "Non-productive WorldFormula scopes cannot emit cognitive triggers"
+            }
             require(!productiveCommitAllowed) {
                 "Non-productive WorldFormula scopes cannot commit productive world state"
             }
