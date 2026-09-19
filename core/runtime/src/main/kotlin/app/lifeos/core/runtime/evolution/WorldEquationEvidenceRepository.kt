@@ -62,6 +62,22 @@ data class WorldEquationEvidenceRecord(
         )
     }
 
+    fun recordVerdict(
+        verdictId: String,
+    ): WorldEquationEvidenceRecord {
+        require(verdictId.isNotBlank())
+        require(state == WorldEquationLifecycleState.SHADOW ||
+            state == WorldEquationLifecycleState.SUPPORTED
+        ) {
+            "Promotion verdicts may only be refreshed during SHADOW or SUPPORTED"
+        }
+        return next(
+            state = state,
+            evidence = evidence,
+            latestVerdictId = verdictId,
+        )
+    }
+
     fun transition(
         nextState: WorldEquationLifecycleState,
         verdictId: String? = latestVerdictId,
