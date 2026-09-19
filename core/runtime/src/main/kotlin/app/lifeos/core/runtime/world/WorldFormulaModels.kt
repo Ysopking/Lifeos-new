@@ -438,12 +438,12 @@ enum class WorldFormulaExecutionState {
 }
 
 data class WorldFormulaExecution(
-    val scope: WorldFormulaExecutionScope = WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE,
     val state: WorldFormulaExecutionState,
     val status: WorldFormulaStatus,
     val snapshot: WorldFormulaSnapshot?,
     val persisted: Boolean,
     val message: String,
+    val scope: WorldFormulaExecutionScope = WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE,
 ) {
     init {
         require(message.isNotBlank())
