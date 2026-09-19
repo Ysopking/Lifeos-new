@@ -35,6 +35,7 @@ fun LifeOsChatScreen(
         bootStatus = state.bootStatus,
         readiness = state.readiness,
         topologyEvidence = state.runtimeTopology,
+        selfStateEvidence = state.selfState,
     )
 
     Column(
@@ -108,6 +109,7 @@ fun LifeOsChatScreen(
             readiness = state.readiness,
             topology = state.runtimeTopology,
             onDismiss = { showRuntimeHealth = false },
+            selfState = state.selfState,
         )
     }
 }

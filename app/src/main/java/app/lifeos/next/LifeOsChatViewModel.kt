@@ -30,6 +30,7 @@ import app.lifeos.next.ui.chat.ChatVoiceStartResult
 import app.lifeos.next.ui.chat.ChatVoiceUiState
 import app.lifeos.next.ui.chat.VoiceDraftResolution
 import app.lifeos.next.ui.components.RuntimeTopologyUiEvidence
+import app.lifeos.next.ui.components.SelfStateUiEvidence
 import app.lifeos.next.ui.perf.StableChatProjection
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -54,6 +55,7 @@ data class LifeOsChatUiState(
     val capabilityProviders: Int = 0,
     val generatedProviders: Int = 0,
     val runtimeTopology: RuntimeTopologyUiEvidence? = null,
+    val selfState: SelfStateUiEvidence? = null,
     val readiness: LifeOsReadinessSnapshot? = null,
     val error: String? = null,
 )
@@ -76,6 +78,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
 
     init {
         observeKernel()
+        observeSelfState()
     }
 
     fun editDraft(text: String) {
@@ -511,6 +514,35 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                         runtimeTopology = topologyEvidence,
                         readiness = readiness,
                         error = boot.failureMessage ?: current.error,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun observeSelfState() {
+        viewModelScope.launch {
+            owner.selfObservationAnalysis.collect { analysis ->
+                mutableState.update { current ->
+                    current.copy(
+                        selfState = analysis?.let { observed ->
+                            val snapshot = observed.cycle.snapshot
+                            SelfStateUiEvidence(
+                                authorityFingerprintShort = snapshot.authorityFingerprint.take(16),
+                                worldRevision = snapshot.world.worldHeadRevision,
+                                equationVersion = snapshot.world.worldEquationVersion,
+                                photonCount = snapshot.photon.livePhotonCount,
+                                memoryNodeCount = snapshot.memory.graphNodeCount,
+                                healthyNodes = snapshot.health.healthy,
+                                degradedNodes = snapshot.health.degraded,
+                                unknownHealthNodes = snapshot.health.unknown,
+                                resourceCapabilityReadiness = snapshot.resource.capabilityReadiness,
+                                activeRepairs = snapshot.recovery.activeRepairs,
+                                activeTools = snapshot.tools.activeTools,
+                                liveSources = snapshot.liveSources.sourceCount,
+                                observationBand = observed.assessment.band.name,
+                            )
+                        },
                     )
                 }
             }

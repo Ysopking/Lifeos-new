@@ -67,12 +67,14 @@ import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.self.SelfObservationCapture
 import app.lifeos.core.runtime.self.SelfObservationCoordinator
+import app.lifeos.core.runtime.self.SelfObservationCycle
 import app.lifeos.core.runtime.self.SELF_OBSERVATION_HEALTH_NODE_ID
 import app.lifeos.core.runtime.self.SELF_OBSERVATION_HEALTH_SOURCE
 import app.lifeos.core.runtime.self.SelfObservationDecisionTraceRecorder
 import app.lifeos.core.runtime.self.SelfObservationTrigger
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.world.SelfStateWorldBand
+import app.lifeos.core.runtime.world.SelfStateWorldFormulaAssessment
 import app.lifeos.core.runtime.world.SelfStateWorldFormulaRuntimeRegistry
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
@@ -116,6 +118,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+data class SelfObservationAnalysisState(
+    val cycle: SelfObservationCycle,
+    val assessment: SelfStateWorldFormulaAssessment,
+)
 
 /** Process-level owner for the LIFEOS kernel instance and read-only private diagnostics. */
 class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
@@ -197,8 +204,12 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private lateinit var selfObservationHealthGraph: app.lifeos.core.runtime.health.HealthGraph
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
+    private val mutableSelfObservationAnalysis =
+        MutableStateFlow<SelfObservationAnalysisState?>(null)
 
     override val startupState: StateFlow<LifeOsProcessStartupState> = mutableStartupState.asStateFlow()
+    val selfObservationAnalysis: StateFlow<SelfObservationAnalysisState?> =
+        mutableSelfObservationAnalysis.asStateFlow()
 
     override fun onCreate() {
         super.onCreate()
@@ -501,9 +512,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         healthGraph: app.lifeos.core.runtime.health.HealthGraph,
     ) {
         if (selfObservationJob?.isActive == true) return
-        // Register the derived self-observation node before exposing any refresh path. Otherwise
-        // an early health event/UI refresh can record it implicitly as UNKNOWN and a later explicit
-        // RUNTIME registration fails closed on the scope mismatch.
+        // Register before any event/UI-triggered refresh can emit the derived node with UNKNOWN scope.
         runBlocking {
             healthGraph.register(
                 app.lifeos.core.runtime.health.HealthNodeId(SELF_OBSERVATION_HEALTH_NODE_ID),
@@ -558,6 +567,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     ) {
         selfObservationAnalysisMutex.withLock {
             val assessment = SelfStateWorldFormulaRuntimeRegistry.requireCurrent().evaluate(cycle.result)
+            mutableSelfObservationAnalysis.value = SelfObservationAnalysisState(cycle, assessment)
             val traceIdentity = cycle.snapshot.authorityFingerprint + ":" + assessment.band.name
             if (traceIdentity != lastSelfObservationTraceIdentity) {
                 selfObservationDecisionTraceRecorder.record(
