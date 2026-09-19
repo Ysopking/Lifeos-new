@@ -39,6 +39,8 @@ class LifeOsThemeContractTest {
         assertTrue(LifeOsTokens.Layout.readingMaxWidth < LifeOsTokens.Layout.workspaceMaxWidth)
         assertTrue(LifeOsTokens.Layout.inspectorWidth < LifeOsTokens.Layout.readingMaxWidth)
         assertTrue(LifeOsTokens.Size.minimumTouchTarget.value >= 48f)
+        assertTrue(LifeOsTokens.Size.minimumTouchTarget > LifeOsTokens.Size.navigationIcon)
+        assertTrue(LifeOsTokens.Size.minimumTouchTarget > LifeOsTokens.Size.actionIcon)
     }
 
     @Test
