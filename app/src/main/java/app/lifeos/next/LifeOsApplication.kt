@@ -138,7 +138,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     lateinit var hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime
         private set
 
-    lateinit var storageIntelligence: AndroidStorageIntelligenceRuntime
+    internal lateinit var storageIntelligence: AndroidStorageIntelligenceRuntime
         private set
 
     internal lateinit var selfObservationRuntime: SelfObservationRuntime
@@ -184,7 +184,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         private set
 
     @Volatile
-    var latestStorageIntelligence: StorageIntelligenceSnapshot? = null
+    internal var latestStorageIntelligence: StorageIntelligenceSnapshot? = null
         private set
 
     @Volatile
@@ -669,9 +669,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     if (snapshot.contentReadComplete) break
 
                     val hardware = hardwareResourceIntelligence.currentHardwareSnapshot()
+                    val batteryFraction = hardware.batteryFraction
                     val delayMillis = when {
                         hardware.charging == true -> 1_000L
-                        hardware.batteryFraction != null && hardware.batteryFraction < 0.20 -> 60_000L
+                        batteryFraction != null && batteryFraction < 0.20 -> 60_000L
                         else -> 15_000L
                     }
                     delay(delayMillis)
