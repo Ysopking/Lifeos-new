@@ -5,6 +5,7 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import java.time.Instant
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -32,6 +33,23 @@ class StableChatProjectionTest {
         assertNotSame(first, revised)
         assertEquals("Alpha 2", revised.events.single().text)
         assertEquals(2, cache.recomputationCount)
+    }
+
+
+    @Test
+    fun revisionFingerprintIsOrderIndependentAndRevisionSensitive() {
+        val first = chatPhoton("a", 1, "Alpha", 1)
+        val second = chatPhoton("b", 1, "Beta", 2)
+        val revised = chatPhoton("a", 2, "Alpha 2", 1)
+
+        assertEquals(
+            canonicalPhotonRevisionFingerprint(listOf(first, second)),
+            canonicalPhotonRevisionFingerprint(listOf(second, first)),
+        )
+        assertNotEquals(
+            canonicalPhotonRevisionFingerprint(listOf(first, second)),
+            canonicalPhotonRevisionFingerprint(listOf(revised, second)),
+        )
     }
 
     @Test

@@ -160,6 +160,55 @@ class BootSnapshotLoaderTest {
         assertNotEquals(first.generationId, second.generationId)
     }
 
+
+    @Test
+    fun bootReadSessionReleaseDropsCachedSnapshotAndExtraReads() = runTest {
+        var photonReads = 0
+        var extraReads = 0
+        val session = BootReadSession(
+            BootSnapshotLoader(
+                photons = BootPhotonSource {
+                    photonReads += 1
+                    PhotonLoadReport(listOf(photon("session", "payload")), emptyList())
+                },
+                tasks = BootTaskSource { TaskLoadReport(emptyList(), emptyList()) },
+                checkpoints = BootCheckpointSource {
+                    CheckpointLoadReport(emptyList(), emptyList())
+                },
+                capabilities = BootCapabilityStateSource { emptyList() },
+                tools = BootToolStateSource { emptyList() },
+                fieldSnapshots = BootFieldSnapshotSource {
+                    FieldSnapshotLoadReport(emptyList(), emptyList())
+                },
+                now = { t0 },
+            )
+        )
+
+        session.snapshot()
+        session.snapshot()
+        session.readOnce("heavy-cache") {
+            extraReads += 1
+            "value"
+        }
+        session.readOnce("heavy-cache") {
+            extraReads += 1
+            "other"
+        }
+
+        assertEquals(1, photonReads)
+        assertEquals(1, extraReads)
+
+        session.releaseAfterBoot()
+        session.snapshot()
+        session.readOnce("heavy-cache") {
+            extraReads += 1
+            "reloaded"
+        }
+
+        assertEquals(2, photonReads)
+        assertEquals(2, extraReads)
+    }
+
     @Test
     fun cancellationPropagatesInsteadOfBecomingPartialSnapshot() = runTest {
         val loader = BootSnapshotLoader(
