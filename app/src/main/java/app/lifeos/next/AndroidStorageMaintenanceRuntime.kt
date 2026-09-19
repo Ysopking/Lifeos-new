@@ -4,7 +4,9 @@ import android.content.Context
 import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
 import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
 import app.lifeos.next.kernel.PrivateOwnerEffectAuthority
+import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileInputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.Duration
@@ -221,7 +223,12 @@ internal class AndroidStorageMaintenanceRuntime(
         val cutoff = now().minus(retention)
         val actions = mutableListOf<StorageMaintenanceActionResult>()
         store.loadByStates(setOf(StorageTrashState.TRASHED))
-            .filter { !it.preparedAt.isAfter(cutoff) }
+            .filter { record ->
+                val trashedAt = requireNotNull(record.settledAt) {
+                    "Trashed storage record must carry its trash timestamp"
+                }
+                !trashedAt.isAfter(cutoff)
+            }
             .forEach { record ->
                 val root = requireRoot(record.volumeId)
                 val trash = resolveInside(root.root, record.trashRelativePath)
@@ -291,6 +298,38 @@ internal class AndroidStorageMaintenanceRuntime(
                 sourceRelativePath = candidate.relativePath,
                 detail = "source-file-changed-since-analysis",
             )
+        }
+        if (candidate.kind == StorageCleanupKind.EXACT_DUPLICATE) {
+            val peerVolumeId = candidate.verificationPeerVolumeId
+                ?: return StorageMaintenanceActionResult(
+                    status = StorageMaintenanceStatus.SKIPPED,
+                    volumeId = candidate.volumeId,
+                    sourceRelativePath = candidate.relativePath,
+                    detail = "duplicate-verification-peer-is-missing",
+                )
+            val peerRelativePath = candidate.verificationPeerRelativePath
+                ?: return StorageMaintenanceActionResult(
+                    status = StorageMaintenanceStatus.SKIPPED,
+                    volumeId = candidate.volumeId,
+                    sourceRelativePath = candidate.relativePath,
+                    detail = "duplicate-verification-peer-is-missing",
+                )
+            val peerRoot = roots().firstOrNull { it.id == peerVolumeId }
+                ?: return StorageMaintenanceActionResult(
+                    status = StorageMaintenanceStatus.SKIPPED,
+                    volumeId = candidate.volumeId,
+                    sourceRelativePath = candidate.relativePath,
+                    detail = "duplicate-verification-volume-is-unavailable",
+                )
+            val peer = resolveInside(peerRoot.root, peerRelativePath)
+            if (!peer.exists() || !peer.isFile || !filesEqual(source, peer)) {
+                return StorageMaintenanceActionResult(
+                    status = StorageMaintenanceStatus.SKIPPED,
+                    volumeId = candidate.volumeId,
+                    sourceRelativePath = candidate.relativePath,
+                    detail = "duplicate-byte-verification-failed",
+                )
+            }
         }
 
         val existingPrepared = store.loadByStates(setOf(StorageTrashState.PREPARED))
@@ -504,6 +543,28 @@ internal class AndroidStorageMaintenanceRuntime(
         }
     }
 
+    private fun filesEqual(first: File, second: File): Boolean {
+        if (first.canonicalPath == second.canonicalPath) return true
+        if (first.length() != second.length()) return false
+        BufferedInputStream(FileInputStream(first), VERIFY_BUFFER_BYTES).use { left ->
+            BufferedInputStream(FileInputStream(second), VERIFY_BUFFER_BYTES).use { right ->
+                val a = ByteArray(VERIFY_BUFFER_BYTES)
+                val b = ByteArray(VERIFY_BUFFER_BYTES)
+                while (true) {
+                    val leftRead = left.read(a)
+                    val rightRead = right.read(b)
+                    if (leftRead != rightRead) return false
+                    if (leftRead < 0) return true
+                    var index = 0
+                    while (index < leftRead) {
+                        if (a[index] != b[index]) return false
+                        index += 1
+                    }
+                }
+            }
+        }
+    }
+
     private fun relative(root: File, file: File): String =
         root.canonicalFile.toPath().relativize(file.canonicalFile.toPath())
             .toString()
@@ -534,5 +595,6 @@ internal class AndroidStorageMaintenanceRuntime(
             StorageCleanupKind.STALE_INSTALLER,
         )
         const val MAX_DESTINATION_ATTEMPTS = 100
+        const val VERIFY_BUFFER_BYTES = 1024 * 1024
     }
 }
