@@ -87,13 +87,18 @@ import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
+import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
@@ -158,6 +163,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val liveSourceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var liveSourceRefreshJob: Job? = null
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
 
@@ -423,6 +429,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         )
 
         installLiveSources()
+        startContinuousLiveSourceRefresh()
 
         initialDataSources = AndroidInitialDataSourceCatalog(this)
         initialDataBootstrap = InitialDataBootstrapRuntime(
@@ -453,13 +460,28 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     fun refreshLiveSources() {
         if (!::liveSourceCoordinator.isInitialized) return
         liveSourceScope.launch {
-            try {
-                latestLiveSourceSync = liveSourceCoordinator.syncAll()
-                liveSourceSyncFailure = null
-            } catch (error: Exception) {
-                liveSourceSyncFailure =
-                    error.message ?: error::class.simpleName ?: "live-source-sync-failed"
+            syncLiveSourcesOnce()
+        }
+    }
+
+    private fun startContinuousLiveSourceRefresh() {
+        if (liveSourceRefreshJob?.isActive == true) return
+        liveSourceRefreshJob = liveSourceScope.launch {
+            while (currentCoroutineContext().isActive) {
+                delay(LIVE_SOURCE_REFRESH_INTERVAL.toMillis())
+                syncLiveSourcesOnce()
             }
+        }
+    }
+
+    private suspend fun syncLiveSourcesOnce() {
+        if (!::liveSourceCoordinator.isInitialized) return
+        try {
+            latestLiveSourceSync = liveSourceCoordinator.syncAll()
+            liveSourceSyncFailure = null
+        } catch (error: Exception) {
+            liveSourceSyncFailure =
+                error.message ?: error::class.simpleName ?: "live-source-sync-failed"
         }
     }
 
@@ -550,6 +572,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private companion object {
+        val LIVE_SOURCE_REFRESH_INTERVAL: Duration = Duration.ofMinutes(5)
         const val INITIAL_DATA_PREFS = "lifeos-initial-data-bootstrap"
         const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"
         const val ALL_RUNTIME_PERMISSION_SCHEMA = "all-runtime-permission-schema"
