@@ -6,6 +6,7 @@ import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
 import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.learning.EncryptedLearningWatermarkRepository
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
+import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionCheckpointId
 import app.lifeos.core.runtime.learning.LearningSourceId
@@ -13,6 +14,7 @@ import app.lifeos.core.runtime.learning.LearningWatermarkLoadResult
 import app.lifeos.core.runtime.learning.LearningWatermarkState
 import app.lifeos.core.runtime.learning.LearningWatermarkWriteResult
 import app.lifeos.core.runtime.level7.ProcessDeathSemanticCheckpoint
+import app.lifeos.core.runtime.world.WorldEquationHead
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -34,6 +36,7 @@ class Level7ProcessDeathGoldDeviceTest {
         assertTrue(root.mkdirs())
         val context = Level7DeviceFixtures.context(instrumentation.targetContext, root)
         val worldRepo = EncryptedProductiveWorldHeadRepository(context)
+        val equationRepo = EncryptedWorldEquationHeadRepository(context)
         val cycleRepo = EncryptedBootEngineCycleRepository(context)
 
         val head = Level7DeviceFixtures.worldHead(
@@ -44,6 +47,13 @@ class Level7ProcessDeathGoldDeviceTest {
             equationVersion = "lifeos-world-cognitive-v1",
         )
         assertTrue(worldRepo.compareAndSet(null, head))
+        val equationHead = WorldEquationHead.create(
+            revision = 1L,
+            activeEquationVersion = head.equationVersion,
+            predecessorEquationVersion = null,
+            sourcePromotionId = "level7-process-death-seed",
+        )
+        assertTrue(equationRepo.compareAndSet(null, equationHead))
 
         val prepared = Level7DeviceFixtures.preparedCycle(
             cycle = "cycle-v1",
@@ -90,6 +100,7 @@ class Level7ProcessDeathGoldDeviceTest {
 
         val checkpoint = ProcessDeathSemanticCheckpoint(
             worldHeadFingerprint = head.fingerprint,
+            worldEquationHeadFingerprint = equationHead.fingerprint,
             equationVersion = head.equationVersion,
             cycleFingerprint = committed.fingerprint,
             decisionSemanticFingerprint = decision.contentFingerprint(),
@@ -98,6 +109,7 @@ class Level7ProcessDeathGoldDeviceTest {
         marker.writeText(
             listOf(
                 checkpoint.worldHeadFingerprint,
+                checkpoint.worldEquationHeadFingerprint,
                 checkpoint.equationVersion,
                 checkpoint.cycleFingerprint,
                 checkpoint.decisionSemanticFingerprint,
@@ -113,17 +125,20 @@ class Level7ProcessDeathGoldDeviceTest {
     fun recoverExactHeadsAndDoNotApplyLearningTwice() = runBlocking {
         assertTrue(marker.isFile)
         val expected = marker.readLines()
-        assertEquals(7, expected.size)
+        assertEquals(8, expected.size)
         val context = Level7DeviceFixtures.context(instrumentation.targetContext, root)
 
         val head = requireNotNull(EncryptedProductiveWorldHeadRepository(context).load())
+        val equationHead = requireNotNull(
+            EncryptedWorldEquationHeadRepository(context).load()
+        )
         val committed = requireNotNull(
             EncryptedBootEngineCycleRepository(context).loadLatestCommitted()
         )
 
         val decision = requireNotNull(
             EncryptedConvergenceDecisionCheckpointRepository(instrumentation.targetContext)
-                .load(ConvergenceDecisionCheckpointId(expected[6]))
+                .load(ConvergenceDecisionCheckpointId(expected[7]))
         )
         assertEquals(expected[3], decision.contentFingerprint())
 
@@ -131,7 +146,7 @@ class Level7ProcessDeathGoldDeviceTest {
         assertTrue(learningLoaded is LearningWatermarkLoadResult.Loaded)
         val learningState = (learningLoaded as LearningWatermarkLoadResult.Loaded).state
         val learningSource = learningState.sources.single()
-        assertEquals(expected[5], learningSource.logicalKey.value)
+        assertEquals(expected[6], learningSource.logicalKey.value)
         val learningFingerprint = StableFieldIds.fingerprint(
             "level7-learning-watermark-head/v1",
             learningState.revision.toString(),
@@ -140,6 +155,7 @@ class Level7ProcessDeathGoldDeviceTest {
 
         val recovered = ProcessDeathSemanticCheckpoint(
             worldHeadFingerprint = head.fingerprint,
+            worldEquationHeadFingerprint = equationHead.fingerprint,
             equationVersion = head.equationVersion,
             cycleFingerprint = committed.fingerprint,
             decisionSemanticFingerprint = decision.contentFingerprint(),
@@ -147,10 +163,11 @@ class Level7ProcessDeathGoldDeviceTest {
         )
 
         assertEquals(expected[0], recovered.worldHeadFingerprint)
-        assertEquals(expected[1], recovered.equationVersion)
-        assertEquals(expected[2], recovered.cycleFingerprint)
-        assertEquals(expected[3], recovered.decisionSemanticFingerprint)
-        assertEquals(expected[4], recovered.learningLedgerHeadFingerprint)
+        assertEquals(expected[1], recovered.worldEquationHeadFingerprint)
+        assertEquals(expected[2], recovered.equationVersion)
+        assertEquals(expected[3], recovered.cycleFingerprint)
+        assertEquals(expected[4], recovered.decisionSemanticFingerprint)
+        assertEquals(expected[5], recovered.learningLedgerHeadFingerprint)
 
         var duplicateLearningRejected = false
         try {
