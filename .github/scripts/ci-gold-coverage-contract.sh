@@ -43,6 +43,7 @@ required_device_tests=(
   "app/src/androidTest/java/app/lifeos/next/FieldSnapshotAtomicRecoveryDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/ProductGoldenChatDeviceTest.kt"
   "app/src/androidTest/java/app/lifeos/next/SemanticActionRecoveryDeviceTest.kt"
+  "app/src/androidTest/java/app/lifeos/next/Level7TruthClosureGoldDeviceTest.kt"
 )
 
 for path in "${required_jvm_tests[@]}" "${required_device_tests[@]}"; do
@@ -72,7 +73,8 @@ for suite in \
   'OfflineImageArtifactDeviceTest' \
   'FieldSnapshotAtomicRecoveryDeviceTest' \
   'ProductGoldenChatDeviceTest' \
-  'SemanticActionRecoveryDeviceTest'; do
+  'SemanticActionRecoveryDeviceTest' \
+  'Level7TruthClosureGoldDeviceTest'; do
   grep -Fq "$suite" "$emulator_gate" || { echo "missing-emulator-gold-suite:$suite" >&2; exit 1; }
 done
 
