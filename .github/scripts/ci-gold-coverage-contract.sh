@@ -109,7 +109,7 @@ require_exact_head_workflow() {
     exit 1
   }
 
-  grep -Fq "name: $stable_job_name" "$workflow" || {
+  grep -Fq "    name: $stable_job_name" "$workflow" || {
     echo "stable-required-check-name-missing:$workflow" >&2
     exit 1
   }
