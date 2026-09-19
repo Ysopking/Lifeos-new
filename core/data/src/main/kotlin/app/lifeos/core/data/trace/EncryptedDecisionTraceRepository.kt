@@ -127,19 +127,43 @@ class EncryptedDecisionTraceRepository(context: Context) : DecisionTraceReposito
 
     private fun traceFiles(): List<File> {
         ensureDirectory()
-        return tracesDirectory.walkTopDown()
-            .filter { it.isFile && it.name.startsWith(REVISION_PREFIX) && it.name.endsWith(REVISION_SUFFIX) }
+        return logicalTraceFiles(tracesDirectory, recursive = true)
+    }
+
+    private fun traceFiles(traceId: String): List<File> =
+        logicalTraceFiles(traceDirectory(traceId), recursive = false)
+
+    /**
+     * Android AtomicFile may leave only a legacy .bak after abrupt process death. Treat that backup
+     * as the logical base segment so openRead() can restore it before revision-contiguity checks.
+     * Incomplete .new files are deliberately ignored because they were never committed.
+     */
+    private fun logicalTraceFiles(root: File, recursive: Boolean): List<File> {
+        if (!root.exists()) return emptyList()
+        val files = if (recursive) {
+            root.walkTopDown().filter { it.isFile }.toList()
+        } else {
+            root.listFiles().orEmpty().filter { it.isFile }
+        }
+        return files.asSequence()
+            .mapNotNull { file ->
+                when {
+                    isRevisionSegment(file.name) -> file
+                    isRevisionBackup(file.name) -> File(file.path.removeSuffix(ATOMIC_BACKUP_SUFFIX))
+                    else -> null
+                }
+            }
+            .distinctBy { it.path }
             .sortedBy { it.path }
             .toList()
     }
 
-    private fun traceFiles(traceId: String): List<File> {
-        val directory = traceDirectory(traceId)
-        if (!directory.exists()) return emptyList()
-        return directory.listFiles().orEmpty()
-            .filter { it.isFile && it.name.startsWith(REVISION_PREFIX) && it.name.endsWith(REVISION_SUFFIX) }
-            .sortedBy { it.name }
-    }
+    private fun isRevisionSegment(name: String): Boolean =
+        name.startsWith(REVISION_PREFIX) && name.endsWith(REVISION_SUFFIX)
+
+    private fun isRevisionBackup(name: String): Boolean =
+        name.startsWith(REVISION_PREFIX) &&
+            name.endsWith(REVISION_SUFFIX + ATOMIC_BACKUP_SUFFIX)
 
     private fun traceRevision(file: File): Long =
         requireNotNull(
@@ -187,6 +211,7 @@ class EncryptedDecisionTraceRepository(context: Context) : DecisionTraceReposito
         const val FILE_NAME = "decision-traces.dtrace"
         const val REVISION_PREFIX = "revision-"
         const val REVISION_SUFFIX = ".dtrace"
+        const val ATOMIC_BACKUP_SUFFIX = ".bak"
         const val KEY_ALIAS = "lifeos.decision.trace.v1"
         val processMutex = Mutex()
     }
