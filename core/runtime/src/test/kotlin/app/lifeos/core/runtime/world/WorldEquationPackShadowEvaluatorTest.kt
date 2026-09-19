@@ -204,6 +204,66 @@ class WorldEquationPackShadowEvaluatorTest {
         }
     }
 
+    @Test
+    fun structuralShadowCoordinatorIsRecoverySafeAndNeverPromotes() = runTest {
+        val fixture = fixture()
+        val evidenceRepository = InMemoryWorldEquationPackEvidenceRepository()
+        val coordinator = WorldEquationPackShadowCoordinator(
+            packs = InMemoryWorldEquationPackRepository(),
+            registry = fixture.registry,
+            evidence = WorldEquationPackEvidenceCoordinator(evidenceRepository),
+        )
+        val protocol = WorldEquationPackEvaluationProtocol(
+            version = "coordinator-v1",
+            minimumIndependentRuns = 2,
+            minimumDistinctWorkloads = 2,
+            minimumStructuralExerciseRuns = 2,
+            minimumShadowRuns = 1,
+            minimumHoldoutRuns = 1,
+        )
+        val cases = listOf(
+            shadowCase(
+                fixture,
+                "run-coordinator-shadow",
+                "workload-a",
+                0.61,
+                WorldEquationPackEvidencePartition.SHADOW,
+            ),
+            shadowCase(
+                fixture,
+                "run-coordinator-holdout",
+                "workload-b",
+                0.79,
+                WorldEquationPackEvidencePartition.HOLDOUT,
+            ),
+        )
+
+        val first = coordinator.evaluate(
+            baseline = fixture.baseline,
+            candidatePack = fixture.candidate.candidate,
+            protocol = protocol,
+            cases = cases,
+        )
+        assertEquals(
+            WorldEquationPackLifecycleState.SHADOW_SUPPORTED,
+            first.evidenceRecord.state,
+        )
+        assertEquals(2, first.evidenceRecord.evidence.observations.size)
+        assertEquals(2, first.evaluatedCaseFingerprints.size)
+        assertFalse(first.productiveActivationAllowed)
+        assertFalse(first.productiveWorldMutationAllowed)
+
+        val recovered = coordinator.evaluate(
+            baseline = fixture.baseline,
+            candidatePack = fixture.candidate.candidate,
+            protocol = protocol,
+            cases = cases,
+        )
+        assertEquals(first.evidenceRecord, recovered.evidenceRecord)
+        assertTrue(recovered.evaluatedCaseFingerprints.isEmpty())
+        assertFalse(recovered.evidenceRecord.promotionAuthorityAllowed)
+    }
+
     private fun shadowCase(
         fixture: Fixture,
         runId: String,
