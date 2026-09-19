@@ -167,6 +167,7 @@ import app.lifeos.core.runtime.world.SelfStateWorldFormulaEvaluator
 import app.lifeos.core.runtime.world.SelfStateWorldFormulaRuntimeRegistry
 import app.lifeos.core.runtime.world.SelfStateWorldFormulaSnapshotRepository
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
+import app.lifeos.core.runtime.world.WorldFormulaExecutionPolicy
 import app.lifeos.core.runtime.world.WorldEquationActivationAuthority
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
 import app.lifeos.core.runtime.workers.CognitiveWorkerFactory
@@ -436,7 +437,7 @@ class LifeOsKernelFactory(
                 coordinator = WorldFormulaCoordinator(
                     equations = InMemoryWorldEquationRegistry(listOf(selfStateWorldEquationProfile.spec)),
                     snapshots = SelfStateWorldFormulaSnapshotRepository(),
-                    captureCognitiveSnapshots = false,
+                    executionPolicy = WorldFormulaExecutionPolicy.SELF_OBSERVATION,
                 ),
             )
         )

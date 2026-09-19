@@ -18,6 +18,7 @@ import app.lifeos.core.runtime.world.HardwareWorldEquationProfile
 import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
 import app.lifeos.core.runtime.world.ResourceAllocationWorldEquationProfile
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
+import app.lifeos.core.runtime.world.WorldFormulaExecutionPolicy
 import app.lifeos.core.runtime.world.WorldFormulaExecution
 import app.lifeos.core.runtime.world.WorldFormulaExecutionState
 import app.lifeos.core.runtime.world.WorldFormulaStatus
@@ -105,6 +106,7 @@ class HardwareResourceIntelligenceRuntime internal constructor(
             listOf(profile.spec, allocationProfile.spec)
         ),
         snapshots = EncryptedWorldFormulaSnapshotRepository(context.applicationContext),
+        executionPolicy = WorldFormulaExecutionPolicy.RESOURCE,
     )
     private val budgetBroker = WorldFormulaBudgetBroker(worldFormula, allocationProfile)
     private val cacheMutex = Mutex()

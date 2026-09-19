@@ -22,8 +22,17 @@ class WorldFormulaCoordinator(
     private val triggerSink: CognitiveTriggerSink? = null,
     private val triggerPolicy: WorldFormulaTriggerPolicy = DefaultWorldFormulaTriggerPolicy,
     private val captureCognitiveSnapshots: Boolean = true,
-) {
-    suspend fun evaluate(request: WorldFormulaRequest): WorldFormulaExecution {
+    private val executionPolicy: WorldFormulaExecutionPolicy =
+        if (captureCognitiveSnapshots) {
+            WorldFormulaExecutionPolicy.PRODUCTIVE
+        } else {
+            WorldFormulaExecutionPolicy.SELF_OBSERVATION
+        },
+) : WorldFormulaExecutor {
+    override val scope: WorldFormulaExecutionScope
+        get() = executionPolicy.scope
+
+    override suspend fun evaluate(request: WorldFormulaRequest): WorldFormulaExecution {
         val spec = equations.resolve(request.equationVersion)
             ?: return invalid(request, "missing-equation-version:${request.equationVersion}")
         val graph = request.buildGraph()
@@ -116,6 +125,7 @@ class WorldFormulaCoordinator(
             throw cancelled
         } catch (error: Exception) {
             return WorldFormulaExecution(
+                scope = executionPolicy.scope,
                 state = WorldFormulaExecutionState.PERSISTENCE_FAILED,
                 status = status,
                 snapshot = snapshot,
@@ -124,11 +134,14 @@ class WorldFormulaCoordinator(
             )
         }
 
-        if (captureCognitiveSnapshots) {
+        if (executionPolicy.captureCognitiveSnapshots) {
             captureCognitiveSnapshotBestEffort(snapshot)
         }
-        emitTriggerBestEffort(request, snapshot)
+        if (executionPolicy.emitCognitiveTriggers) {
+            emitTriggerBestEffort(request, snapshot)
+        }
         return WorldFormulaExecution(
+            scope = executionPolicy.scope,
             state = WorldFormulaExecutionState.COMPLETED,
             status = status,
             snapshot = snapshot,
@@ -139,6 +152,7 @@ class WorldFormulaCoordinator(
 
     private fun invalid(request: WorldFormulaRequest, detail: String): WorldFormulaExecution =
         WorldFormulaExecution(
+            scope = executionPolicy.scope,
             state = WorldFormulaExecutionState.INVALID,
             status = WorldFormulaStatus.INVALID_EQUATION,
             snapshot = null,
@@ -162,6 +176,9 @@ class WorldFormulaCoordinator(
         request: WorldFormulaRequest,
         snapshot: WorldFormulaSnapshot,
     ) {
+        check(executionPolicy.emitCognitiveTriggers) {
+            "WorldFormula execution scope does not permit cognitive triggers"
+        }
         val sink = triggerSink ?: return
         val trigger = triggerPolicy.triggerFor(request, snapshot) ?: return
         try {

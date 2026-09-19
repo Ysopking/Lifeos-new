@@ -138,6 +138,11 @@ data class ProductiveWorldCandidate(
             request: ProductiveWorldFormulaRequest,
             execution: WorldFormulaExecution,
         ): ProductiveWorldCandidate {
+            require(
+                execution.scope == WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE
+            ) {
+                "Productive world candidate requires productive cognitive execution"
+            }
             require(execution.state == WorldFormulaExecutionState.COMPLETED) {
                 "Productive world candidate requires completed WorldFormula execution"
             }

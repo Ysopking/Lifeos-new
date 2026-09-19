@@ -6,6 +6,7 @@ import app.lifeos.core.runtime.world.WorldFormulaExecutionState
 import app.lifeos.core.runtime.world.WorldFormulaRequest
 import app.lifeos.core.runtime.world.WorldFormulaSnapshot
 import app.lifeos.core.runtime.world.WorldFormulaSnapshotNamespace
+import app.lifeos.core.runtime.world.WorldFormulaExecutionScope
 
 data class CounterfactualWorldFormulaInput(
     val baseProductiveSnapshotId: String,
@@ -43,6 +44,11 @@ class CounterfactualWorldFormulaRunner(
 ) {
     suspend fun run(input: CounterfactualWorldFormulaInput): CounterfactualWorldSnapshot {
         val execution = evaluate(input.request)
+        require(
+            execution.scope == WorldFormulaExecutionScope.COUNTERFACTUAL
+        ) {
+            "Counterfactual runner requires counterfactual WorldFormula execution scope"
+        }
         require(execution.state == WorldFormulaExecutionState.COMPLETED)
         val snapshot = requireNotNull(execution.snapshot)
         require(snapshot.equationVersion == input.baseEquationVersion)

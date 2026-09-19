@@ -434,6 +434,7 @@ enum class WorldFormulaExecutionState {
 }
 
 data class WorldFormulaExecution(
+    val scope: WorldFormulaExecutionScope = WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE,
     val state: WorldFormulaExecutionState,
     val status: WorldFormulaStatus,
     val snapshot: WorldFormulaSnapshot?,
