@@ -53,6 +53,10 @@ class EncryptedWorldFormulaSnapshotRepository(context: Context) : WorldFormulaSn
         }
     }
 
+    @Deprecated(
+        message = "WorldFormula snapshots have no global chronological head; use ProductiveWorldHead or a domain-specific authority",
+        level = DeprecationLevel.WARNING,
+    )
     override suspend fun loadLatest(): WorldFormulaSnapshot? {
         val report = loadReport()
         return report.snapshots.maxWithOrNull(
