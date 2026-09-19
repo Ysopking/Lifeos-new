@@ -107,51 +107,50 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
 
     override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> =
         withContext(Dispatchers.IO) {
-            mutex.withLock {
-                val ordering = when (query.order) {
-                    PhotonIndexOrder.IDENTITY ->
-                        compareBy<PhotonIndexEntry> { it.ref.photonId.value }
-                            .thenBy { it.ref.revision }
+            val index = mutex.withLock { ensureIndexLocked() }
+            val ordering = when (query.order) {
+                PhotonIndexOrder.IDENTITY ->
+                    compareBy<PhotonIndexEntry> { it.ref.photonId.value }
+                        .thenBy { it.ref.revision }
 
-                    PhotonIndexOrder.NEWEST_FIRST ->
-                        compareByDescending<PhotonIndexEntry> { it.createdAt }
-                            .thenBy { it.ref.photonId.value }
-                            .thenByDescending { it.ref.revision }
+                PhotonIndexOrder.NEWEST_FIRST ->
+                    compareByDescending<PhotonIndexEntry> { it.createdAt }
+                        .thenBy { it.ref.photonId.value }
+                        .thenByDescending { it.ref.revision }
 
-                    PhotonIndexOrder.OLDEST_FIRST ->
-                        compareBy<PhotonIndexEntry> { it.createdAt }
-                            .thenBy { it.ref.photonId.value }
-                            .thenBy { it.ref.revision }
+                PhotonIndexOrder.OLDEST_FIRST ->
+                    compareBy<PhotonIndexEntry> { it.createdAt }
+                        .thenBy { it.ref.photonId.value }
+                        .thenBy { it.ref.revision }
 
-                    PhotonIndexOrder.HIGHEST_SEMANTIC_MASS ->
-                        compareByDescending<PhotonIndexEntry> { it.semanticMass }
-                            .thenByDescending { it.createdAt }
-                            .thenBy { it.ref.photonId.value }
+                PhotonIndexOrder.HIGHEST_SEMANTIC_MASS ->
+                    compareByDescending<PhotonIndexEntry> { it.semanticMass }
+                        .thenByDescending { it.createdAt }
+                        .thenBy { it.ref.photonId.value }
 
-                    PhotonIndexOrder.HIGHEST_CONFIDENCE ->
-                        compareByDescending<PhotonIndexEntry> { it.confidence }
-                            .thenByDescending { it.createdAt }
-                            .thenBy { it.ref.photonId.value }
-                }
-                val ordered = ensureIndexLocked().entries.values
-                    .asSequence()
-                    .filter { it.matches(query) }
-                    .sortedWith(ordering)
-                    .toList()
-                val startIndex = query.after?.let { cursor ->
-                    val cursorIndex = ordered.indexOfFirst { it.ref == cursor.lastRef }
-                    require(cursorIndex >= 0) {
-                        "Photon index cursor is not present in the filtered result set"
-                    }
-                    cursorIndex + 1
-                } ?: 0
-                ordered
-                    .asSequence()
-                    .drop(startIndex)
-                    .take(query.limit)
-                    .map { it.ref }
-                    .toList()
+                PhotonIndexOrder.HIGHEST_CONFIDENCE ->
+                    compareByDescending<PhotonIndexEntry> { it.confidence }
+                        .thenByDescending { it.createdAt }
+                        .thenBy { it.ref.photonId.value }
             }
+            val ordered = index.candidateEntries(query)
+                .asSequence()
+                .filter { it.matches(query) }
+                .sortedWith(ordering)
+                .toList()
+            val startIndex = query.after?.let { cursor ->
+                val cursorIndex = ordered.indexOfFirst { it.ref == cursor.lastRef }
+                require(cursorIndex >= 0) {
+                    "Photon index cursor is not present in the filtered result set"
+                }
+                cursorIndex + 1
+            } ?: 0
+            ordered
+                .asSequence()
+                .drop(startIndex)
+                .take(query.limit)
+                .map { it.ref }
+                .toList()
         }
 
     override suspend fun indexReport(): PhotonIndexReport = withContext(Dispatchers.IO) {
@@ -850,8 +849,76 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
         val entries: Map<PhotonRevisionRef, PhotonIndexEntry>,
         val unreadableRevisionFiles: List<String> = emptyList(),
     ) {
-        fun head(id: PhotonId): PhotonIndexEntry? =
-            entries.values.firstOrNull { it.ref.photonId == id && it.latest }
+        private val latestEntries: List<PhotonIndexEntry> =
+            entries.values.filter { it.latest }
+
+        val headsById: Map<PhotonId, PhotonIndexEntry> =
+            latestEntries.associateBy { it.ref.photonId }
+
+        val liveRefsByTag: Map<String, Set<PhotonRevisionRef>> =
+            buildLiveRefIndex { entry -> entry.tags }
+
+        val liveRefsByPhase: Map<PhotonPhase, Set<PhotonRevisionRef>> =
+            buildLiveRefIndex { entry -> setOf(entry.phase) }
+
+        val liveRefsByMime: Map<String, Set<PhotonRevisionRef>> =
+            buildLiveRefIndex { entry -> setOf(entry.mimeType) }
+
+        init {
+            require(headsById.size == latestEntries.size) {
+                "Photon index contains multiple latest revisions for one Photon id"
+            }
+        }
+
+        fun head(id: PhotonId): PhotonIndexEntry? = headsById[id]
+
+        fun candidateEntries(query: PhotonIndexQuery): Collection<PhotonIndexEntry> {
+            val candidateSets = mutableListOf<Set<PhotonRevisionRef>>()
+
+            if (query.latestOnly && query.ids.isNotEmpty()) {
+                candidateSets += query.ids
+                    .mapNotNullTo(linkedSetOf()) { id -> headsById[id]?.ref }
+            }
+
+            if (query.latestOnly && !query.includeTombstoned) {
+                query.allTags.forEach { tag ->
+                    candidateSets += liveRefsByTag[tag].orEmpty()
+                }
+                if (query.phases.isNotEmpty()) {
+                    candidateSets += query.phases
+                        .flatMapTo(linkedSetOf()) { phase -> liveRefsByPhase[phase].orEmpty() }
+                }
+                if (query.mimeTypes.isNotEmpty()) {
+                    candidateSets += query.mimeTypes
+                        .flatMapTo(linkedSetOf()) { mime -> liveRefsByMime[mime].orEmpty() }
+                }
+            }
+
+            if (candidateSets.isEmpty()) return entries.values
+            val seed = candidateSets.minBy { it.size }
+            if (seed.isEmpty()) return emptyList()
+            val remaining = candidateSets.filterNot { it === seed }
+            return seed
+                .asSequence()
+                .filter { ref -> remaining.all { ref in it } }
+                .mapNotNull(entries::get)
+                .toList()
+        }
+
+        private fun <K> buildLiveRefIndex(
+            keys: (PhotonIndexEntry) -> Set<K>,
+        ): Map<K, Set<PhotonRevisionRef>> {
+            val mutable = linkedMapOf<K, MutableSet<PhotonRevisionRef>>()
+            latestEntries
+                .asSequence()
+                .filterNot { it.tombstoned }
+                .forEach { entry ->
+                    keys(entry).forEach { key ->
+                        mutable.getOrPut(key) { linkedSetOf() } += entry.ref
+                    }
+                }
+            return mutable.mapValues { (_, refs) -> refs.toSet() }
+        }
     }
 
     private companion object {
