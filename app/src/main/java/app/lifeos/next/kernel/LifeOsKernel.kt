@@ -116,6 +116,7 @@ class LifeOsKernel internal constructor(
     private val continuousCognition: ContinuousCognitionEngine,
     private val cognitiveModuleSnapshotRepository: CognitiveModuleSnapshotRepository? = null,
     private val activeExtensionSnapshotId: suspend () -> String? = { null },
+    private val bootReadyMaintenanceTrigger: () -> Unit = {},
     private val goalResumeEngine: GoalResumeEngine = GoalResumeEngine(),
     private val localKnowledgeGoalEngine: LocalKnowledgeGoalEngine = LocalKnowledgeGoalEngine(),
     private val localDeepSearchGoalEngine: LocalDeepSearchGoalEngine = LocalDeepSearchGoalEngine(),
@@ -941,6 +942,7 @@ class LifeOsKernel internal constructor(
         }
 
         supervisor.start()
+        bootReadyMaintenanceTrigger()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
         // Restore the process-local read model without enqueuing a second task family.

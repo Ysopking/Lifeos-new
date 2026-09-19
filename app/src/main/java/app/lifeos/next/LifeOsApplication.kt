@@ -138,6 +138,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     lateinit var hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime
         private set
 
+    internal lateinit var storageIntelligence: AndroidStorageIntelligenceRuntime
+        private set
+
     internal lateinit var selfObservationRuntime: SelfObservationRuntime
         private set
 
@@ -180,6 +183,14 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     var liveSourceSyncFailure: String? = null
         private set
 
+    @Volatile
+    internal var latestStorageIntelligence: StorageIntelligenceSnapshot? = null
+        private set
+
+    @Volatile
+    var storageIntelligenceFailure: String? = null
+        private set
+
     internal lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
         private set
 
@@ -194,6 +205,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val liveSourceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var liveSourceRefreshJob: Job? = null
+    private val storageIntelligenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var storageIntelligenceJob: Job? = null
     private val selfObservationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var selfObservationJob: Job? = null
     private val selfObservationAnalysisMutex = Mutex()
@@ -232,6 +245,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             EncryptedGeneratedToolStateRepository(this),
         )
         hardwareResourceIntelligence = HardwareResourceIntelligenceRuntime(this)
+        storageIntelligence = AndroidStorageIntelligenceRuntime(
+            context = this,
+            hardware = hardwareResourceIntelligence,
+        )
         LifeOsIntegratedCognitionSuiteRegistry.install(LifeOsIntegratedCognitionSuite())
 
         LifeOsStartupComposition.start(
@@ -280,6 +297,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     kernel = LifeOsKernelFactory(
                         context = this,
                         hardwareResourceIntelligence = hardwareResourceIntelligence,
+                        bootReadyMaintenanceTrigger = {
+                            refreshStorageIntelligence()
+                        },
                     ).create()
                     val ownerAssetReviews = EncryptedOwnerAssetReviewRepository(this)
                     photonIngress = CanonicalPhotonIngress(kernel, ownerAssetReviews)
@@ -635,6 +655,33 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             coalescedCapacity = 16_384,
             health = HealthGraphLiveSourceHealthReporter(healthGraph),
         )
+    }
+
+    fun refreshStorageIntelligence() {
+        if (!::storageIntelligence.isInitialized || !hasBroadFileAccess()) return
+        if (storageIntelligenceJob?.isActive == true) return
+        storageIntelligenceJob = storageIntelligenceScope.launch {
+            try {
+                while (currentCoroutineContext().isActive) {
+                    val snapshot = storageIntelligence.runNextSlice()
+                    latestStorageIntelligence = snapshot
+                    storageIntelligenceFailure = null
+                    if (snapshot.contentReadComplete) break
+
+                    val hardware = hardwareResourceIntelligence.currentHardwareSnapshot()
+                    val batteryFraction = hardware.batteryFraction
+                    val delayMillis = when {
+                        hardware.charging == true -> 1_000L
+                        batteryFraction != null && batteryFraction < 0.20 -> 60_000L
+                        else -> 15_000L
+                    }
+                    delay(delayMillis)
+                }
+            } catch (error: Exception) {
+                storageIntelligenceFailure =
+                    error.message ?: error::class.simpleName ?: "storage-intelligence-failed"
+            }
+        }
     }
 
     fun refreshLiveSources() {

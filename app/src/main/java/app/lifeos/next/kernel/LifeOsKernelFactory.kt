@@ -186,6 +186,7 @@ class LifeOsKernelFactory(
     private val context: Context,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime? = null,
+    private val bootReadyMaintenanceTrigger: () -> Unit = {},
 ) {
     fun create(): LifeOsKernel {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -1100,6 +1101,7 @@ class LifeOsKernelFactory(
             activeExtensionSnapshotId = {
                 extensionRegistryHeadRepository.load()?.activeSnapshotId
             },
+            bootReadyMaintenanceTrigger = bootReadyMaintenanceTrigger,
             photonTransactions = photonTransactions,
             cognitiveOutcomes = cognitiveOutcomes,
             cognitiveTriggers = cognitiveTriggers,
