@@ -1,8 +1,7 @@
 package app.lifeos.next
 
-import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import app.lifeos.core.data.EncryptedPhotonStore
+import androidx.test.platform.app.InstrumentationRegistry
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonIndexCursor
@@ -11,6 +10,7 @@ import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.PhotonRevisionWriteResult
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.RevisionedPhotonRepository
 import java.time.Instant
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -21,12 +21,14 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class M216ScaleRecoveryDeviceTest {
-    private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
+    private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private val app: LifeOsApplication
+        get() = instrumentation.targetContext.applicationContext as LifeOsApplication
     private val at = Instant.parse("2026-09-19T17:30:00Z")
 
     @Test
     fun seedBoundedScaleCorpusBeforeColdRestart() = runBlocking {
-        val store = EncryptedPhotonStore(context)
+        val store = app.kernel.photonStore
 
         repeat(SCALE_PHOTONS) { index ->
             val photon = Photon(
@@ -58,7 +60,7 @@ class M216ScaleRecoveryDeviceTest {
 
     @Test
     fun recoverPagedScaleCorpusAfterColdRestart() = runBlocking {
-        val reopened = EncryptedPhotonStore(context)
+        val reopened = app.kernel.photonStore
         val report = reopened.indexReport()
         assertTrue(report.livePhotonCount >= SCALE_PHOTONS)
 
@@ -89,7 +91,7 @@ class M216ScaleRecoveryDeviceTest {
         assertNotNull(reopened.load(requireNotNull(last)))
     }
 
-    private suspend fun countScaleRefs(store: EncryptedPhotonStore): Int {
+    private suspend fun countScaleRefs(store: RevisionedPhotonRepository): Int {
         var cursor: PhotonIndexCursor? = null
         var count = 0
         while (true) {
