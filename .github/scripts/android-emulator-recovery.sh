@@ -122,6 +122,12 @@ run_test \
   'app.lifeos.next.Level7WorldEquationRollbackDeviceTest#seedDegradedTrialHead' \
   "$report_dir/level7-equation-rollback-seed.txt"
 
+# B200 exact truth-closure seed. Bind promotion evidence -> equation head -> productive world head ->
+# committed BootEngine cycle -> durable goal/cycle binding -> verified outcome -> learning watermark.
+run_test \
+  'app.lifeos.next.Level7TruthClosureGoldDeviceTest#seedExactAuthorityChainBeforeProcessDeath' \
+  "$report_dir/level7-truth-closure-seed.txt"
+
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
@@ -144,6 +150,12 @@ run_test \
 run_test \
   'app.lifeos.next.Level7WorldEquationRollbackDeviceTest#rollbackAfterProcessDeathRestoresExactV17WorldHead' \
   "$report_dir/level7-equation-rollback-recovered.txt"
+
+# B200 exact truth-closure recovery. Reopen every durable authority edge after the same cold restart,
+# reject duplicate learning by identity, then exercise the real WorldEquation rollback authority.
+run_test \
+  'app.lifeos.next.Level7TruthClosureGoldDeviceTest#recoverExactAuthorityChainRollbackAndSealGold' \
+  "$report_dir/level7-truth-closure-gold.txt"
 
 run_test \
   'app.lifeos.next.ThoughtGraphCompactionDeviceTest#recoverCompactedGraphHistory' \
