@@ -251,155 +251,31 @@ class LifeOsKernelFactory(
         val evolutionResources = evolution.evolutionResources
         val goalCapabilityRouter = evolution.goalCapabilityRouter
 
-        val taskRepository = EncryptedTaskRepository(appContext)
-        val checkpointRepository = EncryptedCheckpointRepository(appContext)
-        val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
-        val bootReadSession = BootReadSession(
-            BootSnapshotLoader(
-                photons = PhotonRepositoryBootSource(store),
-                tasks = TaskRepositoryBootSource(taskRepository),
-                checkpoints = CheckpointRepositoryBootSource(checkpointRepository),
-                capabilities = CapabilityRegistryBootSource(capabilityRegistry),
-                tools = GeneratedToolRegistryBootSource(generatedTools),
-                fieldSnapshots = FieldSnapshotRepositoryBootSource(fieldSnapshotRepository),
-            )
-        )
-        val fieldThoughtGraphProjectionOutbox =
-            EncryptedFieldThoughtGraphProjectionOutboxRepository(appContext)
-        val fieldThoughtGraphProjection = FieldThoughtGraphProjectionCoordinator(
-            outbox = fieldThoughtGraphProjectionOutbox,
-            snapshots = fieldSnapshotRepository,
-            graph = thoughtGraph,
-        )
-        val worldFormulaSnapshotRepository = EncryptedWorldFormulaSnapshotRepository(appContext)
-        val productiveWorldHeadRepository = EncryptedProductiveWorldHeadRepository(appContext)
-        val bootEngineCycleRepository = EncryptedBootEngineCycleRepository(appContext)
-        val extensionRegistrySnapshotRepository =
-            EncryptedExtensionRegistrySnapshotRepository(appContext)
-        val extensionRegistryHeadRepository =
-            EncryptedExtensionRegistryHeadRepository(appContext)
-        val extensionRegistryRehydrator = ExtensionRegistryRehydrator(
-            heads = extensionRegistryHeadRepository,
-            snapshots = extensionRegistrySnapshotRepository,
-        )
-        val worldModelRepository = EncryptedWorldModelRepository(appContext)
-        val cognitiveWorldEquationProfile = CognitiveWorldEquationProfile()
-        val worldEquationRegistry = InMemoryWorldEquationRegistry(
-            listOf(cognitiveWorldEquationProfile.spec)
-        )
-        val worldEquationHeads = EncryptedWorldEquationHeadRepository(appContext)
-        val worldEquationSpecs = EncryptedWorldEquationSpecRepository(appContext)
-        val worldEquationEvidence = EncryptedWorldEquationEvidenceRepository(appContext)
-        val worldEquationPromotionEvaluator = WorldEquationPromotionEvaluator(
-            WorldEquationPromotionPolicy.V1
-        )
-        val worldEquationEvidenceCoordinator = WorldEquationEvidenceCoordinator(
-            repository = worldEquationEvidence,
-            evaluator = worldEquationPromotionEvaluator,
-        )
-        val worldEquationAdmissionGate = WorldEquationEvolutionAdmissionGate(
-            evidence = worldEquationEvidence,
-            evaluator = worldEquationPromotionEvaluator,
-        )
-        val worldEquationAuthority = WorldEquationActivationAuthority(
-            equations = worldEquationRegistry,
-            heads = worldEquationHeads,
-            baseline = cognitiveWorldEquationProfile.spec,
-            specs = worldEquationSpecs,
-            admissionVerifier = worldEquationAdmissionGate,
-        )
-        val worldEquationAutoEvolution = WorldEquationAutoEvolutionCoordinator(
-            evidence = worldEquationEvidence,
-            evidenceCoordinator = worldEquationEvidenceCoordinator,
-            shadow = WorldEquationShadowEvaluator(),
-            admissionGate = worldEquationAdmissionGate,
-            authority = worldEquationAuthority,
-        )
-        val worldEquationSafetyMonitor = WorldEquationPostActivationSafetyMonitor(
-            evidence = worldEquationEvidence,
-            evidenceCoordinator = worldEquationEvidenceCoordinator,
-            authority = worldEquationAuthority,
-        )
-        WorldEquationPostActivationSafetyRuntimeRegistry.install(worldEquationSafetyMonitor)
-        val worldFormulaCoordinator = WorldFormulaCoordinator(
-            equations = worldEquationRegistry,
-            snapshots = worldFormulaSnapshotRepository,
-        )
-        val selfStateWorldEquationProfile = SelfStateWorldEquationProfile()
-        SelfStateWorldFormulaRuntimeRegistry.install(
-            SelfStateWorldFormulaEvaluator(
-                profile = selfStateWorldEquationProfile,
-                coordinator = WorldFormulaCoordinator(
-                    equations = InMemoryWorldEquationRegistry(listOf(selfStateWorldEquationProfile.spec)),
-                    snapshots = SelfStateWorldFormulaSnapshotRepository(),
-                    executionPolicy = WorldFormulaExecutionPolicy.SELF_OBSERVATION,
-                ),
-            )
-        )
-        val productiveWorldHeadCommitter = ProductiveWorldHeadCommitter(
-            snapshots = worldFormulaSnapshotRepository,
-            heads = productiveWorldHeadRepository,
-        )
-        val bootEngineRuntime = BootEngineRuntime(
-            cycles = bootEngineCycleRepository,
-            worldHeads = productiveWorldHeadRepository,
-            worldCoordinator = worldFormulaCoordinator,
-            worldCommitter = productiveWorldHeadCommitter,
-            newCycleId = {
-                CognitiveCycleId("cycle:${java.util.UUID.randomUUID()}")
-            },
-        )
-        val productiveDecisionCoordinator = DurableConvergenceDecisionCoordinator(
-            EncryptedConvergenceDecisionCheckpointRepository(appContext),
-        )
-        val productiveWorldConvergence = WorldFormulaBoundConvergenceService(
-            bootEngine = bootEngineRuntime,
-            worldSnapshots = worldFormulaSnapshotRepository,
-            decisions = productiveDecisionCoordinator,
-        )
-        val productiveGoalConvergence = GoalConvergenceDecisionProvider(
-            productiveConvergence = DefaultProductiveConvergenceAuthority(productiveWorldConvergence),
-            bootEngine = bootEngineRuntime,
-            photons = store,
-            cycleInputs = GoalCycleFrozenInputSource { workingSet, routing ->
-                val hardware = cycleResourceIntelligence.currentHardwareSnapshot()
-                val calibration = learnedFieldCalibration.profile()
-                val strategyFingerprint = StableFieldIds.fingerprint(
-                    "productive-goal-strategy-snapshot/v1",
-                    calibration.fingerprint,
-                    routing.plan.goal.intent.name,
-                    *buildList {
-                        routing.selectedProviders.entries
-                            .sortedBy { it.key.value }
-                            .forEach { (capabilityId, provider) ->
-                                add(
-                                    "provider:${capabilityId.value}:${provider.providerId}:" +
-                                        "${provider.state.name}:${provider.trustLevel.name}:" +
-                                        "${java.lang.Double.toHexString(provider.reliability)}:" +
-                                        java.lang.Double.toHexString(provider.cost)
-                                )
-                            }
-                        routing.blockingGaps
-                            .sortedBy { it.requirement.capabilityId.value }
-                            .forEach { gap ->
-                                add(
-                                    "gap:${gap.requirement.capabilityId.value}:${gap.type.name}:" +
-                                        gap.requirement.severity.name
-                                )
-                                gap.candidateProviderIds.sorted().forEach { candidate ->
-                                    add("gap-candidate:${gap.requirement.capabilityId.value}:$candidate")
-                                }
-                            }
-                    }.toTypedArray(),
-                )
-                BootEngineFrozenInputs(
-                    representationSnapshotId = workingSet.sourceSnapshotId,
-                    strategySnapshotId = "goal-strategy:$strategyFingerprint",
-                    equationVersion = worldEquationAuthority.activeVersion(),
-                    resourceSnapshotId = "hardware-state:${hardware.fingerprint()}",
-                )
-            },
-        )
+        val world = KernelWorldComposition(
+            foundation = foundation,
+            evolution = evolution,
+        ).compose()
+        val taskRepository = world.taskRepository
+        val checkpointRepository = world.checkpointRepository
+        val fieldSnapshotRepository = world.fieldSnapshotRepository
+        val bootReadSession = world.bootReadSession
+        val fieldThoughtGraphProjectionOutbox = world.fieldThoughtGraphProjectionOutbox
+        val fieldThoughtGraphProjection = world.fieldThoughtGraphProjection
+        val worldFormulaSnapshotRepository = world.worldFormulaSnapshotRepository
+        val productiveWorldHeadRepository = world.productiveWorldHeadRepository
+        val bootEngineCycleRepository = world.bootEngineCycleRepository
+        val extensionRegistryHeadRepository = world.extensionRegistryHeadRepository
+        val extensionRegistryRehydrator = world.extensionRegistryRehydrator
+        val worldModelRepository = world.worldModelRepository
+        val worldEquationHeads = world.worldEquationHeads
+        val worldEquationSpecs = world.worldEquationSpecs
+        val worldEquationEvidence = world.worldEquationEvidence
+        val worldEquationAuthority = world.worldEquationAuthority
+        val worldEquationAutoEvolution = world.worldEquationAutoEvolution
+        val worldEquationSafetyMonitor = world.worldEquationSafetyMonitor
+        val worldFormulaCoordinator = world.worldFormulaCoordinator
+        val bootEngineRuntime = world.bootEngineRuntime
+        val productiveGoalConvergence = world.productiveGoalConvergence
 
         val universalFieldShadow = UniversalFieldRuntimeAdapter(
             snapshotRepository = fieldSnapshotRepository,
