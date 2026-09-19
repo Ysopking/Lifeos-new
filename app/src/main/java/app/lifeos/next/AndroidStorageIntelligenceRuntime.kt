@@ -64,6 +64,7 @@ internal data class StorageCleanupCandidate(
     val reason: String,
     val safeToTrashAfterOwnerApproval: Boolean,
     val suggestedDirectory: String? = null,
+    val expectedModifiedAtMillis: Long? = null,
 ) {
     init {
         require(volumeId.isNotBlank())
@@ -71,6 +72,7 @@ internal data class StorageCleanupCandidate(
         require(reclaimableBytes >= 0L)
         require(reason.isNotBlank())
         require(suggestedDirectory == null || suggestedDirectory.isNotBlank())
+        require(expectedModifiedAtMillis == null || expectedModifiedAtMillis >= 0L)
     }
 }
 
@@ -545,6 +547,7 @@ internal object StorageCleanupPlanner {
                         safeToTrashAfterOwnerApproval =
                             !duplicate.suspectedEncrypted &&
                                 duplicate.category !in PROTECTED_CATEGORIES,
+                        expectedModifiedAtMillis = duplicate.modifiedAtMillis,
                     )
                 }
         }
@@ -562,6 +565,7 @@ internal object StorageCleanupPlanner {
                     reclaimableBytes = file.sizeBytes,
                     reason = "temporary/cache-like file; reversible trash candidate",
                     safeToTrashAfterOwnerApproval = true,
+                    expectedModifiedAtMillis = file.modifiedAtMillis,
                 )
             }
             if (
@@ -585,6 +589,7 @@ internal object StorageCleanupPlanner {
                     reclaimableBytes = 0L,
                     reason = "large unique file; retention review only",
                     safeToTrashAfterOwnerApproval = false,
+                    expectedModifiedAtMillis = file.modifiedAtMillis,
                 )
             }
             suggestedDirectory(file)?.let { target ->
@@ -597,6 +602,7 @@ internal object StorageCleanupPlanner {
                         reason = "category-based organization candidate",
                         safeToTrashAfterOwnerApproval = false,
                         suggestedDirectory = target,
+                        expectedModifiedAtMillis = file.modifiedAtMillis,
                     )
                 }
             }
