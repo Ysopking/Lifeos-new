@@ -17,8 +17,11 @@ import app.lifeos.core.runtime.RuntimeFailure
 import app.lifeos.core.runtime.RuntimeFailureCategory
 import app.lifeos.core.runtime.checkpoints.FieldCheckpointManager
 import app.lifeos.core.runtime.checkpoints.FieldCheckpointStorageException
+import app.lifeos.core.runtime.field.FieldAuthoritativeExecution
+import app.lifeos.core.runtime.field.FieldCutoverRuntimeRouter
 import app.lifeos.core.runtime.field.FieldShadowExecution
 import app.lifeos.core.runtime.field.FieldShadowProcessor
+import app.lifeos.core.runtime.field.FieldShadowState
 import app.lifeos.core.runtime.tasks.ClaimedTaskDispatcher
 import app.lifeos.core.runtime.tasks.RetryPolicy
 import java.time.Duration
@@ -40,6 +43,7 @@ data class CognitiveTaskExecutionResult(
     val influences: List<FieldInfluence>,
     val failures: List<RuntimeFailure>,
     val fieldShadow: FieldShadowExecution? = null,
+    val fieldAuthoritative: FieldAuthoritativeExecution? = null,
     val recordedAt: Instant? = null,
 )
 
@@ -51,6 +55,7 @@ class CognitiveTaskWorker(
     private val executor: InfluenceExecutor,
     checkpoints: CheckpointRepository? = null,
     private val fieldShadowProcessor: FieldShadowProcessor? = null,
+    private val fieldCutoverRouter: FieldCutoverRuntimeRouter? = null,
     private val retryPolicy: RetryPolicy = RetryPolicy(),
     private val leaseDuration: Duration = Duration.ofSeconds(30),
     private val heartbeatInterval: Duration = Duration.ofSeconds(10),
@@ -192,6 +197,28 @@ class CognitiveTaskWorker(
             }
         }
 
+        val authoritative = try {
+            fieldCutoverRouter?.processIfAuthoritative(photon)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            return failureWork(
+                photonId = photon.id,
+                failure = RuntimeFailure(
+                    category = RuntimeFailureCategory.FIELD,
+                    source = "universal-field-cutover",
+                    message = error.message
+                        ?: error::class.simpleName
+                        ?: "Universal field cutover routing failed",
+                    recoverable = false,
+                    photonId = photon.id,
+                ),
+            )
+        }
+        if (authoritative != null) {
+            return authoritativeWork(photon, authoritative)
+        }
+
         val activeFields = fields.activeFields()
         var checkpoint = try {
             checkpointManager.load(task.id, activeFields)
@@ -284,6 +311,7 @@ class CognitiveTaskWorker(
             influences = work.influences,
             failures = work.failures,
             fieldShadow = work.fieldShadow,
+            fieldAuthoritative = work.fieldAuthoritative,
             recordedAt = finalTask.updatedAt,
         )
     }
@@ -307,6 +335,36 @@ class CognitiveTaskWorker(
         ) ?: throw LeaseOwnershipLostException(
             "Task execution ownership lost before retry scheduling: ${task.id.value}"
         )
+    }
+
+    private fun authoritativeWork(
+        photon: Photon,
+        authoritative: FieldAuthoritativeExecution,
+    ): WorkResult = when (val universal = authoritative.universal) {
+        else -> when (universal.state) {
+            FieldShadowState.COMPLETED -> WorkResult(
+                photonId = photon.id,
+                finalState = TaskState.COMPLETED,
+                fieldAuthoritative = authoritative,
+            )
+            FieldShadowState.FAILED,
+            FieldShadowState.BLOCKED,
+            -> WorkResult(
+                photonId = photon.id,
+                finalState = TaskState.FAILED,
+                failures = listOf(
+                    RuntimeFailure(
+                        category = RuntimeFailureCategory.FIELD,
+                        source = "universal-field-authoritative",
+                        message = universal.message
+                            ?: "Authoritative universal field did not complete",
+                        recoverable = true,
+                        photonId = photon.id,
+                    )
+                ),
+                fieldAuthoritative = authoritative,
+            )
+        }
     }
 
     private fun failureWork(
@@ -403,6 +461,7 @@ class CognitiveTaskWorker(
         val influences: List<FieldInfluence> = emptyList(),
         val failures: List<RuntimeFailure> = emptyList(),
         val fieldShadow: FieldShadowExecution? = null,
+        val fieldAuthoritative: FieldAuthoritativeExecution? = null,
     )
 
     private class LeaseOwnershipLostException(
