@@ -212,8 +212,6 @@ class WorldEquationPackShadowEvaluator : WorldEquationPackShadowRunner {
 
         val materializationFingerprint = StableFieldIds.fingerprint(
             "world-equation-pack-materialization/v1",
-            pack.interactionSchema.fingerprint(),
-            pack.projectionContract.fingerprint(),
             *buildList {
                 selected.sortedBy { it.second.fingerprint() }.forEach { pair ->
                     add("input:" + pair.first + ":" + pair.second.fingerprint())
