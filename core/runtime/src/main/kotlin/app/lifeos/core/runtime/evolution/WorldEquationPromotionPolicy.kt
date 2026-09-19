@@ -71,8 +71,10 @@ class WorldEquationPromotionEvaluator(
 
         val independentRuns = observations.map { it.runId }.distinct().size
         val distinctWorkloads = observations.map { it.workloadId }.distinct().size
-        val shadowRuns = observations
-            .filter { it.partition == WorldEquationEvidencePartition.SHADOW }
+        val shadowObservations = observations.filter {
+            it.partition == WorldEquationEvidencePartition.SHADOW
+        }
+        val shadowRuns = shadowObservations
             .map { it.runId }
             .distinct()
             .size
@@ -83,14 +85,18 @@ class WorldEquationPromotionEvaluator(
         val enoughRuns = independentRuns >= protocol.minimumIndependentRuns
         val enoughWorkloads = distinctWorkloads >= protocol.minimumDistinctWorkloads
 
-        val primary = if (!enoughRuns) {
+        val primary = if (
+            !enoughRuns ||
+            shadowRuns < protocol.minimumShadowRuns
+        ) {
             result(
                 WorldEquationEvidenceGate.PRIMARY_IMPROVEMENT,
                 WorldEquationGateStatus.INCONCLUSIVE,
-                "independent-runs:" + independentRuns + "/" + protocol.minimumIndependentRuns,
+                "independent-runs:" + independentRuns + "/" + protocol.minimumIndependentRuns +
+                    ";shadow-runs=" + shadowRuns + "/" + protocol.minimumShadowRuns,
             )
         } else {
-            val meanImprovement = observations
+            val meanImprovement = shadowObservations
                 .map { it.improvement(protocol.primaryMetric) }
                 .average()
             result(
@@ -100,7 +106,7 @@ class WorldEquationPromotionEvaluator(
                 } else {
                     WorldEquationGateStatus.FAIL
                 },
-                "mean-improvement=" + hex(meanImprovement) +
+                "shadow-mean-improvement=" + hex(meanImprovement) +
                     ";margin=" + hex(policy.primaryImprovementMargin),
             )
         }
