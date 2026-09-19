@@ -114,6 +114,8 @@ interface LiveSourceConnector {
     val adapter: LiveSourceAdapter
     val streamKind: LiveDataStreamKind
     val connectorVersion: String
+    val priority: LiveSourcePriority
+        get() = LiveSourcePriority.NORMAL
 
     suspend fun accountObservation(): LiveDataAccountObservation
 
@@ -161,6 +163,26 @@ sealed interface LiveSourceSyncResult {
         override val sourceId: LiveSourceId,
         val actualRevision: Long?,
     ) : LiveSourceSyncResult
+
+    data class SourceUnavailable(
+        override val sourceId: LiveSourceId,
+        val message: String,
+        val state: LiveSourceCursorState?,
+    ) : LiveSourceSyncResult {
+        init { require(message.isNotBlank()) }
+    }
+
+    data class CapacityBlocked(
+        override val sourceId: LiveSourceId,
+        val distinctObjectCount: Int,
+        val capacity: Int,
+        val state: LiveSourceCursorState,
+    ) : LiveSourceSyncResult {
+        init {
+            require(distinctObjectCount > capacity)
+            require(capacity > 0)
+        }
+    }
 
     data class Bootstrapped(
         override val sourceId: LiveSourceId,
@@ -217,6 +239,7 @@ class LiveSourceDeltaCoordinator(
     private val maxInventoryItems: Int = DEFAULT_MAX_INVENTORY_ITEMS,
     private val maxRawDeltas: Int = DEFAULT_MAX_RAW_DELTAS,
     private val coalescedCapacity: Int = DEFAULT_COALESCED_CAPACITY,
+    private val health: LiveSourceHealthReporter = LiveSourceHealthReporter.NONE,
     private val now: () -> Instant = Instant::now,
 ) {
     private val mutex = Mutex()
@@ -239,8 +262,12 @@ class LiveSourceDeltaCoordinator(
     }
 
     suspend fun syncAll(): LiveSourceSyncSnapshot = mutex.withLock {
+        val ordered = connectors.values.sortedWith(
+            compareByDescending<LiveSourceConnector> { it.priority.rank }
+                .thenBy { it.adapter.sourceId.value }
+        )
         LiveSourceSyncSnapshot(
-            connectors.values.map { syncLocked(it) }.sortedBy { it.sourceId.value }
+            ordered.map { syncLocked(it) }.sortedBy { it.sourceId.value }
         )
     }
 
@@ -258,7 +285,19 @@ class LiveSourceDeltaCoordinator(
             return LiveSourceSyncResult.StateUnreadable(sourceId, loaded.message)
         }
 
-        val rawObservation = connector.accountObservation()
+        val rawObservation = try {
+            connector.accountObservation()
+        } catch (error: Exception) {
+            val message = error.message ?: error::class.simpleName ?: "account observation failed"
+            health.failed(
+                sourceId,
+                now(),
+                app.lifeos.core.runtime.RuntimeFailureCategory.DEPENDENCY,
+                message,
+                true,
+            )
+            return LiveSourceSyncResult.SourceUnavailable(sourceId, message, null)
+        }
         val observedIdentity = connectorIdentity(connector, rawObservation)
         var state = when (loaded) {
             LiveSourceCursorLoadResult.Missing -> {
@@ -277,6 +316,13 @@ class LiveSourceDeltaCoordinator(
 
         if (state.connectorIdentityFingerprint != observedIdentity) {
             hub.observeAccount(rawObservation.copy(sourceCursor = null))
+            health.failed(
+                sourceId,
+                now(),
+                app.lifeos.core.runtime.RuntimeFailureCategory.INVARIANT,
+                "live source connector/account identity changed",
+                false,
+            )
             return LiveSourceSyncResult.IdentityChanged(
                 sourceId = sourceId,
                 durableIdentityFingerprint = state.connectorIdentityFingerprint,
@@ -289,6 +335,11 @@ class LiveSourceDeltaCoordinator(
 
         val permissionReasons = permissionReasons(observation, connector.streamKind)
         if (permissionReasons.isNotEmpty()) {
+            health.healthy(
+                sourceId,
+                now(),
+                "source reachable; permission/capability policy blocks ingestion",
+            )
             return LiveSourceSyncResult.PermissionBlocked(sourceId, permissionReasons, state)
         }
 
@@ -306,7 +357,19 @@ class LiveSourceDeltaCoordinator(
         rawObservation: LiveDataAccountObservation,
         state: LiveSourceCursorState,
     ): LiveSourceSyncResult {
-        val inventory = connector.adapter.inventory()
+        val inventory = try {
+            connector.adapter.inventory()
+        } catch (error: Exception) {
+            val message = error.message ?: error::class.simpleName ?: "source inventory failed"
+            health.failed(
+                connector.adapter.sourceId,
+                now(),
+                app.lifeos.core.runtime.RuntimeFailureCategory.DEPENDENCY,
+                message,
+                true,
+            )
+            return LiveSourceSyncResult.SourceUnavailable(connector.adapter.sourceId, message, state)
+        }
         require(inventory.items.size <= maxInventoryItems) {
             "Live source inventory exceeded bounded capacity"
         }
@@ -327,6 +390,11 @@ class LiveSourceDeltaCoordinator(
         // Raw cursor remains in the encrypted operational repository. LiveDataHub persists only its
         // fingerprint inside the account Photon.
         hub.observeAccount(rawObservation.copy(sourceCursor = durable.cursor?.value))
+        health.healthy(
+            connector.adapter.sourceId,
+            now(),
+            "source inventory bootstrapped at cursor revision " + durable.revision,
+        )
         return LiveSourceSyncResult.Bootstrapped(
             sourceId = connector.adapter.sourceId,
             inventoryItemCount = inventory.items.size,
@@ -340,7 +408,19 @@ class LiveSourceDeltaCoordinator(
         state: LiveSourceCursorState,
         cursor: SourceCursor,
     ): LiveSourceSyncResult {
-        val changes = connector.adapter.changesAfter(cursor)
+        val changes = try {
+            connector.adapter.changesAfter(cursor)
+        } catch (error: Exception) {
+            val message = error.message ?: error::class.simpleName ?: "source delta read failed"
+            health.failed(
+                connector.adapter.sourceId,
+                now(),
+                app.lifeos.core.runtime.RuntimeFailureCategory.DEPENDENCY,
+                message,
+                true,
+            )
+            return LiveSourceSyncResult.SourceUnavailable(connector.adapter.sourceId, message, state)
+        }
         require(changes.deltas.size <= maxRawDeltas) {
             "Live source change set exceeded bounded capacity"
         }
@@ -354,7 +434,23 @@ class LiveSourceDeltaCoordinator(
         val fresh = changes.deltas.filter {
             it.observationRevision > state.lastObservationRevision
         }
-        val coalesced = SourceDeltaCoalescer(coalescedCapacity).coalesce(fresh)
+        val coalesced = try {
+            SourceDeltaCoalescer(coalescedCapacity).coalesce(fresh)
+        } catch (overflow: SourceDeltaCapacityExceededException) {
+            health.failed(
+                connector.adapter.sourceId,
+                now(),
+                app.lifeos.core.runtime.RuntimeFailureCategory.RESOURCE_EXHAUSTED,
+                overflow.message ?: "live source delta capacity exceeded",
+                true,
+            )
+            return LiveSourceSyncResult.CapacityBlocked(
+                sourceId = connector.adapter.sourceId,
+                distinctObjectCount = overflow.distinctObjectCount,
+                capacity = overflow.capacity,
+                state = state,
+            )
+        }
         var accepted = 0
 
         for (sourceDelta in coalesced) {
@@ -395,6 +491,11 @@ class LiveSourceDeltaCoordinator(
         val durable = persistState(state, next)
             ?: return currentConflict(connector.adapter.sourceId)
         hub.observeAccount(rawObservation.copy(sourceCursor = durable.cursor?.value))
+        health.healthy(
+            connector.adapter.sourceId,
+            now(),
+            "source delta batch committed through cursor revision " + durable.revision,
+        )
 
         return LiveSourceSyncResult.Advanced(
             sourceId = connector.adapter.sourceId,
