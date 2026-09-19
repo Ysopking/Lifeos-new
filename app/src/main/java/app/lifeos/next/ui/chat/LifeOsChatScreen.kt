@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +62,21 @@ fun LifeOsChatScreen(
                 vertical = LifeOsTokens.Spacing.large,
             ),
         ) {
+            if (state.hasOlderHistory || state.historyLoading) {
+                item(key = "chat-history-load-more") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        TextButton(
+                            onClick = model::loadOlderHistory,
+                            enabled = state.hasOlderHistory && !state.historyLoading,
+                        ) {
+                            Text(if (state.historyLoading) "Ältere Nachrichten werden geladen …" else "Ältere Nachrichten laden")
+                        }
+                    }
+                }
+            }
             if (state.timeline.isEmpty()) {
                 item {
                     LifeOsEmptyConversation(

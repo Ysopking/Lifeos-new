@@ -31,6 +31,8 @@ import app.lifeos.next.ui.chat.ChatVoiceUiState
 import app.lifeos.next.ui.chat.VoiceDraftResolution
 import app.lifeos.next.ui.components.RuntimeTopologyUiEvidence
 import app.lifeos.next.ui.components.SelfStateUiEvidence
+import app.lifeos.next.ui.perf.ConversationTimelinePager
+import app.lifeos.next.ui.perf.ConversationTimelineWindow
 import app.lifeos.next.ui.perf.StableChatProjection
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -57,6 +59,8 @@ data class LifeOsChatUiState(
     val runtimeTopology: RuntimeTopologyUiEvidence? = null,
     val selfState: SelfStateUiEvidence? = null,
     val readiness: LifeOsReadinessSnapshot? = null,
+    val historyLoading: Boolean = false,
+    val hasOlderHistory: Boolean = false,
     val error: String? = null,
 )
 
@@ -68,6 +72,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     private val voiceStopRequested = AtomicBoolean(false)
     private val imagePreviewLoader = ChatImagePreviewLoader(kernel)
     private val stableChatProjection = StableChatProjection()
+    private val conversationPager = ConversationTimelinePager(kernel.productivePhotonQueries)
     private val mutableState = MutableStateFlow(LifeOsChatUiState())
 
     private var latestPhotons: List<Photon> = emptyList()
@@ -291,6 +296,37 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     suspend fun loadChatImagePreview(photon: Photon): ChatImagePreviewState =
         imagePreviewLoader.load(photon)
 
+    fun loadOlderHistory() {
+        val current = mutableState.value
+        if (current.historyLoading || !current.hasOlderHistory) return
+        mutableState.update { it.copy(historyLoading = true) }
+        viewModelScope.launch {
+            try {
+                var window = conversationPager.loadMore()
+                if (window.loadedPages == 0) {
+                    window = conversationPager.refreshFront()
+                }
+                applyConversationWindow(window)
+                mutableState.update {
+                    it.copy(
+                        historyLoading = false,
+                        hasOlderHistory = window.hasMore,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                mutableState.update {
+                    it.copy(
+                        historyLoading = false,
+                        error = error.message ?: error::class.simpleName ?: "Chat-Verlauf konnte nicht geladen werden",
+                    )
+                }
+            }
+        }
+    }
+
+
     private fun startVoiceCapture(current: LifeOsChatUiState) {
         voiceStopRequested.set(false)
         val languageContext = buildVoiceLanguageContext(latestPhotons)
@@ -478,7 +514,23 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     private fun observeKernel() {
         viewModelScope.launch {
             kernel.bootstrapState.collect { boot ->
-                latestPhotons = boot.photons
+                val timelineWindow = if (boot.ready) {
+                    try {
+                        conversationPager.refreshFront(boot.photons)
+                    } catch (_: Exception) {
+                        conversationPager.seedFallback(boot.photons)
+                    }
+                } else {
+                    conversationPager.clear()
+                    ConversationTimelineWindow(
+                        photons = emptyList(),
+                        next = null,
+                        hasMore = false,
+                        loadedPages = 0,
+                    )
+                }
+                latestPhotons = timelineWindow.photons.filter { "chat" in it.tags }
+
                 val topology = if (boot.ready) LifeOsProcessTopology.snapshot() else null
                 val topologyEvidence = topology?.let { snapshot ->
                     RuntimeTopologyUiEvidence(
@@ -501,7 +553,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                 } else {
                     mutableState.value.readiness
                 }
-                val chatProjection = stableChatProjection.project(boot.photons)
+                val chatProjection = stableChatProjection.project(timelineWindow.photons)
                 mutableState.update { current ->
                     current.copy(
                         events = chatProjection.events,
@@ -513,10 +565,23 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                         generatedProviders = topology?.generatedProviderCount ?: 0,
                         runtimeTopology = topologyEvidence,
                         readiness = readiness,
+                        hasOlderHistory = timelineWindow.hasMore,
                         error = boot.failureMessage ?: current.error,
                     )
                 }
             }
+        }
+    }
+
+    private fun applyConversationWindow(window: ConversationTimelineWindow) {
+        latestPhotons = window.photons.filter { "chat" in it.tags }
+        val projection = stableChatProjection.project(window.photons)
+        mutableState.update { current ->
+            current.copy(
+                events = projection.events,
+                timeline = projection.timeline,
+                hasOlderHistory = window.hasMore,
+            )
         }
     }
 
