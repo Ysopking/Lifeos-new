@@ -200,117 +200,43 @@ class LifeOsKernelFactory(
     private val bootReadyMaintenanceTrigger: () -> Unit = {},
 ) {
     fun create(): LifeOsKernel {
-        val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        val appContext = context.applicationContext
-        val cycleResourceIntelligence =
-            hardwareResourceIntelligence ?: HardwareResourceIntelligenceRuntime(appContext)
-        val store = EncryptedPhotonStore(appContext)
-        val cognitionJournalIndex = CognitionJournalIndex(
-            repository = EncryptedCognitionJournalIndexRepository(appContext),
-            photons = store,
-        )
-        val cognitionCoverageIndex = CognitionCoverageIndex(
-            repository = EncryptedCognitionCoverageRepository(appContext),
-        )
-        val cognitiveModuleSnapshotRepository =
-            EncryptedCognitiveModuleSnapshotRepository(appContext)
-        val learningAdaptationRepository = EncryptedLearningAdaptationRepository(appContext)
-        val learningAdaptations = DurableLearningAdaptationLedger(learningAdaptationRepository)
-        val goalPlanRepository = EncryptedGoalPlanRepository(appContext)
-        val goalPlans = DurableGoalPlanLedger(goalPlanRepository)
-        val learnedProviderReliability = LearnedProviderReliabilityResolver(learningAdaptations)
-        val learnedFieldCalibration = LearnedFieldCalibration(learningAdaptations)
-        val assetStore = EncryptedBinaryAssetStore(appContext)
-        val thoughtMatrixStateRepository = EncryptedThoughtMatrixStateRepository(appContext)
-        val thoughtGraphDeltaRepository = EncryptedThoughtGraphDeltaRepository(appContext)
-        val thoughtGraph = DurableThoughtGraph(thoughtGraphDeltaRepository)
-        val matrix = ThoughtMatrix(durableState = thoughtMatrixStateRepository)
-        val registry = StaticFieldRegistry(listOf(matrix))
-        val executor = InfluenceExecutor()
-        val healthGraph = HealthGraph()
-        val circuitBreaker = CircuitBreaker()
-        val quarantineRegistry = QuarantineRegistry()
-        val protectionRepository = EncryptedProtectionStateRepository(appContext)
-        val protectionCoordinator = ProtectionCoordinator(
-            repository = protectionRepository,
-            quarantineRegistry = quarantineRegistry,
-            verifier = HealthGraphProtectionResumeVerifier(healthGraph),
-            healthGraph = healthGraph,
-        )
-        val healthGate = HealthGate(
-            circuitBreaker = circuitBreaker,
-            quarantineRegistry = quarantineRegistry,
-            protectionAdmission = protectionCoordinator,
-        )
-        val mmsiRuntime = MmsiRuntimeBackendProbe(appContext)
-        val languageUnderstanding = LanguageUnderstandingEngine()
-        val goalPhotonFactory = GoalPhotonFactory()
-        val languageContextBuilder = PhotonLanguageContextBuilder()
-        val sceneCompiler = ProceduralSceneCompiler()
-        val sceneRasterizer: SceneRasterizer = ReferenceCpuSceneRasterizer()
-        val proceduralImageGenerator = ProceduralImageGenerationEngine(
-            context = appContext,
-            runtimeProbe = mmsiRuntime,
-            sceneCompiler = sceneCompiler,
-            sceneRasterizer = sceneRasterizer,
-            computeDispatcher = dispatcher,
-        )
-        val capabilityRegistry = CapabilityRegistry(
-            listOf(
-                CapabilityDescriptor(
-                    capabilityId = CapabilityId("language.understand"),
-                    providerId = "language-core",
-                    providerType = ProviderType.MODULE,
-                    contract = CapabilityContract(
-                        requiredInputs = setOf("chat-photon"),
-                        outputs = setOf("goal-photon"),
-                    ),
-                    state = ProviderState.ACTIVE,
-                    trustLevel = TrustLevel.SYSTEM,
-                    reliability = 1.0,
-                    cost = 0.0,
-                ),
-                CapabilityDescriptor(
-                    capabilityId = CapabilityId("scene.construct.procedural"),
-                    providerId = "procedural-scene-core",
-                    providerType = ProviderType.MODULE,
-                    contract = CapabilityContract(
-                        requiredInputs = setOf("goal-photon"),
-                        outputs = setOf("scene-graph"),
-                    ),
-                    state = ProviderState.ACTIVE,
-                    trustLevel = TrustLevel.SYSTEM,
-                    reliability = 0.92,
-                    cost = 0.0,
-                ),
-                CapabilityDescriptor(
-                    capabilityId = CapabilityId("scene.rasterize.mmsi"),
-                    providerId = "scene-reference-rasterizer",
-                    providerType = ProviderType.MODULE,
-                    contract = CapabilityContract(
-                        requiredInputs = setOf("scene-graph"),
-                        outputs = setOf("mmsi-geometry-buffers"),
-                    ),
-                    state = ProviderState.ACTIVE,
-                    trustLevel = TrustLevel.SYSTEM,
-                    reliability = 0.96,
-                    cost = 0.0,
-                ),
-                CapabilityDescriptor(
-                    capabilityId = CapabilityId("image.render.mmsi"),
-                    providerId = "mmsi-runtime",
-                    providerType = ProviderType.MODULE,
-                    contract = CapabilityContract(
-                        requiredInputs = setOf("mmsi-geometry-buffers"),
-                        outputs = setOf("image-photon"),
-                    ),
-                    state = ProviderState.ACTIVE,
-                    trustLevel = TrustLevel.SYSTEM,
-                    reliability = 0.95,
-                    cost = 0.0,
-                ),
-            ) + LanguageGoalCapabilityRouter.LOCAL_SYSTEM_PROVIDERS
-        )
+        val foundation = KernelFoundationComposition(
+            context = context,
+            dispatcher = dispatcher,
+            hardwareResourceIntelligence = hardwareResourceIntelligence,
+        ).compose()
+        val scope = foundation.scope
+        val appContext = foundation.appContext
+        val cycleResourceIntelligence = foundation.cycleResourceIntelligence
+        val store = foundation.store
+        val cognitionJournalIndex = foundation.cognitionJournalIndex
+        val cognitionCoverageIndex = foundation.cognitionCoverageIndex
+        val cognitiveModuleSnapshotRepository = foundation.cognitiveModuleSnapshotRepository
+        val learningAdaptationRepository = foundation.learningAdaptationRepository
+        val learningAdaptations = foundation.learningAdaptations
+        val goalPlanRepository = foundation.goalPlanRepository
+        val goalPlans = foundation.goalPlans
+        val learnedProviderReliability = foundation.learnedProviderReliability
+        val learnedFieldCalibration = foundation.learnedFieldCalibration
+        val assetStore = foundation.assetStore
+        val thoughtMatrixStateRepository = foundation.thoughtMatrixStateRepository
+        val thoughtGraphDeltaRepository = foundation.thoughtGraphDeltaRepository
+        val thoughtGraph = foundation.thoughtGraph
+        val matrix = foundation.matrix
+        val registry = foundation.registry
+        val executor = foundation.executor
+        val healthGraph = foundation.healthGraph
+        val protectionRepository = foundation.protectionRepository
+        val protectionCoordinator = foundation.protectionCoordinator
+        val healthGate = foundation.healthGate
+        val mmsiRuntime = foundation.mmsiRuntime
+        val languageUnderstanding = foundation.languageUnderstanding
+        val goalPhotonFactory = foundation.goalPhotonFactory
+        val languageContextBuilder = foundation.languageContextBuilder
+        val sceneCompiler = foundation.sceneCompiler
+        val sceneRasterizer = foundation.sceneRasterizer
+        val proceduralImageGenerator = foundation.proceduralImageGenerator
+        val capabilityRegistry = foundation.capabilityRegistry
 
         val generatedToolStateRepository = EncryptedGeneratedToolStateRepository(appContext)
         val generatedTools = GeneratedToolRegistry(durableState = generatedToolStateRepository)
