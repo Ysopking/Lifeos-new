@@ -37,6 +37,7 @@ import app.lifeos.core.runtime.convergence.ProductiveConvergenceInput
 import app.lifeos.core.runtime.convergence.ProductiveConvergenceResult
 import app.lifeos.core.runtime.convergence.ProductiveWorldPublicationNotReadyException
 import app.lifeos.core.runtime.thought.ThoughtGraphWorkingSet
+import app.lifeos.core.runtime.world.CognitiveCycleId
 import java.time.Instant
 
 /**
@@ -48,6 +49,30 @@ import java.time.Instant
  * DurableConvergenceDecisionCoordinator remain authoritative, including all score, freshness,
  * conflict and capability gates. The resulting decision checkpoint is persisted before exposure.
  */
+data class GoalConvergenceCycleBinding(
+    val cycleId: CognitiveCycleId,
+    val sourceWorldSnapshotId: String,
+    val equationVersion: String,
+) {
+    init {
+        require(sourceWorldSnapshotId.isNotBlank())
+        require(equationVersion.isNotBlank())
+    }
+}
+
+data class GoalConvergenceDecisionResult(
+    val checkpoint: ConvergenceDecisionCheckpoint,
+    val cycleBinding: GoalConvergenceCycleBinding?,
+)
+
+fun interface GoalOutcomeLearningHook {
+    suspend fun learn(
+        binding: GoalConvergenceCycleBinding,
+        outcome: Photon,
+        succeeded: Boolean,
+    )
+}
+
 interface GoalConvergenceDecisionSource {
     suspend fun decide(
         goal: GoalFrame,
@@ -57,6 +82,25 @@ interface GoalConvergenceDecisionSource {
         goalPhotonRevision: Long = 1L,
         at: Instant = sourcePhoton.provenance.createdAt,
     ): ConvergenceDecisionCheckpoint
+
+    suspend fun decideBound(
+        goal: GoalFrame,
+        routing: GoalCapabilityResolution,
+        sourcePhoton: Photon,
+        goalPhotonId: PhotonId,
+        goalPhotonRevision: Long = 1L,
+        at: Instant = sourcePhoton.provenance.createdAt,
+    ): GoalConvergenceDecisionResult = GoalConvergenceDecisionResult(
+        checkpoint = decide(
+            goal = goal,
+            routing = routing,
+            sourcePhoton = sourcePhoton,
+            goalPhotonId = goalPhotonId,
+            goalPhotonRevision = goalPhotonRevision,
+            at = at,
+        ),
+        cycleBinding = null,
+    )
 }
 
 fun interface GoalCycleFrozenInputSource {
@@ -80,7 +124,23 @@ class GoalConvergenceDecisionProvider(
         goalPhotonId: PhotonId,
         goalPhotonRevision: Long,
         at: Instant,
-    ): ConvergenceDecisionCheckpoint {
+    ): ConvergenceDecisionCheckpoint = decideBound(
+        goal = goal,
+        routing = routing,
+        sourcePhoton = sourcePhoton,
+        goalPhotonId = goalPhotonId,
+        goalPhotonRevision = goalPhotonRevision,
+        at = at,
+    ).checkpoint
+
+    override suspend fun decideBound(
+        goal: GoalFrame,
+        routing: GoalCapabilityResolution,
+        sourcePhoton: Photon,
+        goalPhotonId: PhotonId,
+        goalPhotonRevision: Long,
+        at: Instant,
+    ): GoalConvergenceDecisionResult {
         require(goalPhotonRevision > 0L)
 
         require(routing.plan.goal == goal) {
@@ -258,7 +318,14 @@ class GoalConvergenceDecisionProvider(
             )
         }
         return when (result) {
-            is ProductiveConvergenceResult.Decided -> result.checkpoint
+            is ProductiveConvergenceResult.Decided -> GoalConvergenceDecisionResult(
+                checkpoint = result.checkpoint,
+                cycleBinding = GoalConvergenceCycleBinding(
+                    cycleId = cycle.cycleId,
+                    sourceWorldSnapshotId = result.worldSnapshotId,
+                    equationVersion = cycle.context.equationVersion,
+                ),
+            )
             is ProductiveConvergenceResult.WorldNotStable -> throw ProductiveConvergenceNotReadyException(
                 "world-not-stable:${result.worldSnapshotId}"
             )
