@@ -36,8 +36,8 @@ else
   echo "KVM device is unavailable; emulator runner may fall back to software acceleration."
 fi
 
-step "gate 04: free Android SDK disk space"
-sudo rm -rf "$sdk_root/ndk" "$sdk_root/cmake"
+step "gate 04: report available disk space"
 df -h /
+df -h "$sdk_root" || true
 
 step "emulator preflight complete"
