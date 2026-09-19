@@ -190,6 +190,7 @@ class ChatMainActivity : ComponentActivity() {
         InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
         owner.refreshInitialDataBootstrap()
         owner.refreshLiveSources()
+        owner.refreshStorageIntelligence()
     }
 
     private fun observeInitialCognitiveContext(owner: LifeOsApplication) {
