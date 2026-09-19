@@ -91,12 +91,12 @@ internal class KernelWorldComposition(
         val fieldSnapshotRepository = EncryptedFieldSnapshotRepository(appContext)
         val bootReadSession = BootReadSession(
             BootSnapshotLoader(
-                photons = PhotonRepositoryBootSource(foundation.store),
                 tasks = TaskRepositoryBootSource(taskRepository),
                 checkpoints = CheckpointRepositoryBootSource(checkpointRepository),
                 capabilities = CapabilityRegistryBootSource(foundation.capabilityRegistry),
                 tools = GeneratedToolRegistryBootSource(evolution.generatedTools),
                 fieldSnapshots = FieldSnapshotRepositoryBootSource(fieldSnapshotRepository),
+                indexedPhotons = PhotonRepositoryBootSource(foundation.store),
             )
         )
         val fieldThoughtGraphProjectionOutbox =

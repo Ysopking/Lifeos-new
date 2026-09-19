@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.boot
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.runtime.cognition.CognitionJournalIndex
 import app.lifeos.core.runtime.cognition.CognitionJournalIntegrityVerifier
@@ -28,12 +29,18 @@ data class PhotonIntegrityAssessment(
 data class PhotonRehydrationResult(
     val hot: List<Photon>,
     val warm: List<Photon>,
-    val cold: List<PhotonId>,
+    val cold: List<PhotonRevisionRef>,
     val assessments: List<PhotonIntegrityAssessment>,
     val unreadableFiles: List<String>,
-    val allPhotons: List<Photon> = hot + warm,
+    val deferredWarm: List<PhotonRevisionRef> = emptyList(),
 ) {
-    val restoredCount: Long = (hot.size + warm.size + cold.size).toLong()
+    val loadedPhotons: List<Photon> = hot + warm
+
+    @Deprecated("Boot no longer materializes the complete Photon history")
+    val allPhotons: List<Photon> get() = loadedPhotons
+
+    val restoredCount: Long =
+        (hot.size + warm.size + cold.size + deferredWarm.size).toLong()
     val quarantined: Set<PhotonId> = assessments
         .asSequence()
         .filter { it.state == PhotonIntegrityState.QUARANTINED }
@@ -55,13 +62,16 @@ object DefaultPhotonHydrationPolicy : PhotonHydrationPolicy {
 }
 
 class PhotonIntegrityValidator {
-    fun assess(photons: List<Photon>): List<PhotonIntegrityAssessment> {
+    fun assess(
+        photons: List<Photon>,
+        knownPhotonIds: Set<PhotonId> = photons.mapTo(hashSetOf()) { it.id },
+    ): List<PhotonIntegrityAssessment> {
         val duplicateIds = photons
             .groupingBy { it.id }
             .eachCount()
             .filterValues { it > 1 }
             .keys
-        val knownIds = photons.mapTo(hashSetOf()) { it.id }
+        val knownIds = knownPhotonIds
 
         return photons.map { photon ->
             val issues = buildList {
@@ -97,28 +107,48 @@ class PhotonRehydrator(
             ?.mapNotNull { it.entry }
             ?: checkNotNull(fallbackReport).unreadableFiles
 
-        // Internal cognition journals share the encrypted Photon repository. When a shared boot
-        // session exists, validate the already decrypted snapshot instead of loading journal refs.
-        val verifier = CognitionJournalIntegrityVerifier(repository, journalIndex)
-        if (sessionSnapshot != null) verifier.verify(photons) else verifier.verify()
+        // Journal integrity is bounded by the durable cognition index and therefore does not
+        // require all user Photon payloads to be decrypted into the boot snapshot.
+        CognitionJournalIntegrityVerifier(repository, journalIndex).verify()
 
-        val assessments = validator.assess(photons)
+        val knownPhotonIds = sessionSnapshot
+            ?.photonEntries
+            ?.mapTo(hashSetOf()) { it.ref.photonId }
+            ?.takeIf { it.isNotEmpty() }
+            ?: photons.mapTo(hashSetOf()) { it.id }
+        val assessments = validator.assess(photons, knownPhotonIds)
         val quarantined = assessments
             .asSequence()
             .filter { it.state == PhotonIntegrityState.QUARANTINED }
             .map { it.photonId }
             .toSet()
 
+        if (sessionSnapshot != null && sessionSnapshot.photonEntries.isNotEmpty()) {
+            val byRef = photons.associateBy { PhotonRevisionRef(it.id, it.revision) }
+            return PhotonRehydrationResult(
+                hot = sessionSnapshot.hotPhotonRefs
+                    .mapNotNull(byRef::get)
+                    .filterNot { it.id in quarantined },
+                warm = sessionSnapshot.warmPhotonRefs
+                    .mapNotNull(byRef::get)
+                    .filterNot { it.id in quarantined },
+                cold = sessionSnapshot.coldPhotonRefs,
+                assessments = assessments,
+                unreadableFiles = unreadable,
+                deferredWarm = sessionSnapshot.deferredWarmPhotonRefs,
+            )
+        }
+
         val hot = mutableListOf<Photon>()
         val warm = mutableListOf<Photon>()
-        val cold = mutableListOf<PhotonId>()
+        val cold = mutableListOf<PhotonRevisionRef>()
 
         photons.forEach { photon ->
             if (photon.id in quarantined) return@forEach
             when (hydrationPolicy.tier(photon)) {
                 PhotonHydrationTier.HOT -> hot += photon
                 PhotonHydrationTier.WARM -> warm += photon
-                PhotonHydrationTier.COLD -> cold += photon.id
+                PhotonHydrationTier.COLD -> cold += PhotonRevisionRef(photon.id, photon.revision)
             }
         }
 
@@ -128,7 +158,6 @@ class PhotonRehydrator(
             cold = cold,
             assessments = assessments,
             unreadableFiles = unreadable,
-            allPhotons = photons,
         )
     }
 }

@@ -980,7 +980,7 @@ class LifeOsKernel internal constructor(
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = if (degraded) KernelBootstrapStatus.DEGRADED else KernelBootstrapStatus.READY,
-            photons = context.photons.allPhotons,
+            photons = context.photons.loadedPhotons,
             unreadableFiles = context.photons.unreadableFiles.size,
             warnings = warnings,
         )
