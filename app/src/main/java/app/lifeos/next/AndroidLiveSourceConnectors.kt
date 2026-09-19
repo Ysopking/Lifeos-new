@@ -190,16 +190,18 @@ internal class AndroidInitialSourceLiveConnector(
                         it.externalObject.externalId == delta.externalKey &&
                         it.externalObject.externalVersion == record.fingerprint
                 }
-                ?.copy(
-                    privacyZone = SourcePrivacyZone.mostRestrictive(
-                        listOf(it.privacyZone, delta.privacyZone)
-                    ),
-                    timestamps = it.timestamps.copy(
-                        occurredAt = occurredAt,
-                        observedAt = observedAt,
-                        importedAt = observedAt,
-                    ),
-                )
+                ?.let { metadata ->
+                    metadata.copy(
+                        privacyZone = SourcePrivacyZone.mostRestrictive(
+                            listOf(metadata.privacyZone, delta.privacyZone)
+                        ),
+                        timestamps = metadata.timestamps.copy(
+                            occurredAt = occurredAt,
+                            observedAt = observedAt,
+                            importedAt = observedAt,
+                        ),
+                    )
+                }
                 ?: canonicalLiveDataMetadata(
                     connectorId = connectorId,
                     accountKey = accountKey,
