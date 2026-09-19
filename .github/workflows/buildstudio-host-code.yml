@@ -46,4 +46,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gradle :host:buildstudio:test :core:runtime:test --stacktrace
+          ./gradlew :host:buildstudio:test :core:runtime:test --stacktrace
