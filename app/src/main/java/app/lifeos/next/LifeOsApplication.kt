@@ -446,7 +446,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             memorySnapshot = lifeMemoryRuntime::current,
             authorityReader = SelfObservationAuthorityRuntimeRegistry.requireCurrent(),
             topologySnapshot = LifeOsProcessTopology::snapshot,
-            healthSnapshot = selfObservationHealthGraph::snapshot,
+            healthSnapshot = { selfObservationHealthGraph.snapshot() },
             hardwareSnapshot = hardwareResourceIntelligence::currentHardwareSnapshot,
             toolStatus = generatedToolStatusReader::snapshot,
             activeRepairs = selfHealingRuntime.ledger::active,
