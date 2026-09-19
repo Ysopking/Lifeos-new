@@ -21,9 +21,9 @@ jobs:
         with:
           gradle-version: "9.3.1"
       - name: Verify accessibility semantics contract
-        run: gradle :app:testDebugUnitTest --tests app.lifeos.next.LifeOsFrontendAccessibilityContractTest
+        run: ./gradlew :app:testDebugUnitTest --tests app.lifeos.next.LifeOsFrontendAccessibilityContractTest
       - name: Build productive launcher input
-        run: gradle :app:assembleDebug
+        run: ./gradlew :app:assembleDebug
       - name: Verify productive launcher on device
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
