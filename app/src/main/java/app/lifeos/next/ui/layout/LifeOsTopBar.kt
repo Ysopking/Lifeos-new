@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -16,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import app.lifeos.next.R
@@ -37,7 +39,9 @@ fun LifeOsTopBar(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .statusBarsPadding(),
         tonalElevation = LifeOsTokens.Elevation.resting,
     ) {
         Row(
@@ -57,7 +61,7 @@ fun LifeOsTopBar(
             BadgedBox(
                 badge = {
                     if (state.attentionCount > 0) {
-                        Badge {
+                        Badge(modifier = Modifier.clearAndSetSemantics { }) {
                             Text(attentionBadgeLabel(state.attentionCount))
                         }
                     }
