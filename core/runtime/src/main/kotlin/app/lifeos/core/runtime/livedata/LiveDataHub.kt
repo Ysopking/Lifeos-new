@@ -2,7 +2,6 @@ package app.lifeos.core.runtime.livedata
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
-import app.lifeos.core.model.PhotonRevisionWriteResult
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RevisionedPhotonRepository
 import kotlinx.coroutines.sync.Mutex
@@ -29,38 +28,30 @@ class LiveDataHub(
     suspend fun observeAccount(
         observation: LiveDataAccountObservation,
     ): Photon = mutationMutex.withLock {
-        repeat(MAX_CAS_ATTEMPTS) {
-            val current = photons.load(observation.photonId)
-            validateAccountHead(current, observation)
+        val current = photons.load(observation.photonId)
+        validateAccountHead(current, observation)
 
-            if (
-                current != null &&
-                observationTag(observation.observationFingerprint) in current.tags
-            ) {
-                // Persistence may have succeeded before a process/cognition handoff failure.
-                // Republishing the exact durable revision closes that crash window idempotently.
-                ingress.publish(current)
-                return@withLock current
-            }
-
-            val revision = (current?.revision ?: 0L) + 1L
-            val next = accountPhoton(observation, revision)
-            when (
-                photons.saveRevision(
-                    photon = next,
-                    expectedPreviousRevision = current?.revision,
-                )
-            ) {
-                is PhotonRevisionWriteResult.Created,
-                is PhotonRevisionWriteResult.Advanced,
-                is PhotonRevisionWriteResult.Idempotent -> {
-                    ingress.publish(next)
-                    return@withLock next
-                }
-                is PhotonRevisionWriteResult.Conflict -> Unit
-            }
+        if (
+            current != null &&
+            observationTag(observation.observationFingerprint) in current.tags
+        ) {
+            // The canonical ingress owns durable classification/cognition. Republishing the exact
+            // revision closes a crash window after persistence/task submission idempotently.
+            ingress.publish(current)
+            return@withLock current
         }
-        error("Live-data account snapshot CAS retry limit exceeded")
+
+        val next = accountPhoton(
+            observation = observation,
+            revision = (current?.revision ?: 0L) + 1L,
+        )
+        // Deliberately do not pre-save here: CanonicalPhotonIngress is the single productive write
+        // path and owns classification before cognitive task submission.
+        ingress.publish(next)
+        check(photons.load(next.id) == next) {
+            "Live-data canonical ingress returned before account snapshot became durable"
+        }
+        next
     }
 
     suspend fun ingest(
@@ -237,7 +228,6 @@ class LiveDataHub(
         const val ACCOUNT_ROOT_TAG = "live-data-account"
         const val DELTA_ROOT_TAG = "live-data-delta"
         const val ACCOUNT_MIME = "application/vnd.lifeos.live-data-account+text"
-        const val MAX_CAS_ATTEMPTS = 32
 
         fun connectorTag(id: LiveDataConnectorId): String =
             "live-data-connector:" + id.value
