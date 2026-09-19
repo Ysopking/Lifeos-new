@@ -69,6 +69,16 @@ data class WorldProjectionContractSnapshot private constructor(
     )
 
     companion object {
+        internal fun restore(
+            registrySnapshotId: String,
+            registryFingerprint: String,
+            requiredProviderIds: Set<String>,
+        ): WorldProjectionContractSnapshot = WorldProjectionContractSnapshot(
+            registrySnapshotId = registrySnapshotId,
+            registryFingerprint = registryFingerprint,
+            requiredProviderIds = requiredProviderIds,
+        )
+
         fun create(
             registry: WorldProjectionRegistrySnapshot,
             requiredProviderIds: Set<String>,
