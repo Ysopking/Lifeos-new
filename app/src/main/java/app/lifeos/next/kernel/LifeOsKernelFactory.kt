@@ -87,6 +87,8 @@ import app.lifeos.core.runtime.boot.StoreState
 import app.lifeos.core.runtime.boot.StoreStatus
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmup
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
+import app.lifeos.core.runtime.self.SelfObservationAuthorityReader
+import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.capability.CapabilityContract
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
 import app.lifeos.core.runtime.capability.CapabilityId
@@ -536,6 +538,21 @@ class LifeOsKernelFactory(
                     DurableLifeMemoryRuntimeRegistry.current()?.current()?.fingerprint
                 },
             )
+        )
+        SelfObservationAuthorityRuntimeRegistry.install(
+            object : SelfObservationAuthorityReader {
+                override suspend fun loadProductiveWorldHead() =
+                    productiveWorldHeadRepository.load()
+
+                override suspend fun loadWorldEquationHead() =
+                    worldEquationHeads.load()
+
+                override suspend fun loadCommittedBootCycle() =
+                    bootEngineCycleRepository.loadLatestCommitted()
+
+                override suspend fun loadCognitiveSnapshot() =
+                    cognitiveSnapshotManager.latestVerified()
+            }
         )
         val cognitiveScheduler = CognitiveScheduler()
         val cognitionAdmission = DurableCognitionAdmissionController(

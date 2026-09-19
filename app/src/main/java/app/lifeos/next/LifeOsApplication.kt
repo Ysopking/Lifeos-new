@@ -64,6 +64,8 @@ import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
+import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
+import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
@@ -88,6 +90,7 @@ import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
+import app.lifeos.next.kernel.SelfObservationRuntime
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -115,6 +118,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         private set
 
     lateinit var hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime
+        private set
+
+    internal lateinit var selfObservationRuntime: SelfObservationRuntime
         private set
 
     lateinit var ownerPolicy: OwnerPolicyLedger
@@ -432,6 +438,21 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         )
 
         installLiveSources()
+        val selfObservationHealthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
+            "Self observation requires the productive HealthGraph"
+        }
+        selfObservationRuntime = SelfObservationRuntime(
+            photonIndex = kernel.photonStore::indexReport,
+            memorySnapshot = lifeMemoryRuntime::current,
+            authorityReader = SelfObservationAuthorityRuntimeRegistry.requireCurrent(),
+            topologySnapshot = LifeOsProcessTopology::snapshot,
+            healthSnapshot = { selfObservationHealthGraph.snapshot() },
+            hardwareSnapshot = hardwareResourceIntelligence::currentHardwareSnapshot,
+            toolStatus = generatedToolStatusReader::snapshot,
+            activeRepairs = selfHealingRuntime.ledger::active,
+            liveSourceSnapshot = { latestLiveSourceSync },
+            liveSourceFailure = { liveSourceSyncFailure },
+        )
         startContinuousLiveSourceRefresh()
 
         initialDataSources = AndroidInitialDataSourceCatalog(this)
