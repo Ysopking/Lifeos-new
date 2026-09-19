@@ -214,6 +214,45 @@ internal class AndroidStorageInventoryStore(
         return writableDatabase.delete(TABLE, "$COL_SCAN<>?", arrayOf(scanId))
     }
 
+    fun loadPage(
+        afterPosition: String?,
+        limit: Int,
+    ): StorageInventoryPage {
+        require(limit > 0)
+        val cursor = afterPosition?.let(::decodePosition)
+        val entries = mutableListOf<StorageIndexedFile>()
+        val selection = if (cursor == null) {
+            null
+        } else {
+            "($COL_VOLUME>? OR ($COL_VOLUME=? AND $COL_PATH>?))"
+        }
+        val args = cursor?.let {
+            arrayOf(it.first, it.first, it.second)
+        }
+        readableDatabase.query(
+            TABLE,
+            COLUMNS,
+            selection,
+            args,
+            null,
+            null,
+            "$COL_VOLUME ASC, $COL_PATH ASC",
+            limit.toString(),
+        ).use { dbCursor ->
+            while (dbCursor.moveToNext()) entries += dbCursor.toEntry().asIndexedFile()
+        }
+        val next = if (entries.size < limit) {
+            null
+        } else {
+            entries.lastOrNull()?.let { encodePosition(it.volumeId, it.relativePath) }
+        }
+        return StorageInventoryPage(
+            entries = entries,
+            nextPosition = next,
+            complete = next == null,
+        )
+    }
+
     fun exactDuplicateGroups(): List<List<StorageIndexedFile>> {
         val keys = mutableListOf<Pair<Long, String>>()
         readableDatabase.rawQuery(
@@ -326,8 +365,18 @@ internal class AndroidStorageInventoryStore(
     private fun android.database.Cursor.getStringOrNull(index: Int): String? =
         if (isNull(index)) null else getString(index)
 
+    private fun encodePosition(volumeId: String, relativePath: String): String =
+        volumeId + POSITION_SEPARATOR + relativePath
+
+    private fun decodePosition(value: String): Pair<String, String> {
+        val index = value.indexOf(POSITION_SEPARATOR)
+        require(index > 0 && index < value.lastIndex) { "Invalid storage inventory position" }
+        return value.substring(0, index) to value.substring(index + 1)
+    }
+
     companion object {
         const val LARGE_REVIEW_BYTES = 2L * 1024L * 1024L * 1024L
+        private const val POSITION_SEPARATOR = '\u0000'
         private const val DATABASE_NAME = "lifeos-storage-inventory.db"
         private const val DATABASE_VERSION = 1
         private const val TABLE = "storage_files"
@@ -366,4 +415,15 @@ internal data class StorageInventorySummary(
 ) {
     val fingerprintComplete: Boolean
         get() = indexedFiles == fullyFingerprintedFiles
+}
+
+
+internal data class StorageInventoryPage(
+    val entries: List<StorageIndexedFile>,
+    val nextPosition: String?,
+    val complete: Boolean,
+) {
+    init {
+        require(complete == (nextPosition == null))
+    }
 }
