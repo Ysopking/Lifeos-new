@@ -1,6 +1,7 @@
 package app.lifeos.core.runtime.world
 
 import app.lifeos.core.field.world.WorldEquationSpec
+import app.lifeos.core.runtime.evolution.WorldEquationPromotionAdmission
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -34,15 +35,17 @@ class WorldEquationActivationAuthority(
         equations.register(spec)
     }
 
-    suspend fun activate(
-        version: String,
-        promotionId: String,
+    suspend fun promote(
+        candidate: WorldEquationSpec,
+        admission: WorldEquationPromotionAdmission,
     ): WorldEquationHead = mutex.withLock {
-        require(version.isNotBlank())
-        require(promotionId.isNotBlank())
-        requireNotNull(equations.resolve(version)) {
-            "Cannot activate unregistered world equation version: $version"
+        require(candidate.version == admission.candidateVersion) {
+            "World equation promotion admission targets another version"
         }
+        require(candidate.fingerprint() == admission.candidateEquationFingerprint) {
+            "World equation promotion admission targets different physics"
+        }
+        equations.register(candidate)
 
         repeat(MAX_CAS_ATTEMPTS) {
             val report = heads.loadReport()
@@ -50,12 +53,18 @@ class WorldEquationActivationAuthority(
                 "World equation head recovery required: ${report.message.orEmpty()}"
             }
             val current = report.head ?: seedBaseline()
-            if (current.activeEquationVersion == version) return@withLock current
+            val currentSpec = requireNotNull(equations.resolve(current.activeEquationVersion)) {
+                "Current active world equation is not registered"
+            }
+            require(currentSpec.fingerprint() == admission.baselineEquationFingerprint) {
+                "World equation promotion baseline no longer matches active physics"
+            }
+            if (current.activeEquationVersion == candidate.version) return@withLock current
             val next = WorldEquationHead.create(
                 revision = Math.addExact(current.revision, 1L),
-                activeEquationVersion = version,
+                activeEquationVersion = candidate.version,
                 predecessorEquationVersion = current.activeEquationVersion,
-                sourcePromotionId = promotionId,
+                sourcePromotionId = admission.validation.promotionDecisionId,
             )
             if (heads.compareAndSet(current.revision, next)) {
                 return@withLock next
