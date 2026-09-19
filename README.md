@@ -1,20 +1,22 @@
 # LIFEOS Next
 
-Offline Android notebook built around persistent **Photons** and typed **Force Fields**.
-The current APK captures, encrypts, restores and searches local thoughts. It does not yet provide an AI chat model, import/export, background learning or a complete replacement for the old LIFEOS app.
+Private, offline-first Android runtime built around persistent **Photons**, typed **Force Fields** and durable cognitive state. The current APK includes encrypted Photon memory, ThoughtMatrix/ThoughtGraph processing, structured language/goal routing, long-horizon goal state, DeepSearch, generated-tool lifecycle, controlled evolution, self-healing, WorldFormula/WorldEquation evaluation and restart recovery.
+
+The language/cognition path is local and deterministic. LIFEOS does not claim that an external or generative LLM is embedded in the APK, and capability gaps remain explicit instead of being silently simulated.
 
 ## Modules and user value
 
 | Module | Responsibility | APK benefit |
 | --- | --- | --- |
-| `app` | Activity-owned ViewModel, lifecycle-aware Compose state, searchable thought list | Rotation keeps the session and draft; thoughts can be searched and copied; storage errors can be retried |
-| `core:model` | Photon invariants and versioned binary codec | Finite numeric values; full graph metadata and long UTF-8 texts; version-1 compatibility |
-| `core:data` | AES-GCM, Android Keystore, AtomicFile and serialized IO | Private storage; interrupted-write recovery; unreadable files reported and preserved |
-| `core:runtime` | Event-driven worker and revision-aware thought matrix | No polling when idle; one failing field does not skip other fields; stale revisions cannot overwrite new state |
+| `app` | Android process composition, Compose UI, startup DAG, local device adapters and product actions | Stable process startup, chat/action routing, local reminders/image flows and device recovery gates |
+| `core:model` | Photon identities, revisions, provenance, relations and binary codecs | Durable information units with explicit lineage and revision safety |
+| `core:data` | Encrypted repositories, Android Keystore, AES-GCM, AtomicFile and recovery reports | Private durable state with bounded reads, corruption detection and path-bound persistence for hardened vaults |
+| `core:field` | Typed field/world graph primitives and deterministic field dynamics | Shared representation for evidence, attraction/repulsion, conflicts and convergence |
+| `core:language` | Deterministic language understanding, semantic action graphs and reference resolution | Local intent/goal extraction without inventing unavailable capabilities |
+| `core:runtime` | Cognition, goals, workers, DeepSearch, ToolWorkshop, evolution, self-healing, WorldFormula and resource intelligence | Durable execution, explicit authority boundaries, recovery and evidence-bound lifecycle transitions |
+| `host:buildstudio` | Isolated candidate-build host contracts | Mutation candidates can be built and evidenced without granting productive activation |
 
-The ViewModel survives configuration changes and stops its worker when cleared. Saved thoughts survive process restarts; an unsaved draft currently survives rotation only. The app does not claim to run continuously after Android terminates its process.
-
-The last 100 field influences are kept in memory for runtime diagnostics. Persistent influence history, conflict-aware storage revisions and large-collection paging remain future work. The matrix still copies its map when publishing a changed snapshot; incremental energy accounting removes the additional full energy scan.
+Android may still terminate the process. LIFEOS therefore treats cold-start rehydration and durable recovery as product requirements rather than claiming an always-resident background process.
 
 ## Build and validation
 
