@@ -139,11 +139,6 @@ run_test \
   'app.lifeos.next.SelfObservationGoldDeviceTest#seedAuthoritativeSelfStateBeforeProcessDeath' \
   "$report_dir/self-observation-seed.txt"
 
-# M216 bounded scale seed. Exceed the 4,096 hot/runtime retention budget while keeping emulator
-# execution bounded. The exact encrypted index is reopened after the same cold process restart.
-run_test \
-  'app.lifeos.next.M216ScaleRecoveryDeviceTest#seedBoundedScaleCorpusBeforeColdRestart' \
-  "$report_dir/m216-scale-seed.txt"
 
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
@@ -156,9 +151,6 @@ run_test \
   'app.lifeos.next.SelfObservationGoldDeviceTest#recoverAuthorityFingerprintAndObserveLiveState' \
   "$report_dir/self-observation-recovered.txt"
 
-run_test \
-  'app.lifeos.next.M216ScaleRecoveryDeviceTest#recoverPagedScaleCorpusAfterColdRestart' \
-  "$report_dir/m216-scale-recovered.txt"
 
 run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' \
@@ -259,3 +251,20 @@ run_suite \
   'app.lifeos.next.DeepSearchEncryptedRepositoryCorruptionDeviceTest' \
   '4' \
   "$report_dir/deepsearch-encrypted-recovery-corruption.txt"
+
+
+# M216 scale recovery is intentionally isolated after all established recovery assertions. This
+# prevents the large synthetic Photon corpus from perturbing legacy semantic baselines while still
+# exercising a real process death and cold rehydration with a working set larger than 4,096.
+run_test \
+  'app.lifeos.next.M216ScaleRecoveryDeviceTest#seedBoundedScaleCorpusBeforeColdRestart' \
+  "$report_dir/m216-scale-seed.txt"
+
+adb shell am force-stop app.lifeos.next
+scale_cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
+printf '%s\n' "$scale_cold_start" | tee "$report_dir/m216-scale-cold-start.txt"
+assert_cold_launcher "$scale_cold_start"
+
+run_test \
+  'app.lifeos.next.M216ScaleRecoveryDeviceTest#recoverPagedScaleCorpusAfterColdRestart' \
+  "$report_dir/m216-scale-recovered.txt"
