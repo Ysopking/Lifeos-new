@@ -15,6 +15,7 @@ import app.lifeos.next.ui.memory.MemorySearchIndex
 import app.lifeos.next.ui.memory.MemorySourceUi
 import app.lifeos.next.ui.memory.MemoryWorkspaceProjector
 import app.lifeos.next.ui.memory.MemoryWorkspaceUiModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
@@ -93,6 +94,8 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
                         current
                     }
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 mutableState.update { current ->
                     if (current.selectedSourceId == photonId) {
@@ -135,6 +138,8 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
                         hasOlderSources = window.hasMore,
                     )
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 mutableState.update {
                     it.copy(
