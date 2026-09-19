@@ -294,154 +294,13 @@ class LifeOsKernelFactory(
         val durableRuntime = cognition.durableRuntime
         val supervisor = cognition.supervisor
 
-        val primaryStateRehydrator = object : StateRehydrator {
-            override suspend fun rehydrate(): RehydratedRuntimeState {
-                protectionCoordinator.rehydrate()
-                recoverExpiredLeases(leaseRecovery)
-                return RehydratedRuntimeState()
-            }
-        }
-        val stateRehydrator = ChainedStateRehydrator(
-            primary = primaryStateRehydrator,
-            additionalSteps = listOf(
-                RuntimeStateRehydrationStep {
-                    extensionRegistryRehydrator.rehydrate()
-                },
-                RuntimeStateRehydrationStep {
-                    worldEquationAuthority.activeVersion()
-                },
-                RuntimeStateRehydrationStep {
-                    worldEquationSafetyMonitor.reconcile()
-                },
-                RuntimeStateRehydrationStep {
-                    val head = worldModelRepository.loadHead()
-                    if (head != null) {
-                        val snapshot = requireNotNull(
-                            worldModelRepository.loadSnapshot(head.activeSnapshotId)
-                        ) { "WorldModel head points to missing snapshot" }
-                        require(snapshot.revision == head.revision) {
-                            "WorldModel head/snapshot revision mismatch"
-                        }
-                        require(snapshot.predecessorSnapshotId == head.predecessorSnapshotId)
-                    }
-                },
-                RuntimeStateRehydrationStep {
-                    goalPlans.rehydrate()
-                },
-                RuntimeStateRehydrationStep {
-                    learningAdaptations.rehydrate()
-                },
-                RuntimeStateRehydrationStep {
-                    thoughtGraph.rehydrate()
-                },
-                RuntimeStateRehydrationStep {
-                    fieldThoughtGraphProjection.reconcile()
-                },
-                RuntimeStateRehydrationStep {
-                    cognitionJournalIndex.reconcile()
-                },
-                RuntimeStateRehydrationStep {
-                    cognitiveSnapshotManager.replay(cognitiveEventJournal)
-                },
-                RuntimeStateRehydrationStep {
-                    cognitionReconciler.reconcile()
-                },
-                RuntimeStateRehydrationStep {
-                    evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
-                },
-                RuntimeStateRehydrationStep {
-                    generatedToolStateRepository.loadAll()
-                },
-                RuntimeStateRehydrationStep {
-                    privateGeneratedToolRuntime.artifactBootVerifier.verify()
-                },
-                RuntimeStateRehydrationStep {
-                    generatedToolBootRehydrator.rehydrateOrVerify()
-                },
-            ),
-        )
-
-        val bootCoordinator = BootCoordinator(
-            runtimeBootstrapper = object : RuntimeBootstrapper {
-                override suspend fun bootstrap() = Unit
-            },
-            storeVerifier = CompositeStoreVerifier(
-                probes = KernelBootStoreProbes(
-                    bootReadSession = bootReadSession,
-                    goalPlanRepository = goalPlanRepository,
-                    learningAdaptationRepository = learningAdaptationRepository,
-                    learningWatermarks = learningWatermarks,
-                    worldEquationHeads = worldEquationHeads,
-                    worldEquationSpecs = worldEquationSpecs,
-                    worldEquationEvidence = worldEquationEvidence,
-                    thoughtMatrixStateRepository = thoughtMatrixStateRepository,
-                    thoughtGraphDeltaRepository = thoughtGraphDeltaRepository,
-                    fieldThoughtGraphProjectionOutbox = fieldThoughtGraphProjectionOutbox,
-                    protectionRepository = protectionRepository,
-                    worldFormulaSnapshotRepository = worldFormulaSnapshotRepository,
-                    productiveWorldHeadRepository = productiveWorldHeadRepository,
-                    bootEngineCycleRepository = bootEngineCycleRepository,
-                    extensionRegistryRehydrator = extensionRegistryRehydrator,
-                    worldModelRepository = worldModelRepository,
-                    cognitiveModuleSnapshotRepository = cognitiveModuleSnapshotRepository,
-                    evolutionStore = evolutionStore,
-                    privateGeneratedToolRuntime = privateGeneratedToolRuntime,
-                ).create(),
-            ),
-            stateRehydrator = stateRehydrator,
-            photonRehydrator = PhotonRehydrator(
-                repository = store,
-                journalIndex = cognitionJournalIndex,
-                bootReadSession = bootReadSession,
-            ),
-            moduleRehydrator = object : ModuleRehydrator {
-                override suspend fun rehydrate(): ModuleRestoreSummary {
-                    matrix.rehydrate()
-                    return ModuleRestoreSummary(restored = registry.activeFields().size)
-                }
-            },
-            thoughtMatrixWarmup = object : ThoughtMatrixWarmup {
-                override suspend fun warmup() = ThoughtMatrixWarmupResult()
-            },
-            capabilityWarmup = object : CapabilityWarmup {
-                override suspend fun warmup(): CapabilityWarmupResult {
-                    val activeGeneratedToolIds = evolutionResources.generatedTools.snapshot()
-                        .filter { it.state == GeneratedToolState.ACTIVE }
-                        .map { it.manifest.toolId }
-                        .toSet()
-                    val providers = capabilityRegistry.all(includeUnavailable = true)
-                    val generatedProviderIds = providers.filter { it.providerType == ProviderType.GENERATED_TOOL }
-                        .map { it.providerId }
-                        .toSet()
-                    require(generatedProviderIds == activeGeneratedToolIds) {
-                        "Generated-tool capability registry differs from rehydrated ACTIVE tool set"
-                    }
-                    val availableCapabilityIds = providers
-                        .filter { it.state == ProviderState.ACTIVE || it.state == ProviderState.DEGRADED }
-                        .map { it.capabilityId }
-                        .toSet()
-                    val degradedCapabilityIds = providers
-                        .filter { it.state == ProviderState.DEGRADED }
-                        .map { it.capabilityId }
-                        .toSet()
-                    return CapabilityWarmupResult(
-                        availableCapabilities = availableCapabilityIds.size,
-                        degradedCapabilities = degradedCapabilityIds.size,
-                    )
-                }
-            },
-            deltaDetector = CompositeBootDeltaDetector(
-                listOf(
-                    CognitiveHeadConsistencyDeltaSource(
-                        worldHeads = productiveWorldHeadRepository,
-                        activeCycleFingerprint = {
-                            bootEngineCycleRepository.loadActive()?.fingerprint
-                        },
-                    )
-                )
-            ),
-            validator = DefaultBootValidator(),
-        )
+        val boot = KernelBootComposition(
+            foundation = foundation,
+            evolution = evolution,
+            world = world,
+            cognition = cognition,
+        ).compose()
+        val bootCoordinator = boot.bootCoordinator
 
         return LifeOsKernel(
             runtime = durableRuntime,
@@ -479,19 +338,4 @@ class LifeOsKernelFactory(
         )
     }
 
-    private suspend fun recoverExpiredLeases(recovery: LeaseRecoveryService) {
-        while (true) {
-            val result = recovery.recoverExpired(LEASE_RECOVERY_BATCH_SIZE)
-            if (result.scanned < LEASE_RECOVERY_BATCH_SIZE || result.recovered == 0) return
-        }
-    }
-
-    private companion object {
-        const val BOOT_PROBE_ADOPTION_ID = "__lifeos_boot_integrity_probe__"
-        const val LEASE_RECOVERY_BATCH_SIZE = 100
-        val TASK_LEASE_DURATION: Duration = Duration.ofSeconds(30)
-        val HEARTBEAT_INTERVAL: Duration = Duration.ofSeconds(10)
-        val LEASE_RECOVERY_INTERVAL: Duration = Duration.ofSeconds(30)
-        val SCHEDULER_RESCAN_INTERVAL: Duration = Duration.ofSeconds(5)
-    }
 }
