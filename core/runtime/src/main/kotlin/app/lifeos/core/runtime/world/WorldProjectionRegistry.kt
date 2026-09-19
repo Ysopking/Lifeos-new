@@ -262,8 +262,22 @@ class WorldProjectionRegistry(
             "Unknown world projection provider: $providerId"
         }
         val projection = provider.project(context)
+        val descriptor = provider.descriptor
         require(projection.providerId == providerId)
         require(projection.contextFingerprint == context.fingerprint())
+        require(projection.inputs.all { it.target.kind in descriptor.nodeKinds }) {
+            "World projection provider emitted undeclared node kind"
+        }
+        require(
+            projection.inputs
+                .flatMap { it.vector.dimensions() }
+                .all { it in descriptor.signalDimensions }
+        ) {
+            "World projection provider emitted undeclared signal dimension"
+        }
+        require(projection.relations.all { it.kind in descriptor.relationKinds }) {
+            "World projection provider emitted undeclared relation kind"
+        }
         return projection
     }
 }
