@@ -20,19 +20,10 @@ class WorldEquationActivationAuthority(
 ) {
     private val mutex = Mutex()
 
-    suspend fun activeVersion(): String = mutex.withLock {
-        // Pin the compiled baseline into the immutable durable spec vault even when an older
-        // deployment already seeded the equation head before the spec vault existed.
-        persistAndRegister(baseline)
-        val report = heads.loadReport()
-        require(!report.corrupted) {
-            "World equation head recovery required: ${report.message.orEmpty()}"
-        }
-        val head = report.head ?: seedBaseline()
-        requireNotNull(resolveRegistered(head.activeEquationVersion)) {
-            "Active world equation version cannot be recovered: ${head.activeEquationVersion}"
-        }
-        head.activeEquationVersion
+    suspend fun activeVersion(): String = activeHead().activeEquationVersion
+
+    suspend fun activeHead(): WorldEquationHead = mutex.withLock {
+        activeHeadLocked()
     }
 
     suspend fun registerCandidate(spec: WorldEquationSpec) = mutex.withLock {
@@ -42,7 +33,11 @@ class WorldEquationActivationAuthority(
     suspend fun promote(
         candidate: WorldEquationSpec,
         admission: WorldEquationPromotionAdmission,
+        expectedHeadFingerprint: String,
     ): WorldEquationHead = mutex.withLock {
+        require(expectedHeadFingerprint.matches(Regex("[0-9a-f]{64}"))) {
+            "World equation promotion requires an exact current head fingerprint"
+        }
         require(candidate.version == admission.candidateVersion) {
             "World equation promotion admission targets another version"
         }
@@ -63,6 +58,9 @@ class WorldEquationActivationAuthority(
                 "World equation head recovery required: ${report.message.orEmpty()}"
             }
             val current = report.head ?: seedBaseline()
+            require(current.fingerprint == expectedHeadFingerprint) {
+                "World equation promotion head changed since admission intent was prepared"
+            }
             val currentSpec = requireNotNull(resolveRegistered(current.activeEquationVersion)) {
                 "Current active world equation cannot be recovered"
             }
@@ -122,6 +120,21 @@ class WorldEquationActivationAuthority(
             }
         }
         error("World equation rollback CAS did not converge")
+    }
+
+    private suspend fun activeHeadLocked(): WorldEquationHead {
+        // Pin the compiled baseline into the immutable durable spec vault even when an older
+        // deployment already seeded the equation head before the spec vault existed.
+        persistAndRegister(baseline)
+        val report = heads.loadReport()
+        require(!report.corrupted) {
+            "World equation head recovery required: ${report.message.orEmpty()}"
+        }
+        val head = report.head ?: seedBaseline()
+        requireNotNull(resolveRegistered(head.activeEquationVersion)) {
+            "Active world equation version cannot be recovered: ${head.activeEquationVersion}"
+        }
+        return head
     }
 
     private suspend fun seedBaseline(): WorldEquationHead {

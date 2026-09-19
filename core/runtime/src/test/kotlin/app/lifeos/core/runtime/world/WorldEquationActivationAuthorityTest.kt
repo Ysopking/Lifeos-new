@@ -39,6 +39,7 @@ class WorldEquationActivationAuthorityTest {
         val promoted = authority.promote(
             candidate = candidate,
             admission = admission,
+            expectedHeadFingerprint = seeded.fingerprint,
         )
 
         assertEquals(2L, promoted.revision)
@@ -63,6 +64,7 @@ class WorldEquationActivationAuthorityTest {
         )
 
         assertEquals(baseline.version, first.activeVersion())
+        val baselineHead = first.activeHead()
         first.promote(
             candidate = candidate,
             admission = WorldEquationEvolutionAdmissionGate.admit(
@@ -75,6 +77,7 @@ class WorldEquationActivationAuthorityTest {
                     promotionDecisionId = "promotion:test-v2",
                 ),
             ),
+            expectedHeadFingerprint = baselineHead.fingerprint,
         )
         assertEquals(candidate.version, first.activeVersion())
 
@@ -121,10 +124,50 @@ class WorldEquationActivationAuthorityTest {
             authority.promote(
                 candidate = other,
                 admission = admission,
+                expectedHeadFingerprint = authority.activeHead().fingerprint,
             )
         }
     }
 
+
+
+    @Test
+    fun stalePromotionIntentCannotBeReplayedAfterHeadHistoryChanges() = runBlocking {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val candidate = changedCandidate(baseline, "lifeos-world-cognitive-v2")
+        val registry = InMemoryWorldEquationRegistry(listOf(baseline, candidate))
+        val heads = MemoryHeadRepository()
+        val specs = InMemoryWorldEquationSpecRepository()
+        val authority = WorldEquationActivationAuthority(
+            equations = registry,
+            heads = heads,
+            baseline = baseline,
+            specs = specs,
+        )
+        val originalHead = authority.activeHead()
+        val admission = WorldEquationEvolutionAdmissionGate.admit(
+            candidate = candidate,
+            baseline = baseline,
+            validation = validation("replay"),
+        )
+        authority.promote(
+            candidate = candidate,
+            admission = admission,
+            expectedHeadFingerprint = originalHead.fingerprint,
+        )
+        authority.rollbackToPredecessor(
+            expectedCurrentVersion = candidate.version,
+            rollbackDecisionId = "decision:replay-rollback",
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            authority.promote(
+                candidate = candidate,
+                admission = admission,
+                expectedHeadFingerprint = originalHead.fingerprint,
+            )
+        }
+    }
 
     @Test
     fun versionOnlyChangeIsNotNewPhysics() {
