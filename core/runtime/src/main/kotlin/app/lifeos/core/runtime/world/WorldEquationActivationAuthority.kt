@@ -64,6 +64,41 @@ class WorldEquationActivationAuthority(
         error("World equation head CAS did not converge")
     }
 
+    suspend fun rollbackToPredecessor(
+        expectedCurrentVersion: String,
+        rollbackDecisionId: String,
+    ): WorldEquationHead = mutex.withLock {
+        require(expectedCurrentVersion.isNotBlank())
+        require(rollbackDecisionId.isNotBlank())
+
+        repeat(MAX_CAS_ATTEMPTS) {
+            val report = heads.loadReport()
+            require(!report.corrupted) {
+                "World equation head recovery required: ${report.message.orEmpty()}"
+            }
+            val current = report.head ?: seedBaseline()
+            require(current.activeEquationVersion == expectedCurrentVersion) {
+                "World equation rollback current version mismatch"
+            }
+            val predecessor = requireNotNull(current.predecessorEquationVersion) {
+                "World equation rollback requires a predecessor version"
+            }
+            requireNotNull(equations.resolve(predecessor)) {
+                "World equation rollback predecessor is not registered: $predecessor"
+            }
+            val next = WorldEquationHead.create(
+                revision = Math.addExact(current.revision, 1L),
+                activeEquationVersion = predecessor,
+                predecessorEquationVersion = current.activeEquationVersion,
+                sourcePromotionId = "rollback:$rollbackDecisionId",
+            )
+            if (heads.compareAndSet(current.revision, next)) {
+                return@withLock next
+            }
+        }
+        error("World equation rollback CAS did not converge")
+    }
+
     private suspend fun seedBaseline(): WorldEquationHead {
         equations.register(baseline)
         val initial = WorldEquationHead.create(
