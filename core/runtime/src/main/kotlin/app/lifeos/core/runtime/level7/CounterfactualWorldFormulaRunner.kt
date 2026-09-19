@@ -2,6 +2,7 @@ package app.lifeos.core.runtime.level7
 
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.world.WorldFormulaExecution
+import app.lifeos.core.runtime.world.WorldFormulaExecutor
 import app.lifeos.core.runtime.world.WorldFormulaExecutionState
 import app.lifeos.core.runtime.world.WorldFormulaRequest
 import app.lifeos.core.runtime.world.WorldFormulaSnapshot
@@ -40,10 +41,18 @@ data class CounterfactualWorldSnapshot(
 }
 
 class CounterfactualWorldFormulaRunner(
-    private val evaluate: suspend (WorldFormulaRequest) -> WorldFormulaExecution,
+    private val executor: WorldFormulaExecutor,
 ) {
+    init {
+        require(
+            executor.scope == WorldFormulaExecutionScope.COUNTERFACTUAL
+        ) {
+            "Counterfactual runner requires a counterfactual executor before evaluation"
+        }
+    }
+
     suspend fun run(input: CounterfactualWorldFormulaInput): CounterfactualWorldSnapshot {
-        val execution = evaluate(input.request)
+        val execution = executor.evaluate(input.request)
         require(
             execution.scope == WorldFormulaExecutionScope.COUNTERFACTUAL
         ) {

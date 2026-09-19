@@ -21,6 +21,9 @@ class WorldEquationActivationAuthority(
     private val mutex = Mutex()
 
     suspend fun activeVersion(): String = mutex.withLock {
+        // Pin the compiled baseline into the immutable durable spec vault even when an older
+        // deployment already seeded the equation head before the spec vault existed.
+        persistAndRegister(baseline)
         val report = heads.loadReport()
         require(!report.corrupted) {
             "World equation head recovery required: ${report.message.orEmpty()}"
