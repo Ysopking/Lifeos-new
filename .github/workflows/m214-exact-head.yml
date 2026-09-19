@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - "optimization/m214-ci-exact-head"
-      - "optimization/m215-ledger-runtime-split"
+      - "optimization/m215*"
+      - "optimization/m216*"
   workflow_dispatch:
 
 permissions:
