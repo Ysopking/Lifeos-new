@@ -10,6 +10,7 @@ import app.lifeos.core.runtime.informationasset.InformationAssetPhotonContract
 import app.lifeos.core.runtime.informationasset.InformationAssetResolutionState
 import app.lifeos.core.runtime.informationasset.InformationAssetRevision
 import app.lifeos.core.runtime.informationasset.InformationAssetRevisionId
+import app.lifeos.core.runtime.informationasset.InformationAssetRevisionRef
 import app.lifeos.core.runtime.informationasset.InformationClaimState
 
 object InformationAssetArtifactBridgeContract {
@@ -31,6 +32,13 @@ data class InformationAssetArtifactSourceBinding(
         require(photonRevision > 0) { "InformationAsset source Photon revision must be positive" }
         require(domainIds.isNotEmpty()) { "InformationAsset artifact source requires at least one domain" }
     }
+
+    val sourceRevision: InformationAssetRevisionRef
+        get() = InformationAssetRevisionRef(
+            assetId = assetId,
+            revisionId = revisionId,
+            photonId = photonId,
+        )
 
     fun sourceDescriptor(): String = buildString {
         append(InformationAssetArtifactBridgeContract.SOURCE_SCHEMA)
@@ -90,6 +98,9 @@ data class InformationAssetArtifactContributionBatch(
     val source: InformationAssetArtifactSourceBinding,
     val contributions: List<ArtifactContribution>,
 ) {
+    val sourceRevision: InformationAssetRevisionRef
+        get() = source.sourceRevision
+
     init {
         require(contributions.isNotEmpty()) {
             "InformationAsset bridge requires at least one non-rejected claim"
@@ -138,6 +149,7 @@ class InformationAssetArtifactContributionFactory {
                     confidence = claim.confidence,
                     content = claim.statement,
                     contributedAt = createdAt,
+                    claimIds = setOf(claim.id.value),
                 )
             }
             .toList()
