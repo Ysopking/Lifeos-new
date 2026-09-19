@@ -30,6 +30,31 @@ class AndroidStorageIntelligenceRuntimeTest {
         }
     }
 
+
+    @Test
+    fun `nested pager resume stays inside active subtree before advancing`() {
+        val root = Files.createTempDirectory("lifeos-storage-nested-resume").toFile()
+        try {
+            root.resolve("a").mkdirs()
+            root.resolve("b").mkdirs()
+            root.resolve("a/1.txt").writeText("1")
+            root.resolve("a/2.txt").writeText("2")
+            root.resolve("b/1.txt").writeText("3")
+
+            val first = StorageTreePager.page(root, null, 1)
+            assertEquals(listOf("a/1.txt"), first.files.map { it.relativePath })
+
+            val second = StorageTreePager.page(root, first.nextPosition, 1)
+            assertEquals(listOf("a/2.txt"), second.files.map { it.relativePath })
+
+            val third = StorageTreePager.page(root, second.nextPosition, 1)
+            assertEquals(listOf("b/1.txt"), third.files.map { it.relativePath })
+            assertTrue(third.complete)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test
     fun `lifeos trash is excluded from the all-files inventory`() {
         val root = Files.createTempDirectory("lifeos-storage-trash").toFile()
@@ -63,6 +88,8 @@ class AndroidStorageIntelligenceRuntimeTest {
         assertEquals("Download/photo-copy.jpg", duplicate.relativePath)
         assertEquals(100, duplicate.reclaimableBytes)
         assertTrue(duplicate.safeToTrashAfterOwnerApproval)
+        assertEquals("primary", duplicate.verificationPeerVolumeId)
+        assertEquals("Pictures/photo.jpg", duplicate.verificationPeerRelativePath)
         assertTrue("Pictures/photo.jpg" in duplicate.reason)
     }
 
@@ -79,6 +106,36 @@ class AndroidStorageIntelligenceRuntimeTest {
         ).single { it.kind == StorageCleanupKind.EXACT_DUPLICATE }
 
         assertFalse(duplicate.safeToTrashAfterOwnerApproval)
+    }
+
+    @Test
+    fun `recent temporary files and installers are not cleanup candidates`() {
+        val now = 2_000_000_000_000L
+        val files = listOf(
+            indexed(
+                "Download/active.part",
+                10,
+                AndroidFileCategory.UNKNOWN,
+                null,
+                modifiedAtMillis = now - 60_000L,
+            ),
+            indexed(
+                "Download/new.apk",
+                100,
+                AndroidFileCategory.ARCHIVE,
+                null,
+                modifiedAtMillis = now - 24L * 60L * 60L * 1000L,
+            ),
+        )
+
+        val candidates = StorageCleanupPlanner.plan(
+            duplicateGroups = emptyList(),
+            reviewEntries = files,
+            nowMillis = now,
+        )
+
+        assertTrue(candidates.none { it.kind == StorageCleanupKind.TEMPORARY_FILE })
+        assertTrue(candidates.none { it.kind == StorageCleanupKind.STALE_INSTALLER })
     }
 
     @Test
@@ -105,6 +162,23 @@ class AndroidStorageIntelligenceRuntimeTest {
     }
 
     @Test
+    fun `camera and established media folders are never reorganized`() {
+        val files = listOf(
+            indexed("DCIM/Camera/photo.jpg", 100, AndroidFileCategory.IMAGE, null),
+            indexed("Pictures/Album/cover.jpg", 100, AndroidFileCategory.IMAGE, null),
+            indexed("Music/Artist/song.mp3", 100, AndroidFileCategory.AUDIO, null),
+        )
+
+        val candidates = StorageCleanupPlanner.plan(
+            duplicateGroups = emptyList(),
+            reviewEntries = files,
+            nowMillis = 2_000_000_000_000L,
+        )
+
+        assertTrue(candidates.none { it.kind == StorageCleanupKind.REORGANIZE })
+    }
+
+    @Test
     fun `normal documents receive organization suggestions but not deletion authority`() {
         val file = indexed(
             "Download/report.pdf",
@@ -128,12 +202,13 @@ class AndroidStorageIntelligenceRuntimeTest {
         size: Long,
         category: AndroidFileCategory,
         fingerprint: String?,
+        modifiedAtMillis: Long = 1L,
     ) = StorageIndexedFile(
         volumeId = "primary",
         relativePath = path,
         absolutePath = "/storage/emulated/0/" + path,
         sizeBytes = size,
-        modifiedAtMillis = 1L,
+        modifiedAtMillis = modifiedAtMillis,
         category = category,
         suspectedEncrypted = false,
         contentFingerprint = fingerprint,

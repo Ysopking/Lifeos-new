@@ -21,6 +21,7 @@ object PrivateOwnerEffectAuthority {
     const val REMINDER_DELIVERY_RESOURCE = "goal://local-reminder/delivery"
     const val SHARE_CACHE_RESOURCE = "file://private-cache/lifeos-share"
     const val SHARE_HANDOFF_RESOURCE = "external-app://android-share-chooser"
+    const val STORAGE_MAINTENANCE_RESOURCE_PREFIX = "file://shared-storage/lifeos-maintenance/"
 
     suspend fun <T> expose(
         context: Context,
@@ -57,4 +58,14 @@ object PrivateOwnerEffectAuthority {
         resource = SHARE_HANDOFF_RESOURCE,
         scope = PrivateOwnerPolicyBaseline.GOAL_SCOPE,
     )
+
+    fun storageMaintenanceRequest(resourceSuffix: String): OwnerEffectRequest {
+        require(resourceSuffix.isNotBlank())
+        return OwnerEffectRequest(
+            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+            effect = OwnerEffectType.FILE_WRITE,
+            resource = STORAGE_MAINTENANCE_RESOURCE_PREFIX + resourceSuffix,
+            scope = PrivateOwnerPolicyBaseline.STORAGE_MAINTENANCE_SCOPE,
+        )
+    }
 }
