@@ -5,6 +5,11 @@ import android.os.Build
 import android.os.Environment
 import android.os.storage.StorageManager
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.resource.HardwareStateSnapshot
+import app.lifeos.core.runtime.resource.HardwareWorkPriority
+import app.lifeos.core.runtime.resource.ResourceBudgetQuota
+import app.lifeos.core.runtime.resource.ResourceBudgetUsage
+import app.lifeos.next.kernel.HardwareResourceDecision
 import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
 import java.io.File
 import java.io.RandomAccessFile
@@ -14,6 +19,9 @@ import java.time.Instant
 import java.util.PriorityQueue
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 
 internal enum class StorageCleanupKind {
@@ -69,6 +77,11 @@ internal data class StorageCleanupCandidate(
 internal data class StorageIntelligenceSnapshot(
     val capturedAt: Instant,
     val phase: StorageIntelligencePhase,
+    val hardwareSnapshotFingerprint: String,
+    val hardwareWorldFormulaBound: Boolean,
+    val processingParallelism: Int,
+    val fingerprintChunkBytes: Long,
+    val fingerprintBudgetBytes: Long,
     val indexedFiles: Long,
     val indexedBytes: Long,
     val fullyFingerprintFiles: Long,
@@ -106,8 +119,9 @@ internal class AndroidStorageIntelligenceRuntime(
         val discoveredRoots = roots()
         require(discoveredRoots.isNotEmpty()) { "No owner-readable shared-storage root is available" }
         val hw = hardware.currentHardwareSnapshot()
-        val metadataBudget = metadataBudget(hw.availableProcessors, hw.batteryFraction, hw.charging, hw.thermalState.name)
-        val fingerprintBudget = fingerprintBudget(hw.batteryFraction, hw.charging, hw.thermalState.name)
+        val processing = resolveProcessingProfile(hw)
+        val metadataBudget = processing.metadataFileBudget
+        val fingerprintBudget = processing.fingerprintByteBudget
 
         var phase = currentPhase()
         var batchScannedFiles = 0
@@ -166,7 +180,12 @@ internal class AndroidStorageIntelligenceRuntime(
             val scanId = requireNotNull(prefs.getString(KEY_SCAN_ID, null)) {
                 "Content fingerprint phase requires the completed inventory scan id"
             }
-            val result = fingerprintPending(scanId, fingerprintBudget)
+            val result = fingerprintPending(
+                scanId = scanId,
+                budgetBytes = fingerprintBudget,
+                parallelReaders = processing.parallelReaders,
+                chunkBytes = processing.chunkBytes,
+            )
             batchFingerprintBytes += result.bytesRead
             unreadable += result.unreadable
         }
@@ -190,6 +209,11 @@ internal class AndroidStorageIntelligenceRuntime(
         StorageIntelligenceSnapshot(
             capturedAt = Instant.now(),
             phase = phase,
+            hardwareSnapshotFingerprint = hw.fingerprint(),
+            hardwareWorldFormulaBound = processing.worldFormulaBound,
+            processingParallelism = processing.parallelReaders,
+            fingerprintChunkBytes = processing.chunkBytes,
+            fingerprintBudgetBytes = processing.fingerprintByteBudget,
             indexedFiles = summary.indexedFiles,
             indexedBytes = summary.indexedBytes,
             fullyFingerprintFiles = summary.fullyFingerprintedFiles,
@@ -212,63 +236,254 @@ internal class AndroidStorageIntelligenceRuntime(
             ?.let { runCatching { StorageIntelligencePhase.valueOf(it) }.getOrNull() }
             ?: StorageIntelligencePhase.METADATA_SCAN
 
-    private fun fingerprintPending(scanId: String, budgetBytes: Long): FingerprintSliceResult {
+    private suspend fun fingerprintPending(
+        scanId: String,
+        budgetBytes: Long,
+        parallelReaders: Int,
+        chunkBytes: Long,
+    ): FingerprintSliceResult = coroutineScope {
+        require(parallelReaders > 0)
+        require(chunkBytes > 0L)
         var remaining = budgetBytes
         var readBytes = 0L
         var unreadable = 0
-        val pending = inventory.pendingHashEntries(HASH_CANDIDATES_PER_SLICE)
 
-        for (entry in pending) {
-            if (remaining <= 0L) break
-            val file = File(entry.absolutePath)
-            if (!file.exists() || !file.isFile || !file.canRead()) {
-                unreadable += 1
-                continue
-            }
-            val liveSize = file.length().coerceAtLeast(0L)
-            val liveModified = file.lastModified().coerceAtLeast(0L)
-            if (liveSize != entry.sizeBytes || liveModified != entry.modifiedAtMillis) {
-                inventory.upsertMetadata(
-                    scanId = scanId,
-                    volumeId = entry.volumeId,
-                    files = listOf(StorageTreePager.Entry(file, entry.relativePath)),
-                )
-                continue
-            }
-
-            var offset = entry.hashOffsetBytes
-            var chain = entry.hashChain ?: initialChain(entry.sizeBytes)
-            if (entry.sizeBytes == 0L) {
-                inventory.updateHashProgress(entry, 0L, chain, chain)
-                continue
-            }
-
-            val maxRead = minOf(CHUNK_BYTES, remaining, entry.sizeBytes - offset)
-            if (maxRead <= 0L) continue
-            val chunk = ByteArray(maxRead.toInt())
-            val actual = runCatching {
-                RandomAccessFile(file, "r").use { raf ->
-                    raf.seek(offset)
-                    raf.read(chunk)
-                }
-            }.getOrElse {
-                unreadable += 1
-                -1
-            }
-            if (actual <= 0) continue
-
-            val chunkHash = sha256(chunk, actual)
-            chain = sha256String(
-                "lifeos-content-chain/v1|$chain|$offset|$actual|$chunkHash"
+        while (remaining > 0L) {
+            val pending = inventory.pendingHashEntries(
+                (parallelReaders * HASH_CANDIDATES_PER_READER).coerceAtLeast(parallelReaders)
             )
-            offset += actual
-            readBytes += actual
-            remaining -= actual
-            val final = if (offset == entry.sizeBytes) chain else null
-            inventory.updateHashProgress(entry, offset, chain, final)
+            if (pending.isEmpty()) break
+
+            val assignments = mutableListOf<FingerprintReadAssignment>()
+            var madeProgress = false
+
+            for (entry in pending) {
+                if (assignments.size >= parallelReaders || remaining <= 0L) break
+                val file = File(entry.absolutePath)
+                if (!file.exists() || !file.isFile || !file.canRead()) {
+                    unreadable += 1
+                    continue
+                }
+                val liveSize = file.length().coerceAtLeast(0L)
+                val liveModified = file.lastModified().coerceAtLeast(0L)
+                if (liveSize != entry.sizeBytes || liveModified != entry.modifiedAtMillis) {
+                    inventory.upsertMetadata(
+                        scanId = scanId,
+                        volumeId = entry.volumeId,
+                        files = listOf(StorageTreePager.Entry(file, entry.relativePath)),
+                    )
+                    madeProgress = true
+                    continue
+                }
+
+                val chain = entry.hashChain ?: initialChain(entry.sizeBytes)
+                if (entry.sizeBytes == 0L) {
+                    inventory.updateHashProgress(entry, 0L, chain, chain)
+                    madeProgress = true
+                    continue
+                }
+
+                val maxRead = minOf(chunkBytes, remaining, entry.sizeBytes - entry.hashOffsetBytes)
+                if (maxRead <= 0L) continue
+                assignments += FingerprintReadAssignment(
+                    entry = entry,
+                    file = file,
+                    offset = entry.hashOffsetBytes,
+                    bytes = maxRead.toInt(),
+                    previousChain = chain,
+                )
+                remaining -= maxRead
+            }
+
+            if (assignments.isEmpty()) {
+                if (!madeProgress) break
+                continue
+            }
+
+            val results = assignments.map { assignment ->
+                async(Dispatchers.IO) { readFingerprintChunk(assignment) }
+            }.awaitAll()
+
+            var unusedReservation = 0L
+            results.forEach { result ->
+                when (result) {
+                    is FingerprintReadResult.Success -> {
+                        val nextChain = sha256String(
+                            "lifeos-content-chain/v1|" +
+                                result.assignment.previousChain + "|" +
+                                result.assignment.offset + "|" +
+                                result.actualBytes + "|" +
+                                result.chunkHash
+                        )
+                        val nextOffset = result.assignment.offset + result.actualBytes
+                        val final = if (nextOffset == result.assignment.entry.sizeBytes) nextChain else null
+                        inventory.updateHashProgress(
+                            result.assignment.entry,
+                            nextOffset,
+                            nextChain,
+                            final,
+                        )
+                        readBytes += result.actualBytes
+                        unusedReservation += result.assignment.bytes - result.actualBytes
+                    }
+
+                    is FingerprintReadResult.Changed -> {
+                        inventory.upsertMetadata(
+                            scanId = scanId,
+                            volumeId = result.assignment.entry.volumeId,
+                            files = listOf(
+                                StorageTreePager.Entry(
+                                    result.assignment.file,
+                                    result.assignment.entry.relativePath,
+                                )
+                            ),
+                        )
+                        unusedReservation += result.assignment.bytes.toLong()
+                    }
+
+                    is FingerprintReadResult.Unreadable -> {
+                        unreadable += 1
+                        unusedReservation += result.assignment.bytes.toLong()
+                    }
+                }
+            }
+            remaining += unusedReservation
         }
-        return FingerprintSliceResult(readBytes, unreadable)
+
+        FingerprintSliceResult(readBytes, unreadable)
     }
+
+    private fun readFingerprintChunk(
+        assignment: FingerprintReadAssignment,
+    ): FingerprintReadResult {
+        val chunk = ByteArray(assignment.bytes)
+        val actual = runCatching {
+            RandomAccessFile(assignment.file, "r").use { raf ->
+                raf.seek(assignment.offset)
+                raf.read(chunk)
+            }
+        }.getOrElse {
+            return FingerprintReadResult.Unreadable(assignment)
+        }
+        if (actual <= 0) return FingerprintReadResult.Unreadable(assignment)
+        if (
+            assignment.file.length().coerceAtLeast(0L) != assignment.entry.sizeBytes ||
+            assignment.file.lastModified().coerceAtLeast(0L) != assignment.entry.modifiedAtMillis
+        ) {
+            return FingerprintReadResult.Changed(assignment)
+        }
+        return FingerprintReadResult.Success(
+            assignment = assignment,
+            actualBytes = actual,
+            chunkHash = sha256(chunk, actual),
+        )
+    }
+
+    private suspend fun resolveProcessingProfile(
+        snapshot: HardwareStateSnapshot,
+    ): HardwareStorageProcessingProfile {
+        val hardQuota = ResourceBudgetQuota(
+            elapsedMillis = 120_000L,
+            workUnits = 120_000L,
+            memoryBytes = 512L * 1024L * 1024L,
+            ioBytes = 2L * 1024L * 1024L * 1024L,
+            networkBytes = 0L,
+            candidates = 8_192L,
+        )
+        val requested = ResourceBudgetUsage(
+            elapsedMillis = 120_000L,
+            workUnits = 120_000L,
+            memoryBytes = 512L * 1024L * 1024L,
+            ioBytes = 2L * 1024L * 1024L * 1024L,
+            networkBytes = 0L,
+            candidates = 8_192L,
+        )
+        val priority = if (
+            snapshot.charging == true &&
+            snapshot.computeHeadroom() >= 0.50 &&
+            snapshot.thermalHeadroom() >= 0.80
+        ) {
+            HardwareWorkPriority.HIGH
+        } else {
+            HardwareWorkPriority.NORMAL
+        }
+
+        return when (val decision = hardware.evaluate(hardQuota, requested, priority)) {
+            is HardwareResourceDecision.Blocked -> HardwareStorageProcessingProfile(
+                metadataFileBudget = 64,
+                fingerprintByteBudget = 0L,
+                parallelReaders = 1,
+                chunkBytes = MIN_CHUNK_BYTES,
+                worldFormulaBound = false,
+            )
+
+            is HardwareResourceDecision.Ready -> {
+                val quota = decision.plan.effectiveQuota
+                val compute = snapshot.computeHeadroom()
+                val memory = snapshot.memoryHeadroom() ?: 0.70
+                val cpuIdle = 1.0 - (snapshot.cpuLoadFraction ?: 0.0)
+                val parallelism = (
+                    snapshot.availableProcessors.toDouble() *
+                        compute *
+                        cpuIdle.coerceIn(0.25, 1.0)
+                    ).toInt()
+                    .coerceIn(1, MAX_PARALLEL_READERS)
+                val memoryPerReader = (quota.memoryBytes / parallelism.coerceAtLeast(1))
+                    .coerceAtLeast(MIN_CHUNK_BYTES)
+                val preferredChunk = when {
+                    snapshot.charging == true && memory >= 0.60 && compute >= 0.60 -> BOOST_CHUNK_BYTES
+                    memory >= 0.35 && compute >= 0.35 -> NORMAL_CHUNK_BYTES
+                    else -> MIN_CHUNK_BYTES
+                }
+                val chunk = minOf(preferredChunk, memoryPerReader / 4L)
+                    .coerceIn(MIN_CHUNK_BYTES, BOOST_CHUNK_BYTES)
+                HardwareStorageProcessingProfile(
+                    metadataFileBudget = quota.candidates
+                        .coerceIn(64L, 8_192L)
+                        .toInt(),
+                    fingerprintByteBudget = quota.ioBytes
+                        .coerceIn(0L, 2L * 1024L * 1024L * 1024L),
+                    parallelReaders = parallelism,
+                    chunkBytes = chunk,
+                    worldFormulaBound = true,
+                )
+            }
+        }
+    }
+
+    private data class FingerprintReadAssignment(
+        val entry: StorageInventoryEntry,
+        val file: File,
+        val offset: Long,
+        val bytes: Int,
+        val previousChain: String,
+    )
+
+    private sealed interface FingerprintReadResult {
+        val assignment: FingerprintReadAssignment
+
+        data class Success(
+            override val assignment: FingerprintReadAssignment,
+            val actualBytes: Int,
+            val chunkHash: String,
+        ) : FingerprintReadResult
+
+        data class Changed(
+            override val assignment: FingerprintReadAssignment,
+        ) : FingerprintReadResult
+
+        data class Unreadable(
+            override val assignment: FingerprintReadAssignment,
+        ) : FingerprintReadResult
+    }
+
+    private data class HardwareStorageProcessingProfile(
+        val metadataFileBudget: Int,
+        val fingerprintByteBudget: Long,
+        val parallelReaders: Int,
+        val chunkBytes: Long,
+        val worldFormulaBound: Boolean,
+    )
 
     private fun initialChain(sizeBytes: Long): String =
         sha256String("lifeos-content-chain/v1|size=$sizeBytes")
@@ -285,30 +500,6 @@ internal class AndroidStorageIntelligenceRuntime(
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
-    private fun metadataBudget(
-        processors: Int,
-        battery: Double?,
-        charging: Boolean?,
-        thermal: String,
-    ): Int = when {
-        thermal in CRITICAL_THERMAL -> 64
-        battery != null && battery < 0.15 && charging != true -> 128
-        charging == true && processors >= 6 -> 4_000
-        processors >= 4 -> 2_000
-        else -> 750
-    }
-
-    private fun fingerprintBudget(
-        battery: Double?,
-        charging: Boolean?,
-        thermal: String,
-    ): Long = when {
-        thermal in CRITICAL_THERMAL -> 0L
-        battery != null && battery < 0.20 && charging != true -> 0L
-        charging == true -> 512L * 1024L * 1024L
-        else -> 96L * 1024L * 1024L
-    }
-
     private data class FingerprintSliceResult(val bytesRead: Long, val unreadable: Int)
 
     private companion object {
@@ -317,9 +508,11 @@ internal class AndroidStorageIntelligenceRuntime(
         const val KEY_SCAN_ID = "scan-id"
         const val KEY_ROOT_INDEX = "root-index"
         const val KEY_CURSOR = "cursor"
-        const val HASH_CANDIDATES_PER_SLICE = 512
-        const val CHUNK_BYTES = 4L * 1024L * 1024L
-        val CRITICAL_THERMAL = setOf("CRITICAL", "EMERGENCY", "SHUTDOWN")
+        const val HASH_CANDIDATES_PER_READER = 8
+        const val MAX_PARALLEL_READERS = 8
+        const val MIN_CHUNK_BYTES = 1L * 1024L * 1024L
+        const val NORMAL_CHUNK_BYTES = 4L * 1024L * 1024L
+        const val BOOST_CHUNK_BYTES = 16L * 1024L * 1024L
     }
 }
 
