@@ -162,6 +162,10 @@ import app.lifeos.core.runtime.world.CognitiveCycleId
 import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
 import app.lifeos.core.runtime.world.ProductiveWorldHeadCommitter
+import app.lifeos.core.runtime.world.SelfStateWorldEquationProfile
+import app.lifeos.core.runtime.world.SelfStateWorldFormulaEvaluator
+import app.lifeos.core.runtime.world.SelfStateWorldFormulaRuntimeRegistry
+import app.lifeos.core.runtime.world.SelfStateWorldFormulaSnapshotRepository
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
 import app.lifeos.core.runtime.world.WorldEquationActivationAuthority
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
@@ -424,6 +428,17 @@ class LifeOsKernelFactory(
         val worldFormulaCoordinator = WorldFormulaCoordinator(
             equations = worldEquationRegistry,
             snapshots = worldFormulaSnapshotRepository,
+        )
+        val selfStateWorldEquationProfile = SelfStateWorldEquationProfile()
+        SelfStateWorldFormulaRuntimeRegistry.install(
+            SelfStateWorldFormulaEvaluator(
+                profile = selfStateWorldEquationProfile,
+                coordinator = WorldFormulaCoordinator(
+                    equations = InMemoryWorldEquationRegistry(listOf(selfStateWorldEquationProfile.spec)),
+                    snapshots = SelfStateWorldFormulaSnapshotRepository(),
+                    captureCognitiveSnapshots = false,
+                ),
+            )
         )
         val productiveWorldHeadCommitter = ProductiveWorldHeadCommitter(
             snapshots = worldFormulaSnapshotRepository,

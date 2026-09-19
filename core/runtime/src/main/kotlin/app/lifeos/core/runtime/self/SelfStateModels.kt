@@ -20,12 +20,14 @@ data class SelfPhotonState(
     val livePhotonCount: Long?,
     val tombstonedPhotonCount: Long?,
     val indexFingerprint: String?,
+    val headFingerprint: String? = null,
 ) {
     init {
         validateCount(latestRevisionCount, "latestRevisionCount")
         validateCount(livePhotonCount, "livePhotonCount")
         validateCount(tombstonedPhotonCount, "tombstonedPhotonCount")
         validateOptionalFingerprint(indexFingerprint, "indexFingerprint")
+        validateOptionalFingerprint(headFingerprint, "headFingerprint")
     }
 }
 
@@ -109,6 +111,7 @@ data class SelfHealthState(
     val recovering: Int?,
     val quarantined: Int?,
     val disabled: Int?,
+    val unknown: Int? = null,
 ) {
     init {
         validateCount(healthy, "healthy")
@@ -117,6 +120,7 @@ data class SelfHealthState(
         validateCount(recovering, "recovering")
         validateCount(quarantined, "quarantined")
         validateCount(disabled, "disabled")
+        validateCount(unknown, "unknown")
     }
 }
 
@@ -179,11 +183,7 @@ data class LifeOsSelfStateSnapshot(
 ) {
     val authorityFingerprint: String
         get() = SelfStateFingerprint.authorityFingerprint(
-            photon = photon,
-            memory = memory,
             world = world,
-            runtime = runtime,
-            tools = tools,
         )
 
     val stateFingerprint: String

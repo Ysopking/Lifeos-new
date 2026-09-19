@@ -108,6 +108,31 @@ class AutomaticHealthEscalationOrchestratorTest {
     }
 
     @Test
+    fun nonActionableHealthEvidenceDoesNotEnterEscalationLadder() = runTest {
+        val selected = mutableListOf<EscalationLevel>()
+        val graph = HealthGraph()
+        orchestrator(graph, recoveryAvailable = true, selected).start()
+        runCurrent()
+
+        val nodeId = HealthNodeId("diagnostic:self-observation")
+        graph.register(nodeId, HealthScope.RUNTIME)
+        graph.record(
+            HealthObservation(
+                nodeId = nodeId,
+                state = HealthState.UNHEALTHY,
+                observedAt = NOW,
+                source = "diagnostic",
+                message = "observed-only",
+                actionable = false,
+            )
+        )
+        runCurrent()
+
+        assertEquals(emptyList(), selected)
+        assertEquals(HealthState.UNHEALTHY, graph.node(nodeId)?.state)
+    }
+
+    @Test
     fun protectionCriticalStorageCorruptionJumpsToL6() = runTest {
         val selected = mutableListOf<EscalationLevel>()
         val graph = HealthGraph()

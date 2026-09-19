@@ -104,7 +104,8 @@ class SelfStateProjector {
             },
             livePhotonCount = photonReport?.livePhotonCount?.toLong(),
             tombstonedPhotonCount = photonReport?.tombstonedPhotonCount?.toLong(),
-            indexFingerprint = photonReport?.takeUnless { photonCorrupt }?.let(::photonIndexFingerprint),
+            indexFingerprint = photonReport?.takeUnless { photonCorrupt }?.let(::photonIndexIdentityFingerprint),
+            headFingerprint = photonReport?.takeUnless { photonCorrupt }?.let(::photonIndexHeadFingerprint),
         )
 
         val memorySnapshot = value(SelfObservationDomain.MEMORY, inputs.memory, issues)
@@ -160,13 +161,19 @@ class SelfStateProjector {
         )
 
         val healthSnapshot = value(SelfObservationDomain.HEALTH, inputs.health, issues)
+        // The self-observation controller's own derived health node is output evidence, not input
+        // evidence. Excluding it prevents a DEGRADED/CRITICAL assessment from feeding itself back
+        // into the next assessment while every other productive HealthGraph node remains visible.
+        val observedHealthNodes = healthSnapshot?.nodes
+            ?.filterNot { it.id.value == SELF_OBSERVATION_HEALTH_NODE_ID }
         val health = SelfHealthState(
-            healthy = healthSnapshot?.nodes?.count { it.state == HealthState.HEALTHY },
-            degraded = healthSnapshot?.nodes?.count { it.state == HealthState.DEGRADED },
-            unhealthy = healthSnapshot?.nodes?.count { it.state == HealthState.UNHEALTHY },
-            recovering = healthSnapshot?.nodes?.count { it.state == HealthState.RECOVERING },
-            quarantined = healthSnapshot?.nodes?.count { it.state == HealthState.QUARANTINED },
-            disabled = healthSnapshot?.nodes?.count { it.state == HealthState.DISABLED },
+            healthy = observedHealthNodes?.count { it.state == HealthState.HEALTHY },
+            degraded = observedHealthNodes?.count { it.state == HealthState.DEGRADED },
+            unhealthy = observedHealthNodes?.count { it.state == HealthState.UNHEALTHY },
+            recovering = observedHealthNodes?.count { it.state == HealthState.RECOVERING },
+            quarantined = observedHealthNodes?.count { it.state == HealthState.QUARANTINED },
+            disabled = observedHealthNodes?.count { it.state == HealthState.DISABLED },
+            unknown = observedHealthNodes?.count { it.state == HealthState.UNKNOWN },
         )
 
         val repairs = value(SelfObservationDomain.RECOVERY, inputs.recovery, issues)
@@ -231,19 +238,42 @@ class SelfStateProjector {
         }
     }
 
-    private fun photonIndexFingerprint(report: PhotonIndexReport): String = StableFieldIds.fingerprint(
-        "lifeos-self-photon-index/v1",
-        report.formatVersion.toString(),
-        report.entryCount.toString(),
-        report.livePhotonCount.toString(),
-        report.tombstonedPhotonCount.toString(),
-        *report.latestRefs.entries
-            .sortedBy { it.key.value }
-            .map { entry ->
-                "head:" + entry.key.value + ":" + entry.value.revision.toString()
-            }
-            .toTypedArray(),
-    )
+    /**
+     * Canonical identity of the current live Photon population at capture time.
+     *
+     * Revision numbers and total historical entry count are deliberately excluded so revision-only
+     * churn remains distinguishable from population changes. This is state evidence, not the
+     * restart-stable control-plane authority seal. Exact head-state drift is captured separately by
+     * [photonIndexHeadFingerprint].
+     */
+    private fun photonIndexIdentityFingerprint(report: PhotonIndexReport): String =
+        StableFieldIds.fingerprint(
+            "lifeos-self-photon-index-identity/v1",
+            report.formatVersion.toString(),
+            report.livePhotonCount.toString(),
+            report.tombstonedPhotonCount.toString(),
+            *report.latestRefs.keys
+                .map { it.value }
+                .sorted()
+                .map { "id:" + it }
+                .toTypedArray(),
+        )
+
+    /** Exact current Photon index head, including historical entry count and live revisions. */
+    private fun photonIndexHeadFingerprint(report: PhotonIndexReport): String =
+        StableFieldIds.fingerprint(
+            "lifeos-self-photon-index-head/v1",
+            report.formatVersion.toString(),
+            report.entryCount.toString(),
+            report.livePhotonCount.toString(),
+            report.tombstonedPhotonCount.toString(),
+            *report.latestRefs.entries
+                .sortedBy { it.key.value }
+                .map { entry ->
+                    "head:" + entry.key.value + ":" + entry.value.revision.toString()
+                }
+                .toTypedArray(),
+        )
 
     private fun cognitiveSnapshotFingerprint(
         snapshot: app.lifeos.core.runtime.CognitiveSnapshot,
@@ -279,3 +309,7 @@ class SelfStateProjector {
                 .toTypedArray(),
         )
 }
+
+
+const val SELF_OBSERVATION_HEALTH_NODE_ID: String = "self-observation"
+const val SELF_OBSERVATION_HEALTH_SOURCE: String = "lifeos-self-observation"

@@ -26,6 +26,7 @@ class AutomaticSelfHealingOrchestrator(
         job?.takeIf { it.isActive }?.let { return it }
         return scope.launch {
             graph.observations.collect { observation ->
+                if (!observation.actionable) return@collect
                 when (observation.state) {
                     HealthState.HEALTHY -> stateMutex.withLock {
                         healthySeenSinceStartup += observation.nodeId

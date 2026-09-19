@@ -26,7 +26,8 @@ class SelfStateFingerprintTest {
         val unavailable = snapshot(indexFingerprint = null)
         val literal = snapshot(indexFingerprint = "<unavailable>")
 
-        assertNotEquals(unavailable.authorityFingerprint, literal.authorityFingerprint)
+        assertEquals(unavailable.authorityFingerprint, literal.authorityFingerprint)
+        assertNotEquals(unavailable.stateFingerprint, literal.stateFingerprint)
     }
 
     @Test
@@ -34,8 +35,71 @@ class SelfStateFingerprintTest {
         val unavailable = snapshot(registered = null, repairs = null)
         val knownEmpty = snapshot(registered = emptySet(), repairs = emptySet())
 
-        assertNotEquals(unavailable.authorityFingerprint, knownEmpty.authorityFingerprint)
+        assertEquals(unavailable.authorityFingerprint, knownEmpty.authorityFingerprint)
         assertNotEquals(unavailable.stateFingerprint, knownEmpty.stateFingerprint)
+    }
+
+    @Test
+    fun photonPopulationAndHeadDriftDoNotRewriteControlPlaneAuthorityIdentity() {
+        val first = snapshot().copy(
+            photon = SelfPhotonState(
+                latestRevisionCount = 1,
+                livePhotonCount = 1,
+                tombstonedPhotonCount = 0,
+                indexFingerprint = "population-a",
+                headFingerprint = "head-revision-1",
+            )
+        )
+        val second = first.copy(
+            photon = first.photon.copy(
+                latestRevisionCount = 3,
+                livePhotonCount = 2,
+                indexFingerprint = "population-b",
+                headFingerprint = "head-revision-2",
+            )
+        )
+
+        assertEquals(first.authorityFingerprint, second.authorityFingerprint)
+        assertNotEquals(first.stateFingerprint, second.stateFingerprint)
+    }
+
+    @Test
+    fun rebuildableMemoryTopologyAndToolChangesDoNotRewriteDurableAuthorityIdentity() {
+        val first = snapshot()
+        val second = first.copy(
+            memory = first.memory.copy(
+                authoritativePhotonCount = 99,
+                graphNodeCount = 88,
+                graphEdgeCount = 77,
+                memoryFingerprint = "memory-rehydrated",
+            ),
+            runtime = first.runtime.copy(
+                topologyFingerprint = "topology-rehydrated",
+                registeredSubsystems = setOf("world", "health", "tools"),
+                unboundSubsystems = setOf("tools"),
+            ),
+            tools = first.tools.copy(
+                totalTools = 3,
+                activeTools = 2,
+                trialTools = 1,
+            ),
+        )
+
+        assertEquals(first.authorityFingerprint, second.authorityFingerprint)
+        assertNotEquals(first.stateFingerprint, second.stateFingerprint)
+    }
+
+    @Test
+    fun rebuildableCognitiveSnapshotDoesNotRewriteDurableAuthorityIdentity() {
+        val first = snapshot()
+        val second = first.copy(
+            world = first.world.copy(
+                cognitiveSnapshotFingerprint = "cog-rehydrated",
+            )
+        )
+
+        assertEquals(first.authorityFingerprint, second.authorityFingerprint)
+        assertNotEquals(first.stateFingerprint, second.stateFingerprint)
     }
 
     @Test

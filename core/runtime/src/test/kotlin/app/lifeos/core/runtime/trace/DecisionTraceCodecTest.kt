@@ -53,6 +53,24 @@ class DecisionTraceCodecTest {
     }
 
     @Test
+    fun `isolated immutable segment may encode a non-first revision`() {
+        val id = DecisionTraceId.create("goal", "goal-segment")
+        val node = DecisionTraceNode.create(
+            DecisionTraceNodeType.OBSERVED_FACT,
+            "goal",
+            "goal-segment",
+            2,
+            recordedAt = NOW,
+        )
+        val revision = DecisionTrace(id, 2, listOf(node), emptyList())
+
+        val encoded = DecisionTraceLogCodec.encodeSegment(revision)
+
+        assertEquals(revision, DecisionTraceLogCodec.decodeSegment(encoded))
+        assertFailsWith<IllegalArgumentException> { DecisionTraceLogCodec.decode(encoded) }
+    }
+
+    @Test
     fun `revision gaps are rejected`() {
         val id = DecisionTraceId.create("goal", "goal-gap")
         val node = DecisionTraceNode.create(

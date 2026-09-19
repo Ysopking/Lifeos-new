@@ -55,8 +55,11 @@ class DecisionTraceLedger(private val repository: DecisionTraceRepository) {
     ): DecisionTrace? {
         val revisions = traces.filter { it.id == id }.sortedBy { it.revision }
         if (revisions.isEmpty()) return null
-        require(revisions.map { it.revision } == (1L..revisions.size.toLong()).toList()) {
-            "Decision trace revisions must be contiguous"
+        val actualRevisions = revisions.map { it.revision }
+        val expectedRevisions = (1L..revisions.size.toLong()).toList()
+        require(actualRevisions == expectedRevisions) {
+            "Decision trace revisions must be contiguous: id=${id.value} " +
+                "actual=${actualRevisions.joinToString(",")} expected=${expectedRevisions.joinToString(",")}"
         }
         return revisions.last()
     }
