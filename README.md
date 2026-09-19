@@ -23,7 +23,7 @@ Android may still terminate the process. LIFEOS therefore treats cold-start rehy
 Requires JDK 17, Android SDK 37, Gradle 9.3.1 and AGP 9.1.1. Target SDK remains 36; minimum SDK is 26. Dependencies are kept on the existing project versions.
 
 ```bash
-gradle test :app:lintDebug :app:assembleDebug :app:assembleRelease
+./gradlew test :app:lintDebug :app:assembleDebug :app:assembleRelease
 ```
 
 CI uploads `LIFEOS-Next-debug` and `LIFEOS-validation`. Release compilation verifies R8/resource shrinking, but the release APK is unsigned until a signing setup is provided. No credentials, signing keys or user content belong in this repository.
