@@ -14,6 +14,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.evolution.WorldEquationEvidenceCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationEvidencePartition
 import app.lifeos.core.runtime.evolution.WorldEquationEvaluationProtocol
 import app.lifeos.core.runtime.evolution.WorldEquationEvolutionAdmissionGate
 import app.lifeos.core.runtime.evolution.WorldEquationPrimaryMetric
@@ -110,6 +111,7 @@ class Level7TruthClosureGoldDeviceTest {
                 candidateSpec = candidateSpec,
                 activeCoefficientId = firstCoefficient.id,
                 runId = "b200-run-2",
+                partition = WorldEquationEvidencePartition.HOLDOUT,
             ),
         )
         val admissionGate = WorldEquationEvolutionAdmissionGate(
@@ -372,10 +374,12 @@ class Level7TruthClosureGoldDeviceTest {
         candidateSpec: app.lifeos.core.field.world.WorldEquationSpec,
         activeCoefficientId: app.lifeos.core.field.world.WorldCoefficientId,
         runId: String,
+        partition: WorldEquationEvidencePartition = WorldEquationEvidencePartition.SHADOW,
     ) = WorldEquationShadowObservation(
         caseFingerprint = StableFieldIds.fingerprint("b200-shadow-case", runId),
         runId = runId,
         workloadId = "b200-truth-closure-workload",
+        partition = partition,
         baselineEquationFingerprint = baselineSpec.fingerprint(),
         candidateEquationFingerprint = candidateSpec.fingerprint(),
         baseline = WorldEquationRunMetrics(

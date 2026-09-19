@@ -7,6 +7,7 @@ import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
 import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.field.world.WorldCoefficientId
 import app.lifeos.core.runtime.evolution.WorldEquationEvidenceCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationEvidencePartition
 import app.lifeos.core.runtime.evolution.WorldEquationEvaluationProtocol
 import app.lifeos.core.runtime.evolution.WorldEquationEvolutionAdmissionGate
 import app.lifeos.core.runtime.evolution.WorldEquationLifecycleState
@@ -111,6 +112,7 @@ class WorldEquationAutoEvolutionRecoveryDeviceTest {
                 candidate = candidate.fingerprint(),
                 coefficientId = coefficient.id,
                 runId = "device-run-2",
+                partition = WorldEquationEvidencePartition.HOLDOUT,
             ),
         )
         assertEquals(WorldEquationLifecycleState.PROMOTABLE, promotable.state)
@@ -202,10 +204,12 @@ class WorldEquationAutoEvolutionRecoveryDeviceTest {
         candidate: String,
         coefficientId: WorldCoefficientId,
         runId: String,
+        partition: WorldEquationEvidencePartition = WorldEquationEvidencePartition.SHADOW,
     ) = WorldEquationShadowObservation(
         caseFingerprint = fingerprint("case:" + runId),
         runId = runId,
         workloadId = "device-workload-a",
+        partition = partition,
         baselineEquationFingerprint = baseline,
         candidateEquationFingerprint = candidate,
         baseline = WorldEquationRunMetrics(
