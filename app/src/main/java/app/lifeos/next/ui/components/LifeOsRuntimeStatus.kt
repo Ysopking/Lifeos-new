@@ -3,7 +3,7 @@ package app.lifeos.next.ui.components
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Card
+import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -193,23 +193,56 @@ fun buildRuntimeHealthUiModel(
 }
 
 @Composable
-fun LifeOsRuntimeStatus(
+fun LifeOsRuntimeAlert(
     model: RuntimeHealthUiModel,
     onOpenDetails: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Card(modifier = modifier.fillMaxWidth()) {
-        TextButton(
+    when (model.level) {
+        RuntimeHealthLevel.READY,
+        RuntimeHealthLevel.STARTING -> Unit
+
+        RuntimeHealthLevel.VERIFYING -> TextButton(
             onClick = onOpenDetails,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth(),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 2.dp),
+            Text(
+                text = model.compactLabel,
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+
+        RuntimeHealthLevel.DEGRADED,
+        RuntimeHealthLevel.FAILED -> {
+            val containerColor = if (model.level == RuntimeHealthLevel.FAILED) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.secondaryContainer
+            }
+            Surface(
+                modifier = modifier.fillMaxWidth(),
+                color = containerColor,
+                shape = MaterialTheme.shapes.medium,
             ) {
-                Text(model.compactLabel, style = MaterialTheme.typography.labelLarge)
-                Text(model.summary, style = MaterialTheme.typography.bodySmall)
+                TextButton(
+                    onClick = onOpenDetails,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = model.compactLabel,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Text(
+                            text = model.summary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             }
         }
     }
