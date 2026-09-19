@@ -7,6 +7,7 @@ import app.lifeos.core.model.worker.WorkerId
 import app.lifeos.core.runtime.FieldRegistry
 import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.field.FieldCutoverRuntimeRouter
+import app.lifeos.core.runtime.field.FieldShadowAdmissionPolicy
 import app.lifeos.core.runtime.field.FieldShadowProcessor
 import app.lifeos.core.runtime.tasks.RetryPolicy
 import java.time.Duration
@@ -41,6 +42,7 @@ class CognitiveWorkerFactory(
     private val executor: InfluenceExecutor,
     private val checkpoints: CheckpointRepository? = null,
     private val fieldShadowProcessor: FieldShadowProcessor? = null,
+    private val fieldShadowAdmission: FieldShadowAdmissionPolicy = FieldShadowAdmissionPolicy.ALL,
     private val fieldCutoverRouter: FieldCutoverRuntimeRouter? = null,
     private val retryPolicy: RetryPolicy = RetryPolicy(),
     private val config: CognitiveWorkerConfig = CognitiveWorkerConfig(),
@@ -54,6 +56,7 @@ class CognitiveWorkerFactory(
         executor = executor,
         checkpoints = checkpoints,
         fieldShadowProcessor = fieldShadowProcessor,
+        fieldShadowAdmission = fieldShadowAdmission,
         fieldCutoverRouter = fieldCutoverRouter,
         retryPolicy = retryPolicy,
         leaseDuration = config.leaseDuration,

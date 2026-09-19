@@ -1,12 +1,52 @@
 package app.lifeos.core.runtime.field
 
 import app.lifeos.core.field.FieldDomainId
+import app.lifeos.core.field.FieldSnapshot
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonIndexQuery
 
 interface AuthoritativeFieldProcessor {
     val domainId: FieldDomainId
     fun accepts(photon: Photon): Boolean
     suspend fun process(photon: Photon): FieldShadowExecution
+}
+
+data class FieldReplayExecution(
+    val execution: FieldShadowExecution,
+    val snapshot: FieldSnapshot?,
+) {
+    init {
+        if (execution.state == FieldShadowState.COMPLETED) {
+            requireNotNull(snapshot) { "Completed field replay requires its exact snapshot" }
+            require(execution.snapshotId == snapshot.id)
+            require(execution.domainId == snapshot.domainId)
+        }
+    }
+}
+
+interface ReplayableAuthoritativeFieldProcessor : AuthoritativeFieldProcessor {
+    val replayQuery: PhotonIndexQuery
+    suspend fun replay(photon: Photon): FieldReplayExecution
+}
+
+class SelectedDomainFieldShadowProcessor(
+    processors: List<ReplayableAuthoritativeFieldProcessor>,
+) : FieldShadowProcessor {
+    private val processors = processors.toList()
+
+    init {
+        val domains = this.processors.map { it.domainId }
+        require(domains.size == domains.distinct().size)
+        require(DefaultPhotonFieldRequestFactory.DOMAIN_ID !in domains)
+    }
+
+    override suspend fun process(photon: Photon): FieldShadowExecution {
+        val matches = processors.filter { it.accepts(photon) }
+        require(matches.size == 1) {
+            "Selected field shadow requires exactly one accepting domain processor"
+        }
+        return matches.single().process(photon)
+    }
 }
 
 data class FieldAuthoritativeExecution(

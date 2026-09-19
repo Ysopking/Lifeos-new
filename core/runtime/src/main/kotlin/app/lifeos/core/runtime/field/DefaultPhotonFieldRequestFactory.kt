@@ -6,6 +6,7 @@ import app.lifeos.core.field.EvidencePayload
 import app.lifeos.core.field.EvidenceRelationType
 import app.lifeos.core.field.EvidenceReliability
 import app.lifeos.core.field.FieldContext
+import app.lifeos.core.field.FieldDomainId
 import app.lifeos.core.field.FieldEvidence
 import app.lifeos.core.field.FieldGraph
 import app.lifeos.core.field.FieldHypothesis
@@ -24,9 +25,15 @@ import app.lifeos.core.model.Photon
  * The source Photon remains immutable. Provenance.source/actor are not translated into authority;
  * until a domain-specific adapter can prove authority, the generic shadow evidence is UNVERIFIED.
  */
-class DefaultPhotonFieldRequestFactory : PhotonFieldRequestFactory {
+class DefaultPhotonFieldRequestFactory(
+    private val domainId: FieldDomainId = DOMAIN_ID,
+    private val projectionName: String = "runtime-shadow-v1",
+) : PhotonFieldRequestFactory {
+    init {
+        require(projectionName.isNotBlank())
+    }
+
     override fun create(photon: Photon): app.lifeos.core.field.FieldConvergenceRequest {
-        val domainId = DOMAIN_ID
         val semanticKey = semanticKey(photon)
         val evidence = FieldEvidence.create(
             domainId = domainId,
@@ -83,7 +90,7 @@ class DefaultPhotonFieldRequestFactory : PhotonFieldRequestFactory {
                 ),
                 domain = DomainContext(
                     domainId = domainId,
-                    attributes = mapOf("projection" to "runtime-shadow-v1"),
+                    attributes = mapOf("projection" to projectionName),
                 ),
             ),
         )

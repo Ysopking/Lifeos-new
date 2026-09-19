@@ -19,6 +19,7 @@ import app.lifeos.core.runtime.checkpoints.FieldCheckpointManager
 import app.lifeos.core.runtime.checkpoints.FieldCheckpointStorageException
 import app.lifeos.core.runtime.field.FieldAuthoritativeExecution
 import app.lifeos.core.runtime.field.FieldCutoverRuntimeRouter
+import app.lifeos.core.runtime.field.FieldShadowAdmissionPolicy
 import app.lifeos.core.runtime.field.FieldShadowExecution
 import app.lifeos.core.runtime.field.FieldShadowProcessor
 import app.lifeos.core.runtime.field.FieldShadowState
@@ -55,6 +56,7 @@ class CognitiveTaskWorker(
     private val executor: InfluenceExecutor,
     checkpoints: CheckpointRepository? = null,
     private val fieldShadowProcessor: FieldShadowProcessor? = null,
+    private val fieldShadowAdmission: FieldShadowAdmissionPolicy = FieldShadowAdmissionPolicy.ALL,
     private val fieldCutoverRouter: FieldCutoverRuntimeRouter? = null,
     private val retryPolicy: RetryPolicy = RetryPolicy(),
     private val leaseDuration: Duration = Duration.ofSeconds(30),
@@ -269,6 +271,7 @@ class CognitiveTaskWorker(
 
     private suspend fun processFieldShadow(photon: Photon): FieldShadowExecution? {
         val processor = fieldShadowProcessor ?: return null
+        if (!fieldShadowAdmission.shouldProcess(photon)) return null
         return try {
             processor.process(photon)
         } catch (cancelled: CancellationException) {
