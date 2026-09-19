@@ -65,6 +65,9 @@ import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
+import app.lifeos.core.runtime.self.SelfObservationCapture
+import app.lifeos.core.runtime.self.SelfObservationCoordinator
+import app.lifeos.core.runtime.self.SelfObservationTrigger
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
@@ -99,6 +102,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
@@ -121,6 +125,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         private set
 
     internal lateinit var selfObservationRuntime: SelfObservationRuntime
+        private set
+
+    lateinit var selfObservationCoordinator: SelfObservationCoordinator
         private set
 
     lateinit var ownerPolicy: OwnerPolicyLedger
@@ -171,6 +178,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val liveSourceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var liveSourceRefreshJob: Job? = null
+    private val selfObservationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var selfObservationJob: Job? = null
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
 
@@ -332,6 +341,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                             ),
                             PhotonIngressMode.ORIGIN,
                         )
+                        requestSelfObservation(SelfObservationTrigger.TOOL_STATE_TRANSITION)
                         Unit
                     }
                 },
@@ -453,6 +463,12 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             liveSourceSnapshot = { latestLiveSourceSync },
             liveSourceFailure = { liveSourceSyncFailure },
         )
+        selfObservationCoordinator = SelfObservationCoordinator(
+            capture = SelfObservationCapture {
+                selfObservationRuntime.capture()
+            }
+        )
+        startSelfObservation(selfObservationHealthGraph)
         startContinuousLiveSourceRefresh()
 
         initialDataSources = AndroidInitialDataSourceCatalog(this)
@@ -463,6 +479,38 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         )
         refreshInitialDataBootstrap()
         refreshLiveSources()
+    }
+
+    private fun startSelfObservation(
+        healthGraph: app.lifeos.core.runtime.health.HealthGraph,
+    ) {
+        if (selfObservationJob?.isActive == true) return
+        selfObservationJob = selfObservationScope.launch {
+            launch {
+                healthGraph.observations.collect { observation ->
+                    if (observation.source != SELF_OBSERVATION_SOURCE) {
+                        selfObservationCoordinator.refresh(SelfObservationTrigger.HEALTH_TRANSITION)
+                    }
+                }
+            }
+            var trigger = SelfObservationTrigger.STARTUP
+            while (currentCoroutineContext().isActive) {
+                val cycle = selfObservationCoordinator.refresh(trigger)
+                trigger = SelfObservationTrigger.TIMER
+                delay(selfObservationCoordinator.nextInterval(cycle.band).toMillis())
+            }
+        }
+    }
+
+    fun refreshSelfObservation() {
+        requestSelfObservation(SelfObservationTrigger.EXPLICIT_UI_REFRESH)
+    }
+
+    internal fun requestSelfObservation(trigger: SelfObservationTrigger) {
+        if (!::selfObservationCoordinator.isInitialized) return
+        selfObservationScope.launch {
+            selfObservationCoordinator.refresh(trigger)
+        }
     }
 
     private fun installLiveSources() {
@@ -596,6 +644,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private companion object {
+        const val SELF_OBSERVATION_SOURCE = "lifeos-self-observation"
         val LIVE_SOURCE_REFRESH_INTERVAL: Duration = Duration.ofMinutes(5)
         const val INITIAL_DATA_PREFS = "lifeos-initial-data-bootstrap"
         const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"
