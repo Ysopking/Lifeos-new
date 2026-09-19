@@ -3,11 +3,20 @@ package app.lifeos.next
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import app.lifeos.core.model.Photon
-import app.lifeos.core.model.PhotonId
-import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.StableCognitiveIds
-import app.lifeos.next.kernel.LiveNotificationPhotonIngress
+import app.lifeos.core.model.source.SourceConversationMetadata
+import app.lifeos.core.model.source.SourcePrivacyZone
+import app.lifeos.core.runtime.livedata.LiveDataAccountKey
+import app.lifeos.core.runtime.livedata.LiveDataAccountObservation
+import app.lifeos.core.runtime.livedata.LiveDataCapability
+import app.lifeos.core.runtime.livedata.LiveDataConnectorId
+import app.lifeos.core.runtime.livedata.LiveDataDelta
+import app.lifeos.core.runtime.livedata.LiveDataDeltaOperation
+import app.lifeos.core.runtime.livedata.LiveDataPermission
+import app.lifeos.core.runtime.livedata.LiveDataPermissionState
+import app.lifeos.core.runtime.livedata.LiveDataStreamKind
+import app.lifeos.core.runtime.livedata.canonicalLiveDataMetadata
+import app.lifeos.next.kernel.PushLiveDataIngress
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,31 +24,67 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * Owner-enabled live Android context stream. Only user-visible notification text is projected into
- * canonical Photons; no app databases, accessibility scraping or parallel message store is used.
+ * Owner-enabled live Android context stream. It projects only user-visible notification data into
+ * the canonical LiveDataHub path; no foreign app database or accessibility store is inspected.
  */
 class LiveNotificationListenerService : NotificationListenerService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    @Volatile
+    private var accountObservation: LiveDataAccountObservation? = null
+
     override fun onListenerConnected() {
         super.onListenerConnected()
+        val observation = createAccountObservation(Instant.now())
+        accountObservation = observation
         activeNotifications
             ?.sortedWith(compareBy<StatusBarNotification> { it.postTime }.thenBy { it.key })
-            ?.forEach(::submit)
+            ?.forEach { submit(it, observation) }
+    }
+
+    override fun onListenerDisconnected() {
+        accountObservation = null
+        super.onListenerDisconnected()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
-        sbn?.let(::submit)
+        sbn?.let { submit(it, currentAccountObservation()) }
     }
 
-    private fun submit(sbn: StatusBarNotification) {
-        val photon = sbn.toPhoton() ?: return
+    private fun submit(
+        sbn: StatusBarNotification,
+        observation: LiveDataAccountObservation,
+    ) {
+        val delta = sbn.toLiveDataDelta(observation) ?: return
         scope.launch {
-            LiveNotificationPhotonIngress.ingest(photon)
+            PushLiveDataIngress.ingest(observation, delta)
         }
     }
 
-    private fun StatusBarNotification.toPhoton(): Photon? {
+    private fun currentAccountObservation(): LiveDataAccountObservation =
+        accountObservation ?: synchronized(this) {
+            accountObservation ?: createAccountObservation(Instant.now()).also {
+                accountObservation = it
+            }
+        }
+
+    private fun createAccountObservation(observedAt: Instant): LiveDataAccountObservation =
+        LiveDataAccountObservation(
+            connectorId = CONNECTOR_ID,
+            accountKey = ACCOUNT_KEY,
+            capabilities = setOf(LiveDataCapability.MESSAGE_DELTAS),
+            permissions = mapOf(
+                LiveDataPermission.READ_MESSAGES to LiveDataPermissionState.GRANTED,
+                LiveDataPermission.READ_CALENDAR to LiveDataPermissionState.UNAVAILABLE,
+                LiveDataPermission.READ_FILES to LiveDataPermissionState.UNAVAILABLE,
+            ),
+            observedAt = observedAt,
+            sourceCursor = "notification-listener-connected",
+        )
+
+    private fun StatusBarNotification.toLiveDataDelta(
+        observation: LiveDataAccountObservation,
+    ): LiveDataDelta? {
         if (packageName == applicationContext.packageName) return null
         val notification = notification ?: return null
         if (notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return null
@@ -49,48 +94,74 @@ class LiveNotificationListenerService : NotificationListenerService() {
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.clean().orEmpty()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.clean().orEmpty()
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.clean().orEmpty()
-        val conversation = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()?.clean().orEmpty()
+        val conversationTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)
+            ?.toString()
+            ?.clean()
+            .orEmpty()
         val body = bigText.ifBlank { text }
-        if (title.isBlank() && body.isBlank() && conversation.isBlank()) return null
+        if (title.isBlank() && body.isBlank() && conversationTitle.isBlank()) return null
 
         val category = notification.category.orEmpty()
         val postedAt = Instant.ofEpochMilli(postTime.coerceAtLeast(0L))
-        val fingerprint = StableCognitiveIds.fingerprint(
-            "android-live-notification/v1",
+        val observedAt = maxOf(postedAt, Instant.now())
+        val version = StableCognitiveIds.fingerprint(
+            "android-live-notification/v2",
             key,
             packageName,
             postTime.toString(),
             category,
             title,
             body,
-            conversation,
+            conversationTitle,
         )
-        val isMessage = category == Notification.CATEGORY_MESSAGE || conversation.isNotBlank()
-        return Photon(
-            id = PhotonId("android-notification-$fingerprint"),
-            content = buildString {
+        val shortcutId = notification.shortcutId?.clean()?.takeIf { it.isNotBlank() }
+        val baseMetadata = canonicalLiveDataMetadata(
+            connectorId = observation.connectorId,
+            accountKey = observation.accountKey,
+            kind = LiveDataStreamKind.MESSAGE,
+            externalId = key,
+            externalVersion = version,
+            occurredAt = postedAt,
+            observedAt = observedAt,
+            mimeType = NOTIFICATION_MIME,
+            privacyZone = SourcePrivacyZone.SENSITIVE,
+        )
+        val metadata = baseMetadata.copy(
+            conversation = shortcutId?.let {
+                SourceConversationMetadata(
+                    conversationId = it,
+                    threadId = it,
+                )
+            },
+            technical = baseMetadata.technical.copy(
+                producer = packageName,
+                attributes = baseMetadata.technical.attributes + mapOf(
+                    "android:notification-category" to category,
+                    "android:notification-package" to packageName,
+                    "android:notification-shortcut" to shortcutId.orEmpty(),
+                ),
+            ),
+        )
+
+        return LiveDataDelta(
+            connectorId = observation.connectorId,
+            accountKey = observation.accountKey,
+            kind = LiveDataStreamKind.MESSAGE,
+            externalId = key,
+            externalVersion = version,
+            operation = LiveDataDeltaOperation.UPSERT,
+            occurredAt = postedAt,
+            observedAt = observedAt,
+            payload = buildString {
                 appendLine("package=$packageName")
                 appendLine("category=$category")
                 appendLine("title=$title")
-                appendLine("conversation=$conversation")
-                appendLine("text=$body")
-                append("posted_at=${postedAt}")
+                appendLine("conversation=$conversationTitle")
+                append("text=$body")
             },
-            mimeType = "application/vnd.lifeos.android-notification+text",
+            mimeType = NOTIFICATION_MIME,
             confidence = 1.0,
-            provenance = Provenance(
-                source = "android-notification-listener",
-                actor = packageName,
-                createdAt = postedAt,
-            ),
-            tags = buildSet {
-                add("notification")
-                add("live-context")
-                add("app:$packageName")
-                if (category.isNotBlank()) add("notification-category:$category")
-                if (isMessage) add("message")
-                if (conversation.isNotBlank()) add("conversation:$conversation")
-            },
+            metadata = metadata,
         )
     }
 
@@ -101,6 +172,9 @@ class LiveNotificationListenerService : NotificationListenerService() {
         .take(MAX_TEXT_LENGTH)
 
     private companion object {
+        val CONNECTOR_ID = LiveDataConnectorId("android-notifications")
+        val ACCOUNT_KEY = LiveDataAccountKey("device-notification-listener")
+        const val NOTIFICATION_MIME = "application/vnd.lifeos.android-notification+text"
         const val MAX_TEXT_LENGTH = 8_192
     }
 }

@@ -87,8 +87,9 @@ class CanonicalPhotonIngress(
                 photon
             },
         )
-        LiveNotificationPhotonIngress.install { photon ->
-            ingest(photon, PhotonIngressMode.ORIGIN)
+        PushLiveDataIngress.install { observation, delta ->
+            liveData.observeAccount(observation)
+            liveData.ingest(delta)
         }
     }
 
