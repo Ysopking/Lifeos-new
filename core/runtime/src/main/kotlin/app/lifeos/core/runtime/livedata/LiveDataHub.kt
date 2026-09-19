@@ -121,6 +121,14 @@ class LiveDataHub(
         }
         require(connectorTag(observation.connectorId) in current.tags)
         require(accountTag(observation.accountFingerprint) in current.tags)
+        require(!observation.observedAt.isBefore(current.provenance.createdAt)) {
+            "Stale live-data account observation cannot replace newer permission state"
+        }
+        if (observation.observedAt == current.provenance.createdAt) {
+            require(observationTag(observation.observationFingerprint) in current.tags) {
+                "Conflicting live-data account observation at identical timestamp"
+            }
+        }
     }
 
     private fun accountPhoton(

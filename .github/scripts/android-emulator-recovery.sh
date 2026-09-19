@@ -181,6 +181,12 @@ run_test \
   'app.lifeos.next.HardwareResourceIntelligenceDeviceTest#localSignalsFeedPersistedWorldFormulaWithoutExpandingHardQuota' \
   "$report_dir/hardware-resource-intelligence.txt"
 
+# M01 Live Data Hub. Prove explicit current account permission state gates canonical external
+# message ingestion through the real encrypted PhotonStore and rejects a subsequent revocation.
+run_test \
+  'app.lifeos.next.LiveDataHubDeviceTest#accountPermissionSnapshotGatesCanonicalDeltaIngress' \
+  "$report_dir/m01-live-data-permission-ingress.txt"
+
 # B01 persistent universal-field hardening. Exercise the real AndroidKeyStore + AtomicFile repository
 # against both explicit rollback and an interrupted write recovered by a fresh repository instance.
 run_suite \

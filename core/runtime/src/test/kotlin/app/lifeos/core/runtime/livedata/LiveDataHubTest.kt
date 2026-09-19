@@ -102,6 +102,51 @@ class LiveDataHubTest {
     }
 
     @Test
+    fun staleOrSameTimeConflictingPermissionObservationIsRejected() = runBlocking {
+        val repository = MemoryRevisionedPhotonRepository()
+        val ingress = RecordingIngress(repository)
+        val hub = LiveDataHub(repository, ingress)
+
+        hub.observeAccount(observation())
+        val revokedAt = at.plusSeconds(2)
+        val revoked = hub.observeAccount(
+            observation(
+                observedAt = revokedAt,
+                permissions = permissions(messages = LiveDataPermissionState.REVOKED),
+            )
+        )
+
+        val stale = runCatching {
+            hub.observeAccount(
+                observation(
+                    observedAt = at.plusSeconds(1),
+                    permissions = permissions(messages = LiveDataPermissionState.GRANTED),
+                )
+            )
+        }
+        assertTrue(stale.isFailure)
+
+        val sameTimeConflict = runCatching {
+            hub.observeAccount(
+                observation(
+                    observedAt = revokedAt,
+                    permissions = permissions(messages = LiveDataPermissionState.GRANTED),
+                )
+            )
+        }
+        assertTrue(sameTimeConflict.isFailure)
+        assertEquals(revoked, repository.load(revoked.id))
+        assertIs<LiveDataIngestResult.Blocked>(
+            hub.ingest(
+                delta(
+                    LiveDataStreamKind.MESSAGE,
+                    observedAt = revokedAt.plusSeconds(1),
+                )
+            )
+        )
+    }
+
+    @Test
     fun exactRepeatedObservationIsIdempotentAndRepublishedForCrashRecovery() = runBlocking {
         val repository = MemoryRevisionedPhotonRepository()
         val ingress = RecordingIngress(repository)
