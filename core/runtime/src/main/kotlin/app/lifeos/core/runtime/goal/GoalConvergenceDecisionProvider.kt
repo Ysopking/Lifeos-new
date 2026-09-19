@@ -65,12 +65,22 @@ data class GoalConvergenceDecisionResult(
     val cycleBinding: GoalConvergenceCycleBinding?,
 )
 
+data class GoalOutcomeLearningReceipt(
+    val outcomeWorldSnapshotId: String,
+    val learningWatermarkRevision: Long,
+) {
+    init {
+        require(outcomeWorldSnapshotId.isNotBlank())
+        require(learningWatermarkRevision >= 0L)
+    }
+}
+
 fun interface GoalOutcomeLearningHook {
     suspend fun learn(
         binding: GoalConvergenceCycleBinding,
         outcome: Photon,
         succeeded: Boolean,
-    )
+    ): GoalOutcomeLearningReceipt
 }
 
 interface GoalConvergenceDecisionSource {
