@@ -71,6 +71,8 @@ data class SelfStateProjectionInputs(
     val recovery: SelfObservationSource<List<SelfHealingIncidentSnapshot>>,
     val tools: SelfObservationSource<GeneratedToolRuntimeStatus>,
     val liveSources: SelfObservationSource<SelfLiveSourceProjectionInput>,
+    val runtimeTelemetry: SelfObservationSource<RuntimeTelemetrySnapshot> =
+        SelfObservationSource.Unavailable("runtime-telemetry-not-configured"),
 )
 
 data class SelfStateProjectionResult(
@@ -128,6 +130,7 @@ class SelfStateProjector {
         )
 
         val topology = value(SelfObservationDomain.RUNTIME, inputs.runtimeTopology, issues)
+        val runtimeTelemetry = value(SelfObservationDomain.RUNTIME, inputs.runtimeTelemetry, issues)
         val runtime = SelfRuntimeState(
             topologyFingerprint = topology?.manifestFingerprint,
             registeredSubsystems = topology?.subsystems?.mapTo(linkedSetOf()) { it.descriptor.id },
@@ -143,6 +146,7 @@ class SelfStateProjector {
             unboundSubsystems = topology?.subsystems
                 ?.filter { it.state == LifeOsSubsystemState.REGISTERED }
                 ?.mapTo(linkedSetOf()) { it.descriptor.id },
+            telemetry = runtimeTelemetry,
         )
 
         val hardware = value(SelfObservationDomain.RESOURCE, inputs.resources, issues)

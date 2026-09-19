@@ -58,6 +58,7 @@ object SelfStateFingerprint {
             addAll(canonicalSet("runtime.operational", snapshot.runtime.operationalSubsystems))
             addAll(canonicalSet("runtime.degraded", snapshot.runtime.degradedSubsystems))
             addAll(canonicalSet("runtime.unavailable", snapshot.runtime.unavailableSubsystems))
+            add("runtime.telemetry=" + encode(snapshot.runtime.telemetry?.fingerprint()))
 
             add("resource.hardware=" + encode(snapshot.resource.hardwareFingerprint))
             add("resource.memory=" + encode(snapshot.resource.memoryHeadroom))

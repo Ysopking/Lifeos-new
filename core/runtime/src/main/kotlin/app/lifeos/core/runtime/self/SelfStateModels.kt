@@ -72,6 +72,7 @@ data class SelfRuntimeState(
     val degradedSubsystems: Set<String>?,
     val unavailableSubsystems: Set<String>?,
     val unboundSubsystems: Set<String>?,
+    val telemetry: RuntimeTelemetrySnapshot? = null,
 ) {
     init {
         validateOptionalFingerprint(topologyFingerprint, "topologyFingerprint")
