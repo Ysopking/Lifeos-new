@@ -22,6 +22,27 @@ class EncryptedPhotonRevisionStoreTest {
     @After fun after() = clearPhotonVault(context)
 
     @Test
+    fun qualifiedCanonicalPhotonIdsRemainPathSafeAndRecoverable() = runBlocking {
+        val store = EncryptedPhotonStore(context)
+        val ids = listOf(
+            PhotonId("field-cutover-state:0123456789abcdef"),
+            PhotonId("outcome-prediction:0123456789abcdef"),
+            PhotonId("domain.v2:qualified-id_01"),
+        )
+
+        ids.forEachIndexed { index, id ->
+            val photon = testPhoton(id, 1, "qualified-$index")
+            assertTrue(store.saveRevision(photon, null) is PhotonRevisionWriteResult.Created)
+            assertEquals(photon, store.load(id))
+        }
+
+        val reopened = EncryptedPhotonStore(context)
+        ids.forEachIndexed { index, id ->
+            assertEquals(testPhoton(id, 1, "qualified-$index"), reopened.load(id))
+        }
+    }
+
+    @Test
     fun historicalRevisionsRemainAddressableWhileHeadAdvances() = runBlocking {
         val store = EncryptedPhotonStore(context)
         val id = PhotonId("b101_revision_history")

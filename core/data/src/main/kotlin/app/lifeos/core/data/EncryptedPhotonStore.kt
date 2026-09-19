@@ -1088,7 +1088,7 @@ class EncryptedPhotonStore(context: Context) :
         file.exists() || File("${file.path}.bak").exists()
 
     private fun safeId(id: PhotonId): String = id.value.also {
-        require(it.matches(Regex("[A-Za-z0-9_-]{1,128}"))) {
+        require(it.matches(Regex("[A-Za-z0-9_.:-]{1,128}"))) {
             "Invalid Photon ID: value=\'$it\'"
         }
     }
