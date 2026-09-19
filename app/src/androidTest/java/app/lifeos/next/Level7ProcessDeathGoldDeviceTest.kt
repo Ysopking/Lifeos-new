@@ -140,7 +140,7 @@ class Level7ProcessDeathGoldDeviceTest {
             EncryptedConvergenceDecisionCheckpointRepository(instrumentation.targetContext)
                 .load(ConvergenceDecisionCheckpointId(expected[7]))
         )
-        assertEquals(expected[3], decision.contentFingerprint())
+        assertEquals(expected[4], decision.contentFingerprint())
 
         val learningLoaded = EncryptedLearningWatermarkRepository(context).load()
         assertTrue(learningLoaded is LearningWatermarkLoadResult.Loaded)
