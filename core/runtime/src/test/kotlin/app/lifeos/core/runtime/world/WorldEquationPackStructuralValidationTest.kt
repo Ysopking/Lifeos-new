@@ -76,6 +76,35 @@ class WorldEquationPackStructuralValidationTest {
         assertEquals(listOf(bundle), repository.loadReport().bundles)
     }
 
+    @Test
+    fun validationCoordinatorPersistsAndRecoversExactBundleIdempotently() = runTest {
+        val fixture = fixture()
+        val repository = InMemoryWorldEquationPackStructuralValidationRepository()
+        val coordinator = WorldEquationPackStructuralValidationCoordinator(repository)
+        val record = supportedRecord(fixture)
+
+        val first = coordinator.validateAndPersist(
+            baseline = fixture.baseline,
+            candidate = fixture.candidate,
+            preflight = fixture.preflight,
+            evidenceRecord = record,
+        )
+        val second = coordinator.validateAndPersist(
+            baseline = fixture.baseline,
+            candidate = fixture.candidate,
+            preflight = fixture.preflight,
+            evidenceRecord = record,
+        )
+
+        assertEquals(first, second)
+        assertEquals(
+            first,
+            coordinator.recover(fixture.candidate.candidate.fingerprint()),
+        )
+        assertFalse(first.productiveActivationAllowed)
+        assertFalse(first.promotionAdmissionAllowed)
+    }
+
     private fun supportedRecord(
         fixture: Fixture,
     ): WorldEquationPackEvidenceRecord {
