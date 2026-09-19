@@ -12,7 +12,7 @@ step "preflight: Java"
 java -version
 
 step "preflight: Gradle"
-gradle --version
+./gradlew --version
 
 step "preflight: Android SDK"
 sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
@@ -21,10 +21,10 @@ printf 'ANDROID_SDK_ROOT=%s\n' "${ANDROID_SDK_ROOT:-}"
 printf 'sdk_root=%s\n' "$sdk_root"
 
 step "gate 01: build debug APK"
-gradle :app:assembleDebug --stacktrace
+./gradlew :app:assembleDebug --stacktrace
 
 step "gate 02: build debug AndroidTest APK"
-gradle :app:assembleDebugAndroidTest --stacktrace
+./gradlew :app:assembleDebugAndroidTest --stacktrace
 
 step "gate 03: enable KVM if present"
 if [[ -e /dev/kvm ]]; then
