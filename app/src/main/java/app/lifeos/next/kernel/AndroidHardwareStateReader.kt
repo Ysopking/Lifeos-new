@@ -45,7 +45,9 @@ internal class AndroidHardwareStateReader(
             batteryFraction = batteryLevel,
             charging = charging,
             thermalState = thermalState(powerManager),
-            cpuLoadFraction = cpuObservation?.loadFraction,
+            // Preserve the legacy V16 quota-admission lane; measured process load is consumed
+            // by the execution planner so transient startup load cannot revoke supported actions.
+            cpuLoadFraction = null,
             processCpuLoadFraction = cpuObservation?.loadFraction,
             memoryPressureFraction = memoryPressure,
             ioPressureFraction = null,
