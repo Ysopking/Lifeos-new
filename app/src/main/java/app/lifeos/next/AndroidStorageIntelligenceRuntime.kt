@@ -64,6 +64,9 @@ internal data class StorageCleanupCandidate(
     val reason: String,
     val safeToTrashAfterOwnerApproval: Boolean,
     val suggestedDirectory: String? = null,
+    val expectedModifiedAtMillis: Long? = null,
+    val verificationPeerVolumeId: String? = null,
+    val verificationPeerRelativePath: String? = null,
 ) {
     init {
         require(volumeId.isNotBlank())
@@ -71,6 +74,12 @@ internal data class StorageCleanupCandidate(
         require(reclaimableBytes >= 0L)
         require(reason.isNotBlank())
         require(suggestedDirectory == null || suggestedDirectory.isNotBlank())
+        require(expectedModifiedAtMillis == null || expectedModifiedAtMillis >= 0L)
+        require(
+            (verificationPeerVolumeId == null) == (verificationPeerRelativePath == null)
+        ) { "Duplicate verification peer must be complete or absent" }
+        require(verificationPeerVolumeId == null || verificationPeerVolumeId.isNotBlank())
+        require(verificationPeerRelativePath == null || verificationPeerRelativePath.isNotBlank())
     }
 }
 
@@ -204,6 +213,7 @@ internal class AndroidStorageIntelligenceRuntime(
         val cleanup = StorageCleanupPlanner.plan(
             duplicateGroups = inventory.exactDuplicateGroups(),
             reviewEntries = inventory.reviewEntries(),
+            nowMillis = System.currentTimeMillis(),
         )
 
         StorageIntelligenceSnapshot(
@@ -518,7 +528,9 @@ internal object StorageCleanupPlanner {
     fun plan(
         duplicateGroups: List<List<StorageIndexedFile>>,
         reviewEntries: List<StorageIndexedFile>,
+        nowMillis: Long = System.currentTimeMillis(),
     ): List<StorageCleanupCandidate> {
+        require(nowMillis >= 0L)
         val candidates = mutableListOf<StorageCleanupCandidate>()
 
         duplicateGroups.forEach { duplicates ->
@@ -545,6 +557,9 @@ internal object StorageCleanupPlanner {
                         safeToTrashAfterOwnerApproval =
                             !duplicate.suspectedEncrypted &&
                                 duplicate.category !in PROTECTED_CATEGORIES,
+                        expectedModifiedAtMillis = duplicate.modifiedAtMillis,
+                        verificationPeerVolumeId = keeper.volumeId,
+                        verificationPeerRelativePath = keeper.relativePath,
                     )
                 }
         }
@@ -553,7 +568,8 @@ internal object StorageCleanupPlanner {
             if (
                 looksTemporary(file.relativePath) &&
                 file.category !in PROTECTED_CATEGORIES &&
-                !file.suspectedEncrypted
+                !file.suspectedEncrypted &&
+                isOlderThan(file.modifiedAtMillis, nowMillis, TEMP_MIN_AGE_MILLIS)
             ) {
                 candidates += StorageCleanupCandidate(
                     volumeId = file.volumeId,
@@ -562,11 +578,13 @@ internal object StorageCleanupPlanner {
                     reclaimableBytes = file.sizeBytes,
                     reason = "temporary/cache-like file; reversible trash candidate",
                     safeToTrashAfterOwnerApproval = true,
+                    expectedModifiedAtMillis = file.modifiedAtMillis,
                 )
             }
             if (
                 file.category == AndroidFileCategory.ARCHIVE &&
-                file.relativePath.endsWith(".apk", ignoreCase = true)
+                file.relativePath.endsWith(".apk", ignoreCase = true) &&
+                isOlderThan(file.modifiedAtMillis, nowMillis, INSTALLER_MIN_AGE_MILLIS)
             ) {
                 candidates += StorageCleanupCandidate(
                     volumeId = file.volumeId,
@@ -575,6 +593,7 @@ internal object StorageCleanupPlanner {
                     reclaimableBytes = file.sizeBytes,
                     reason = "APK/installer file; owner review before reversible trash",
                     safeToTrashAfterOwnerApproval = true,
+                    expectedModifiedAtMillis = file.modifiedAtMillis,
                 )
             }
             if (file.sizeBytes >= AndroidStorageInventoryStore.LARGE_REVIEW_BYTES) {
@@ -585,6 +604,7 @@ internal object StorageCleanupPlanner {
                     reclaimableBytes = 0L,
                     reason = "large unique file; retention review only",
                     safeToTrashAfterOwnerApproval = false,
+                    expectedModifiedAtMillis = file.modifiedAtMillis,
                 )
             }
             suggestedDirectory(file)?.let { target ->
@@ -597,6 +617,7 @@ internal object StorageCleanupPlanner {
                         reason = "category-based organization candidate",
                         safeToTrashAfterOwnerApproval = false,
                         suggestedDirectory = target,
+                        expectedModifiedAtMillis = file.modifiedAtMillis,
                     )
                 }
             }
@@ -613,17 +634,27 @@ internal object StorageCleanupPlanner {
             )
     }
 
-    private fun suggestedDirectory(file: StorageIndexedFile): String? = when (file.category) {
-        AndroidFileCategory.IMAGE -> "Pictures/LIFEOS"
-        AndroidFileCategory.VIDEO -> "Movies/LIFEOS"
-        AndroidFileCategory.AUDIO -> "Music/LIFEOS"
-        AndroidFileCategory.DOCUMENT -> "Documents/LIFEOS"
-        AndroidFileCategory.ARCHIVE -> "Documents/LIFEOS/Archives"
-        AndroidFileCategory.BACKUP -> "Documents/LIFEOS/Backups"
-        AndroidFileCategory.DATABASE,
-        AndroidFileCategory.WHATSAPP,
-        AndroidFileCategory.UNKNOWN,
-        -> null
+    internal fun suggestedDirectory(file: StorageIndexedFile): String? {
+        if (!isOrganizationEligible(file.relativePath)) return null
+        return when (file.category) {
+            AndroidFileCategory.IMAGE -> "Pictures/LIFEOS"
+            AndroidFileCategory.VIDEO -> "Movies/LIFEOS"
+            AndroidFileCategory.AUDIO -> "Music/LIFEOS"
+            AndroidFileCategory.DOCUMENT -> "Documents/LIFEOS"
+            AndroidFileCategory.ARCHIVE -> "Documents/LIFEOS/Archives"
+            AndroidFileCategory.BACKUP -> "Documents/LIFEOS/Backups"
+            AndroidFileCategory.DATABASE,
+            AndroidFileCategory.WHATSAPP,
+            AndroidFileCategory.UNKNOWN,
+            -> null
+        }
+    }
+
+    private fun isOrganizationEligible(relativePath: String): Boolean {
+        val normalized = relativePath.replace('\\', '/').trimStart('/')
+        if ('/' !in normalized) return true
+        val top = normalized.substringBefore('/').lowercase()
+        return top in ORGANIZATION_INBOX_ROOTS
     }
 
     private fun alreadyIn(path: String, directory: String): Boolean {
@@ -655,10 +686,30 @@ internal object StorageCleanupPlanner {
             "/tmp/" in ("/" + p + "/")
     }
 
+    private fun isOlderThan(
+        modifiedAtMillis: Long,
+        nowMillis: Long,
+        minimumAgeMillis: Long,
+    ): Boolean {
+        if (modifiedAtMillis <= 0L) return true
+        if (modifiedAtMillis > nowMillis) return false
+        return nowMillis - modifiedAtMillis >= minimumAgeMillis
+    }
+
     private val PROTECTED_CATEGORIES = setOf(
         AndroidFileCategory.DATABASE,
         AndroidFileCategory.BACKUP,
         AndroidFileCategory.WHATSAPP,
+    )
+    private const val TEMP_MIN_AGE_MILLIS = 7L * 24L * 60L * 60L * 1000L
+    private const val INSTALLER_MIN_AGE_MILLIS = 30L * 24L * 60L * 60L * 1000L
+    private val ORGANIZATION_INBOX_ROOTS = setOf(
+        "download",
+        "downloads",
+        "bluetooth",
+        "received",
+        "share",
+        "shared",
     )
 }
 
@@ -742,6 +793,7 @@ internal object StorageTreePager {
                 continue
             }
             if (file.isDirectory) {
+                if (canPruneSubtree(current.relativePath, after)) continue
                 val canonical = runCatching { file.canonicalPath }.getOrNull()
                 if (
                     canonical == null ||
@@ -781,6 +833,13 @@ internal object StorageTreePager {
             .replace(File.separatorChar, '/')
             .trim()
         return relative.takeIf { it.isNotBlank() }?.let { Candidate(file, it) }
+    }
+
+    private fun canPruneSubtree(relativeDirectory: String, after: String): Boolean {
+        if (after.isBlank()) return false
+        val prefix = relativeDirectory.trimEnd('/') + "/"
+        if (after.startsWith(prefix)) return false
+        return prefix < after
     }
 
     private fun insideRoot(rootPath: String, path: String): Boolean =

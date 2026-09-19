@@ -142,6 +142,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     internal lateinit var storageIntelligence: AndroidStorageIntelligenceRuntime
         private set
 
+    internal lateinit var storageMaintenance: AndroidStorageMaintenanceRuntime
+        private set
+
     internal lateinit var selfObservationRuntime: SelfObservationRuntime
         private set
 
@@ -247,6 +250,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         )
         hardwareResourceIntelligence = HardwareResourceIntelligenceRuntime(this)
         storageIntelligence = AndroidStorageIntelligenceRuntime(
+            context = this,
+            hardware = hardwareResourceIntelligence,
+        )
+        storageMaintenance = AndroidStorageMaintenanceRuntime(
             context = this,
             hardware = hardwareResourceIntelligence,
         )

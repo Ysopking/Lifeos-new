@@ -24,6 +24,7 @@ object PrivateOwnerPolicyBaseline {
     const val TOOL_WORKSHOP_SCOPE = "private-apk-tool-workshop"
     const val HOT_SWAP_SCOPE = "private-apk-hot-swap"
     const val GENERATED_PROVIDER_RESTORE_SCOPE = "private-apk-generated-provider-restore"
+    const val STORAGE_MAINTENANCE_SCOPE = "private-apk-storage-maintenance"
 
     private val mutex = Mutex()
 
@@ -33,6 +34,19 @@ object PrivateOwnerPolicyBaseline {
         if (policy.snapshot().revision != 0L) return@withLock
         DEFAULT_GRANTS.forEach { policy.grant(it) }
     }
+
+    fun storageMaintenanceGrant(
+        validFrom: Instant = Instant.EPOCH,
+    ): OwnerPolicyGrant = OwnerPolicyGrant.create(
+        actorId = ownerActorId,
+        effect = OwnerEffectType.FILE_WRITE,
+        resource = OwnerResourceSelector(
+            OwnerResourceSelectorType.PREFIX,
+            PrivateOwnerEffectAuthority.STORAGE_MAINTENANCE_RESOURCE_PREFIX,
+        ),
+        scope = STORAGE_MAINTENANCE_SCOPE,
+        validFrom = validFrom,
+    )
 
     private val DEFAULT_GRANTS = listOf(
         OwnerPolicyGrant.create(
