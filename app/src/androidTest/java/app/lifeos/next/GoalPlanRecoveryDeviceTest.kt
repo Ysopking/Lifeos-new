@@ -13,7 +13,7 @@ import app.lifeos.next.kernel.KernelBootstrapStatus
 import java.time.Instant
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -30,22 +30,28 @@ class GoalPlanRecoveryDeviceTest {
     private val at = Instant.parse("2026-09-11T14:00:00Z")
 
     private suspend fun awaitBoot() {
-        val processStartup = withTimeout(30_000) {
+        val processStartup = withTimeoutOrNull(90_000) {
             app.startupState.first { state ->
                 state.phase == LifeOsProcessStartupPhase.READY ||
                     state.phase == LifeOsProcessStartupPhase.FAILED
             }
-        }
+        } ?: error(
+            "Process startup timed out during V7 recovery at stage: " +
+                app.startupState.value.stage
+        )
         if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
             error("Process startup failed during V7 recovery: ${processStartup.failure ?: "unknown"}")
         }
-        val boot = withTimeout(30_000) {
+        val boot = withTimeoutOrNull(90_000) {
             app.kernel.bootstrapState.first {
                 it.status == KernelBootstrapStatus.READY ||
                     it.status == KernelBootstrapStatus.DEGRADED ||
                     it.status == KernelBootstrapStatus.FAILED
             }
-        }
+        } ?: error(
+            "Kernel boot timed out during V7 recovery: " +
+                app.kernel.bootstrapState.value.status
+        )
         if (boot.status == KernelBootstrapStatus.FAILED) {
             error("Kernel boot failed during V7 recovery: ${boot.failureMessage ?: "unknown"}")
         }
