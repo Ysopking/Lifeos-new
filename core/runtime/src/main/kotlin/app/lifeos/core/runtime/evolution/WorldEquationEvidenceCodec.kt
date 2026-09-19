@@ -163,7 +163,9 @@ object WorldEquationEvidenceCodec {
         data.writeDouble(metrics.terminalDelta)
         require(metrics.activeCoefficientIds.size <= MAX_ACTIVE_COEFFICIENTS)
         data.writeInt(metrics.activeCoefficientIds.size)
-        metrics.activeCoefficientIds.map { it.value }.sorted().forEach(data::writeString)
+        metrics.activeCoefficientIds.map { it.value }.sorted().forEach { value ->
+            data.writeString(value)
+        }
     }
 
     private fun readMetrics(data: DataInputStream): WorldEquationRunMetrics {
