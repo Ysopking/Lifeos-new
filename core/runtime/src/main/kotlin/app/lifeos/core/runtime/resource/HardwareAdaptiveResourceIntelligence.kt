@@ -158,7 +158,11 @@ data class HardwareStateSnapshot(
         val measuredLoad = effectiveProcessCpuLoadFraction() ?: UNKNOWN_PROCESS_CPU_LOAD
         val loadHeadroom = (1.0 - measuredLoad).coerceIn(0.0, 1.0)
         val memoryBoundary = memoryHeadroom()
-            ?.let { (0.50 + 0.50 * it).coerceIn(0.0, 1.0) }
+            ?.let { headroom ->
+                // RAM already has an independent hard quota. Compute is contracted only once
+                // pressure becomes material, avoiding a second penalty on healthy mid-range RAM.
+                if (headroom >= 0.50) 1.0 else (0.50 + headroom).coerceIn(0.50, 1.0)
+            }
             // Unknown memory is already conservatively constrained by the independent memory quota.
             // Avoid applying the same uncertainty twice to compute capacity.
             ?: 1.0
