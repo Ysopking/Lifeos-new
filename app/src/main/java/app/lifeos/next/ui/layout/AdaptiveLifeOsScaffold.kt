@@ -29,7 +29,7 @@ fun AdaptiveLifeOsScaffold(
     selected: LifeOsDestination,
     onSelect: (LifeOsDestination) -> Unit,
     onOpenSystem: () -> Unit,
-    attention: Boolean,
+    attentionCount: Int,
     modifier: Modifier = Modifier,
     content: @Composable (Modifier) -> Unit,
 ) {
@@ -41,7 +41,7 @@ fun AdaptiveLifeOsScaffold(
                     LifeOsTopBar(
                         state = LifeOsTopBarState(
                             title = selected.label,
-                            attention = attention,
+                            attentionCount = attentionCount,
                         ),
                         onOpenSystem = onOpenSystem,
                     )
@@ -81,7 +81,7 @@ fun AdaptiveLifeOsScaffold(
                     LifeOsTopBar(
                         state = LifeOsTopBarState(
                             title = selected.label,
-                            attention = attention,
+                            attentionCount = attentionCount,
                         ),
                         onOpenSystem = onOpenSystem,
                     )
@@ -100,7 +100,7 @@ fun AdaptiveLifeOsScaffold(
                     LifeOsTopBar(
                         state = LifeOsTopBarState(
                             title = selected.label,
-                            attention = attention,
+                            attentionCount = attentionCount,
                         ),
                         onOpenSystem = onOpenSystem,
                     )
