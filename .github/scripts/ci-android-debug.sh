@@ -14,14 +14,14 @@ step "preflight: Java"
 java -version
 
 step "preflight: Gradle"
-gradle --version
+./gradlew --version
 
 step "preflight: Android SDK"
 printf 'ANDROID_HOME=%s\n' "${ANDROID_HOME:-}"
 printf 'ANDROID_SDK_ROOT=%s\n' "${ANDROID_SDK_ROOT:-}"
 
 step "gates 01-03: unit tests, app debug lint and debug APK"
-gradle test :app:lintDebug :app:assembleDebug --stacktrace
+./gradlew test :app:lintDebug :app:assembleDebug --stacktrace
 
 step "gate 04: APK existence"
 test -f "$apk_path"
