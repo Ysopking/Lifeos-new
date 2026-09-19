@@ -48,7 +48,8 @@ fun LifeOsMemoryScreen(
                 value = state.query,
                 onValueChange = model::editQuery,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Im Gedächtnis suchen") },
+                label = { Text("Gedächtnis durchsuchen") },
+                placeholder = { Text("Begriff, Quelle oder Thema") },
                 singleLine = true,
             )
             Box {
