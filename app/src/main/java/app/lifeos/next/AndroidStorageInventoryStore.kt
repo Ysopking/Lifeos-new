@@ -1,0 +1,369 @@
+package app.lifeos.next
+
+import android.content.ContentValues
+import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteOpenHelper
+import java.io.File
+
+internal data class StorageInventoryEntry(
+    val volumeId: String,
+    val relativePath: String,
+    val absolutePath: String,
+    val sizeBytes: Long,
+    val modifiedAtMillis: Long,
+    val category: AndroidFileCategory,
+    val suspectedEncrypted: Boolean,
+    val hashOffsetBytes: Long,
+    val hashChain: String?,
+    val contentFingerprint: String?,
+    val lastSeenScanId: String,
+) {
+    init {
+        require(volumeId.isNotBlank())
+        require(relativePath.isNotBlank())
+        require(sizeBytes >= 0L)
+        require(modifiedAtMillis >= 0L)
+        require(hashOffsetBytes in 0L..sizeBytes)
+        require(hashChain == null || hashChain.matches(Regex("[0-9a-f]{64}")))
+        require(contentFingerprint == null || contentFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(lastSeenScanId.isNotBlank())
+    }
+
+    fun asIndexedFile(): StorageIndexedFile = StorageIndexedFile(
+        volumeId = volumeId,
+        relativePath = relativePath,
+        absolutePath = absolutePath,
+        sizeBytes = sizeBytes,
+        modifiedAtMillis = modifiedAtMillis,
+        category = category,
+        suspectedEncrypted = suspectedEncrypted,
+        contentFingerprint = contentFingerprint,
+    )
+}
+
+/**
+ * Durable metadata/content-fingerprint index for owner-reachable shared storage.
+ *
+ * The database contains metadata and resumable cryptographic fingerprints only. File contents are
+ * never copied into this database. A metadata change resets hash progress so stale fingerprints
+ * cannot be reused for deletion decisions.
+ */
+internal class AndroidStorageInventoryStore(
+    context: Context,
+) : SQLiteOpenHelper(
+    context.applicationContext,
+    DATABASE_NAME,
+    null,
+    DATABASE_VERSION,
+) {
+    override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE storage_files (
+                volume_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                absolute_path TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                modified_ms INTEGER NOT NULL,
+                category TEXT NOT NULL,
+                suspected_encrypted INTEGER NOT NULL,
+                hash_offset_bytes INTEGER NOT NULL DEFAULT 0,
+                hash_chain TEXT,
+                content_fingerprint TEXT,
+                last_seen_scan_id TEXT NOT NULL,
+                PRIMARY KEY(volume_id, relative_path)
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            "CREATE INDEX storage_files_hash_idx ON storage_files(size_bytes, content_fingerprint)"
+        )
+        db.execSQL(
+            "CREATE INDEX storage_files_pending_hash_idx ON storage_files(content_fingerprint, hash_offset_bytes)"
+        )
+        db.execSQL(
+            "CREATE INDEX storage_files_scan_idx ON storage_files(last_seen_scan_id)"
+        )
+    }
+
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        error("Storage inventory schema has no migration from $oldVersion to $newVersion")
+    }
+
+    fun upsertMetadata(
+        scanId: String,
+        volumeId: String,
+        files: List<StorageTreePager.Entry>,
+    ) {
+        require(scanId.isNotBlank())
+        require(volumeId.isNotBlank())
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            files.forEach { entry ->
+                val file = entry.file
+                val classification = AndroidFileMetadataClassifier.classify(
+                    relativePath = entry.relativePath,
+                    displayName = file.name,
+                    mimeType = null,
+                )
+                val size = file.length().coerceAtLeast(0L)
+                val modified = file.lastModified().coerceAtLeast(0L)
+                val previous = loadInternal(db, volumeId, entry.relativePath)
+                val unchanged = previous != null &&
+                    previous.sizeBytes == size &&
+                    previous.modifiedAtMillis == modified
+
+                val values = ContentValues().apply {
+                    put(COL_VOLUME, volumeId)
+                    put(COL_PATH, entry.relativePath)
+                    put(COL_ABSOLUTE, file.absolutePath)
+                    put(COL_SIZE, size)
+                    put(COL_MODIFIED, modified)
+                    put(COL_CATEGORY, classification.category.name)
+                    put(COL_ENCRYPTED, if (classification.suspectedEncrypted) 1 else 0)
+                    put(COL_SCAN, scanId)
+                    if (unchanged) {
+                        put(COL_HASH_OFFSET, previous!!.hashOffsetBytes)
+                        if (previous.hashChain == null) putNull(COL_HASH_CHAIN)
+                        else put(COL_HASH_CHAIN, previous.hashChain)
+                        if (previous.contentFingerprint == null) putNull(COL_FINGERPRINT)
+                        else put(COL_FINGERPRINT, previous.contentFingerprint)
+                    } else {
+                        put(COL_HASH_OFFSET, 0L)
+                        putNull(COL_HASH_CHAIN)
+                        putNull(COL_FINGERPRINT)
+                    }
+                }
+                db.insertWithOnConflict(
+                    TABLE,
+                    null,
+                    values,
+                    SQLiteDatabase.CONFLICT_REPLACE,
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun pendingHashEntries(limit: Int): List<StorageInventoryEntry> {
+        require(limit > 0)
+        val out = mutableListOf<StorageInventoryEntry>()
+        readableDatabase.query(
+            TABLE,
+            COLUMNS,
+            "$COL_FINGERPRINT IS NULL",
+            null,
+            null,
+            null,
+            "$COL_SIZE ASC, $COL_VOLUME ASC, $COL_PATH ASC",
+            limit.toString(),
+        ).use { cursor ->
+            while (cursor.moveToNext()) out += cursor.toEntry()
+        }
+        return out
+    }
+
+    fun updateHashProgress(
+        entry: StorageInventoryEntry,
+        nextOffsetBytes: Long,
+        nextChain: String,
+        finalFingerprint: String?,
+    ): Boolean {
+        require(nextOffsetBytes in 0L..entry.sizeBytes)
+        require(nextChain.matches(Regex("[0-9a-f]{64}")))
+        require(finalFingerprint == null || finalFingerprint.matches(Regex("[0-9a-f]{64}")))
+        val values = ContentValues().apply {
+            put(COL_HASH_OFFSET, nextOffsetBytes)
+            put(COL_HASH_CHAIN, nextChain)
+            if (finalFingerprint == null) putNull(COL_FINGERPRINT)
+            else put(COL_FINGERPRINT, finalFingerprint)
+        }
+        return writableDatabase.update(
+            TABLE,
+            values,
+            "$COL_VOLUME=? AND $COL_PATH=? AND $COL_SIZE=? AND $COL_MODIFIED=?",
+            arrayOf(
+                entry.volumeId,
+                entry.relativePath,
+                entry.sizeBytes.toString(),
+                entry.modifiedAtMillis.toString(),
+            ),
+        ) == 1
+    }
+
+    fun resetHashProgress(entry: StorageInventoryEntry) {
+        val values = ContentValues().apply {
+            put(COL_HASH_OFFSET, 0L)
+            putNull(COL_HASH_CHAIN)
+            putNull(COL_FINGERPRINT)
+        }
+        writableDatabase.update(
+            TABLE,
+            values,
+            "$COL_VOLUME=? AND $COL_PATH=?",
+            arrayOf(entry.volumeId, entry.relativePath),
+        )
+    }
+
+    fun purgeNotSeen(scanId: String): Int {
+        require(scanId.isNotBlank())
+        return writableDatabase.delete(TABLE, "$COL_SCAN<>?", arrayOf(scanId))
+    }
+
+    fun exactDuplicateGroups(): List<List<StorageIndexedFile>> {
+        val keys = mutableListOf<Pair<Long, String>>()
+        readableDatabase.rawQuery(
+            """
+            SELECT $COL_SIZE, $COL_FINGERPRINT
+            FROM $TABLE
+            WHERE $COL_FINGERPRINT IS NOT NULL AND $COL_SIZE > 0
+            GROUP BY $COL_SIZE, $COL_FINGERPRINT
+            HAVING COUNT(*) > 1
+            ORDER BY $COL_SIZE DESC, $COL_FINGERPRINT ASC
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                keys += cursor.getLong(0) to cursor.getString(1)
+            }
+        }
+        return keys.map { (size, fingerprint) ->
+            val entries = mutableListOf<StorageIndexedFile>()
+            readableDatabase.query(
+                TABLE,
+                COLUMNS,
+                "$COL_SIZE=? AND $COL_FINGERPRINT=?",
+                arrayOf(size.toString(), fingerprint),
+                null,
+                null,
+                "$COL_VOLUME ASC, $COL_PATH ASC",
+            ).use { cursor ->
+                while (cursor.moveToNext()) entries += cursor.toEntry().asIndexedFile()
+            }
+            entries
+        }
+    }
+
+    fun reviewEntries(): List<StorageIndexedFile> {
+        val out = mutableListOf<StorageIndexedFile>()
+        readableDatabase.query(
+            TABLE,
+            COLUMNS,
+            "$COL_SIZE>=? OR lower($COL_PATH) LIKE ? OR lower($COL_PATH) LIKE ? OR lower($COL_PATH) LIKE ? OR lower($COL_PATH) LIKE ?",
+            arrayOf(
+                LARGE_REVIEW_BYTES.toString(),
+                "%.tmp",
+                "%.temp",
+                "%.part",
+                "%.apk",
+            ),
+            null,
+            null,
+            "$COL_SIZE DESC, $COL_VOLUME ASC, $COL_PATH ASC",
+        ).use { cursor ->
+            while (cursor.moveToNext()) out += cursor.toEntry().asIndexedFile()
+        }
+        return out
+    }
+
+    fun summary(): StorageInventorySummary {
+        readableDatabase.rawQuery(
+            """
+            SELECT COUNT(*), COALESCE(SUM($COL_SIZE),0),
+                   SUM(CASE WHEN $COL_FINGERPRINT IS NOT NULL THEN 1 ELSE 0 END),
+                   COALESCE(SUM(CASE WHEN $COL_FINGERPRINT IS NOT NULL THEN $COL_SIZE ELSE 0 END),0)
+            FROM $TABLE
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            check(cursor.moveToFirst())
+            return StorageInventorySummary(
+                indexedFiles = cursor.getLong(0),
+                indexedBytes = cursor.getLong(1),
+                fullyFingerprintedFiles = cursor.getLong(2),
+                fullyFingerprintedBytes = cursor.getLong(3),
+            )
+        }
+    }
+
+    private fun loadInternal(
+        db: SQLiteDatabase,
+        volumeId: String,
+        relativePath: String,
+    ): StorageInventoryEntry? {
+        db.query(
+            TABLE,
+            COLUMNS,
+            "$COL_VOLUME=? AND $COL_PATH=?",
+            arrayOf(volumeId, relativePath),
+            null,
+            null,
+            null,
+            "1",
+        ).use { cursor ->
+            return if (cursor.moveToFirst()) cursor.toEntry() else null
+        }
+    }
+
+    private fun android.database.Cursor.toEntry(): StorageInventoryEntry = StorageInventoryEntry(
+        volumeId = getString(getColumnIndexOrThrow(COL_VOLUME)),
+        relativePath = getString(getColumnIndexOrThrow(COL_PATH)),
+        absolutePath = getString(getColumnIndexOrThrow(COL_ABSOLUTE)),
+        sizeBytes = getLong(getColumnIndexOrThrow(COL_SIZE)),
+        modifiedAtMillis = getLong(getColumnIndexOrThrow(COL_MODIFIED)),
+        category = AndroidFileCategory.valueOf(getString(getColumnIndexOrThrow(COL_CATEGORY))),
+        suspectedEncrypted = getInt(getColumnIndexOrThrow(COL_ENCRYPTED)) != 0,
+        hashOffsetBytes = getLong(getColumnIndexOrThrow(COL_HASH_OFFSET)),
+        hashChain = getStringOrNull(getColumnIndexOrThrow(COL_HASH_CHAIN)),
+        contentFingerprint = getStringOrNull(getColumnIndexOrThrow(COL_FINGERPRINT)),
+        lastSeenScanId = getString(getColumnIndexOrThrow(COL_SCAN)),
+    )
+
+    private fun android.database.Cursor.getStringOrNull(index: Int): String? =
+        if (isNull(index)) null else getString(index)
+
+    companion object {
+        const val LARGE_REVIEW_BYTES = 2L * 1024L * 1024L * 1024L
+        private const val DATABASE_NAME = "lifeos-storage-inventory.db"
+        private const val DATABASE_VERSION = 1
+        private const val TABLE = "storage_files"
+        private const val COL_VOLUME = "volume_id"
+        private const val COL_PATH = "relative_path"
+        private const val COL_ABSOLUTE = "absolute_path"
+        private const val COL_SIZE = "size_bytes"
+        private const val COL_MODIFIED = "modified_ms"
+        private const val COL_CATEGORY = "category"
+        private const val COL_ENCRYPTED = "suspected_encrypted"
+        private const val COL_HASH_OFFSET = "hash_offset_bytes"
+        private const val COL_HASH_CHAIN = "hash_chain"
+        private const val COL_FINGERPRINT = "content_fingerprint"
+        private const val COL_SCAN = "last_seen_scan_id"
+        private val COLUMNS = arrayOf(
+            COL_VOLUME,
+            COL_PATH,
+            COL_ABSOLUTE,
+            COL_SIZE,
+            COL_MODIFIED,
+            COL_CATEGORY,
+            COL_ENCRYPTED,
+            COL_HASH_OFFSET,
+            COL_HASH_CHAIN,
+            COL_FINGERPRINT,
+            COL_SCAN,
+        )
+    }
+}
+
+internal data class StorageInventorySummary(
+    val indexedFiles: Long,
+    val indexedBytes: Long,
+    val fullyFingerprintedFiles: Long,
+    val fullyFingerprintedBytes: Long,
+) {
+    val fingerprintComplete: Boolean
+        get() = indexedFiles == fullyFingerprintedFiles
+}
