@@ -11,6 +11,8 @@ import app.lifeos.next.ui.components.PhotonImagePreviewLoader
 import app.lifeos.next.ui.components.PhotonImagePreviewState
 import app.lifeos.next.ui.memory.MemorySearchIndex
 import app.lifeos.next.ui.memory.MemorySourceUi
+import app.lifeos.next.ui.memory.MemoryWorkspacePageState
+import app.lifeos.next.ui.memory.MemoryWorkspacePager
 import app.lifeos.next.ui.memory.MemoryWorkspaceProjector
 import app.lifeos.next.ui.memory.MemoryWorkspaceUiModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +40,8 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
     private var latestPhotons: List<Photon> = emptyList()
     private var latestSnapshot: DurableLifeMemorySnapshot? = null
     private var searchIndex: MemorySearchIndex = MemorySearchIndex.build(emptyList())
+    private var fullWorkspace: MemoryWorkspaceUiModel = MemoryWorkspaceUiModel.empty()
+    private var pageState: MemoryWorkspacePageState = MemoryWorkspacePageState()
 
     val state = mutableState.asStateFlow()
 
@@ -46,16 +50,33 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun editQuery(query: String) {
+        pageState = MemoryWorkspacePageState()
+        fullWorkspace = MemoryWorkspaceProjector.project(
+            snapshot = latestSnapshot,
+            searchIndex = searchIndex,
+            query = query,
+        )
         mutableState.update { current ->
             current.copy(
                 query = query,
-                workspace = MemoryWorkspaceProjector.project(
-                    snapshot = latestSnapshot,
-                    searchIndex = searchIndex,
-                    query = query,
-                ),
+                workspace = MemoryWorkspacePager.page(fullWorkspace, pageState),
             )
         }
+    }
+
+    fun loadMoreNow() {
+        pageState = pageState.expandNow()
+        publishPagedWorkspace()
+    }
+
+    fun loadMoreTopics() {
+        pageState = pageState.expandTopics()
+        publishPagedWorkspace()
+    }
+
+    fun loadMoreTimeline() {
+        pageState = pageState.expandTimeline()
+        publishPagedWorkspace()
     }
 
     fun selectSource(photonId: PhotonId) {
@@ -90,6 +111,11 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
                 latestPhotons = boot.photons
                 searchIndex = MemorySearchIndex.reuseOrBuild(searchIndex, latestPhotons)
                 latestSnapshot = owner.lifeMemoryRuntime.current()
+                fullWorkspace = MemoryWorkspaceProjector.project(
+                    snapshot = latestSnapshot,
+                    searchIndex = searchIndex,
+                    query = mutableState.value.query,
+                )
                 mutableState.update { current ->
                     val selected = current.selectedSourceId?.let { id ->
                         MemoryWorkspaceProjector.resolveSource(
@@ -99,11 +125,7 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
                         )
                     }
                     current.copy(
-                        workspace = MemoryWorkspaceProjector.project(
-                            snapshot = latestSnapshot,
-                            searchIndex = searchIndex,
-                            query = current.query,
-                        ),
+                        workspace = MemoryWorkspacePager.page(fullWorkspace, pageState),
                         loading = boot.status == KernelBootstrapStatus.CREATED ||
                             boot.status == KernelBootstrapStatus.LOADING,
                         selectedSource = selected,
@@ -111,6 +133,12 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
                     )
                 }
             }
+        }
+    }
+
+    private fun publishPagedWorkspace() {
+        mutableState.update { current ->
+            current.copy(workspace = MemoryWorkspacePager.page(fullWorkspace, pageState))
         }
     }
 

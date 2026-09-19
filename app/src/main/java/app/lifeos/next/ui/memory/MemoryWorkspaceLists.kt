@@ -23,6 +23,7 @@ import app.lifeos.core.model.PhotonId
 internal fun MemoryNowList(
     workspace: MemoryWorkspaceUiModel,
     onOpenSource: (PhotonId) -> Unit,
+    onLoadMore: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (workspace.now.isEmpty()) {
@@ -56,6 +57,13 @@ internal fun MemoryNowList(
                 }
             }
         }
+        if (workspace.paging.hasMoreNow) {
+            item(key = "load-more-now") {
+                TextButton(onClick = onLoadMore) {
+                    Text("Mehr laden · " + workspace.paging.visibleNowCount + "/" + workspace.paging.totalNowCount)
+                }
+            }
+        }
     }
 }
 
@@ -63,6 +71,7 @@ internal fun MemoryNowList(
 internal fun MemoryTopicsList(
     workspace: MemoryWorkspaceUiModel,
     onOpenSource: (PhotonId) -> Unit,
+    onLoadMore: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (workspace.topicGroups.isEmpty() && workspace.crystals.isEmpty()) {
@@ -85,6 +94,18 @@ internal fun MemoryTopicsList(
                 MemoryAtomCard(atom, onOpenSource)
             }
         }
+        if (workspace.paging.hasMoreTopics) {
+            item(key = "load-more-topics") {
+                TextButton(onClick = onLoadMore) {
+                    Text(
+                        "Mehr laden · " +
+                            (workspace.paging.visibleTopicAtomCount + workspace.paging.visibleCrystalCount) +
+                            "/" +
+                            (workspace.paging.totalTopicAtomCount + workspace.paging.totalCrystalCount)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -92,6 +113,7 @@ internal fun MemoryTopicsList(
 internal fun MemoryTimelineList(
     workspace: MemoryWorkspaceUiModel,
     onOpenSource: (PhotonId) -> Unit,
+    onLoadMore: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     if (workspace.episodes.isEmpty()) {
@@ -101,6 +123,18 @@ internal fun MemoryTimelineList(
     LazyColumn(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(workspace.episodes, key = { it.episodeId }) { episode ->
             MemoryEpisodeCard(episode, onOpenSource)
+        }
+        if (workspace.paging.hasMoreTimeline) {
+            item(key = "load-more-timeline") {
+                TextButton(onClick = onLoadMore) {
+                    Text(
+                        "Mehr laden · " +
+                            workspace.paging.visibleEpisodeCount +
+                            "/" +
+                            workspace.paging.totalEpisodeCount
+                    )
+                }
+            }
         }
     }
 }

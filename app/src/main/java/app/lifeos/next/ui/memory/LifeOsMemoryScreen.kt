@@ -91,16 +91,19 @@ fun LifeOsMemoryScreen(
                 MemoryWorkspaceTab.NOW -> MemoryNowList(
                     workspace = state.workspace,
                     onOpenSource = model::selectSource,
+                    onLoadMore = model::loadMoreNow,
                     modifier = Modifier.weight(1f),
                 )
                 MemoryWorkspaceTab.TOPICS -> MemoryTopicsList(
                     workspace = state.workspace,
                     onOpenSource = model::selectSource,
+                    onLoadMore = model::loadMoreTopics,
                     modifier = Modifier.weight(1f),
                 )
                 MemoryWorkspaceTab.TIMELINE -> MemoryTimelineList(
                     workspace = state.workspace,
                     onOpenSource = model::selectSource,
+                    onLoadMore = model::loadMoreTimeline,
                     modifier = Modifier.weight(1f),
                 )
             }

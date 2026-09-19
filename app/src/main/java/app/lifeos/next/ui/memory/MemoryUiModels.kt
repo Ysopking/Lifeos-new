@@ -73,6 +73,23 @@ data class MemoryEpisodeUi(
     val missingSourceCount: Int,
 )
 
+data class MemoryWorkspacePagingUi(
+    val visibleNowCount: Int = 0,
+    val totalNowCount: Int = 0,
+    val visibleTopicAtomCount: Int = 0,
+    val totalTopicAtomCount: Int = 0,
+    val visibleCrystalCount: Int = 0,
+    val totalCrystalCount: Int = 0,
+    val visibleEpisodeCount: Int = 0,
+    val totalEpisodeCount: Int = 0,
+) {
+    val hasMoreNow: Boolean get() = visibleNowCount < totalNowCount
+    val hasMoreTopics: Boolean
+        get() = visibleTopicAtomCount < totalTopicAtomCount ||
+            visibleCrystalCount < totalCrystalCount
+    val hasMoreTimeline: Boolean get() = visibleEpisodeCount < totalEpisodeCount
+}
+
 data class MemoryWorkspaceUiModel(
     val projectionAvailable: Boolean,
     val projectionEvaluatedAt: Instant?,
@@ -82,6 +99,7 @@ data class MemoryWorkspaceUiModel(
     val crystals: List<MemoryCrystalUi>,
     val episodes: List<MemoryEpisodeUi>,
     val query: String,
+    val paging: MemoryWorkspacePagingUi = MemoryWorkspacePagingUi(),
 ) {
     companion object {
         fun empty(): MemoryWorkspaceUiModel = MemoryWorkspaceUiModel(
