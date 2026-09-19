@@ -38,6 +38,14 @@ data class WorldEquationShadowCase(
     )
 }
 
+fun interface WorldEquationShadowRunner {
+    suspend fun evaluate(
+        baseline: WorldEquationSpec,
+        candidate: WorldEquationSpec,
+        case: WorldEquationShadowCase,
+    ): WorldEquationShadowObservation
+}
+
 /**
  * Paired, non-productive WorldEquation evaluator.
  *
@@ -46,8 +54,8 @@ data class WorldEquationShadowCase(
  * process-local repository, so evaluation cannot publish ProductiveWorldHead state, capture
  * CognitiveSnapshots or emit cognitive triggers.
  */
-class WorldEquationShadowEvaluator {
-    suspend fun evaluate(
+class WorldEquationShadowEvaluator : WorldEquationShadowRunner {
+    override suspend fun evaluate(
         baseline: WorldEquationSpec,
         candidate: WorldEquationSpec,
         case: WorldEquationShadowCase,
