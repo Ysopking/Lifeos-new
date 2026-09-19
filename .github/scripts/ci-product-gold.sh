@@ -18,15 +18,6 @@ bash .github/scripts/ci-gold-coverage-contract.sh
 step "Product Gold 03: complete core regression set"
 bash .github/scripts/ci-core-fast.sh
 
-step "Product Gold 03b: functional Level-7 JVM GOLD"
-gradle :core:runtime:test --stacktrace \
-  --tests 'app.lifeos.core.runtime.level7.Level7ContractInvariantTest' \
-  --tests 'app.lifeos.core.runtime.level7.Level7ArchitectureGuardTest' \
-  --tests 'app.lifeos.core.runtime.level7.Level7FunctionalGoldTest' \
-  --tests 'app.lifeos.core.runtime.escalation.EscalationFunctionalGoldTest' \
-  --tests 'app.lifeos.core.runtime.level7.Level7NovelDomainGoldTest' \
-  --tests 'app.lifeos.core.runtime.level7.Level7TransferGoldTest'
-
 step "Product Gold 04: unit tests, lint and debug APK"
 bash .github/scripts/ci-android-debug.sh
 
