@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlinx.coroutines.test.runTest
 
 class WorldEquationPackStructuralCanaryPlanTest {
     @Test
@@ -68,6 +69,59 @@ class WorldEquationPackStructuralCanaryPlanTest {
                 maximumConsecutiveFailures = 1,
             )
         }
+    }
+
+    @Test
+    fun codecRejectsTrailingBytesAndPreservesCanonicalPlan() {
+        val validation = validationBundle("candidate-codec")
+        val recovery = WorldEquationPackStructuralValidationRecoveryReport(
+            state = WorldEquationPackStructuralValidationRecoveryState.HEALTHY,
+            bundles = listOf(validation),
+            unreadableEntries = emptyList(),
+        )
+        val plan = WorldEquationPackStructuralCanaryPlanner().create(
+            validation = validation,
+            recovery = recovery,
+            maximumCases = 25,
+            maximumConsecutiveFailures = 2,
+        )
+
+        val encoded = WorldEquationPackStructuralCanaryPlanCodec.encode(plan)
+        assertEquals(plan, WorldEquationPackStructuralCanaryPlanCodec.decode(encoded))
+        assertFailsWith<IllegalArgumentException> {
+            WorldEquationPackStructuralCanaryPlanCodec.decode(encoded + byteArrayOf(1))
+        }
+    }
+
+    @Test
+    fun coordinatorPersistsAndRecoversPlanIdempotently() = runTest {
+        val validation = validationBundle("candidate-coordinator")
+        val recovery = WorldEquationPackStructuralValidationRecoveryReport(
+            state = WorldEquationPackStructuralValidationRecoveryState.HEALTHY,
+            bundles = listOf(validation),
+            unreadableEntries = emptyList(),
+        )
+        val repository = InMemoryWorldEquationPackStructuralCanaryPlanRepository()
+        val coordinator = WorldEquationPackStructuralCanaryPlanCoordinator(repository)
+
+        val first = coordinator.createAndPersist(
+            validation = validation,
+            recovery = recovery,
+            maximumCases = 50,
+            maximumConsecutiveFailures = 2,
+        )
+        val second = coordinator.createAndPersist(
+            validation = validation,
+            recovery = recovery,
+            maximumCases = 50,
+            maximumConsecutiveFailures = 2,
+        )
+
+        assertEquals(first, second)
+        assertEquals(first, coordinator.recover(first.fingerprint))
+        assertEquals(listOf(first), repository.loadReport().plans)
+        assertFalse(first.executionAllowed)
+        assertFalse(first.productiveActivationAllowed)
     }
 
     private fun validationBundle(
