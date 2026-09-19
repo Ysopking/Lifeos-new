@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
 import app.lifeos.core.data.goal.EncryptedGoalCognitiveCycleBindingRepository
+import app.lifeos.core.data.evolution.EncryptedWorldEquationEvidenceRepository
 import app.lifeos.core.data.learning.EncryptedLearningWatermarkRepository
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
 import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
@@ -12,8 +13,14 @@ import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
+import app.lifeos.core.runtime.evolution.WorldEquationEvidenceCoordinator
+import app.lifeos.core.runtime.evolution.WorldEquationEvaluationProtocol
 import app.lifeos.core.runtime.evolution.WorldEquationEvolutionAdmissionGate
-import app.lifeos.core.runtime.evolution.WorldEquationEvolutionValidation
+import app.lifeos.core.runtime.evolution.WorldEquationPrimaryMetric
+import app.lifeos.core.runtime.evolution.WorldEquationPromotionEvaluator
+import app.lifeos.core.runtime.evolution.WorldEquationPromotionPolicy
+import app.lifeos.core.runtime.evolution.WorldEquationRunMetrics
+import app.lifeos.core.runtime.evolution.WorldEquationShadowObservation
 import app.lifeos.core.runtime.goal.GoalCognitiveCycleBindingRecord
 import app.lifeos.core.runtime.goal.GoalCognitiveCycleBindingState
 import app.lifeos.core.runtime.goal.GoalConvergenceCycleBinding
@@ -25,6 +32,7 @@ import app.lifeos.core.runtime.learning.LearningWatermarkWriteResult
 import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
 import app.lifeos.core.runtime.world.WorldEquationActivationAuthority
+import app.lifeos.core.runtime.world.WorldFormulaStatus
 import java.io.File
 import java.time.Instant
 import kotlinx.coroutines.runBlocking
@@ -68,27 +76,62 @@ class Level7TruthClosureGoldDeviceTest {
         )
         val equationRepo = EncryptedWorldEquationHeadRepository(context)
         val equationSpecs = EncryptedWorldEquationSpecRepository(context)
+        val equationEvidence = EncryptedWorldEquationEvidenceRepository(context)
+        val promotionEvaluator = WorldEquationPromotionEvaluator(
+            WorldEquationPromotionPolicy.V1
+        )
+        val evidenceCoordinator = WorldEquationEvidenceCoordinator(
+            repository = equationEvidence,
+            evaluator = promotionEvaluator,
+        )
+        val protocol = WorldEquationEvaluationProtocol(
+            version = "b200-truth-closure-protocol-v1",
+            primaryMetric = WorldEquationPrimaryMetric.STABILIZATION_ITERATIONS,
+            minimumIndependentRuns = 2,
+            minimumDistinctWorkloads = 1,
+            minimumActiveObservationsPerChangedCoefficient = 1,
+        )
+        evidenceCoordinator.beginShadow(candidateSpec, baselineSpec, protocol)
+        evidenceCoordinator.recordObservation(
+            candidateSpec,
+            baselineSpec,
+            goldObservation(
+                baselineSpec = baselineSpec,
+                candidateSpec = candidateSpec,
+                activeCoefficientId = firstCoefficient.id,
+                runId = "b200-run-1",
+            ),
+        )
+        evidenceCoordinator.recordObservation(
+            candidateSpec,
+            baselineSpec,
+            goldObservation(
+                baselineSpec = baselineSpec,
+                candidateSpec = candidateSpec,
+                activeCoefficientId = firstCoefficient.id,
+                runId = "b200-run-2",
+            ),
+        )
+        val admissionGate = WorldEquationEvolutionAdmissionGate(
+            evidence = equationEvidence,
+            evaluator = promotionEvaluator,
+        )
         val equations = InMemoryWorldEquationRegistry(listOf(baselineSpec))
         val equationAuthority = WorldEquationActivationAuthority(
             equations = equations,
             heads = equationRepo,
             baseline = baselineSpec,
             specs = equationSpecs,
+            admissionVerifier = admissionGate,
         )
         assertEquals(baselineSpec.version, equationAuthority.activeVersion())
         val baselineEquation = requireNotNull(equationRepo.load())
 
-        val validation = WorldEquationEvolutionValidation(
-            holdoutEvidenceId = StableFieldIds.fingerprint("b200-holdout", candidateSpec.version),
-            shadowEvidenceId = StableFieldIds.fingerprint("b200-shadow", candidateSpec.version),
-            trialEvidenceId = StableFieldIds.fingerprint("b200-trial", candidateSpec.version),
-            promotionDecisionId = StableFieldIds.fingerprint("b200-promotion", candidateSpec.version),
-        )
-        val admission = WorldEquationEvolutionAdmissionGate.admit(
+        val admission = admissionGate.admit(
             candidate = candidateSpec,
             baseline = baselineSpec,
-            validation = validation,
         )
+        val validation = admission.validation
         val promotedEquation = equationAuthority.promote(
             candidate = candidateSpec,
             admission = admission,
@@ -209,9 +252,9 @@ class Level7TruthClosureGoldDeviceTest {
                 promotedWorld.activeSnapshot.snapshotId,
                 learned.outcomeWorldSnapshotId.orEmpty(),
                 learningState.revision.toString(),
-                validation.holdoutEvidenceId,
-                validation.shadowEvidenceId,
-                validation.trialEvidenceId,
+                validation.evidenceRecordFingerprint,
+                validation.protocolFingerprint,
+                validation.policyFingerprint,
                 validation.promotionDecisionId,
                 planId.value,
                 outcome.id.value,
@@ -324,4 +367,33 @@ class Level7TruthClosureGoldDeviceTest {
         println("LEVEL7_TRUTH_CLOSURE_GOLD=$seal")
         assertTrue(seal.isNotBlank())
     }
+    private fun goldObservation(
+        baselineSpec: app.lifeos.core.field.world.WorldEquationSpec,
+        candidateSpec: app.lifeos.core.field.world.WorldEquationSpec,
+        activeCoefficientId: app.lifeos.core.field.world.WorldCoefficientId,
+        runId: String,
+    ) = WorldEquationShadowObservation(
+        caseFingerprint = StableFieldIds.fingerprint("b200-shadow-case", runId),
+        runId = runId,
+        workloadId = "b200-truth-closure-workload",
+        baselineEquationFingerprint = baselineSpec.fingerprint(),
+        candidateEquationFingerprint = candidateSpec.fingerprint(),
+        baseline = WorldEquationRunMetrics(
+            status = WorldFormulaStatus.CONVERGED,
+            iterationCount = 5,
+            conflictCount = 0,
+            anomalyCount = 0,
+            terminalDelta = 0.0,
+            activeCoefficientIds = setOf(activeCoefficientId),
+        ),
+        candidate = WorldEquationRunMetrics(
+            status = WorldFormulaStatus.CONVERGED,
+            iterationCount = 3,
+            conflictCount = 0,
+            anomalyCount = 0,
+            terminalDelta = 0.0,
+            activeCoefficientIds = setOf(activeCoefficientId),
+        ),
+    )
+
 }
