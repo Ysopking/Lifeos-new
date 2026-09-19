@@ -268,7 +268,7 @@ class LiveSourceDeltaCoordinatorTest {
     }
 
     private class FakeAuthority(
-        private val ingest: suspend (LiveDataDelta) -> LiveDataIngestResult = {
+        private val ingestHandler: suspend (LiveDataDelta) -> LiveDataIngestResult = {
             LiveDataIngestResult.Accepted(
                 photonId = it.photonId,
                 permissionSnapshotId = PhotonId("permission"),
@@ -294,7 +294,7 @@ class LiveSourceDeltaCoordinatorTest {
 
         override suspend fun ingest(delta: LiveDataDelta): LiveDataIngestResult {
             deltas += delta
-            return ingest(delta)
+            return ingestHandler(delta)
         }
     }
 }
