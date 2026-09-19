@@ -147,6 +147,23 @@ class LiveDataHubTest {
     }
 
     @Test
+    fun sameExternalRevisionWithDifferentPayloadIsRejected() = runBlocking {
+        val repository = MemoryRevisionedPhotonRepository()
+        val ingress = RecordingIngress(repository)
+        val hub = LiveDataHub(repository, ingress)
+        hub.observeAccount(observation())
+
+        val first = delta(LiveDataStreamKind.MESSAGE, payload = "original")
+        assertIs<LiveDataIngestResult.Accepted>(hub.ingest(first))
+
+        val conflicting = first.copy(payload = "conflicting-content")
+        assertEquals(first.photonId, conflicting.photonId)
+        assertTrue(runCatching { hub.ingest(conflicting) }.isFailure)
+        assertEquals("original", requireNotNull(repository.load(first.photonId))
+            .content.substringAfter("payload="))
+    }
+
+    @Test
     fun messageCalendarAndFileDeltasUseDistinctStableIdsAndDeleteCarriesNoPayload() = runBlocking {
         val repository = MemoryRevisionedPhotonRepository()
         val ingress = RecordingIngress(repository)
