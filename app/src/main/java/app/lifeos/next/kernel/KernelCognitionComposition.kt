@@ -32,12 +32,16 @@ import app.lifeos.core.runtime.cognition.PhotonTransactionObserver
 import app.lifeos.core.runtime.context.DurableContextFieldEnricher
 import app.lifeos.core.runtime.field.AuthoritativeFieldProcessor
 import app.lifeos.core.runtime.field.FieldCutoverAuthority
+import app.lifeos.core.runtime.field.FieldCutoverLifecycleCoordinator
 import app.lifeos.core.runtime.field.FieldCutoverRuntimeRouter
 import app.lifeos.core.runtime.field.FieldShadowValidationObserver
 import app.lifeos.core.runtime.field.FieldShadowValidationPolicy
 import app.lifeos.core.runtime.field.FieldShadowValidator
 import app.lifeos.core.runtime.field.PhotonBackedFieldCutoverStateRepository
 import app.lifeos.core.runtime.field.PhotonBackedFieldShadowValidationLedger
+import app.lifeos.core.runtime.field.ThoughtMatrixAuthoritativeFieldProcessor
+import app.lifeos.core.runtime.field.ThoughtMatrixFieldCutoverReplayCoordinator
+import app.lifeos.core.runtime.field.ThoughtMatrixFieldRequestFactory
 import app.lifeos.core.runtime.field.UniversalFieldRuntimeAdapter
 import app.lifeos.core.runtime.health.HealthNodeId
 import app.lifeos.core.runtime.health.HealthTaskExecutionObserver
@@ -75,6 +79,8 @@ internal data class KernelCognitionGraph(
     val cognitiveOutcomes: PhotonBackedCognitiveOutcomeJournal,
     val cognitiveTriggers: DurableCognitiveTriggerSink,
     val fieldCutoverAuthority: FieldCutoverAuthority,
+    val fieldCutoverLifecycle: FieldCutoverLifecycleCoordinator,
+    val thoughtMatrixFieldCutoverReplay: ThoughtMatrixFieldCutoverReplayCoordinator,
     val leaseRecovery: LeaseRecoveryService,
     val durableRuntime: DurableLifeOsRuntime,
     val supervisor: RuntimeSupervisor,
@@ -97,7 +103,25 @@ internal class KernelCognitionComposition(
             healthGate = foundation.healthGate,
             thoughtGraphProjection = world.fieldThoughtGraphProjection,
         )
-        val selectedFieldDomains = authoritativeFieldProcessors.mapTo(linkedSetOf()) { it.domainId }
+        val thoughtMatrixCutoverProcessor = ThoughtMatrixAuthoritativeFieldProcessor(
+            matrix = foundation.matrix,
+            universal = UniversalFieldRuntimeAdapter(
+                snapshotRepository = world.fieldSnapshotRepository,
+                requestFactory = ThoughtMatrixFieldRequestFactory(),
+                healthGate = foundation.healthGate,
+                thoughtGraphProjection = world.fieldThoughtGraphProjection,
+            ),
+        )
+        val selectedFieldProcessors =
+            listOf(thoughtMatrixCutoverProcessor) + authoritativeFieldProcessors
+        require(
+            selectedFieldProcessors.map { it.domainId }.distinct().size ==
+                selectedFieldProcessors.size
+        ) {
+            "Productive field cutover processors must have unique domains"
+        }
+        val selectedFieldDomains =
+            selectedFieldProcessors.mapTo(linkedSetOf()) { it.domainId }
         val fieldCutoverStates = PhotonBackedFieldCutoverStateRepository(foundation.store)
         val fieldShadowValidationLedger = PhotonBackedFieldShadowValidationLedger(foundation.store)
         val fieldShadowValidator = FieldShadowValidator(
@@ -108,9 +132,18 @@ internal class KernelCognitionComposition(
             states = fieldCutoverStates,
             validator = fieldShadowValidator,
         )
+        val fieldCutoverLifecycle = FieldCutoverLifecycleCoordinator(
+            authority = fieldCutoverAuthority,
+            selectedDomains = selectedFieldDomains,
+        )
+        val thoughtMatrixFieldCutoverReplay = ThoughtMatrixFieldCutoverReplayCoordinator(
+            ledger = fieldShadowValidationLedger,
+            validator = fieldShadowValidator,
+            authority = fieldCutoverAuthority,
+        )
         val fieldCutoverRouter = FieldCutoverRuntimeRouter(
             states = fieldCutoverStates,
-            processors = authoritativeFieldProcessors,
+            processors = selectedFieldProcessors,
         )
         val fieldShadowValidationObserver = FieldShadowValidationObserver(
             photons = foundation.store,
@@ -326,6 +359,8 @@ internal class KernelCognitionComposition(
             cognitiveOutcomes = cognitiveOutcomes,
             cognitiveTriggers = cognitiveTriggers,
             fieldCutoverAuthority = fieldCutoverAuthority,
+            fieldCutoverLifecycle = fieldCutoverLifecycle,
+            thoughtMatrixFieldCutoverReplay = thoughtMatrixFieldCutoverReplay,
             leaseRecovery = leaseRecovery,
             durableRuntime = durableRuntime,
             supervisor = supervisor,

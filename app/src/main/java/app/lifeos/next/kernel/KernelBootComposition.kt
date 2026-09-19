@@ -22,6 +22,7 @@ import app.lifeos.core.runtime.capability.GeneratedToolState
 import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
+import java.time.Instant
 
 internal data class KernelBootGraph(
     val bootCoordinator: BootCoordinator,
@@ -81,6 +82,12 @@ internal class KernelBootComposition(
                 },
                 RuntimeStateRehydrationStep {
                     world.fieldThoughtGraphProjection.reconcile()
+                },
+                RuntimeStateRehydrationStep {
+                    cognition.fieldCutoverLifecycle.reconcile(
+                        at = Instant.now(),
+                        provenance = "boot:m212-field-cutover-reconcile",
+                    )
                 },
                 RuntimeStateRehydrationStep {
                     foundation.cognitionJournalIndex.reconcile()

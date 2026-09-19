@@ -124,6 +124,10 @@ class FieldCutoverAuthority(
             current.mode == FieldCutoverMode.AUTHORITATIVE &&
                 targetMode == FieldCutoverMode.ELIGIBLE &&
                 current.evidenceFingerprint == fingerprint -> current
+            current.mode == targetMode &&
+                current.evidenceFingerprint ==
+                    fingerprint.takeIf { targetMode != FieldCutoverMode.SHADOW } &&
+                current.replayCaseCount == report.replayCaseCount -> current
             else -> current.copy(
                 generation = if (
                     current.mode == FieldCutoverMode.AUTHORITATIVE &&
