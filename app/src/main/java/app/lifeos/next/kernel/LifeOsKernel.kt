@@ -211,7 +211,7 @@ class LifeOsKernel internal constructor(
         executeImageGeneration = { context ->
             generateImage(
                 goal = context.goal,
-                sourcePhotonId = context.sourcePhoton.id,
+                sourcePhoton = context.sourcePhoton,
                 goalPhotonId = context.goalPhotonId,
                 referenceInstant = context.sourcePhoton.provenance.createdAt,
             )
@@ -817,7 +817,7 @@ class LifeOsKernel internal constructor(
 
     private suspend fun generateImage(
         goal: GoalFrame,
-        sourcePhotonId: PhotonId,
+        sourcePhoton: Photon,
         goalPhotonId: PhotonId,
         referenceInstant: Instant,
     ): ImageGenerationResult {
@@ -849,9 +849,10 @@ class LifeOsKernel internal constructor(
                         )
                         val imagePhoton = imagePhotonFactory.create(
                             descriptor = descriptor,
-                            parentIds = setOf(sourcePhotonId, goalPhotonId, sceneGraphPhoton.photon.id),
+                            parentIds = setOf(sourcePhoton.id, goalPhotonId, sceneGraphPhoton.photon.id),
                             confidence = rendered.graph.confidence,
                             createdAt = createdAt,
+                            inheritedTags = sourcePhoton.tags,
                         )
                         val imageSubmission = PhotonSubmissionResult(
                             photon = imagePhoton,

@@ -32,6 +32,26 @@ class ImagePhotonFactoryTest {
         assertTrue("asset-ref" in photon.tags)
     }
 
+    @Test
+    fun `generated image inherits only explicit conversation and turn routing tags`() {
+        val photon = ImagePhotonFactory().create(
+            descriptor = descriptor(),
+            parentIds = setOf(PhotonId("source")),
+            confidence = 0.9,
+            inheritedTags = setOf(
+                "conversation:default",
+                "turn:turn-7",
+                "chat:user",
+                "private-unrelated",
+            ),
+        )
+
+        assertTrue("conversation:default" in photon.tags)
+        assertTrue("turn:turn-7" in photon.tags)
+        assertTrue("chat:user" !in photon.tags)
+        assertTrue("private-unrelated" !in photon.tags)
+    }
+
     private fun descriptor() = ImageAssetDescriptor(
         asset = AssetRef(
             id = AssetId("asset-test"),

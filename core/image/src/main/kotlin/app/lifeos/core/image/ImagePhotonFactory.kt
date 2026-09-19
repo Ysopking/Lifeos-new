@@ -79,6 +79,7 @@ class ImagePhotonFactory {
         parentIds: Set<PhotonId>,
         confidence: Double,
         createdAt: Instant = Instant.now(),
+        inheritedTags: Set<String> = emptySet(),
     ): Photon {
         require(parentIds.isNotEmpty()) { "Generated image must retain source provenance" }
         require(confidence in 0.0..1.0)
@@ -97,11 +98,22 @@ class ImagePhotonFactory {
             relations = parentIds.mapTo(linkedSetOf()) {
                 PhotonRelation(it, RelationType.DERIVED_FROM)
             },
-            tags = setOf("image", "generated", "offline", "mmsi", "asset-ref"),
+            tags = buildSet {
+                addAll(setOf("image", "generated", "offline", "mmsi", "asset-ref"))
+                inheritedTags
+                    .asSequence()
+                    .filter {
+                        it.startsWith(CONVERSATION_TAG_PREFIX) ||
+                            it.startsWith(TURN_TAG_PREFIX)
+                    }
+                    .forEach(::add)
+            },
         )
     }
 
     companion object {
         const val IMAGE_REFERENCE_MIME = "application/vnd.lifeos.image-ref+text"
+        private const val CONVERSATION_TAG_PREFIX = "conversation:"
+        private const val TURN_TAG_PREFIX = "turn:"
     }
 }

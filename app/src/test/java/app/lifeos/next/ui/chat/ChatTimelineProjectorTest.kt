@@ -64,6 +64,33 @@ class ChatTimelineProjectorTest {
     }
 
     @Test
+    fun conversationTaggedImageSurvivesPagedHistoryWhenParentIsOutsideWindow() {
+        val generated = image(
+            id = "paged-image",
+            createdAt = baseTime.plusSeconds(1),
+            parents = setOf(PhotonId("older-parent-not-loaded")),
+            tags = setOf("image", "asset-ref", "conversation:default", "turn:older-turn"),
+        )
+
+        val timeline = ChatTimelineProjector.project(listOf(generated))
+
+        assertEquals(1, timeline.size)
+        assertEquals(generated.id, assertIs<ChatTimelineItem.Image>(timeline.single()).photon.id)
+    }
+
+    @Test
+    fun explicitlyDifferentConversationImageIsNotIncludedWithoutMatchingAncestry() {
+        val generated = image(
+            id = "other-conversation-image",
+            createdAt = baseTime.plusSeconds(1),
+            parents = setOf(PhotonId("older-parent-not-loaded")),
+            tags = setOf("image", "asset-ref", "conversation:other"),
+        )
+
+        assertTrue(ChatTimelineProjector.project(listOf(generated)).isEmpty())
+    }
+
+    @Test
     fun transformedImageThroughGoalAncestryIsIncluded() {
         val user = chatUser("user-transform", "turn-transform", "Mach das Bild heller", baseTime)
         val goal = photon(
@@ -191,13 +218,14 @@ class ChatTimelineProjectorTest {
         id: String,
         createdAt: Instant,
         parents: Set<PhotonId>,
+        tags: Set<String> = setOf("image", "asset-ref"),
     ): Photon = photon(
         id = id,
         content = "image-reference-$id",
         createdAt = createdAt,
         parents = parents,
         mimeType = ImagePhotonFactory.IMAGE_REFERENCE_MIME,
-        tags = setOf("image", "asset-ref"),
+        tags = tags,
         actor = "lifeos.image",
     )
 

@@ -38,14 +38,16 @@ object ChatTimelineProjector {
         val byId = snapshot.associateBy { it.id }
         val messages = ConversationProjector.project(snapshot, conversationId)
             .map(ChatTimelineItem::Message)
+        val conversationTag = "${ConversationProjector.CONVERSATION_PREFIX}$conversationId"
         val images = snapshot.asSequence()
             .filter { it.mimeType == ImagePhotonFactory.IMAGE_REFERENCE_MIME }
             .filter { image ->
-                reachesConversationUser(
-                    parentIds = image.provenance.parentIds,
-                    byId = byId,
-                    conversationId = conversationId,
-                )
+                conversationTag in image.tags ||
+                    reachesConversationUser(
+                        parentIds = image.provenance.parentIds,
+                        byId = byId,
+                        conversationId = conversationId,
+                    )
             }
             .map(ChatTimelineItem::Image)
             .toList()
