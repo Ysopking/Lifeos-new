@@ -2,6 +2,7 @@ package app.lifeos.next
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.runtime.livedata.LiveDataAccountKey
 import app.lifeos.core.runtime.livedata.LiveDataAccountObservation
 import app.lifeos.core.runtime.livedata.LiveDataCapability
@@ -76,7 +77,7 @@ class LiveDataHubDeviceTest {
         assertEquals(setOf(grantedPhoton.id), persisted!!.provenance.parentIds)
         assertTrue(persisted.tags.none { it.contains("private-message-id") })
         val metadataRecord = SourceMetadataRepository(app.kernel.photonStore)
-            .load(app.lifeos.core.model.PhotonRevisionRef(message.photonId, 1L))
+            .load(PhotonRevisionRef(message.photonId, 1L))
         assertNotNull(metadataRecord)
         assertEquals(message.metadata, metadataRecord!!.metadata)
         assertNotNull(app.kernel.photonStore.load(acceptedResult.metadataPhotonId))
