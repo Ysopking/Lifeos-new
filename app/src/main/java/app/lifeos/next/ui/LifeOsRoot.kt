@@ -13,15 +13,12 @@ import app.lifeos.next.LifeOsMemoryViewModel
 import app.lifeos.next.LifeOsToolCenterViewModel
 import app.lifeos.next.OwnerAssetReviewViewModel
 import app.lifeos.next.StorageMaintenanceViewModel
-import app.lifeos.next.ui.assets.OwnerAssetReviewScreen
 import app.lifeos.next.ui.chat.LifeOsChatScreen
-import app.lifeos.next.ui.decision.LifeOsDecisionTraceScreen
 import app.lifeos.next.ui.goals.LifeOsGoalsScreen
 import app.lifeos.next.ui.layout.AdaptiveLifeOsScaffold
 import app.lifeos.next.ui.memory.LifeOsMemoryScreen
-import app.lifeos.next.ui.system.LifeOsSystemHub
+import app.lifeos.next.ui.system.LifeOsSystemOverlay
 import app.lifeos.next.ui.theme.LifeOsTheme
-import app.lifeos.next.ui.tools.LifeOsToolCenterScreen
 
 @Composable
 fun LifeOsRoot(
@@ -37,16 +34,25 @@ fun LifeOsRoot(
     var selectedKey by rememberSaveable {
         mutableStateOf(LifeOsDestination.default.key)
     }
+    var showSystem by rememberSaveable {
+        mutableStateOf(false)
+    }
     val selected = LifeOsDestination.fromKey(selectedKey)
 
-    BackHandler(enabled = selected != LifeOsDestination.CHAT) {
-        selectedKey = LifeOsDestination.CHAT.key
+    BackHandler(enabled = showSystem || selected != LifeOsDestination.CHAT) {
+        if (showSystem) {
+            showSystem = false
+        } else {
+            selectedKey = LifeOsDestination.CHAT.key
+        }
     }
 
     LifeOsTheme {
         AdaptiveLifeOsScaffold(
             selected = selected,
             onSelect = { destination -> selectedKey = destination.key },
+            onOpenSystem = { showSystem = true },
+            attention = false,
         ) { contentModifier ->
             when (selected) {
                 LifeOsDestination.CHAT -> LifeOsChatScreen(
@@ -54,35 +60,28 @@ fun LifeOsRoot(
                     modifier = contentModifier,
                     onRequestMicrophonePermission = onRequestMicrophonePermission,
                 )
-                LifeOsDestination.MEMORY -> LifeOsMemoryScreen(
-                    model = memoryModel,
-                    modifier = contentModifier,
-                )
-                LifeOsDestination.ASSETS -> OwnerAssetReviewScreen(
-                    model = assetReviewModel,
-                    modifier = contentModifier,
-                )
+
                 LifeOsDestination.GOALS -> LifeOsGoalsScreen(
                     model = goalsModel,
                     modifier = contentModifier,
                 )
-                LifeOsDestination.WHY -> LifeOsDecisionTraceScreen(
-                    model = decisionTraceModel,
-                    modifier = contentModifier,
-                )
-                LifeOsDestination.TOOLS -> LifeOsToolCenterScreen(
-                    model = toolCenterModel,
-                    modifier = contentModifier,
-                )
-                LifeOsDestination.SYSTEM -> LifeOsSystemHub(
-                    model = model,
-                    decisionTraceModel = decisionTraceModel,
-                    toolCenterModel = toolCenterModel,
-                    assetReviewModel = assetReviewModel,
-                    storageMaintenanceModel = storageMaintenanceModel,
+
+                LifeOsDestination.MEMORY -> LifeOsMemoryScreen(
+                    model = memoryModel,
                     modifier = contentModifier,
                 )
             }
+        }
+
+        if (showSystem) {
+            LifeOsSystemOverlay(
+                model = model,
+                decisionTraceModel = decisionTraceModel,
+                toolCenterModel = toolCenterModel,
+                assetReviewModel = assetReviewModel,
+                storageMaintenanceModel = storageMaintenanceModel,
+                onDismiss = { showSystem = false },
+            )
         }
     }
 }
