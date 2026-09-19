@@ -23,6 +23,7 @@ import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.ui.chat.ChatImagePreviewLoader
 import app.lifeos.next.ui.chat.ChatImagePreviewState
 import app.lifeos.next.ui.chat.ChatTimelineItem
+import app.lifeos.next.ui.chat.ChatTimelinePager
 import app.lifeos.next.ui.chat.ChatTurnProcessingState
 import app.lifeos.next.ui.chat.ChatVoicePhase
 import app.lifeos.next.ui.chat.ChatVoicePolicy
@@ -46,6 +47,8 @@ import kotlinx.coroutines.withContext
 data class LifeOsChatUiState(
     val events: List<ChatEvent> = emptyList(),
     val timeline: List<ChatTimelineItem> = emptyList(),
+    val timelineTotalCount: Int = 0,
+    val timelineHasOlder: Boolean = false,
     val draft: String = "",
     val turnProcessing: ChatTurnProcessingState = ChatTurnProcessingState.idle(),
     val voice: ChatVoiceUiState = ChatVoiceUiState(),
@@ -71,6 +74,8 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     private val mutableState = MutableStateFlow(LifeOsChatUiState())
 
     private var latestPhotons: List<Photon> = emptyList()
+    private var latestTimeline: List<ChatTimelineItem> = emptyList()
+    private var timelineVisibleCount: Int = ChatTimelinePager.DEFAULT_PAGE_SIZE
     private var pendingVoiceRecognitions: List<Photon> = emptyList()
     private var stagedVoiceRecognition: Photon? = null
 
@@ -79,6 +84,19 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     init {
         observeKernel()
         observeSelfState()
+    }
+
+    fun loadOlderTimeline() {
+        if (timelineVisibleCount >= latestTimeline.size) return
+        timelineVisibleCount = ChatTimelinePager.expand(timelineVisibleCount)
+        val page = ChatTimelinePager.page(latestTimeline, timelineVisibleCount)
+        mutableState.update { current ->
+            current.copy(
+                timeline = page.items,
+                timelineTotalCount = page.totalCount,
+                timelineHasOlder = page.hasOlder,
+            )
+        }
     }
 
     fun editDraft(text: String) {
@@ -502,10 +520,17 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                     mutableState.value.readiness
                 }
                 val chatProjection = stableChatProjection.project(boot.photons)
+                latestTimeline = chatProjection.timeline
+                val timelinePage = ChatTimelinePager.page(
+                    timeline = latestTimeline,
+                    visibleCount = timelineVisibleCount,
+                )
                 mutableState.update { current ->
                     current.copy(
                         events = chatProjection.events,
-                        timeline = chatProjection.timeline,
+                        timeline = timelinePage.items,
+                        timelineTotalCount = timelinePage.totalCount,
+                        timelineHasOlder = timelinePage.hasOlder,
                         bootStatus = boot.status,
                         registeredSubsystems = topology?.registeredSubsystemCount ?: 0,
                         unavailableSubsystems = topology?.unavailableSubsystems?.size ?: 0,
