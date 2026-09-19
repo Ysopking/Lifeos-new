@@ -742,6 +742,7 @@ internal object StorageTreePager {
                 continue
             }
             if (file.isDirectory) {
+                if (canPruneSubtree(current.relativePath, after)) continue
                 val canonical = runCatching { file.canonicalPath }.getOrNull()
                 if (
                     canonical == null ||
@@ -781,6 +782,13 @@ internal object StorageTreePager {
             .replace(File.separatorChar, '/')
             .trim()
         return relative.takeIf { it.isNotBlank() }?.let { Candidate(file, it) }
+    }
+
+    private fun canPruneSubtree(relativeDirectory: String, after: String): Boolean {
+        if (after.isBlank()) return false
+        val prefix = relativeDirectory.trimEnd('/') + "/"
+        if (after.startsWith(prefix)) return false
+        return prefix < after
     }
 
     private fun insideRoot(rootPath: String, path: String): Boolean =
