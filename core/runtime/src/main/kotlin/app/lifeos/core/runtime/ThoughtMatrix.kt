@@ -53,11 +53,25 @@ class ThoughtMatrix(
     private val mutableState = MutableStateFlow(MatrixState())
     val state: StateFlow<MatrixState> = mutableState.asStateFlow()
 
-    override suspend fun influence(photon: Photon): FieldInfluence? = mutex.withLock {
+    override suspend fun influence(photon: Photon): FieldInfluence? =
+        project(photon, emitLegacyInfluence = true)
+
+    /**
+     * M212 compatibility projection for the authoritative universal-field lane. It updates the same
+     * durable ThoughtMatrixV2/read-model state without executing the legacy ForceField contract.
+     */
+    suspend fun indexFromAuthoritativeField(photon: Photon) {
+        project(photon, emitLegacyInfluence = false)
+    }
+
+    private suspend fun project(
+        photon: Photon,
+        emitLegacyInfluence: Boolean,
+    ): FieldInfluence? = mutex.withLock {
         val result = v2.project(
             ThoughtProjectionInput(
                 photon = photon,
-                fieldDomainId = LEGACY_DOMAIN,
+                fieldDomainId = FIELD_DOMAIN_ID,
                 semanticKey = semanticKey(photon),
                 verification = ThoughtVerificationStatus.OBSERVED,
             )
@@ -81,24 +95,32 @@ class ThoughtMatrix(
                     nodes = nodes,
                     totalEnergy = previous.totalEnergy - (existing?.energy ?: 0.0) + projected.energy,
                 )
+                if (emitLegacyInfluence) {
+                    FieldInfluence(
+                        module = "Gedankenmatrix",
+                        photonId = photon.id,
+                        type = "INDEX",
+                        deltaEnergy = photon.energy,
+                        confidence = photon.confidence,
+                        explanation = "Photon indexed in the active thought field",
+                    )
+                } else {
+                    null
+                }
+            }
+
+            is ThoughtProjectionResult.Conflict -> if (emitLegacyInfluence) {
                 FieldInfluence(
                     module = "Gedankenmatrix",
                     photonId = photon.id,
-                    type = "INDEX",
-                    deltaEnergy = photon.energy,
-                    confidence = photon.confidence,
-                    explanation = "Photon indexed in the active thought field",
+                    type = "INDEX_CONFLICT",
+                    deltaEnergy = 0.0,
+                    confidence = 0.0,
+                    explanation = "Equal Photon revision produced conflicting v2 thought projections; legacy value retained for compatibility and not treated as v2 authority",
                 )
+            } else {
+                null
             }
-
-            is ThoughtProjectionResult.Conflict -> FieldInfluence(
-                module = "Gedankenmatrix",
-                photonId = photon.id,
-                type = "INDEX_CONFLICT",
-                deltaEnergy = 0.0,
-                confidence = 0.0,
-                explanation = "Equal Photon revision produced conflicting v2 thought projections; legacy value retained for compatibility and not treated as v2 authority",
-            )
 
             is ThoughtProjectionResult.Stale,
             is ThoughtProjectionResult.Unchanged -> null
@@ -144,7 +166,7 @@ class ThoughtMatrix(
         .firstOrNull()
         ?: photon.mimeType.trim().lowercase()
 
-    private companion object {
-        val LEGACY_DOMAIN = StableFieldIds.domain("lifeos.runtime.thought-matrix")
+    companion object {
+        val FIELD_DOMAIN_ID = StableFieldIds.domain("lifeos.runtime.thought-matrix")
     }
 }
