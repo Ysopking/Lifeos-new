@@ -52,6 +52,12 @@ class WorldEquationAutoEvolutionCoordinator(
         require(candidate.version != baseline.version) {
             "WorldEquation candidate version must differ from active baseline"
         }
+        require(candidate.physicsFingerprint() != baseline.physicsFingerprint()) {
+            "WorldEquation candidate must change active physics"
+        }
+        require(candidate.schemaFingerprint() == baseline.schemaFingerprint()) {
+            "Automatic WorldEquation evolution supports parameter-only candidates"
+        }
         authority.registerCandidate(candidate)
         val record = evidenceCoordinator.beginShadow(candidate, baseline, protocol)
         return WorldEquationAutoEvolutionResult.Started(record)

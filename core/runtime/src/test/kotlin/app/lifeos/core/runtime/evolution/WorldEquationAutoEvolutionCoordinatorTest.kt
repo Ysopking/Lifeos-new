@@ -17,7 +17,9 @@ import app.lifeos.core.runtime.world.WorldFormulaStatus
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlinx.coroutines.test.runTest
 
 class WorldEquationAutoEvolutionCoordinatorTest {
@@ -96,6 +98,51 @@ class WorldEquationAutoEvolutionCoordinatorTest {
         assertEquals(WorldEquationLifecycleState.ACTIVE, promoted.record.state)
         assertEquals(promoted.head.fingerprint, promoted.record.activationHeadFingerprint)
         assertEquals(candidate.version, authority.activeVersion())
+    }
+
+    @Test
+    fun structuralCandidateIsRejectedBeforeDurableRegistration() = runTest {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val structuralCandidate = baseline.copy(
+            version = baseline.version + "-structural",
+            coefficients = baseline.coefficients.dropLast(1),
+        )
+        val specs = InMemoryWorldEquationSpecRepository()
+        val evidenceRepository = InMemoryWorldEquationEvidenceRepository()
+        val evaluator = WorldEquationPromotionEvaluator()
+        val gate = WorldEquationEvolutionAdmissionGate(evidenceRepository, evaluator)
+        val authority = WorldEquationActivationAuthority(
+            equations = InMemoryWorldEquationRegistry(listOf(baseline)),
+            heads = MemoryHeadRepository(),
+            baseline = baseline,
+            specs = specs,
+            admissionVerifier = gate,
+        )
+        val coordinator = WorldEquationAutoEvolutionCoordinator(
+            evidence = evidenceRepository,
+            evidenceCoordinator = WorldEquationEvidenceCoordinator(
+                evidenceRepository,
+                evaluator,
+            ),
+            shadow = WorldEquationShadowRunner { _, _, _ ->
+                error("Structural candidate must never reach shadow execution")
+            },
+            admissionGate = gate,
+            authority = authority,
+        )
+        val protocol = WorldEquationEvaluationProtocol(
+            version = "structural-rejection-v1",
+            primaryMetric = WorldEquationPrimaryMetric.STABILIZATION_ITERATIONS,
+            minimumIndependentRuns = 2,
+            minimumDistinctWorkloads = 1,
+            minimumActiveObservationsPerChangedCoefficient = 1,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            coordinator.start(structuralCandidate, protocol)
+        }
+        assertNull(specs.load(structuralCandidate.version))
+        assertNull(evidenceRepository.load(structuralCandidate.fingerprint()))
     }
 
     private fun shadowCase(
