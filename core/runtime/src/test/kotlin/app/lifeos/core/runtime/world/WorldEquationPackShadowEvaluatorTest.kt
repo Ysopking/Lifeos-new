@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.world
 
+import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.field.world.WorldDimensionValue
 import app.lifeos.core.field.world.WorldFieldVector
 import app.lifeos.core.field.world.WorldNodeKind
@@ -262,6 +263,104 @@ class WorldEquationPackShadowEvaluatorTest {
         assertEquals(first.evidenceRecord, recovered.evidenceRecord)
         assertTrue(recovered.evaluatedCaseFingerprints.isEmpty())
         assertFalse(recovered.evidenceRecord.promotionAuthorityAllowed)
+    }
+
+    @Test
+    fun structuralCanarySandboxUsesDedicatedNonProductiveScope() = runTest {
+        val fixture = fixture()
+        val plan = canaryPlan(fixture)
+        val plans = InMemoryWorldEquationPackStructuralCanaryPlanRepository()
+        plans.putIfAbsent(plan)
+        val admission = WorldEquationPackStructuralCanaryAdmissionGate(plans).admit(plan)
+        val case = shadowCase(
+            fixture = fixture,
+            runId = "run-canary",
+            workloadId = "workload-canary",
+            value = 0.72,
+            partition = WorldEquationPackEvidencePartition.HOLDOUT,
+        )
+
+        val observation = WorldEquationPackStructuralCanaryEvaluator().evaluate(
+            baseline = fixture.baseline,
+            candidate = fixture.candidate,
+            plan = plan,
+            admission = admission,
+            case = case,
+        )
+        val shadow = WorldEquationPackShadowEvaluator().evaluate(
+            baseline = fixture.baseline,
+            candidate = fixture.candidate,
+            case = case,
+        )
+
+        assertEquals(WorldFormulaExecutionScope.STRUCTURAL_CANARY, observation.scope)
+        assertNotEquals(WorldFormulaStatus.INVALID_EQUATION, observation.metrics.status)
+        assertEquals(
+            shadow.candidate.materializationFingerprint,
+            observation.metrics.materializationFingerprint,
+        )
+        assertFalse(observation.productiveActivationAllowed)
+        assertFalse(observation.productiveWorldMutationAllowed)
+        assertFalse(observation.cognitiveSideEffectsAllowed)
+        assertTrue(admission.isolatedExecutionAllowed)
+        assertFalse(admission.productiveActivationAllowed)
+        assertFalse(admission.promotionAdmissionAllowed)
+    }
+
+    @Test
+    fun structuralCanaryAdmissionFailsClosedWhenPlanRepositoryIsCorrupted() = runTest {
+        val fixture = fixture()
+        val plan = canaryPlan(fixture)
+        val repository = object : WorldEquationPackStructuralCanaryPlanRepository {
+            override suspend fun putIfAbsent(plan: WorldEquationPackStructuralCanaryPlan) = Unit
+
+            override suspend fun load(
+                planFingerprint: String,
+            ): WorldEquationPackStructuralCanaryPlan? = plan
+
+            override suspend fun loadReport(): WorldEquationPackStructuralCanaryPlanLoadReport =
+                WorldEquationPackStructuralCanaryPlanLoadReport(
+                    plans = listOf(plan),
+                    unreadableEntries = listOf("corrupt.wepcp"),
+                )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            WorldEquationPackStructuralCanaryAdmissionGate(repository).admit(plan)
+        }
+    }
+
+    private fun canaryPlan(
+        fixture: Fixture,
+    ): WorldEquationPackStructuralCanaryPlan {
+        val validationBundleFingerprint = "validation-bundle-canary-test"
+        val maximumCases = 8
+        val maximumConsecutiveFailures = 2
+        val requireHoldoutRecheck = true
+        val requireColdRestartRecovery = true
+        val version = "structural-canary-sandbox-test-v1"
+        val fingerprint = StableFieldIds.fingerprint(
+            "world-equation-pack-structural-canary-plan/v1",
+            validationBundleFingerprint,
+            fixture.baseline.fingerprint(),
+            fixture.candidate.candidate.fingerprint(),
+            maximumCases.toString(),
+            maximumConsecutiveFailures.toString(),
+            requireHoldoutRecheck.toString(),
+            requireColdRestartRecovery.toString(),
+            version,
+        )
+        return WorldEquationPackStructuralCanaryPlan.restore(
+            validationBundleFingerprint = validationBundleFingerprint,
+            baselinePackFingerprint = fixture.baseline.fingerprint(),
+            candidatePackFingerprint = fixture.candidate.candidate.fingerprint(),
+            maximumCases = maximumCases,
+            maximumConsecutiveFailures = maximumConsecutiveFailures,
+            requireHoldoutRecheck = requireHoldoutRecheck,
+            requireColdRestartRecovery = requireColdRestartRecovery,
+            version = version,
+            fingerprint = fingerprint,
+        )
     }
 
     private fun shadowCase(
