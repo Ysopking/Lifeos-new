@@ -77,6 +77,39 @@ class WorldEquationPromotionEvaluatorTest {
     }
 
     @Test
+    fun holdoutImprovementCannotRescueShadowRegression() {
+        val evidence = evidence(
+            observations = listOf(
+                observation("run-1", "workload-a", 3, 5),
+                observation("run-2", "workload-a", 3, 5),
+                observation(
+                    "run-3",
+                    "workload-b",
+                    8,
+                    2,
+                    WorldEquationEvidencePartition.HOLDOUT,
+                ),
+            )
+        )
+
+        val verdict = evaluator.evaluate(candidate, baseline, evidence)
+
+        assertEquals(WorldEquationPromotionDecision.REJECTED, verdict.decision)
+        assertEquals(
+            WorldEquationGateStatus.FAIL,
+            verdict.gateResults.single {
+                it.gate == WorldEquationEvidenceGate.PRIMARY_IMPROVEMENT
+            }.status,
+        )
+        assertEquals(
+            WorldEquationGateStatus.PASS,
+            verdict.gateResults.single {
+                it.gate == WorldEquationEvidenceGate.HELD_OUT_VALIDATION
+            }.status,
+        )
+    }
+
+    @Test
     fun shadowImprovementCannotOverrideHoldoutRegression() {
         val evidence = evidence(
             observations = listOf(
