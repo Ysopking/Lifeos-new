@@ -366,17 +366,21 @@ internal class AndroidStorageInventoryStore(
         if (isNull(index)) null else getString(index)
 
     private fun encodePosition(volumeId: String, relativePath: String): String =
-        volumeId + POSITION_SEPARATOR + relativePath
+        volumeId.length.toString() + ":" + volumeId + relativePath
 
     private fun decodePosition(value: String): Pair<String, String> {
-        val index = value.indexOf(POSITION_SEPARATOR)
-        require(index > 0 && index < value.lastIndex) { "Invalid storage inventory position" }
-        return value.substring(0, index) to value.substring(index + 1)
+        val separator = value.indexOf(':')
+        require(separator > 0) { "Invalid storage inventory position" }
+        val volumeLength = value.substring(0, separator).toIntOrNull()
+        require(volumeLength != null && volumeLength > 0) { "Invalid storage inventory volume length" }
+        val volumeStart = separator + 1
+        val pathStart = volumeStart + volumeLength
+        require(pathStart < value.length) { "Invalid storage inventory position payload" }
+        return value.substring(volumeStart, pathStart) to value.substring(pathStart)
     }
 
     companion object {
         const val LARGE_REVIEW_BYTES = 2L * 1024L * 1024L * 1024L
-        private const val POSITION_SEPARATOR = '\u0000'
         private const val DATABASE_NAME = "lifeos-storage-inventory.db"
         private const val DATABASE_VERSION = 1
         private const val TABLE = "storage_files"
