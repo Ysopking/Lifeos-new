@@ -10,7 +10,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 
 object WorldEquationEvidenceCodec {
-    const val VERSION = 1
+    const val VERSION = 2
     const val MAX_ENCODED_BYTES = 8 * 1024 * 1024
     private const val MAX_STRING_BYTES = 1024 * 1024
     private const val MAX_OBSERVATIONS = 10_000
@@ -121,6 +121,8 @@ object WorldEquationEvidenceCodec {
         data.writeInt(evidence.protocol.minimumIndependentRuns)
         data.writeInt(evidence.protocol.minimumDistinctWorkloads)
         data.writeInt(evidence.protocol.minimumActiveObservationsPerChangedCoefficient)
+        data.writeInt(evidence.protocol.minimumShadowRuns)
+        data.writeInt(evidence.protocol.minimumHoldoutRuns)
         data.writeString(evidence.policyFingerprint)
         require(evidence.observations.size <= MAX_OBSERVATIONS)
         data.writeInt(evidence.observations.size)
@@ -130,6 +132,7 @@ object WorldEquationEvidenceCodec {
                 data.writeString(observation.caseFingerprint)
                 data.writeString(observation.runId)
                 data.writeString(observation.workloadId)
+                data.writeString(observation.partition.name)
                 data.writeString(observation.baselineEquationFingerprint)
                 data.writeString(observation.candidateEquationFingerprint)
                 writeMetrics(data, observation.baseline)
@@ -151,6 +154,8 @@ object WorldEquationEvidenceCodec {
             minimumIndependentRuns = data.readInt(),
             minimumDistinctWorkloads = data.readInt(),
             minimumActiveObservationsPerChangedCoefficient = data.readInt(),
+            minimumShadowRuns = data.readInt(),
+            minimumHoldoutRuns = data.readInt(),
         )
         val policyFingerprint = data.readString()
         val observationCount = data.readInt()
@@ -164,6 +169,7 @@ object WorldEquationEvidenceCodec {
                         caseFingerprint = data.readString(),
                         runId = data.readString(),
                         workloadId = data.readString(),
+                        partition = WorldEquationEvidencePartition.valueOf(data.readString()),
                         baselineEquationFingerprint = data.readString(),
                         candidateEquationFingerprint = data.readString(),
                         baseline = readMetrics(data),

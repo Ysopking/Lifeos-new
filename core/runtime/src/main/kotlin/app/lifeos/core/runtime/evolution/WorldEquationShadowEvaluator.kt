@@ -20,6 +20,7 @@ data class WorldEquationShadowCase(
     val runId: String,
     val workloadId: String,
     val request: WorldFormulaRequest,
+    val partition: WorldEquationEvidencePartition = WorldEquationEvidencePartition.SHADOW,
 ) {
     init {
         require(runId.isNotBlank())
@@ -27,8 +28,9 @@ data class WorldEquationShadowCase(
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
-        "world-equation-shadow-case/v1",
+        "world-equation-shadow-case/v2",
         workloadId,
+        partition.name,
         request.observedAt.toString(),
         request.config.fingerprint(),
         request.sourceTaskId?.value.orEmpty(),
@@ -94,6 +96,7 @@ class WorldEquationShadowEvaluator : WorldEquationShadowRunner {
             caseFingerprint = case.fingerprint(),
             runId = case.runId,
             workloadId = case.workloadId,
+            partition = case.partition,
             baselineEquationFingerprint = baseline.fingerprint(),
             candidateEquationFingerprint = candidate.fingerprint(),
             baseline = metrics(baselineExecution),

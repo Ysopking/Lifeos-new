@@ -67,6 +67,15 @@ class WorldEquationPromotionEvaluator(
 
         val independentRuns = observations.map { it.runId }.distinct().size
         val distinctWorkloads = observations.map { it.workloadId }.distinct().size
+        val shadowRuns = observations
+            .filter { it.partition == WorldEquationEvidencePartition.SHADOW }
+            .map { it.runId }
+            .distinct()
+            .size
+        val holdoutObservations = observations.filter {
+            it.partition == WorldEquationEvidencePartition.HOLDOUT
+        }
+        val holdoutRuns = holdoutObservations.map { it.runId }.distinct().size
         val enoughRuns = independentRuns >= protocol.minimumIndependentRuns
         val enoughWorkloads = distinctWorkloads >= protocol.minimumDistinctWorkloads
 
@@ -88,6 +97,32 @@ class WorldEquationPromotionEvaluator(
                     WorldEquationGateStatus.FAIL
                 },
                 "mean-improvement=" + hex(meanImprovement) +
+                    ";margin=" + hex(policy.primaryImprovementMargin),
+            )
+        }
+
+        val heldOutValidation = if (
+            shadowRuns < protocol.minimumShadowRuns ||
+            holdoutRuns < protocol.minimumHoldoutRuns
+        ) {
+            result(
+                WorldEquationEvidenceGate.HELD_OUT_VALIDATION,
+                WorldEquationGateStatus.INCONCLUSIVE,
+                "shadow-runs=" + shadowRuns + "/" + protocol.minimumShadowRuns +
+                    ";holdout-runs=" + holdoutRuns + "/" + protocol.minimumHoldoutRuns,
+            )
+        } else {
+            val holdoutImprovement = holdoutObservations
+                .map { it.improvement(protocol.primaryMetric) }
+                .average()
+            result(
+                WorldEquationEvidenceGate.HELD_OUT_VALIDATION,
+                if (holdoutImprovement > policy.primaryImprovementMargin) {
+                    WorldEquationGateStatus.PASS
+                } else {
+                    WorldEquationGateStatus.FAIL
+                },
+                "holdout-mean-improvement=" + hex(holdoutImprovement) +
                     ";margin=" + hex(policy.primaryImprovementMargin),
             )
         }
@@ -218,6 +253,7 @@ class WorldEquationPromotionEvaluator(
 
         val gates = listOf(
             primary,
+            heldOutValidation,
             status,
             reproducibility,
             transfer,

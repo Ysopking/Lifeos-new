@@ -24,8 +24,14 @@ enum class WorldEquationPrimaryMetric {
     NON_CONVERGED_RATE,
 }
 
+enum class WorldEquationEvidencePartition {
+    SHADOW,
+    HOLDOUT,
+}
+
 enum class WorldEquationEvidenceGate {
     PRIMARY_IMPROVEMENT,
+    HELD_OUT_VALIDATION,
     STATUS_NON_INFERIORITY,
     REPRODUCIBILITY,
     CROSS_WORKLOAD_TRANSFER,
@@ -46,6 +52,8 @@ data class WorldEquationEvaluationProtocol(
     val minimumIndependentRuns: Int,
     val minimumDistinctWorkloads: Int,
     val minimumActiveObservationsPerChangedCoefficient: Int,
+    val minimumShadowRuns: Int = 1,
+    val minimumHoldoutRuns: Int = 1,
 ) {
     init {
         require(version.isNotBlank())
@@ -54,15 +62,22 @@ data class WorldEquationEvaluationProtocol(
         require(minimumDistinctWorkloads <= minimumIndependentRuns)
         require(minimumActiveObservationsPerChangedCoefficient >= 1)
         require(minimumActiveObservationsPerChangedCoefficient <= minimumIndependentRuns)
+        require(minimumShadowRuns >= 1)
+        require(minimumHoldoutRuns >= 1)
+        require(minimumShadowRuns + minimumHoldoutRuns <= minimumIndependentRuns) {
+            "WorldEquation protocol must reserve independent evidence for SHADOW and HOLDOUT"
+        }
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
-        "world-equation-evaluation-protocol/v1",
+        "world-equation-evaluation-protocol/v2",
         version,
         primaryMetric.name,
         minimumIndependentRuns.toString(),
         minimumDistinctWorkloads.toString(),
         minimumActiveObservationsPerChangedCoefficient.toString(),
+        minimumShadowRuns.toString(),
+        minimumHoldoutRuns.toString(),
     )
 }
 
@@ -108,6 +123,7 @@ data class WorldEquationShadowObservation(
     val candidateEquationFingerprint: String,
     val baseline: WorldEquationRunMetrics,
     val candidate: WorldEquationRunMetrics,
+    val partition: WorldEquationEvidencePartition = WorldEquationEvidencePartition.SHADOW,
 ) {
     init {
         require(caseFingerprint.isNotBlank())
@@ -119,10 +135,11 @@ data class WorldEquationShadowObservation(
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
-        "world-equation-shadow-observation/v1",
+        "world-equation-shadow-observation/v2",
         caseFingerprint,
         runId,
         workloadId,
+        partition.name,
         baselineEquationFingerprint,
         candidateEquationFingerprint,
         baseline.fingerprint(),
@@ -164,7 +181,7 @@ data class WorldEquationEvidenceSet(
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
-        "world-equation-evidence-set/v1",
+        "world-equation-evidence-set/v2",
         candidateVersion,
         candidateEquationFingerprint,
         candidatePhysicsFingerprint,
