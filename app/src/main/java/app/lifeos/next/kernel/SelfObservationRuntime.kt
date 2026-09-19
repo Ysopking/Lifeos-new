@@ -40,7 +40,7 @@ internal class SelfObservationRuntime(
         SelfStateProjectionInputs(
             capturedAt = now(),
             photonIndex = source { photonIndex() },
-            memory = memorySnapshot()?.let(SelfObservationSource::Available)
+            memory = memorySnapshot()?.let { SelfObservationSource.Available(it) }
                 ?: SelfObservationSource.Unavailable("life-memory-not-projected"),
             authorities = source { authorityReader.snapshot() },
             runtimeTopology = sourceNullable(
@@ -71,7 +71,7 @@ internal class SelfObservationRuntime(
         unavailable: String,
         block: suspend () -> T?,
     ): SelfObservationSource<T> = try {
-        block()?.let(SelfObservationSource::Available)
+        block()?.let { SelfObservationSource.Available(it) }
             ?: SelfObservationSource.Unavailable(unavailable)
     } catch (error: Exception) {
         SelfObservationSource.Failed(error.message ?: error::class.simpleName ?: "self-observation-read-failed")
