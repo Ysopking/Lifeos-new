@@ -181,6 +181,11 @@ run_test \
   'app.lifeos.next.HardwareResourceIntelligenceDeviceTest#localSignalsFeedPersistedWorldFormulaWithoutExpandingHardQuota' \
   "$report_dir/hardware-resource-intelligence.txt"
 
+# M02 durable live-source cursor. Prove encrypted cursor CAS survives repository reconstruction.
+run_test \
+  'app.lifeos.next.LiveSourceCursorRepositoryDeviceTest#cursorSurvivesRepositoryReconstructionAndRejectsStaleWriter' \
+  "$report_dir/m02-live-source-cursor-recovery.txt"
+
 # M01 Live Data Hub. Prove explicit current account permission state gates canonical external
 # message ingestion through the real encrypted PhotonStore and rejects a subsequent revocation.
 run_test \
