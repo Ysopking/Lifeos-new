@@ -1,5 +1,7 @@
 package app.lifeos.next
 
+import app.lifeos.core.model.source.SourceObjectKind
+import app.lifeos.core.model.source.SourcePrivacyZone
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -72,6 +74,14 @@ class AndroidSharedFilesInitialDataSourceTest {
             assertEquals(listOf("a.txt", "b.bin"), first.records.map(::relativePath))
             assertTrue(first.records.all { "decode_state=METADATA_ONLY" in it.payload })
             assertTrue(first.records.all { "content_hash_state=DEFERRED" in it.payload })
+            first.records.forEach { record ->
+                val metadata = requireNotNull(record.metadata)
+                assertEquals(SourceObjectKind.FILE, metadata.objectKind)
+                assertEquals(SourcePrivacyZone.PRIVATE, metadata.privacyZone)
+                assertEquals(relativePath(record), metadata.file?.logicalPath)
+                assertEquals(record.recordId.substringBeforeLast('-'), metadata.externalObject.externalId)
+                assertEquals(record.recordId.substringAfterLast('-'), metadata.externalObject.externalVersion)
+            }
 
             val replay = AndroidFilesystemMetadataPager.page(root, null, 2, mime)
             assertEquals(first.records.map { it.recordId }, replay.records.map { it.recordId })

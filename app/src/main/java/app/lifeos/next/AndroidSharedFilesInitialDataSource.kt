@@ -7,6 +7,16 @@ import android.os.Build
 import android.os.Environment
 import android.webkit.MimeTypeMap
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.model.source.CanonicalSourceMetadata
+import app.lifeos.core.model.source.SourceAccountRef
+import app.lifeos.core.model.source.SourceExternalObjectRef
+import app.lifeos.core.model.source.SourceFileMetadata
+import app.lifeos.core.model.source.SourceMetadataOrigin
+import app.lifeos.core.model.source.SourceObjectKind
+import app.lifeos.core.model.source.SourcePrivacyZone
+import app.lifeos.core.model.source.SourceProviderRef
+import app.lifeos.core.model.source.SourceTechnicalMetadata
+import app.lifeos.core.model.source.SourceTimestamps
 import app.lifeos.core.runtime.life.InitialDataSourceAdapter
 import app.lifeos.core.runtime.life.InitialDataSourcePage
 import app.lifeos.core.runtime.life.InitialDataSourceStatus
@@ -251,10 +261,52 @@ internal object AndroidFilesystemMetadataPager {
         )
         val parent = relativePath.substringBeforeLast('/', "")
         val extension = file.name.substringAfterLast('.', "").lowercase()
+        val sourceTime = instantFromMillis(file.lastModified())
+        val externalId = "file-$identity"
+        val metadata = CanonicalSourceMetadata(
+            objectKind = SourceObjectKind.FILE,
+            origin = SourceMetadataOrigin.PLATFORM,
+            privacyZone = SourcePrivacyZone.PRIVATE,
+            externalObject = SourceExternalObjectRef(
+                provider = SourceProviderRef(LIVE_PROVIDER_ID),
+                account = SourceAccountRef(
+                    providerId = LIVE_PROVIDER_ID,
+                    accountId = LIVE_ACCOUNT_ID,
+                ),
+                objectKind = SourceObjectKind.FILE,
+                externalId = externalId,
+                externalVersion = state,
+            ),
+            timestamps = SourceTimestamps(
+                modifiedAt = sourceTime,
+                occurredAt = sourceTime,
+                observedAt = sourceTime,
+                importedAt = sourceTime,
+            ),
+            file = SourceFileMetadata(
+                name = file.name,
+                extension = extension.takeIf { it.isNotBlank() },
+                logicalPath = relativePath,
+                parentPath = parent.takeIf { it.isNotBlank() },
+                byteCount = file.length(),
+                mimeType = classification.mimeType,
+            ),
+            technical = SourceTechnicalMetadata(
+                format = classification.mimeType,
+                producer = AndroidSharedFilesInitialDataSource.ADAPTER_VERSION,
+                attributes = mapOf(
+                    "android:category" to classification.category.name,
+                    "android:file-identity" to identity,
+                    "android:state-fingerprint" to state,
+                    "android:suspected-encrypted" to classification.suspectedEncrypted.toString(),
+                    "android:whatsapp-hint" to classification.whatsapp.toString(),
+                ),
+            ),
+        )
         val record = LifeSourceRecord(
             sourceId = AndroidSharedFilesInitialDataSource.SOURCE_ID,
-            recordId = "file-$identity-$state",
-            observedAt = instantFromMillis(file.lastModified()),
+            recordId = "$externalId-$state",
+            observedAt = sourceTime,
             payload = buildString {
                 appendLine("schema=1")
                 appendLine("file_identity=$identity")
@@ -298,6 +350,7 @@ internal object AndroidFilesystemMetadataPager {
                 if (classification.whatsapp) add("whatsapp")
                 if (classification.suspectedEncrypted) add("encrypted:opaque")
             },
+            metadata = metadata,
         )
         return PositionedRecord(relativePath, record)
     }
@@ -307,6 +360,31 @@ internal object AndroidFilesystemMetadataPager {
             "android-filesystem-gap/v1",
             relativePath,
             reason,
+        )
+        val metadata = CanonicalSourceMetadata(
+            objectKind = SourceObjectKind.OTHER,
+            origin = SourceMetadataOrigin.PLATFORM,
+            privacyZone = SourcePrivacyZone.PRIVATE,
+            externalObject = SourceExternalObjectRef(
+                provider = SourceProviderRef(LIVE_PROVIDER_ID),
+                account = SourceAccountRef(
+                    providerId = LIVE_PROVIDER_ID,
+                    accountId = LIVE_ACCOUNT_ID,
+                ),
+                objectKind = SourceObjectKind.OTHER,
+                externalId = "gap-$id",
+                externalVersion = id,
+            ),
+            timestamps = SourceTimestamps(
+                observedAt = Instant.EPOCH,
+                importedAt = Instant.EPOCH,
+            ),
+            technical = SourceTechnicalMetadata(
+                producer = AndroidSharedFilesInitialDataSource.ADAPTER_VERSION,
+                attributes = mapOf(
+                    "android:gap-reason" to reason.lowercase(),
+                ),
+            ),
         )
         return PositionedRecord(
             position = relativePath,
@@ -321,6 +399,7 @@ internal object AndroidFilesystemMetadataPager {
                 },
                 mimeType = "application/vnd.lifeos.file-scan-gap+text",
                 tags = setOf("file-scan-gap", "file-scan-gap:${reason.lowercase()}"),
+                metadata = metadata,
             ),
         )
     }
@@ -339,6 +418,9 @@ internal object AndroidFilesystemMetadataPager {
 
     private fun instantFromMillis(value: Long): Instant =
         if (value > 0L) Instant.ofEpochMilli(value) else Instant.EPOCH
+
+    private const val LIVE_PROVIDER_ID = "android-files"
+    private const val LIVE_ACCOUNT_ID = "device-shared-files"
 
     private val MEDIA_CATEGORIES = setOf(
         AndroidFileCategory.IMAGE,

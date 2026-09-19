@@ -83,6 +83,7 @@ internal class AndroidInitialSourceLiveConnector(
         val payload: String,
         val mimeType: String,
         val sourceObservedAt: Instant,
+        val metadata: app.lifeos.core.model.source.CanonicalSourceMetadata?,
     )
 
     private val currentRecords = AtomicReference<Map<String, CurrentRecord>>(emptyMap())
@@ -181,6 +182,35 @@ internal class AndroidInitialSourceLiveConnector(
             require(record.fingerprint == delta.newFingerprint) {
                 "Current Android source payload does not match diff fingerprint"
             }
+            val occurredAt = minOf(record.sourceObservedAt, observedAt)
+            val canonicalMetadata = record.metadata
+                ?.takeIf {
+                    it.externalObject.provider.providerId == connectorId.value &&
+                        it.externalObject.account.accountId == accountKey.value &&
+                        it.externalObject.externalId == delta.externalKey &&
+                        it.externalObject.externalVersion == record.fingerprint
+                }
+                ?.copy(
+                    privacyZone = SourcePrivacyZone.mostRestrictive(
+                        listOf(it.privacyZone, delta.privacyZone)
+                    ),
+                    timestamps = it.timestamps.copy(
+                        occurredAt = occurredAt,
+                        observedAt = observedAt,
+                        importedAt = observedAt,
+                    ),
+                )
+                ?: canonicalLiveDataMetadata(
+                    connectorId = connectorId,
+                    accountKey = accountKey,
+                    kind = streamKind,
+                    externalId = delta.externalKey,
+                    externalVersion = record.fingerprint,
+                    occurredAt = occurredAt,
+                    observedAt = observedAt,
+                    mimeType = record.mimeType,
+                    privacyZone = delta.privacyZone,
+                )
             LiveDataDelta(
                 connectorId = connectorId,
                 accountKey = accountKey,
@@ -188,21 +218,11 @@ internal class AndroidInitialSourceLiveConnector(
                 externalId = delta.externalKey,
                 externalVersion = record.fingerprint,
                 operation = LiveDataDeltaOperation.UPSERT,
-                occurredAt = minOf(record.sourceObservedAt, observedAt),
+                occurredAt = occurredAt,
                 observedAt = observedAt,
                 payload = record.payload,
                 mimeType = record.mimeType,
-                metadata = canonicalLiveDataMetadata(
-                    connectorId = connectorId,
-                    accountKey = accountKey,
-                    kind = streamKind,
-                    externalId = delta.externalKey,
-                    externalVersion = record.fingerprint,
-                    occurredAt = minOf(record.sourceObservedAt, observedAt),
-                    observedAt = observedAt,
-                    mimeType = record.mimeType,
-                    privacyZone = delta.privacyZone,
-                ),
+                metadata = canonicalMetadata,
             )
         }
     }
@@ -227,6 +247,7 @@ internal class AndroidInitialSourceLiveConnector(
             payload = payload,
             mimeType = mimeType,
             sourceObservedAt = observedAt,
+            metadata = metadata,
         )
     }
 
