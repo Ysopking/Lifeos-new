@@ -11,6 +11,9 @@ object StandardInformationDomains {
     val SCIENCE: FieldDomainId = StableFieldIds.domain("information.science")
     val CODE: FieldDomainId = StableFieldIds.domain("information.code")
     val PROJECT: FieldDomainId = StableFieldIds.domain("information.project")
+    val COMMUNICATION: FieldDomainId = StableFieldIds.domain("information.communication")
+    val DOCUMENT: FieldDomainId = StableFieldIds.domain("information.document")
+    val EVENT: FieldDomainId = StableFieldIds.domain("information.event")
 
     val ALL: Set<FieldDomainId> = linkedSetOf(
         GENERAL,
@@ -20,6 +23,9 @@ object StandardInformationDomains {
         SCIENCE,
         CODE,
         PROJECT,
+        COMMUNICATION,
+        DOCUMENT,
+        EVENT,
     )
 
     fun isStandard(domainId: FieldDomainId): Boolean = domainId in ALL
@@ -32,6 +38,9 @@ object StandardInformationDomains {
         "science", "scientific", "research" -> SCIENCE
         "code", "coding" -> CODE
         "project" -> PROJECT
+        "communication", "conversation", "message", "email" -> COMMUNICATION
+        "document", "file" -> DOCUMENT
+        "event", "calendar" -> EVENT
         else -> null
     }
 }

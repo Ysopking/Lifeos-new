@@ -21,6 +21,9 @@ enum class InformationAssetKind {
     CODE_AUDIT,
     CODE_CHANGE_PROPOSAL,
     PROJECT,
+    DOCUMENT,
+    CONVERSATION,
+    EVENT,
     OTHER,
 }
 
