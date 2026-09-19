@@ -109,6 +109,7 @@ data class SelfHealthState(
     val recovering: Int?,
     val quarantined: Int?,
     val disabled: Int?,
+    val unknown: Int? = null,
 ) {
     init {
         validateCount(healthy, "healthy")
@@ -117,6 +118,7 @@ data class SelfHealthState(
         validateCount(recovering, "recovering")
         validateCount(quarantined, "quarantined")
         validateCount(disabled, "disabled")
+        validateCount(unknown, "unknown")
     }
 }
 

@@ -133,6 +133,7 @@ class SelfObservationCoordinator(
             "health.recovering=" + encode(snapshot.health.recovering),
             "health.quarantined=" + encode(snapshot.health.quarantined),
             "health.disabled=" + encode(snapshot.health.disabled),
+            "health.unknown=" + encode(snapshot.health.unknown),
             "recovery=" + encode(snapshot.recovery.recoveryStateFingerprint),
             "sources=" + encode(snapshot.liveSources.sourceStateFingerprint),
             *result.issues

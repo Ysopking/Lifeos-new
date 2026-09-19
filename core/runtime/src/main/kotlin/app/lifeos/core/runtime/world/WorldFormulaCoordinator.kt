@@ -21,6 +21,7 @@ class WorldFormulaCoordinator(
     private val snapshots: WorldFormulaSnapshotRepository,
     private val triggerSink: CognitiveTriggerSink? = null,
     private val triggerPolicy: WorldFormulaTriggerPolicy = DefaultWorldFormulaTriggerPolicy,
+    private val captureCognitiveSnapshots: Boolean = true,
 ) {
     suspend fun evaluate(request: WorldFormulaRequest): WorldFormulaExecution {
         val spec = equations.resolve(request.equationVersion)
@@ -123,7 +124,9 @@ class WorldFormulaCoordinator(
             )
         }
 
-        captureCognitiveSnapshotBestEffort(snapshot)
+        if (captureCognitiveSnapshots) {
+            captureCognitiveSnapshotBestEffort(snapshot)
+        }
         emitTriggerBestEffort(request, snapshot)
         return WorldFormulaExecution(
             state = WorldFormulaExecutionState.COMPLETED,

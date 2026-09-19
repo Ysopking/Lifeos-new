@@ -160,13 +160,19 @@ class SelfStateProjector {
         )
 
         val healthSnapshot = value(SelfObservationDomain.HEALTH, inputs.health, issues)
+        // The self-observation controller's own derived health node is output evidence, not input
+        // evidence. Excluding it prevents a DEGRADED/CRITICAL assessment from feeding itself back
+        // into the next assessment while every other productive HealthGraph node remains visible.
+        val observedHealthNodes = healthSnapshot?.nodes
+            ?.filterNot { it.id.value == SELF_OBSERVATION_HEALTH_NODE_ID }
         val health = SelfHealthState(
-            healthy = healthSnapshot?.nodes?.count { it.state == HealthState.HEALTHY },
-            degraded = healthSnapshot?.nodes?.count { it.state == HealthState.DEGRADED },
-            unhealthy = healthSnapshot?.nodes?.count { it.state == HealthState.UNHEALTHY },
-            recovering = healthSnapshot?.nodes?.count { it.state == HealthState.RECOVERING },
-            quarantined = healthSnapshot?.nodes?.count { it.state == HealthState.QUARANTINED },
-            disabled = healthSnapshot?.nodes?.count { it.state == HealthState.DISABLED },
+            healthy = observedHealthNodes?.count { it.state == HealthState.HEALTHY },
+            degraded = observedHealthNodes?.count { it.state == HealthState.DEGRADED },
+            unhealthy = observedHealthNodes?.count { it.state == HealthState.UNHEALTHY },
+            recovering = observedHealthNodes?.count { it.state == HealthState.RECOVERING },
+            quarantined = observedHealthNodes?.count { it.state == HealthState.QUARANTINED },
+            disabled = observedHealthNodes?.count { it.state == HealthState.DISABLED },
+            unknown = observedHealthNodes?.count { it.state == HealthState.UNKNOWN },
         )
 
         val repairs = value(SelfObservationDomain.RECOVERY, inputs.recovery, issues)
@@ -279,3 +285,7 @@ class SelfStateProjector {
                 .toTypedArray(),
         )
 }
+
+
+const val SELF_OBSERVATION_HEALTH_NODE_ID: String = "self-observation"
+const val SELF_OBSERVATION_HEALTH_SOURCE: String = "lifeos-self-observation"

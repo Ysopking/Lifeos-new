@@ -3,7 +3,11 @@ package app.lifeos.core.runtime.self
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.model.PhotonIndexReport
 import app.lifeos.core.runtime.CognitiveSnapshot
+import app.lifeos.core.runtime.health.HealthNode
+import app.lifeos.core.runtime.health.HealthNodeId
+import app.lifeos.core.runtime.health.HealthScope
 import app.lifeos.core.runtime.health.HealthSnapshot
+import app.lifeos.core.runtime.health.HealthState
 import app.lifeos.core.runtime.resource.HardwareStateSnapshot
 import app.lifeos.core.runtime.resource.HardwareThermalState
 import app.lifeos.core.runtime.topology.LifeOsRuntimeTopologySnapshot
@@ -107,6 +111,53 @@ class SelfStateProjectorTest {
         assertNull(result.snapshot.liveSources.sourceCount)
         assertNull(result.snapshot.recovery.activeRepairs)
         assertTrue(result.issues.all { it.kind == SelfObservationIssueKind.UNAVAILABLE })
+    }
+
+    @Test
+    fun selfObservationHealthOutputIsExcludedFromItsOwnInputProjection() {
+        val health = HealthSnapshot(
+            nodes = listOf(
+                HealthNode(
+                    id = HealthNodeId(SELF_OBSERVATION_HEALTH_NODE_ID),
+                    scope = HealthScope.RUNTIME,
+                    state = HealthState.UNHEALTHY,
+                ),
+                HealthNode(
+                    id = HealthNodeId("runtime"),
+                    scope = HealthScope.RUNTIME,
+                    state = HealthState.HEALTHY,
+                ),
+            ),
+            capturedAt = now,
+        )
+        val result = projector.project(
+            baseInputs().copy(health = SelfObservationSource.Available(health))
+        )
+
+        assertEquals(1, result.snapshot.health.healthy)
+        assertEquals(0, result.snapshot.health.unhealthy)
+        assertEquals(0, result.snapshot.health.unknown)
+    }
+
+    @Test
+    fun unknownHealthNodesRemainExplicitInsteadOfDisappearingFromSelfState() {
+        val health = HealthSnapshot(
+            nodes = listOf(
+                HealthNode(
+                    id = HealthNodeId("unobserved-component"),
+                    scope = HealthScope.RUNTIME,
+                    state = HealthState.UNKNOWN,
+                ),
+            ),
+            capturedAt = now,
+        )
+
+        val result = projector.project(
+            baseInputs().copy(health = SelfObservationSource.Available(health))
+        )
+
+        assertEquals(1, result.snapshot.health.unknown)
+        assertEquals(0, result.snapshot.health.healthy)
     }
 
     @Test

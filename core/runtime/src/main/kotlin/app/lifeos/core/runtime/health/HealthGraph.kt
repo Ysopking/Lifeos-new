@@ -62,6 +62,7 @@ class HealthGraph(
         source: String,
         message: String? = null,
         observedAt: Instant = now(),
+        actionable: Boolean = true,
     ): HealthNode = record(
         HealthObservation(
             nodeId = id,
@@ -69,6 +70,7 @@ class HealthGraph(
             observedAt = observedAt,
             source = source,
             message = message,
+            actionable = actionable,
         )
     )
 

@@ -67,8 +67,13 @@ import app.lifeos.core.runtime.resource.SharedResourceBudgetRuntimeRegistry
 import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.self.SelfObservationCapture
 import app.lifeos.core.runtime.self.SelfObservationCoordinator
+import app.lifeos.core.runtime.self.SELF_OBSERVATION_HEALTH_NODE_ID
+import app.lifeos.core.runtime.self.SELF_OBSERVATION_HEALTH_SOURCE
+import app.lifeos.core.runtime.self.SelfObservationDecisionTraceRecorder
 import app.lifeos.core.runtime.self.SelfObservationTrigger
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
+import app.lifeos.core.runtime.world.SelfStateWorldBand
+import app.lifeos.core.runtime.world.SelfStateWorldFormulaRuntimeRegistry
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
@@ -109,6 +114,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Process-level owner for the LIFEOS kernel instance and read-only private diagnostics. */
 class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
@@ -138,6 +145,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
     lateinit var decisionTraces: DecisionTraceLedger
         private set
+
+    private lateinit var selfObservationDecisionTraceRecorder: SelfObservationDecisionTraceRecorder
 
     lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
         private set
@@ -180,6 +189,12 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private var liveSourceRefreshJob: Job? = null
     private val selfObservationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var selfObservationJob: Job? = null
+    private val selfObservationAnalysisMutex = Mutex()
+    @Volatile
+    private var lastSelfObservationWorldBand: SelfStateWorldBand? = null
+    @Volatile
+    private var lastSelfObservationTraceIdentity: String? = null
+    private lateinit var selfObservationHealthGraph: app.lifeos.core.runtime.health.HealthGraph
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
 
@@ -224,6 +239,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     )
                     resourceBudgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(this))
                     decisionTraces = DecisionTraceLedger(EncryptedDecisionTraceRepository(this))
+                    selfObservationDecisionTraceRecorder = SelfObservationDecisionTraceRecorder(decisionTraces)
                     goalDecisionTraceRecorder = GoalDecisionTraceRecorder(decisionTraces)
                     DecisionTraceRuntimeRegistry.install(SubsystemDecisionTraceRecorder(decisionTraces))
                     LifecycleDecisionTraceRuntimeRegistry.install(LifecycleDecisionTraceRecorder(decisionTraces))
@@ -448,7 +464,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         )
 
         installLiveSources()
-        val selfObservationHealthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
+        selfObservationHealthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
             "Self observation requires the productive HealthGraph"
         }
         selfObservationRuntime = SelfObservationRuntime(
@@ -485,17 +501,31 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         healthGraph: app.lifeos.core.runtime.health.HealthGraph,
     ) {
         if (selfObservationJob?.isActive == true) return
+        // Register the derived self-observation node before exposing any refresh path. Otherwise
+        // an early health event/UI refresh can record it implicitly as UNKNOWN and a later explicit
+        // RUNTIME registration fails closed on the scope mismatch.
+        runBlocking {
+            healthGraph.register(
+                app.lifeos.core.runtime.health.HealthNodeId(SELF_OBSERVATION_HEALTH_NODE_ID),
+                app.lifeos.core.runtime.health.HealthScope.RUNTIME,
+            )
+        }
         selfObservationJob = selfObservationScope.launch {
             launch {
                 healthGraph.observations.collect { observation ->
-                    if (observation.source != SELF_OBSERVATION_SOURCE) {
-                        selfObservationCoordinator.refresh(SelfObservationTrigger.HEALTH_TRANSITION)
+                    if (observation.source != SELF_OBSERVATION_HEALTH_SOURCE) {
+                        val trigger = if (observation.state == app.lifeos.core.runtime.health.HealthState.RECOVERING) {
+                            SelfObservationTrigger.RECOVERY_TRANSITION
+                        } else {
+                            SelfObservationTrigger.HEALTH_TRANSITION
+                        }
+                        refreshAndAnalyzeSelfObservation(trigger)
                     }
                 }
             }
             var trigger = SelfObservationTrigger.STARTUP
             while (currentCoroutineContext().isActive) {
-                val cycle = selfObservationCoordinator.refresh(trigger)
+                val cycle = refreshAndAnalyzeSelfObservation(trigger)
                 trigger = SelfObservationTrigger.TIMER
                 delay(selfObservationCoordinator.nextInterval(cycle.band).toMillis())
             }
@@ -509,7 +539,75 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     internal fun requestSelfObservation(trigger: SelfObservationTrigger) {
         if (!::selfObservationCoordinator.isInitialized) return
         selfObservationScope.launch {
-            selfObservationCoordinator.refresh(trigger)
+            refreshAndAnalyzeSelfObservation(trigger)
+        }
+    }
+
+    private suspend fun refreshAndAnalyzeSelfObservation(
+        trigger: SelfObservationTrigger,
+    ): app.lifeos.core.runtime.self.SelfObservationCycle {
+        val cycle = selfObservationCoordinator.refresh(trigger)
+        if (cycle.emitted) {
+            analyzeSelfObservation(cycle)
+        }
+        return cycle
+    }
+
+    private suspend fun analyzeSelfObservation(
+        cycle: app.lifeos.core.runtime.self.SelfObservationCycle,
+    ) {
+        selfObservationAnalysisMutex.withLock {
+            val assessment = SelfStateWorldFormulaRuntimeRegistry.requireCurrent().evaluate(cycle.result)
+            val traceIdentity = cycle.snapshot.authorityFingerprint + ":" + assessment.band.name
+            if (traceIdentity != lastSelfObservationTraceIdentity) {
+                selfObservationDecisionTraceRecorder.record(
+                    snapshot = cycle.snapshot,
+                    assessment = assessment,
+                )
+                lastSelfObservationTraceIdentity = traceIdentity
+            }
+
+            val previousBand = lastSelfObservationWorldBand
+            if (assessment.band != previousBand) {
+                when (assessment.band) {
+                    SelfStateWorldBand.CRITICAL -> selfObservationHealthGraph.record(
+                        app.lifeos.core.runtime.health.HealthObservation(
+                            nodeId = app.lifeos.core.runtime.health.HealthNodeId(SELF_OBSERVATION_HEALTH_NODE_ID),
+                            state = app.lifeos.core.runtime.health.HealthState.UNHEALTHY,
+                            observedAt = cycle.snapshot.capturedAt,
+                            source = SELF_OBSERVATION_HEALTH_SOURCE,
+                            message = "self-observation:critical:" + assessment.reasonCodes.joinToString("|"),
+                            actionable = false,
+                        )
+                    )
+                    SelfStateWorldBand.DEGRADED -> selfObservationHealthGraph.record(
+                        app.lifeos.core.runtime.health.HealthObservation(
+                            nodeId = app.lifeos.core.runtime.health.HealthNodeId(SELF_OBSERVATION_HEALTH_NODE_ID),
+                            state = app.lifeos.core.runtime.health.HealthState.DEGRADED,
+                            observedAt = cycle.snapshot.capturedAt,
+                            source = SELF_OBSERVATION_HEALTH_SOURCE,
+                            message = "self-observation:degraded:" + assessment.reasonCodes.joinToString("|"),
+                            actionable = false,
+                        )
+                    )
+                    SelfStateWorldBand.STABLE,
+                    SelfStateWorldBand.OBSERVE -> {
+                        if (
+                            previousBand == SelfStateWorldBand.DEGRADED ||
+                            previousBand == SelfStateWorldBand.CRITICAL
+                        ) {
+                            selfObservationHealthGraph.recordHealthy(
+                                id = app.lifeos.core.runtime.health.HealthNodeId(SELF_OBSERVATION_HEALTH_NODE_ID),
+                                source = SELF_OBSERVATION_HEALTH_SOURCE,
+                                message = "self-observation:recovered",
+                                observedAt = cycle.snapshot.capturedAt,
+                                actionable = false,
+                            )
+                        }
+                    }
+                }
+                lastSelfObservationWorldBand = assessment.band
+            }
         }
     }
 
@@ -644,7 +742,6 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private companion object {
-        const val SELF_OBSERVATION_SOURCE = "lifeos-self-observation"
         val LIVE_SOURCE_REFRESH_INTERVAL: Duration = Duration.ofMinutes(5)
         const val INITIAL_DATA_PREFS = "lifeos-initial-data-bootstrap"
         const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"

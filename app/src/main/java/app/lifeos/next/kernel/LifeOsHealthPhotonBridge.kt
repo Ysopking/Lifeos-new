@@ -6,6 +6,7 @@ import app.lifeos.core.runtime.health.HealthGraph
 import app.lifeos.core.runtime.health.HealthNodeId
 import app.lifeos.core.runtime.health.HealthScope
 import app.lifeos.core.runtime.health.HealthState
+import app.lifeos.core.runtime.self.SELF_OBSERVATION_HEALTH_SOURCE
 import app.lifeos.core.runtime.topology.LifeOsRuntimeBindingRegistry
 import app.lifeos.core.runtime.topology.LifeOsRuntimeBindingState
 import java.util.concurrent.ConcurrentHashMap
@@ -35,6 +36,9 @@ object LifeOsHealthPhotonBridge {
         }
         scope.launch {
             graph.observations.collect { observation ->
+                // Self-observation already has a dedicated DecisionTrace. Re-projecting its derived
+                // HealthGraph output into PhotonStore/topology would mutate the state it is observing.
+                if (observation.source == SELF_OBSERVATION_HEALTH_SOURCE) return@collect
                 updateTopology(graph, observation.nodeId, observation.state, observation.message)
 
                 val previous = lastStateByNode.put(observation.nodeId.value, observation.state)

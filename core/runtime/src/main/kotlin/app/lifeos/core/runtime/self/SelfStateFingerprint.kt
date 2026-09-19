@@ -73,6 +73,7 @@ object SelfStateFingerprint {
             add("health.recovering=" + encode(snapshot.health.recovering))
             add("health.quarantined=" + encode(snapshot.health.quarantined))
             add("health.disabled=" + encode(snapshot.health.disabled))
+            add("health.unknown=" + encode(snapshot.health.unknown))
 
             addAll(canonicalSet("recovery.active", snapshot.recovery.activeRepairIds))
             add("recovery.fingerprint=" + encode(snapshot.recovery.recoveryStateFingerprint))

@@ -69,6 +69,7 @@ data class HealthObservation(
     val source: String,
     val message: String? = null,
     val classification: FailureClassification? = null,
+    val actionable: Boolean = true,
 ) {
     init {
         require(source.isNotBlank()) { "Health observation source must not be blank" }

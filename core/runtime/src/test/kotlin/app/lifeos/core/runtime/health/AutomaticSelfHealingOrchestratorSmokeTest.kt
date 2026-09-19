@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class AutomaticSelfHealingOrchestratorSmokeTest {
     @Test
@@ -57,6 +58,50 @@ class AutomaticSelfHealingOrchestratorSmokeTest {
         runCurrent()
         assertNotNull(quarantine.active(nodeId, NOW))
         assertEquals(HealthState.QUARANTINED, graph.node(nodeId)?.state)
+    }
+
+    @Test
+    fun `non-actionable health evidence remains observable without repair or quarantine`() = runTest {
+        val graph = HealthGraph()
+        val quarantine = QuarantineRegistry()
+        val ledger = SelfHealingLedger(MemorySelfHealingRepository()) { NOW }
+        val coordinator = DurableSelfHealingCoordinator(
+            ledger = ledger,
+            healthGraph = graph,
+            quarantineRegistry = quarantine,
+            budgets = ResourceBudgetCoordinator(MemoryResourceBudgetRepository()),
+            sharedBudgetProvider = { null },
+            now = { NOW },
+        )
+        val orchestrator = AutomaticSelfHealingOrchestrator(
+            scope = backgroundScope,
+            graph = graph,
+            plans = AutomaticSelfHealingPlanRegistry(emptyList()),
+            generations = SelfHealingIncidentGenerationResolver(ledger),
+            coordinator = coordinator,
+            quarantineRegistry = quarantine,
+            now = { NOW },
+        )
+        orchestrator.start()
+        runCurrent()
+
+        val nodeId = HealthNodeId("diagnostic:self-observation")
+        graph.register(nodeId, HealthScope.RUNTIME)
+        graph.record(
+            HealthObservation(
+                nodeId = nodeId,
+                state = HealthState.UNHEALTHY,
+                observedAt = NOW,
+                source = "diagnostic",
+                message = "observed-only",
+                actionable = false,
+            )
+        )
+        runCurrent()
+
+        assertNull(quarantine.active(nodeId, NOW))
+        assertEquals(HealthState.UNHEALTHY, graph.node(nodeId)?.state)
+        assertEquals(0, ledger.active().size)
     }
 
     private class MemorySelfHealingRepository : SelfHealingRepository {
