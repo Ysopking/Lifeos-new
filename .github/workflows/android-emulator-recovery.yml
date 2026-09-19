@@ -1,7 +1,7 @@
 name: Android Emulator Recovery
 on:
   push:
-    branches: [main]
+    branches: [main, "optimization/m216c-scale-recovery", "optimization/m216e-final-gold-seal"]
   pull_request:
     branches: [main]
   merge_group:

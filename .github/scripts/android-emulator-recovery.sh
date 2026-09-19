@@ -139,6 +139,12 @@ run_test \
   'app.lifeos.next.SelfObservationGoldDeviceTest#seedAuthoritativeSelfStateBeforeProcessDeath' \
   "$report_dir/self-observation-seed.txt"
 
+# M216 bounded scale seed. Exceed the 4,096 hot/runtime retention budget while keeping emulator
+# execution bounded. The exact encrypted index is reopened after the same cold process restart.
+run_test \
+  'app.lifeos.next.M216ScaleRecoveryDeviceTest#seedBoundedScaleCorpusBeforeColdRestart' \
+  "$report_dir/m216-scale-seed.txt"
+
 adb shell am force-stop app.lifeos.next
 cold_start="$(adb shell am start -W -n app.lifeos.next/.ChatMainActivity)"
 printf '%s\n' "$cold_start" | tee "$report_dir/cold-start.txt"
@@ -149,6 +155,10 @@ assert_cold_launcher "$cold_start"
 run_test \
   'app.lifeos.next.SelfObservationGoldDeviceTest#recoverAuthorityFingerprintAndObserveLiveState' \
   "$report_dir/self-observation-recovered.txt"
+
+run_test \
+  'app.lifeos.next.M216ScaleRecoveryDeviceTest#recoverPagedScaleCorpusAfterColdRestart' \
+  "$report_dir/m216-scale-recovered.txt"
 
 run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' \
