@@ -227,6 +227,19 @@ data class WorldEquationPackEvidenceRecord(
     }
 }
 
+data class WorldEquationPackEvidenceLoadReport(
+    val records: List<WorldEquationPackEvidenceRecord>,
+    val unreadableEntries: List<String>,
+) {
+    init {
+        require(records.map { it.candidatePackFingerprint }.distinct().size == records.size)
+        require(unreadableEntries.none { it.isBlank() })
+    }
+
+    val corrupted: Boolean
+        get() = unreadableEntries.isNotEmpty()
+}
+
 interface WorldEquationPackEvidenceRepository {
     suspend fun load(candidatePackFingerprint: String): WorldEquationPackEvidenceRecord?
 
@@ -235,6 +248,8 @@ interface WorldEquationPackEvidenceRepository {
         expectedRevision: Long?,
         next: WorldEquationPackEvidenceRecord,
     ): Boolean
+
+    suspend fun loadReport(): WorldEquationPackEvidenceLoadReport
 }
 
 class InMemoryWorldEquationPackEvidenceRepository : WorldEquationPackEvidenceRepository {
@@ -266,6 +281,13 @@ class InMemoryWorldEquationPackEvidenceRepository : WorldEquationPackEvidenceRep
         next.requireSuccessorOf(current)
         records[candidatePackFingerprint] = next
         true
+    }
+
+    override suspend fun loadReport(): WorldEquationPackEvidenceLoadReport = mutex.withLock {
+        WorldEquationPackEvidenceLoadReport(
+            records = records.values.sortedBy { it.id },
+            unreadableEntries = emptyList(),
+        )
     }
 }
 
