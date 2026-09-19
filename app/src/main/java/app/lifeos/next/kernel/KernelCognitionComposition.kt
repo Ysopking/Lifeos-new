@@ -125,7 +125,12 @@ internal class KernelCognitionComposition(
         val fieldCutoverStates = PhotonBackedFieldCutoverStateRepository(foundation.store)
         val fieldShadowValidationLedger = PhotonBackedFieldShadowValidationLedger(foundation.store)
         val fieldShadowValidator = FieldShadowValidator(
-            policy = FieldShadowValidationPolicy(selectedDomains = selectedFieldDomains),
+            policy = FieldShadowValidationPolicy(
+                selectedDomains = selectedFieldDomains,
+                maximumConfidenceDeltaByDomain = mapOf(
+                    app.lifeos.core.runtime.ThoughtMatrix.FIELD_DOMAIN_ID to 1.0,
+                ),
+            ),
         )
         val fieldCutoverAuthority = FieldCutoverAuthority(
             ledger = fieldShadowValidationLedger,

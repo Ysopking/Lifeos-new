@@ -10,10 +10,12 @@ import app.lifeos.core.field.FieldConvergenceRequest
 import app.lifeos.core.field.FieldEvidence
 import app.lifeos.core.field.FieldGraph
 import app.lifeos.core.field.FieldHypothesis
+import app.lifeos.core.field.FieldContextScope
 import app.lifeos.core.field.FieldNode
 import app.lifeos.core.field.FieldNodeKind
 import app.lifeos.core.field.HypothesisEvidenceLink
 import app.lifeos.core.field.HypothesisScope
+import app.lifeos.core.field.PhotonContextReference
 import app.lifeos.core.field.SourceAuthority
 import app.lifeos.core.field.TemporalContext
 import app.lifeos.core.model.Photon
@@ -35,10 +37,10 @@ class ThoughtMatrixFieldRequestFactory : PhotonFieldRequestFactory {
             semanticKey = semanticKey,
             confidence = photon.confidence,
             reliability = EvidenceReliability(
-                score = photon.confidence,
-                reason = "source-photon-confidence",
+                score = 1.0,
+                reason = "exact-durable-photon-revision",
             ),
-            authority = SourceAuthority.UNVERIFIED,
+            authority = SourceAuthority.AUTHORITATIVE,
             observedAt = photon.provenance.createdAt,
             payload = EvidencePayload.text(photon.content),
             explanation = "ThoughtMatrix cutover evidence projected from immutable source Photon",
@@ -84,6 +86,16 @@ class ThoughtMatrixFieldRequestFactory : PhotonFieldRequestFactory {
                 domain = DomainContext(
                     domainId = domainId,
                     attributes = mapOf("projection" to "thought-matrix-cutover-v1"),
+                ),
+                photonReferences = listOf(
+                    PhotonContextReference(
+                        photonId = photon.id,
+                        revision = photon.revision,
+                        scopes = setOf(FieldContextScope.CURRENT_TASK),
+                        semanticTerms = setOf(semanticKey),
+                        confidence = 1.0,
+                        observedAt = photon.provenance.createdAt,
+                    )
                 ),
             ),
         )

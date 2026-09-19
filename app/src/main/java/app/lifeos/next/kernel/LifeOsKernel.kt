@@ -53,6 +53,10 @@ import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.evolution.WorldEquationAutoEvolutionCoordinator
 import app.lifeos.core.runtime.evolution.WorldEquationAutoEvolutionResult
 import app.lifeos.core.runtime.evolution.WorldEquationEvaluationProtocol
+import app.lifeos.core.runtime.field.FieldCutoverLifecycleCoordinator
+import app.lifeos.core.runtime.field.FieldCutoverReplaySummary
+import app.lifeos.core.runtime.field.FieldCutoverState
+import app.lifeos.core.runtime.field.ThoughtMatrixFieldCutoverReplayCoordinator
 import app.lifeos.core.runtime.evolution.WorldEquationShadowCase
 import app.lifeos.core.field.world.WorldEquationSpec
 import app.lifeos.core.runtime.goal.GoalResumeEngine
@@ -92,6 +96,8 @@ class LifeOsKernel internal constructor(
     val photonTransactions: PhotonTransactionJournal,
     val cognitiveOutcomes: CognitiveOutcomeJournal,
     val cognitiveTriggers: CognitiveTriggerSink,
+    val fieldCutoverLifecycle: FieldCutoverLifecycleCoordinator,
+    private val thoughtMatrixFieldCutoverReplay: ThoughtMatrixFieldCutoverReplayCoordinator,
     /** Durable V7 state, verified and replayed before the runtime is started. */
     val goalPlans: DurableGoalPlanLedger,
     /** Sole productive Goal -> ThoughtGraph -> WorldFormula -> Convergence authority. */
@@ -147,6 +153,36 @@ class LifeOsKernel internal constructor(
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
     val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
+
+    suspend fun assessThoughtMatrixFieldCutover(
+        limit: Int = 64,
+    ): FieldCutoverReplaySummary {
+        requireCompletedBoot("ThoughtMatrix field cutover replay")
+        require(limit in 32..128) {
+            "ThoughtMatrix cutover replay limit must be in 32..128"
+        }
+        val candidates = productivePhotonQueries.latest(
+            limit = limit,
+            order = PhotonIndexOrder.NEWEST_FIRST,
+        ).photons.filterNot { "life-memory-management" in it.tags }
+        return thoughtMatrixFieldCutoverReplay.replayAndAssess(
+            photons = candidates,
+            at = Instant.now(),
+            provenance = "kernel:m212-thought-matrix-replay",
+        )
+    }
+
+    suspend fun activateThoughtMatrixFieldCutover(
+        expectedEvidenceFingerprint: String,
+    ): FieldCutoverState {
+        requireCompletedBoot("ThoughtMatrix field cutover activation")
+        return fieldCutoverLifecycle.activate(
+            domainId = ThoughtMatrix.FIELD_DOMAIN_ID,
+            expectedEvidenceFingerprint = expectedEvidenceFingerprint,
+            at = Instant.now(),
+            provenance = "kernel:m212-thought-matrix-activation",
+        )
+    }
 
     suspend fun freezeCognitiveModulesForCurrentCycle(
         builtIns: Collection<CognitiveModule>,

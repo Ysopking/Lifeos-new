@@ -270,11 +270,20 @@ data class FieldShadowValidationPolicy(
     val minimumReplayCases: Int = 32,
     val maximumConfidenceDelta: Double = 0.25,
     val selectedDomains: Set<FieldDomainId> = emptySet(),
+    val maximumConfidenceDeltaByDomain: Map<FieldDomainId, Double> = emptyMap(),
 ) {
     init {
         require(minimumReplayCases > 0)
         require(maximumConfidenceDelta.isFinite() && maximumConfidenceDelta in 0.0..1.0)
+        require(
+            maximumConfidenceDeltaByDomain.values.all {
+                it.isFinite() && it in 0.0..1.0
+            }
+        ) { "Domain confidence-delta limits must be finite and in 0..1" }
     }
+
+    fun maximumConfidenceDelta(domainId: FieldDomainId): Double =
+        maximumConfidenceDeltaByDomain[domainId] ?: maximumConfidenceDelta
 }
 
 data class FieldShadowValidationReport(
@@ -426,7 +435,9 @@ class FieldShadowValidator(
                 else -> FieldShadowDifferenceClass.SEMANTIC_DIVERGENCE
             }
             ShadowSemanticState.RESOLVED -> when (input.universal.semanticState) {
-                ShadowSemanticState.RESOLVED -> if (confidenceDelta <= policy.maximumConfidenceDelta) {
+                ShadowSemanticState.RESOLVED -> if (
+                    confidenceDelta <= policy.maximumConfidenceDelta(input.domainId)
+                ) {
                     FieldShadowDifferenceClass.EQUIVALENT
                 } else {
                     FieldShadowDifferenceClass.CONFIDENCE_DRIFT

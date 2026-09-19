@@ -64,6 +64,8 @@ class LifeOsKernelFactory(
             photonTransactions = cognition.photonTransactions,
             cognitiveOutcomes = cognition.cognitiveOutcomes,
             cognitiveTriggers = cognition.cognitiveTriggers,
+            fieldCutoverLifecycle = cognition.fieldCutoverLifecycle,
+            thoughtMatrixFieldCutoverReplay = cognition.thoughtMatrixFieldCutoverReplay,
             mmsiRuntime = foundation.mmsiRuntime,
             languageUnderstanding = foundation.languageUnderstanding,
             goalPhotonFactory = foundation.goalPhotonFactory,
