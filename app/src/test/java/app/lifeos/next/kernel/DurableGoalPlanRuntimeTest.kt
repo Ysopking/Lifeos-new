@@ -16,7 +16,15 @@ import app.lifeos.core.runtime.convergence.ConvergenceDecisionCheckpointReposito
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionCheckpointWriteResult
 import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
+import app.lifeos.core.runtime.goal.GoalCognitiveCycleBindingRecord
+import app.lifeos.core.runtime.goal.GoalCognitiveCycleBindingRepository
+import app.lifeos.core.runtime.goal.GoalCognitiveCycleBindingState
+import app.lifeos.core.runtime.goal.GoalConvergenceCycleBinding
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.goal.GoalConvergenceDecisionResult
+import app.lifeos.core.runtime.goal.GoalConvergenceDecisionSource
+import app.lifeos.core.runtime.goal.GoalOutcomeLearningHook
+import app.lifeos.core.runtime.goal.GoalOutcomeLearningReceipt
 import app.lifeos.core.runtime.goal.GoalPlanDefinition
 import app.lifeos.core.runtime.goal.GoalPlanDefinitionWriteResult
 import app.lifeos.core.runtime.goal.GoalPlanId
@@ -30,6 +38,7 @@ import app.lifeos.core.runtime.goal.LocalKnowledgeGoalKind
 import app.lifeos.core.runtime.goal.LocalShareKind
 import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.core.runtime.query.GoalOutcomeLookup
+import app.lifeos.core.runtime.world.CognitiveCycleId
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -108,6 +117,124 @@ class DurableGoalPlanRuntimeTest {
         assertTrue(ledger.states.value.values.single().stepStates.values.all {
             it == GoalStepState.COMPLETED
         })
+    }
+
+    @Test
+    fun `productive goal outcome is learned exactly once from durable cycle lineage`() = runTest {
+        val goalRepository = MemoryGoalPlanRepository()
+        val checkpointRepository = MemoryCheckpointRepository()
+        val ledger = DurableGoalPlanLedger(goalRepository)
+        val persisted = mutableListOf<Photon>()
+        val bindings = MemoryGoalCognitiveCycleBindingRepository()
+        var learningCalls = 0
+        val baseConvergence = testGoalConvergenceDecisionSource(checkpointRepository)
+        val boundConvergence = object : GoalConvergenceDecisionSource {
+            override suspend fun decide(
+                goal: GoalFrame,
+                routing: GoalCapabilityResolution,
+                sourcePhoton: Photon,
+                goalPhotonId: PhotonId,
+                goalPhotonRevision: Long,
+                at: Instant,
+            ): ConvergenceDecisionCheckpoint =
+                baseConvergence.decide(
+                    goal = goal,
+                    routing = routing,
+                    sourcePhoton = sourcePhoton,
+                    goalPhotonId = goalPhotonId,
+                    goalPhotonRevision = goalPhotonRevision,
+                    at = at,
+                )
+
+            override suspend fun decideBound(
+                goal: GoalFrame,
+                routing: GoalCapabilityResolution,
+                sourcePhoton: Photon,
+                goalPhotonId: PhotonId,
+                goalPhotonRevision: Long,
+                at: Instant,
+            ): GoalConvergenceDecisionResult = GoalConvergenceDecisionResult(
+                checkpoint = decide(
+                    goal = goal,
+                    routing = routing,
+                    sourcePhoton = sourcePhoton,
+                    goalPhotonId = goalPhotonId,
+                    goalPhotonRevision = goalPhotonRevision,
+                    at = at,
+                ),
+                cycleBinding = GoalConvergenceCycleBinding(
+                    cycleId = CognitiveCycleId("cycle:test-goal-learning"),
+                    sourceWorldSnapshotId = "world:test-before",
+                    equationVersion = "lifeos-world-cognitive-v1",
+                ),
+            )
+        }
+        val learning = GoalOutcomeLearningHook { binding, outcome, succeeded ->
+            learningCalls += 1
+            assertEquals("world:test-before", binding.sourceWorldSnapshotId)
+            assertEquals("lifeos-world-cognitive-v1", binding.equationVersion)
+            assertEquals("outcome-learning", outcome.id.value)
+            assertTrue(succeeded)
+            GoalOutcomeLearningReceipt(
+                outcomeWorldSnapshotId = "world:test-after",
+                learningWatermarkRevision = 17L,
+            )
+        }
+        val runtime = DurableGoalPlanRuntime(
+            ledger = ledger,
+            convergence = boundConvergence,
+            persistDerivedOutcome = { null },
+            outcomeLookup = GoalOutcomeLookup { goalPhotonId, limit ->
+                persisted.filter { goalPhotonId in it.provenance.parentIds }.take(limit)
+            },
+            cognitiveBindings = bindings,
+            outcomeLearning = learning,
+            now = { at },
+        )
+        val goal = goal(IntentType.QUERY, "Learn from this local query")
+        val goalId = PhotonId("goal-learning")
+        val source = photon("source-learning", tags = setOf("chat"))
+        val outcome = photon(
+            id = "outcome-learning",
+            tags = setOf("answer", "result", "local-query-answer"),
+            parentIds = setOf(goalId),
+        )
+        val context = GoalActionContext(
+            goal = goal,
+            routing = routing(goal),
+            sourcePhoton = source,
+            goalPhotonId = goalId,
+        )
+        val dispatcher = GoalActionDispatcher(
+            executeKnowledge = {
+                persisted += outcome
+                LocalKnowledgeExecutionResult.Produced(
+                    kind = LocalKnowledgeGoalKind.QUERY_ANSWER,
+                    output = PhotonSubmissionResult(outcome, processingQueued = true),
+                    evidencePhotonIds = emptyList(),
+                )
+            },
+            executeDeepSearch = { error("unexpected DeepSearch") },
+            executeImageGeneration = { error("unexpected image generation") },
+            executeImageTransform = { error("unexpected image transform") },
+            executeSchedule = { error("unexpected schedule") },
+            prepareCommunication = { error("unexpected communication") },
+            executionGuard = PassThroughGoalActionExecutionGuard,
+            durableRuntimeProvider = { runtime },
+        )
+
+        dispatcher.execute(context)
+        assertEquals(1, learningCalls)
+        val record = requireNotNull(bindings.single())
+        assertEquals(GoalCognitiveCycleBindingState.LEARNED, record.state)
+        assertEquals(outcome.id, record.outcomePhotonId)
+        assertEquals("world:test-after", record.outcomeWorldSnapshotId)
+        assertEquals(17L, record.learningWatermarkRevision)
+
+        val replay = dispatcher.execute(context)
+        assertEquals(outcome, replay.recoveredOutcome)
+        assertEquals(1, learningCalls)
+        assertEquals(GoalCognitiveCycleBindingState.LEARNED, requireNotNull(bindings.single()).state)
     }
 
     @Test
@@ -227,6 +354,27 @@ class DurableGoalPlanRuntimeTest {
         ),
         tags = tags,
     )
+
+    private class MemoryGoalCognitiveCycleBindingRepository :
+        GoalCognitiveCycleBindingRepository {
+        private val records = linkedMapOf<GoalPlanId, GoalCognitiveCycleBindingRecord>()
+
+        override suspend fun load(planId: GoalPlanId): GoalCognitiveCycleBindingRecord? =
+            records[planId]
+
+        override suspend fun compareAndSet(
+            planId: GoalPlanId,
+            expectedRevision: Long?,
+            next: GoalCognitiveCycleBindingRecord,
+        ): Boolean {
+            if (records[planId]?.revision != expectedRevision) return false
+            require(next.planId == planId)
+            records[planId] = next
+            return true
+        }
+
+        fun single(): GoalCognitiveCycleBindingRecord? = records.values.singleOrNull()
+    }
 
     private class MemoryGoalPlanRepository : GoalPlanRepository {
         val definitions = linkedMapOf<GoalPlanId, GoalPlanDefinition>()

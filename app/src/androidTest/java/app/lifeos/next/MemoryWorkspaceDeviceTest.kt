@@ -2,6 +2,7 @@ package app.lifeos.next
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.runtime.life.MemoryStage
 import app.lifeos.next.kernel.KernelBootstrapState
 import app.lifeos.next.kernel.KernelBootstrapStatus
@@ -68,8 +69,11 @@ class MemoryWorkspaceDeviceTest {
         // legitimate runtime evidence concurrently with this read-only projection, so whole-store
         // equality is racy and can report a false F5 write. The projection must still preserve every
         // exact Photon revision that existed before it ran; additions from the live runtime are allowed.
-        val durableAfter = app.kernel.photonStore.loadAll().toSet()
-        val missingOrChanged = durableBefore.filterNot(durableAfter::contains)
+        val missingOrChanged = durableBefore.filter { photon ->
+            app.kernel.photonStore.load(
+                PhotonRevisionRef(photon.id, photon.revision)
+            ) != photon
+        }
         assertTrue(
             "F5 projection must preserve every pre-existing Photon revision; changed=${missingOrChanged.map { "${it.id.value}@${it.revision}" }}",
             missingOrChanged.isEmpty(),

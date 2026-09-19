@@ -52,6 +52,7 @@ import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.goal.GoalResumeEngine
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
+import app.lifeos.core.runtime.goal.GoalOutcomeLearningHook
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
 import app.lifeos.core.runtime.goal.GoalResumeResult
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
@@ -90,6 +91,8 @@ class LifeOsKernel internal constructor(
     val goalPlans: DurableGoalPlanLedger,
     /** Sole productive Goal -> ThoughtGraph -> WorldFormula -> Convergence authority. */
     val productiveGoalConvergence: GoalConvergenceDecisionProvider,
+    /** BootEngine-owned persisted Outcome -> WorldFormula -> learning bridge. */
+    val goalOutcomeLearning: GoalOutcomeLearningHook,
     /** Lazily probes and selects the strongest offline MMSI execution path supported by this device. */
     val mmsiRuntime: MmsiRuntimeBackendProbe,
     /** Deterministic GoalFrame -> SceneGraph compiler used by image action execution. */

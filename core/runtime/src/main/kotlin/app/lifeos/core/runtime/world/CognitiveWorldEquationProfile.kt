@@ -30,13 +30,13 @@ class CognitiveWorldEquationProfile(
         photonId: PhotonId,
         config: WorldFormulaConfig = WorldFormulaConfig(),
     ): ProductiveWorldFormulaRequest {
-        require(cycle.equationVersion == VERSION) {
-            "Cognitive WorldFormula cycle must freeze $VERSION"
+        require(cycle.equationVersion.isNotBlank()) {
+            "Cognitive WorldFormula cycle must freeze a versioned equation"
         }
         val base = WorldFormulaRequest(
             inputs = projection.inputs,
             interactions = informationalProfile.interactions(links),
-            equationVersion = spec.version,
+            equationVersion = cycle.equationVersion,
             observedAt = observedAt,
             config = config,
             sourceTaskId = sourceTaskId,

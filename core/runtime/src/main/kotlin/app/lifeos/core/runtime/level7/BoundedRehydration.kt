@@ -72,6 +72,7 @@ data class BoundedRehydrationPlan private constructor(
 
 data class ProcessDeathSemanticCheckpoint(
     val worldHeadFingerprint: String,
+    val worldEquationHeadFingerprint: String,
     val equationVersion: String,
     val cycleFingerprint: String,
     val decisionSemanticFingerprint: String,
@@ -79,6 +80,7 @@ data class ProcessDeathSemanticCheckpoint(
 ) {
     init {
         require(worldHeadFingerprint.isNotBlank())
+        require(worldEquationHeadFingerprint.isNotBlank())
         require(equationVersion.isNotBlank())
         require(cycleFingerprint.isNotBlank())
         require(decisionSemanticFingerprint.isNotBlank())
@@ -88,6 +90,7 @@ data class ProcessDeathSemanticCheckpoint(
     fun fingerprint(): String = StableFieldIds.fingerprint(
         "level7-process-death-semantic-checkpoint/v1",
         worldHeadFingerprint,
+        worldEquationHeadFingerprint,
         equationVersion,
         cycleFingerprint,
         decisionSemanticFingerprint,

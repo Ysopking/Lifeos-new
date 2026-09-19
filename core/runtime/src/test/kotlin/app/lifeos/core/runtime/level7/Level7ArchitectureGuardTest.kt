@@ -73,7 +73,9 @@ class SingleBootEngineOwnerTest {
         val continuous = Level7SourceArchitecture.text(
             "core/runtime/src/main/kotlin/app/lifeos/core/runtime/boot/ContinuousBootEngine.kt"
         )
-        assertFalse("while (isActive)" in learning)
+        assertFalse(Regex("""\bwhile\s*\(""").containsMatchIn(learning))
+        assertFalse("currentCoroutineContext().isActive" in learning)
+        assertFalse("delay(" in learning)
         assertTrue("processAvailable" in learning)
         assertTrue("class ContinuousBootEngine" in continuous)
     }

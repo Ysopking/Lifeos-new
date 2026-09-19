@@ -19,6 +19,7 @@ import app.lifeos.core.data.evolution.EncryptedEvolutionStore
 import app.lifeos.core.data.field.EncryptedFieldSnapshotRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.learning.EncryptedLearningAdaptationRepository
+import app.lifeos.core.data.learning.EncryptedLearningWatermarkRepository
 import app.lifeos.core.data.snapshot.EncryptedCognitiveSnapshotRepository
 import app.lifeos.core.data.goal.EncryptedGoalPlanRepository
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
@@ -28,6 +29,7 @@ import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
 import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
+import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
 import app.lifeos.core.data.boot.EncryptedBootEngineCycleRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistryHeadRepository
 import app.lifeos.core.data.extension.EncryptedExtensionRegistrySnapshotRepository
@@ -55,6 +57,8 @@ import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootEngineFrozenInputs
 import app.lifeos.core.runtime.boot.BootEngineRuntime
+import app.lifeos.core.runtime.boot.BootEngineLearningPhase
+import app.lifeos.core.runtime.boot.BootEngineGoalOutcomeLearning
 import app.lifeos.core.runtime.boot.BootSnapshotSource
 import app.lifeos.core.runtime.boot.TaskRepositoryBootSource
 import app.lifeos.core.runtime.boot.PhotonRepositoryBootSource
@@ -86,6 +90,7 @@ import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
 import app.lifeos.core.runtime.capability.CapabilityContract
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
 import app.lifeos.core.runtime.capability.CapabilityId
+import app.lifeos.core.runtime.capability.CapabilityGapDetector
 import app.lifeos.core.runtime.capability.CapabilityRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolBootStateRehydrator
 import app.lifeos.core.runtime.capability.GeneratedToolLifecycleCoordinator
@@ -132,7 +137,12 @@ import app.lifeos.core.runtime.health.HealthTaskExecutionObserver
 import app.lifeos.core.runtime.health.ProtectionCoordinator
 import app.lifeos.core.runtime.health.QuarantineRegistry
 import app.lifeos.core.runtime.health.RuntimeHealthMonitor
+import app.lifeos.core.runtime.learning.CognitiveEventLearningSource
+import app.lifeos.core.runtime.learning.ContinuousLearningCoordinator
 import app.lifeos.core.runtime.learning.DurableLearningAdaptationLedger
+import app.lifeos.core.runtime.learning.DurableLearningWorkSink
+import app.lifeos.core.runtime.learning.LearningWatermarkLoadResult
+import app.lifeos.core.runtime.learning.RegistryLearningCapabilityGapDetector
 import app.lifeos.core.runtime.learning.LearnedFieldCalibration
 import app.lifeos.core.runtime.learning.LearnedProviderReliabilityResolver
 import app.lifeos.core.runtime.recovery.LeaseRecoveryLoop
@@ -151,6 +161,7 @@ import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
 import app.lifeos.core.runtime.world.ProductiveWorldHeadCommitter
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
+import app.lifeos.core.runtime.world.WorldEquationActivationAuthority
 import app.lifeos.core.runtime.workers.CognitiveWorkerConfig
 import app.lifeos.core.runtime.workers.CognitiveWorkerFactory
 import app.lifeos.core.runtime.workers.ReportingCognitiveTaskDispatcher
@@ -399,8 +410,17 @@ class LifeOsKernelFactory(
         )
         val worldModelRepository = EncryptedWorldModelRepository(appContext)
         val cognitiveWorldEquationProfile = CognitiveWorldEquationProfile()
+        val worldEquationRegistry = InMemoryWorldEquationRegistry(
+            listOf(cognitiveWorldEquationProfile.spec)
+        )
+        val worldEquationHeads = EncryptedWorldEquationHeadRepository(appContext)
+        val worldEquationAuthority = WorldEquationActivationAuthority(
+            equations = worldEquationRegistry,
+            heads = worldEquationHeads,
+            baseline = cognitiveWorldEquationProfile.spec,
+        )
         val worldFormulaCoordinator = WorldFormulaCoordinator(
-            equations = InMemoryWorldEquationRegistry(listOf(cognitiveWorldEquationProfile.spec)),
+            equations = worldEquationRegistry,
             snapshots = worldFormulaSnapshotRepository,
         )
         val productiveWorldHeadCommitter = ProductiveWorldHeadCommitter(
@@ -462,7 +482,7 @@ class LifeOsKernelFactory(
                 BootEngineFrozenInputs(
                     representationSnapshotId = workingSet.sourceSnapshotId,
                     strategySnapshotId = "goal-strategy:$strategyFingerprint",
-                    equationVersion = cognitiveWorldEquationProfile.spec.version,
+                    equationVersion = worldEquationAuthority.activeVersion(),
                     resourceSnapshotId = "hardware-state:${hardware.fingerprint()}",
                 )
             },
@@ -481,6 +501,20 @@ class LifeOsKernelFactory(
         val cognitiveEventJournal = PhotonBackedRuntimeEventJournal(
             store = store,
             journalIndex = cognitionJournalIndex,
+        )
+        val learningWatermarks = EncryptedLearningWatermarkRepository(appContext)
+        val continuousLearning = ContinuousLearningCoordinator(
+            sources = listOf(CognitiveEventLearningSource(cognitiveEventJournal)),
+            watermarks = learningWatermarks,
+            gapDetector = RegistryLearningCapabilityGapDetector(
+                CapabilityGapDetector(capabilityRegistry)
+            ),
+            workSink = DurableLearningWorkSink(taskEngine),
+        )
+        val bootEngineLearning = BootEngineLearningPhase(continuousLearning)
+        val goalOutcomeLearning = BootEngineGoalOutcomeLearning(
+            worldFormula = worldFormulaCoordinator,
+            learning = bootEngineLearning,
         )
         val cognitiveSnapshotManager = CognitiveSnapshotManager(
             repository = EncryptedCognitiveSnapshotRepository(appContext),
@@ -652,6 +686,9 @@ class LifeOsKernelFactory(
                     extensionRegistryRehydrator.rehydrate()
                 },
                 RuntimeStateRehydrationStep {
+                    worldEquationAuthority.activeVersion()
+                },
+                RuntimeStateRehydrationStep {
                     val head = worldModelRepository.loadHead()
                     if (head != null) {
                         val snapshot = requireNotNull(
@@ -739,6 +776,34 @@ class LifeOsKernelFactory(
                                 storeId = storeId,
                                 state = if (report.unreadableEntries.isEmpty()) StoreState.HEALTHY else StoreState.CORRUPTED,
                                 message = if (report.unreadableEntries.isEmpty()) null else "unreadable:${report.unreadableEntries.size}",
+                            )
+                        }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "continuous-learning-watermarks"
+                        override suspend fun probe(): StoreStatus =
+                            when (val loaded = learningWatermarks.load()) {
+                                LearningWatermarkLoadResult.Missing,
+                                is LearningWatermarkLoadResult.Loaded ->
+                                    StoreStatus(storeId, StoreState.HEALTHY)
+                                is LearningWatermarkLoadResult.Unreadable ->
+                                    StoreStatus(
+                                        storeId = storeId,
+                                        state = StoreState.CORRUPTED,
+                                        message = loaded.message,
+                                    )
+                            }
+                    },
+                    object : StoreProbe {
+                        override val storeId: String = "world-equation-head"
+                        override suspend fun probe(): StoreStatus {
+                            val report = bootReadSession.readOnce("world-equation-head") {
+                                worldEquationHeads.loadReport()
+                            }
+                            return StoreStatus(
+                                storeId = storeId,
+                                state = if (report.corrupted) StoreState.CORRUPTED else StoreState.HEALTHY,
+                                message = report.message,
                             )
                         }
                     },
@@ -1011,6 +1076,7 @@ class LifeOsKernelFactory(
             goalPhotonFactory = goalPhotonFactory,
             goalPlans = goalPlans,
             productiveGoalConvergence = productiveGoalConvergence,
+            goalOutcomeLearning = goalOutcomeLearning,
             languageContextBuilder = languageContextBuilder,
             goalCapabilityRouter = goalCapabilityRouter,
             privateGeneratedToolRuntime = privateGeneratedToolRuntime,

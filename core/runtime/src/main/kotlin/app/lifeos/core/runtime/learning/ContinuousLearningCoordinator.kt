@@ -353,33 +353,10 @@ class ContinuousLearningCoordinator(
         )
     }
 
-    @Deprecated(
-        message = "BootEngine owns productive continuous learning; use processAvailable() from BootEngineLearningPhase",
-        level = DeprecationLevel.WARNING,
-    )
-    fun start(
-        scope: CoroutineScope,
-        pollInterval: Duration = Duration.ofSeconds(5),
-        observer: ContinuousLearningObserver = NoOpContinuousLearningObserver,
-    ): Job {
-        require(!pollInterval.isZero && !pollInterval.isNegative) {
-            "Learning poll interval must be positive"
-        }
-        return scope.launch {
-            while (currentCoroutineContext().isActive) {
-                try {
-                    val result = processAvailable()
-                    notifyCycle(observer, result)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    notifyFailure(observer, error)
-                }
-                delay(pollInterval.toMillis())
-            }
-        }
-    }
-
+    /**
+     * Productive learning is deliberately pull-driven by BootEngineLearningPhase.
+     * No autonomous coroutine/polling owner is permitted here.
+     */
     private suspend fun processEvent(event: LearningEvent): LearningEventProcessingResult {
         val context = contextUpdater.update(event).canonical()
         val memory = memoryUpdater.update(event).canonical()

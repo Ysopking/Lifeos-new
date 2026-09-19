@@ -5,6 +5,13 @@ import android.app.Application
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import app.lifeos.core.data.EncryptedLiveSourceCursorRepository
+import app.lifeos.core.data.EncryptedLiveSourceSnapshotRepository
+import app.lifeos.core.data.goal.EncryptedGoalCognitiveCycleBindingRepository
+import app.lifeos.core.data.HealthGraphLiveSourceHealthReporter
+import app.lifeos.core.data.LiveDataHubAuthority
+import app.lifeos.core.data.LiveSourceDeltaCoordinator
+import app.lifeos.core.data.LiveSourceSyncSnapshot
 import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
@@ -81,13 +88,18 @@ import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
+import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
@@ -131,6 +143,14 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     var initialDataBootstrapFailure: String? = null
         private set
 
+    @Volatile
+    var latestLiveSourceSync: LiveSourceSyncSnapshot? = null
+        private set
+
+    @Volatile
+    var liveSourceSyncFailure: String? = null
+        private set
+
     internal lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
         private set
 
@@ -138,10 +158,13 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         private set
 
     private lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
+    private lateinit var liveSourceCoordinator: LiveSourceDeltaCoordinator
     private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val liveSourceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var liveSourceRefreshJob: Job? = null
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
 
@@ -387,6 +410,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                                 photonIngress.ingestWithReceipt(photon, PhotonIngressMode.DERIVED)
                             },
                             outcomeLookup = kernel.productivePhotonQueries,
+                            cognitiveBindings = EncryptedGoalCognitiveCycleBindingRepository(this),
+                            outcomeLearning = kernel.goalOutcomeLearning,
                             traces = goalDecisionTraceRecorder,
                         )
                     )
@@ -406,6 +431,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             )
         )
 
+        installLiveSources()
+        startContinuousLiveSourceRefresh()
+
         initialDataSources = AndroidInitialDataSourceCatalog(this)
         initialDataBootstrap = InitialDataBootstrapRuntime(
             photons = lifePhotonRepository,
@@ -413,6 +441,51 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             sources = initialDataSources.sources + AndroidSharedFilesInitialDataSource(this),
         )
         refreshInitialDataBootstrap()
+        refreshLiveSources()
+    }
+
+    private fun installLiveSources() {
+        val healthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
+            "Live sources require the productive HealthGraph"
+        }
+        liveSourceCoordinator = LiveSourceDeltaCoordinator(
+            connectors = AndroidLiveSourceConnectors.create(this),
+            cursors = EncryptedLiveSourceCursorRepository(this),
+            hub = LiveDataHubAuthority.from(photonIngress.liveData),
+            snapshots = EncryptedLiveSourceSnapshotRepository(this),
+            maxInventoryItems = 16_384,
+            maxRawDeltas = 16_384,
+            coalescedCapacity = 16_384,
+            health = HealthGraphLiveSourceHealthReporter(healthGraph),
+        )
+    }
+
+    fun refreshLiveSources() {
+        if (!::liveSourceCoordinator.isInitialized) return
+        liveSourceScope.launch {
+            syncLiveSourcesOnce()
+        }
+    }
+
+    private fun startContinuousLiveSourceRefresh() {
+        if (liveSourceRefreshJob?.isActive == true) return
+        liveSourceRefreshJob = liveSourceScope.launch {
+            while (currentCoroutineContext().isActive) {
+                delay(LIVE_SOURCE_REFRESH_INTERVAL.toMillis())
+                syncLiveSourcesOnce()
+            }
+        }
+    }
+
+    private suspend fun syncLiveSourcesOnce() {
+        if (!::liveSourceCoordinator.isInitialized) return
+        try {
+            latestLiveSourceSync = liveSourceCoordinator.syncAll()
+            liveSourceSyncFailure = null
+        } catch (error: Exception) {
+            liveSourceSyncFailure =
+                error.message ?: error::class.simpleName ?: "live-source-sync-failed"
+        }
     }
 
     fun initialDataPermissionsToRequest(): List<String> = initialDataSources.missingRuntimePermissions()
@@ -502,6 +575,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private companion object {
+        val LIVE_SOURCE_REFRESH_INTERVAL: Duration = Duration.ofMinutes(5)
         const val INITIAL_DATA_PREFS = "lifeos-initial-data-bootstrap"
         const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"
         const val ALL_RUNTIME_PERMISSION_SCHEMA = "all-runtime-permission-schema"

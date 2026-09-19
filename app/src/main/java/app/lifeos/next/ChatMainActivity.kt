@@ -189,6 +189,7 @@ class ChatMainActivity : ComponentActivity() {
         awaitingPostPermissionRefresh = true
         InitialCognitiveContextRuntimeRegistry.markBuildingMemory()
         owner.refreshInitialDataBootstrap()
+        owner.refreshLiveSources()
     }
 
     private fun observeInitialCognitiveContext(owner: LifeOsApplication) {

@@ -119,6 +119,10 @@ class Level7FunctionalGoldTest {
         )
         val checkpoint = ProcessDeathSemanticCheckpoint(
             worldHeadFingerprint = StableFieldIds.fingerprint("world-head", worldSnapshotId),
+            worldEquationHeadFingerprint = StableFieldIds.fingerprint(
+                "world-equation-head",
+                "lifeos-world-cognitive-v1",
+            ),
             equationVersion = "lifeos-world-cognitive-v1",
             cycleFingerprint = StableFieldIds.fingerprint("cycle", "X", worldSnapshotId),
             decisionSemanticFingerprint = StableFieldIds.fingerprint(
@@ -300,6 +304,7 @@ class Level7FunctionalGoldTest {
                 preDeath = checkpoint,
                 postRehydration = checkpoint,
                 restoredExactEquationVersion = checkpoint.equationVersion,
+                restoredExactEquationHeadFingerprint = checkpoint.worldEquationHeadFingerprint,
                 restoredExactWorldHeadFingerprint = checkpoint.worldHeadFingerprint,
             ),
             RollbackProof(

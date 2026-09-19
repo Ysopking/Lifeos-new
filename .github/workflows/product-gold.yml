@@ -67,6 +67,7 @@ jobs:
             'level7_productive_world_persistence=PASS' \
             'level7_process_death_semantics=PASS' \
             'level7_world_equation_rollback=PASS' \
+            'level7_truth_closure_gold=PASS' \
             'level7_functional_gold=PASS' \
             'escalation_functional_gold=PASS' >> product-gold-evidence/gates.txt
           printf 'product_gold=PASS\n' >> product-gold-evidence/gates.txt

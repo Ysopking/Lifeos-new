@@ -42,11 +42,33 @@ interface LiveSourceAdapter {
 }
 
 /** Coalescing boundary: repeated changes for one external object collapse to its newest observed delta. */
+class SourceDeltaCapacityExceededException(
+    val distinctObjectCount: Int,
+    val capacity: Int,
+) : IllegalStateException(
+    "Live source coalesced delta capacity exceeded: " + distinctObjectCount + " > " + capacity
+) {
+    init {
+        require(distinctObjectCount > capacity)
+        require(capacity > 0)
+    }
+}
+
+/**
+ * Lossless coalescing boundary: repeated changes for one external object collapse to the newest
+ * observed delta, but distinct objects are never silently dropped. Capacity exhaustion fails closed
+ * so the durable cursor cannot advance past unprocessed source truth.
+ */
 class SourceDeltaCoalescer(private val capacity: Int) {
     init { require(capacity > 0) }
-    fun coalesce(deltas: Collection<SourceDelta>): List<SourceDelta> =
-        deltas.groupBy { it.sourceId to it.externalKey }
+
+    fun coalesce(deltas: Collection<SourceDelta>): List<SourceDelta> {
+        val coalesced = deltas.groupBy { it.sourceId to it.externalKey }
             .values.map { group -> group.maxBy { it.observationRevision } }
             .sortedWith(compareBy<SourceDelta> { it.observationRevision }.thenBy { it.deltaId })
-            .takeLast(capacity)
+        if (coalesced.size > capacity) {
+            throw SourceDeltaCapacityExceededException(coalesced.size, capacity)
+        }
+        return coalesced
+    }
 }

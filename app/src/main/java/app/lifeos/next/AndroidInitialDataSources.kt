@@ -247,6 +247,10 @@ private class AndroidCalendarInitialDataSource(
     }
 }
 
+internal fun androidCalendarInitialDataSource(
+    context: Context,
+): InitialDataSourceAdapter = AndroidCalendarInitialDataSource(context)
+
 private enum class AndroidMediaKind(
     val sourceId: String,
     val adapterVersion: String,

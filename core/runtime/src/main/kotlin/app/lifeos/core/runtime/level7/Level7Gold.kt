@@ -266,12 +266,15 @@ data class RecoveryProof(
     val preDeath: ProcessDeathSemanticCheckpoint,
     val postRehydration: ProcessDeathSemanticCheckpoint,
     val restoredExactEquationVersion: String,
+    val restoredExactEquationHeadFingerprint: String,
     val restoredExactWorldHeadFingerprint: String,
 ) : Level7InvariantProof {
     init {
         require(proofId.isNotBlank() && planId.isNotBlank())
         require(restoredExactEquationVersion == preDeath.equationVersion)
         require(restoredExactEquationVersion == postRehydration.equationVersion)
+        require(restoredExactEquationHeadFingerprint == preDeath.worldEquationHeadFingerprint)
+        require(restoredExactEquationHeadFingerprint == postRehydration.worldEquationHeadFingerprint)
         require(restoredExactWorldHeadFingerprint == preDeath.worldHeadFingerprint)
         require(restoredExactWorldHeadFingerprint == postRehydration.worldHeadFingerprint)
         require(preDeath.decisionSemanticFingerprint == postRehydration.decisionSemanticFingerprint)
@@ -282,7 +285,7 @@ data class RecoveryProof(
     override fun fingerprint(): String = StableFieldIds.fingerprint(
         "level7-proof/recovery/v1", proofId, planId, preDeath.fingerprint(),
         postRehydration.fingerprint(), restoredExactEquationVersion,
-        restoredExactWorldHeadFingerprint,
+        restoredExactEquationHeadFingerprint, restoredExactWorldHeadFingerprint,
     )
 }
 
