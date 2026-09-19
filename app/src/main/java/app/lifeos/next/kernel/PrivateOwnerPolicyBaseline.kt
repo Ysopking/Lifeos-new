@@ -36,7 +36,7 @@ object PrivateOwnerPolicyBaseline {
     }
 
     fun storageMaintenanceGrant(
-        validFrom: Instant = Instant.now(),
+        validFrom: Instant = Instant.EPOCH,
     ): OwnerPolicyGrant = OwnerPolicyGrant.create(
         actorId = ownerActorId,
         effect = OwnerEffectType.FILE_WRITE,
