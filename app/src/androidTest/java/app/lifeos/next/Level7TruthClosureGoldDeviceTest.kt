@@ -7,6 +7,7 @@ import app.lifeos.core.data.goal.EncryptedGoalCognitiveCycleBindingRepository
 import app.lifeos.core.data.learning.EncryptedLearningWatermarkRepository
 import app.lifeos.core.data.world.EncryptedProductiveWorldHeadRepository
 import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
+import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
@@ -48,13 +49,31 @@ class Level7TruthClosureGoldDeviceTest {
         val context = Level7DeviceFixtures.context(instrumentation.targetContext, root)
 
         val baselineSpec = CognitiveWorldEquationProfile().spec
-        val candidateSpec = baselineSpec.copy(version = "lifeos-world-cognitive-v2")
+        val firstCoefficient = baselineSpec.stableCoefficients().first()
+        val candidateSpec = baselineSpec.copy(
+            version = "lifeos-world-cognitive-v2",
+            coefficients = baselineSpec.coefficients.map {
+                if (it.id == firstCoefficient.id) {
+                    it.copy(
+                        multiplier = if (it.multiplier < 0.9) {
+                            it.multiplier + 0.05
+                        } else {
+                            it.multiplier - 0.05
+                        },
+                    )
+                } else {
+                    it
+                }
+            },
+        )
         val equationRepo = EncryptedWorldEquationHeadRepository(context)
+        val equationSpecs = EncryptedWorldEquationSpecRepository(context)
         val equations = InMemoryWorldEquationRegistry(listOf(baselineSpec))
         val equationAuthority = WorldEquationActivationAuthority(
             equations = equations,
             heads = equationRepo,
             baseline = baselineSpec,
+            specs = equationSpecs,
         )
         assertEquals(baselineSpec.version, equationAuthority.activeVersion())
         val baselineEquation = requireNotNull(equationRepo.load())
@@ -70,7 +89,11 @@ class Level7TruthClosureGoldDeviceTest {
             baseline = baselineSpec,
             validation = validation,
         )
-        val promotedEquation = equationAuthority.promote(candidateSpec, admission)
+        val promotedEquation = equationAuthority.promote(
+            candidate = candidateSpec,
+            admission = admission,
+            expectedHeadFingerprint = baselineEquation.fingerprint,
+        )
         assertEquals(candidateSpec.version, promotedEquation.activeEquationVersion)
         assertEquals(baselineSpec.version, promotedEquation.predecessorEquationVersion)
         assertEquals(validation.promotionDecisionId, promotedEquation.sourcePromotionId)
@@ -207,8 +230,9 @@ class Level7TruthClosureGoldDeviceTest {
         val context = Level7DeviceFixtures.context(instrumentation.targetContext, root)
 
         val baselineSpec = CognitiveWorldEquationProfile().spec
-        val candidateSpec = baselineSpec.copy(version = expected[7])
         val equationRepo = EncryptedWorldEquationHeadRepository(context)
+        val equationSpecs = EncryptedWorldEquationSpecRepository(context)
+        val candidateSpec = requireNotNull(equationSpecs.load(expected[7]))
         val promotedEquation = requireNotNull(equationRepo.load())
         assertEquals(expected[1], promotedEquation.fingerprint)
         assertEquals(expected[7], promotedEquation.activeEquationVersion)
@@ -253,10 +277,12 @@ class Level7TruthClosureGoldDeviceTest {
         assertEquals(learned, replay)
 
         val equationAuthority = WorldEquationActivationAuthority(
-            equations = InMemoryWorldEquationRegistry(listOf(baselineSpec, candidateSpec)),
+            equations = InMemoryWorldEquationRegistry(listOf(baselineSpec)),
             heads = equationRepo,
             baseline = baselineSpec,
+            specs = equationSpecs,
         )
+        assertEquals(candidateSpec.version, equationAuthority.activeVersion())
         val restoredEquation = equationAuthority.rollbackToPredecessor(
             expectedCurrentVersion = candidateSpec.version,
             rollbackDecisionId = expected[18],
