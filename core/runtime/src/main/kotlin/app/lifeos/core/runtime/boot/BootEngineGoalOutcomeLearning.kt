@@ -9,6 +9,7 @@ import app.lifeos.core.field.world.WorldTargetRef
 import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.goal.GoalConvergenceCycleBinding
 import app.lifeos.core.runtime.goal.GoalOutcomeLearningHook
+import app.lifeos.core.runtime.goal.GoalOutcomeLearningReceipt
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
 import app.lifeos.core.runtime.world.WorldFormulaExecutionState
 import app.lifeos.core.runtime.world.WorldFormulaInputSnapshot
@@ -37,8 +38,12 @@ class BootEngineGoalOutcomeLearning(
         binding: GoalConvergenceCycleBinding,
         outcome: Photon,
         succeeded: Boolean,
-    ) {
-        process(binding, outcome, succeeded)
+    ): GoalOutcomeLearningReceipt {
+        val result = process(binding, outcome, succeeded)
+        return GoalOutcomeLearningReceipt(
+            outcomeWorldSnapshotId = result.outcomeWorldSnapshot.id,
+            learningWatermarkRevision = result.learning.cycle.endingWatermarkRevision,
+        )
     }
 
     suspend fun process(
