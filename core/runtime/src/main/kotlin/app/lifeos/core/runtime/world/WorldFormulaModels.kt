@@ -444,6 +444,8 @@ data class WorldFormulaExecution(
     val persisted: Boolean,
     val message: String,
     val scope: WorldFormulaExecutionScope = WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE,
+    val productiveCommitAllowed: Boolean =
+        scope == WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE,
 ) {
     init {
         require(message.isNotBlank())

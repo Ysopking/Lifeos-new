@@ -17,6 +17,18 @@ class WorldFormulaExecutionPolicyTest {
         }
     }
 
+
+    @Test
+    fun productiveScopeWithoutCommitAuthorityCannotCreateProductiveCandidateAuthority() {
+        val policy = WorldFormulaExecutionPolicy(
+            scope = WorldFormulaExecutionScope.PRODUCTIVE_COGNITIVE,
+            captureCognitiveSnapshots = false,
+            emitCognitiveTriggers = false,
+            productiveCommitAllowed = false,
+        )
+        assertEquals(false, policy.productiveCommitAllowed)
+    }
+
     @Test
     fun predefinedPoliciesKeepAuthoritySeparated() {
         assertEquals(

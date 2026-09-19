@@ -126,6 +126,7 @@ class WorldFormulaCoordinator(
         } catch (error: Exception) {
             return WorldFormulaExecution(
                 scope = executionPolicy.scope,
+                productiveCommitAllowed = executionPolicy.productiveCommitAllowed,
                 state = WorldFormulaExecutionState.PERSISTENCE_FAILED,
                 status = status,
                 snapshot = snapshot,
@@ -142,6 +143,7 @@ class WorldFormulaCoordinator(
         }
         return WorldFormulaExecution(
             scope = executionPolicy.scope,
+            productiveCommitAllowed = executionPolicy.productiveCommitAllowed,
             state = WorldFormulaExecutionState.COMPLETED,
             status = status,
             snapshot = snapshot,
@@ -153,6 +155,7 @@ class WorldFormulaCoordinator(
     private fun invalid(request: WorldFormulaRequest, detail: String): WorldFormulaExecution =
         WorldFormulaExecution(
             scope = executionPolicy.scope,
+            productiveCommitAllowed = executionPolicy.productiveCommitAllowed,
             state = WorldFormulaExecutionState.INVALID,
             status = WorldFormulaStatus.INVALID_EQUATION,
             snapshot = null,
