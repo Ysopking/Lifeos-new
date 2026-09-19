@@ -34,7 +34,7 @@ internal object AndroidLiveSourceConnectors {
         now: () -> Instant = Instant::now,
     ): List<LiveSourceConnector> = listOf(
         AndroidInitialSourceLiveConnector(
-            source = AndroidCalendarInitialDataSource(context),
+            source = androidCalendarInitialDataSource(context),
             sourceId = LiveSourceId("android-calendar"),
             connectorId = LiveDataConnectorId("android-calendar"),
             accountKey = LiveDataAccountKey("device-local-calendar"),
