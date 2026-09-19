@@ -32,6 +32,9 @@ class BoundedRehydrationScaleTest {
                 worldHeadFingerprint = resolved.getValue(
                     RehydrationStepKind.PRODUCTIVE_WORLD_HEAD
                 ).resolvedFingerprint,
+                worldEquationHeadFingerprint = resolved.getValue(
+                    RehydrationStepKind.WORLD_EQUATION_HEAD
+                ).resolvedFingerprint,
                 equationVersion = resolved.getValue(
                     RehydrationStepKind.WORLD_EQUATION_HEAD
                 ).resolvedFingerprint,
