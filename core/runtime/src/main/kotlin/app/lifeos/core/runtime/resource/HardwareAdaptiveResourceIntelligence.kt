@@ -148,23 +148,31 @@ data class HardwareStateSnapshot(
     }
 
     /**
-     * Processor capability is multiplied by measured process headroom, thermal headroom and the
-     * current memory boundary. Missing process load is intentionally conservative instead of being
-     * interpreted as a completely idle CPU.
+     * Stable V16 quota-admission capacity. Keep this compatible with the pre-execution-fabric
+     * contract: transient process-load samples must not turn already-supported foreground actions
+     * into admission failures. New measured load belongs to execution topology, not hard authority.
      */
     fun computeHeadroom(): Double {
+        val processorCapacity = (availableProcessors.toDouble() / REFERENCE_PROCESSORS)
+            .coerceIn(MIN_PROCESSOR_CAPACITY, 1.0)
+        val loadHeadroom = 1.0 - (cpuLoadFraction ?: 0.0)
+        return (processorCapacity * loadHeadroom * thermalHeadroom()).coerceIn(0.0, 1.0)
+    }
+
+    /**
+     * Dynamic execution-topology capacity. Unlike [computeHeadroom], this consumes measured process
+     * load and memory pressure so the scheduler can reduce parallelism without revoking V16 budget
+     * admission for a small user-blocking action.
+     */
+    fun executionComputeHeadroom(): Double {
         val processorCapacity = (availableProcessors.toDouble() / REFERENCE_PROCESSORS)
             .coerceIn(MIN_PROCESSOR_CAPACITY, 1.0)
         val measuredLoad = effectiveProcessCpuLoadFraction() ?: UNKNOWN_PROCESS_CPU_LOAD
         val loadHeadroom = (1.0 - measuredLoad).coerceIn(0.0, 1.0)
         val memoryBoundary = memoryHeadroom()
             ?.let { headroom ->
-                // RAM already has an independent hard quota. Compute is contracted only once
-                // pressure becomes material, avoiding a second penalty on healthy mid-range RAM.
                 if (headroom >= 0.50) 1.0 else (0.50 + headroom).coerceIn(0.50, 1.0)
             }
-            // Unknown memory is already conservatively constrained by the independent memory quota.
-            // Avoid applying the same uncertainty twice to compute capacity.
             ?: 1.0
         return (
             processorCapacity *
