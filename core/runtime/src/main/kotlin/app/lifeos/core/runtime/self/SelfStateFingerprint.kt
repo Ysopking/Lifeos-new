@@ -5,9 +5,12 @@ import java.time.Instant
 
 object SelfStateFingerprint {
     /**
-     * Durable/self-authoritative identity only. Observation time and volatile runtime/resource/
-     * health/recovery/live-source measurements are deliberately excluded so process death does not
-     * manufacture an authority change.
+     * Restart-stable durable authority identity.
+     *
+     * Only exact persisted authority heads belong here. Rebuildable memory projections, process
+     * topology and generated-tool runtime status remain part of [stateFingerprint] instead; they
+     * may legitimately change while a process is rehydrating and must not manufacture an authority
+     * change after process death.
      */
     fun authorityFingerprint(
         photon: SelfPhotonState,
@@ -16,48 +19,39 @@ object SelfStateFingerprint {
         runtime: SelfRuntimeState,
         tools: SelfToolState,
     ): String = StableFieldIds.fingerprint(
-        *buildList {
-            add("lifeos-self-authority/v1")
-            add("photon.latest=" + encode(photon.latestRevisionCount))
-            add("photon.live=" + encode(photon.livePhotonCount))
-            add("photon.tombstoned=" + encode(photon.tombstonedPhotonCount))
-            add("photon.index=" + encode(photon.indexFingerprint))
-
-            add("memory.authoritative=" + encode(memory.authoritativePhotonCount))
-            add("memory.nodes=" + encode(memory.graphNodeCount))
-            add("memory.edges=" + encode(memory.graphEdgeCount))
-            add("memory.fingerprint=" + encode(memory.memoryFingerprint))
-
-            add("world.revision=" + encode(world.worldHeadRevision))
-            add("world.fingerprint=" + encode(world.worldHeadFingerprint))
-            add("equation.revision=" + encode(world.worldEquationRevision))
-            add("equation.version=" + encode(world.worldEquationVersion))
-            add("equation.fingerprint=" + encode(world.worldEquationFingerprint))
-            add("boot.id=" + encode(world.bootCycleId))
-            add("boot.fingerprint=" + encode(world.bootCycleFingerprint))
-            add("cognition.snapshot=" + encode(world.cognitiveSnapshotFingerprint))
-
-            add("runtime.topology=" + encode(runtime.topologyFingerprint))
-            addAll(canonicalSet("runtime.registered", runtime.registeredSubsystems))
-            addAll(canonicalSet("runtime.unbound", runtime.unboundSubsystems))
-
-            add("tools.total=" + encode(tools.totalTools))
-            add("tools.active=" + encode(tools.activeTools))
-            add("tools.trial=" + encode(tools.trialTools))
-            add("tools.quarantined=" + encode(tools.quarantinedTools))
-            add("tools.rejected=" + encode(tools.rejectedTools))
-        }.toTypedArray()
+        "lifeos-self-authority/v2",
+        "photon.index=" + encode(photon.indexFingerprint),
+        "world.revision=" + encode(world.worldHeadRevision),
+        "world.fingerprint=" + encode(world.worldHeadFingerprint),
+        "equation.revision=" + encode(world.worldEquationRevision),
+        "equation.version=" + encode(world.worldEquationVersion),
+        "equation.fingerprint=" + encode(world.worldEquationFingerprint),
+        "boot.id=" + encode(world.bootCycleId),
+        "boot.fingerprint=" + encode(world.bootCycleFingerprint),
+        "cognition.snapshot=" + encode(world.cognitiveSnapshotFingerprint),
     )
 
     fun stateFingerprint(snapshot: LifeOsSelfStateSnapshot): String = StableFieldIds.fingerprint(
         *buildList {
-            add("lifeos-self-state/v1")
+            add("lifeos-self-state/v2")
             add("captured=" + encode(snapshot.capturedAt))
             add("authority=" + snapshot.authorityFingerprint)
 
+            add("photon.latest=" + encode(snapshot.photon.latestRevisionCount))
+            add("photon.live=" + encode(snapshot.photon.livePhotonCount))
+            add("photon.tombstoned=" + encode(snapshot.photon.tombstonedPhotonCount))
+
+            add("memory.authoritative=" + encode(snapshot.memory.authoritativePhotonCount))
+            add("memory.nodes=" + encode(snapshot.memory.graphNodeCount))
+            add("memory.edges=" + encode(snapshot.memory.graphEdgeCount))
+            add("memory.fingerprint=" + encode(snapshot.memory.memoryFingerprint))
+
+            add("runtime.topology=" + encode(snapshot.runtime.topologyFingerprint))
+            addAll(canonicalSet("runtime.registered", snapshot.runtime.registeredSubsystems))
             addAll(canonicalSet("runtime.operational", snapshot.runtime.operationalSubsystems))
             addAll(canonicalSet("runtime.degraded", snapshot.runtime.degradedSubsystems))
             addAll(canonicalSet("runtime.unavailable", snapshot.runtime.unavailableSubsystems))
+            addAll(canonicalSet("runtime.unbound", snapshot.runtime.unboundSubsystems))
             add("runtime.telemetry=" + encode(snapshot.runtime.telemetry?.fingerprint()))
 
             add("resource.hardware=" + encode(snapshot.resource.hardwareFingerprint))
@@ -77,6 +71,12 @@ object SelfStateFingerprint {
 
             addAll(canonicalSet("recovery.active", snapshot.recovery.activeRepairIds))
             add("recovery.fingerprint=" + encode(snapshot.recovery.recoveryStateFingerprint))
+
+            add("tools.total=" + encode(snapshot.tools.totalTools))
+            add("tools.active=" + encode(snapshot.tools.activeTools))
+            add("tools.trial=" + encode(snapshot.tools.trialTools))
+            add("tools.quarantined=" + encode(snapshot.tools.quarantinedTools))
+            add("tools.rejected=" + encode(snapshot.tools.rejectedTools))
 
             add("sources.total=" + encode(snapshot.liveSources.sourceCount))
             add("sources.healthy=" + encode(snapshot.liveSources.healthyCount))

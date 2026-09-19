@@ -34,8 +34,34 @@ class SelfStateFingerprintTest {
         val unavailable = snapshot(registered = null, repairs = null)
         val knownEmpty = snapshot(registered = emptySet(), repairs = emptySet())
 
-        assertNotEquals(unavailable.authorityFingerprint, knownEmpty.authorityFingerprint)
+        assertEquals(unavailable.authorityFingerprint, knownEmpty.authorityFingerprint)
         assertNotEquals(unavailable.stateFingerprint, knownEmpty.stateFingerprint)
+    }
+
+    @Test
+    fun rebuildableMemoryTopologyAndToolChangesDoNotRewriteDurableAuthorityIdentity() {
+        val first = snapshot()
+        val second = first.copy(
+            memory = first.memory.copy(
+                authoritativePhotonCount = 99,
+                graphNodeCount = 88,
+                graphEdgeCount = 77,
+                memoryFingerprint = "memory-rehydrated",
+            ),
+            runtime = first.runtime.copy(
+                topologyFingerprint = "topology-rehydrated",
+                registeredSubsystems = setOf("world", "health", "tools"),
+                unboundSubsystems = setOf("tools"),
+            ),
+            tools = first.tools.copy(
+                totalTools = 3,
+                activeTools = 2,
+                trialTools = 1,
+            ),
+        )
+
+        assertEquals(first.authorityFingerprint, second.authorityFingerprint)
+        assertNotEquals(first.stateFingerprint, second.stateFingerprint)
     }
 
     @Test
