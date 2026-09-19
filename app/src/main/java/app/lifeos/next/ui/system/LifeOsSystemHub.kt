@@ -21,6 +21,7 @@ import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.LifeOsDecisionTraceViewModel
 import app.lifeos.next.LifeOsToolCenterViewModel
 import app.lifeos.next.OwnerAssetReviewViewModel
+import app.lifeos.next.StorageMaintenanceViewModel
 import app.lifeos.next.ui.assets.OwnerAssetReviewScreen
 import app.lifeos.next.ui.decision.LifeOsDecisionTraceScreen
 import app.lifeos.next.ui.tools.LifeOsToolCenterScreen
@@ -30,6 +31,7 @@ private enum class SystemHubPage {
     WHY,
     TOOLS,
     ASSETS,
+    STORAGE,
 }
 
 @Composable
@@ -38,6 +40,7 @@ fun LifeOsSystemHub(
     decisionTraceModel: LifeOsDecisionTraceViewModel,
     toolCenterModel: LifeOsToolCenterViewModel,
     assetReviewModel: OwnerAssetReviewViewModel,
+    storageMaintenanceModel: StorageMaintenanceViewModel,
     modifier: Modifier = Modifier,
 ) {
     var page by rememberSaveable { mutableStateOf(SystemHubPage.OVERVIEW) }
@@ -57,6 +60,7 @@ fun LifeOsSystemHub(
                     TextButton(onClick = { page = SystemHubPage.WHY }) { Text("Warum") }
                     TextButton(onClick = { page = SystemHubPage.TOOLS }) { Text("Tools") }
                     TextButton(onClick = { page = SystemHubPage.ASSETS }) { Text("Assets") }
+                    TextButton(onClick = { page = SystemHubPage.STORAGE }) { Text("Speicher") }
                 }
             }
             SystemRuntimeHealthScreen(
@@ -84,6 +88,13 @@ fun LifeOsSystemHub(
             modifier = modifier,
         ) { contentModifier ->
             OwnerAssetReviewScreen(assetReviewModel, contentModifier)
+        }
+        SystemHubPage.STORAGE -> TechnicalSubpage(
+            title = "Speicher",
+            onBack = { page = SystemHubPage.OVERVIEW },
+            modifier = modifier,
+        ) { contentModifier ->
+            StorageMaintenanceScreen(storageMaintenanceModel, contentModifier)
         }
     }
 }
