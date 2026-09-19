@@ -84,13 +84,10 @@ class EncryptedDecisionTraceRepository(context: Context) : DecisionTraceReposito
         }
     }
 
-    private fun readTrace(file: File): DecisionTrace {
-        val values = DecisionTraceLogCodec.decode(
+    private fun readTrace(file: File): DecisionTrace =
+        DecisionTraceLogCodec.decodeSegment(
             decrypt(file, DecisionTraceLogCodec.MAX_PAYLOAD_BYTES)
         )
-        require(values.size == 1) { "Decision trace segment must contain one trace revision" }
-        return values.single()
-    }
 
     private fun readValidatedTrace(file: File): DecisionTrace {
         val trace = readTrace(file)
@@ -112,7 +109,7 @@ class EncryptedDecisionTraceRepository(context: Context) : DecisionTraceReposito
     private fun writeTrace(file: File, trace: DecisionTrace) {
         writeEncrypted(
             file,
-            DecisionTraceLogCodec.encode(listOf(trace)),
+            DecisionTraceLogCodec.encodeSegment(trace),
             DecisionTraceLogCodec.MAX_PAYLOAD_BYTES,
         )
     }

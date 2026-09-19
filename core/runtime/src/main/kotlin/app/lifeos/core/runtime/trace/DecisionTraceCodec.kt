@@ -17,10 +17,36 @@ object DecisionTraceLogCodec {
     private const val MAX_STRING_BYTES = 32 * 1024
     const val MAX_PAYLOAD_BYTES = 16 * 1024 * 1024
 
-    fun encode(traces: List<DecisionTrace>): ByteArray {
+    fun encode(traces: List<DecisionTrace>): ByteArray =
+        encodeCanonical(traces, validateChains = true)
+
+    /**
+     * Encodes one immutable segmented revision. A segment is not a complete history, therefore a
+     * standalone revision > 1 is valid here while [encode] continues to require a complete chain.
+     */
+    fun encodeSegment(trace: DecisionTrace): ByteArray =
+        encodeCanonical(listOf(trace), validateChains = false)
+
+    fun decode(bytes: ByteArray): List<DecisionTrace> =
+        decodeCanonical(bytes, validateChains = true)
+
+    /**
+     * Decodes one immutable segmented revision without pretending the segment contains revisions
+     * 1..N. Cross-segment continuity remains enforced by the repository before append/read exposure.
+     */
+    fun decodeSegment(bytes: ByteArray): DecisionTrace {
+        val traces = decodeCanonical(bytes, validateChains = false)
+        require(traces.size == 1) { "Decision trace segment must contain one trace revision" }
+        return traces.single()
+    }
+
+    private fun encodeCanonical(
+        traces: List<DecisionTrace>,
+        validateChains: Boolean,
+    ): ByteArray {
         require(traces.size <= MAX_TRACE_REVISIONS) { "Decision trace log too large" }
         val canonical = canonicalize(traces)
-        validateRevisionChains(canonical)
+        if (validateChains) validateRevisionChains(canonical)
         return ByteArrayOutputStream().let { output ->
             DataOutputStream(output).use { stream ->
                 stream.writeInt(MAGIC)
@@ -36,7 +62,10 @@ object DecisionTraceLogCodec {
         }
     }
 
-    fun decode(bytes: ByteArray): List<DecisionTrace> {
+    private fun decodeCanonical(
+        bytes: ByteArray,
+        validateChains: Boolean,
+    ): List<DecisionTrace> {
         require(bytes.isNotEmpty() && bytes.size <= MAX_PAYLOAD_BYTES) {
             "Invalid decision trace payload size"
         }
@@ -49,7 +78,7 @@ object DecisionTraceLogCodec {
         require(input.available() == 0) { "Trailing decision trace payload bytes" }
         val canonical = canonicalize(traces)
         require(traces == canonical) { "Decision trace payload is not canonically ordered" }
-        validateRevisionChains(canonical)
+        if (validateChains) validateRevisionChains(canonical)
         return canonical
     }
 
