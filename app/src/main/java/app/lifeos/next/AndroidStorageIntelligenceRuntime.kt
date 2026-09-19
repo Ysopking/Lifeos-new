@@ -65,6 +65,8 @@ internal data class StorageCleanupCandidate(
     val safeToTrashAfterOwnerApproval: Boolean,
     val suggestedDirectory: String? = null,
     val expectedModifiedAtMillis: Long? = null,
+    val verificationPeerVolumeId: String? = null,
+    val verificationPeerRelativePath: String? = null,
 ) {
     init {
         require(volumeId.isNotBlank())
@@ -73,6 +75,11 @@ internal data class StorageCleanupCandidate(
         require(reason.isNotBlank())
         require(suggestedDirectory == null || suggestedDirectory.isNotBlank())
         require(expectedModifiedAtMillis == null || expectedModifiedAtMillis >= 0L)
+        require(
+            (verificationPeerVolumeId == null) == (verificationPeerRelativePath == null)
+        ) { "Duplicate verification peer must be complete or absent" }
+        require(verificationPeerVolumeId == null || verificationPeerVolumeId.isNotBlank())
+        require(verificationPeerRelativePath == null || verificationPeerRelativePath.isNotBlank())
     }
 }
 
@@ -206,6 +213,7 @@ internal class AndroidStorageIntelligenceRuntime(
         val cleanup = StorageCleanupPlanner.plan(
             duplicateGroups = inventory.exactDuplicateGroups(),
             reviewEntries = inventory.reviewEntries(),
+            nowMillis = System.currentTimeMillis(),
         )
 
         StorageIntelligenceSnapshot(
@@ -520,7 +528,9 @@ internal object StorageCleanupPlanner {
     fun plan(
         duplicateGroups: List<List<StorageIndexedFile>>,
         reviewEntries: List<StorageIndexedFile>,
+        nowMillis: Long = System.currentTimeMillis(),
     ): List<StorageCleanupCandidate> {
+        require(nowMillis >= 0L)
         val candidates = mutableListOf<StorageCleanupCandidate>()
 
         duplicateGroups.forEach { duplicates ->
@@ -548,6 +558,8 @@ internal object StorageCleanupPlanner {
                             !duplicate.suspectedEncrypted &&
                                 duplicate.category !in PROTECTED_CATEGORIES,
                         expectedModifiedAtMillis = duplicate.modifiedAtMillis,
+                        verificationPeerVolumeId = keeper.volumeId,
+                        verificationPeerRelativePath = keeper.relativePath,
                     )
                 }
         }
@@ -556,7 +568,8 @@ internal object StorageCleanupPlanner {
             if (
                 looksTemporary(file.relativePath) &&
                 file.category !in PROTECTED_CATEGORIES &&
-                !file.suspectedEncrypted
+                !file.suspectedEncrypted &&
+                isOlderThan(file.modifiedAtMillis, nowMillis, TEMP_MIN_AGE_MILLIS)
             ) {
                 candidates += StorageCleanupCandidate(
                     volumeId = file.volumeId,
@@ -570,7 +583,8 @@ internal object StorageCleanupPlanner {
             }
             if (
                 file.category == AndroidFileCategory.ARCHIVE &&
-                file.relativePath.endsWith(".apk", ignoreCase = true)
+                file.relativePath.endsWith(".apk", ignoreCase = true) &&
+                isOlderThan(file.modifiedAtMillis, nowMillis, INSTALLER_MIN_AGE_MILLIS)
             ) {
                 candidates += StorageCleanupCandidate(
                     volumeId = file.volumeId,
@@ -662,11 +676,23 @@ internal object StorageCleanupPlanner {
             "/tmp/" in ("/" + p + "/")
     }
 
+    private fun isOlderThan(
+        modifiedAtMillis: Long,
+        nowMillis: Long,
+        minimumAgeMillis: Long,
+    ): Boolean {
+        if (modifiedAtMillis <= 0L) return true
+        if (modifiedAtMillis > nowMillis) return false
+        return nowMillis - modifiedAtMillis >= minimumAgeMillis
+    }
+
     private val PROTECTED_CATEGORIES = setOf(
         AndroidFileCategory.DATABASE,
         AndroidFileCategory.BACKUP,
         AndroidFileCategory.WHATSAPP,
     )
+    private const val TEMP_MIN_AGE_MILLIS = 7L * 24L * 60L * 60L * 1000L
+    private const val INSTALLER_MIN_AGE_MILLIS = 30L * 24L * 60L * 60L * 1000L
 }
 
 internal data class SharedStorageRoot(
