@@ -191,25 +191,30 @@ class GoalConvergenceDecisionProvider(
             source = source,
             at = at,
         )
-        val inputSource = cycleInputs
-            ?: throw ProductiveConvergenceNotReadyException(
-                "bootengine-cycle-input-source-unavailable"
-            )
-        val expectedFrozenInputs = inputSource.freeze(workingSet, routing)
-        val cycle = bootEngine.activeCycle()?.also { active ->
-            if (active.frozenInputsFingerprint != expectedFrozenInputs.fingerprint()) {
-                throw ProductiveConvergenceNotReadyException(
-                    "active-bootengine-cycle-lineage-mismatch:" +
-                        active.cycleId.value
-                )
-            }
-            if (active.context.representationSnapshotId != workingSet.sourceSnapshotId) {
+        val activeCycle = bootEngine.activeCycle()
+        val cycle = if (activeCycle != null) {
+            if (activeCycle.context.representationSnapshotId != workingSet.sourceSnapshotId) {
                 throw ProductiveConvergenceNotReadyException(
                     "active-bootengine-cycle-representation-mismatch:" +
-                        active.cycleId.value
+                        activeCycle.cycleId.value
                 )
             }
-        } ?: run {
+            cycleInputs?.let { inputSource ->
+                val expectedFrozenInputs = inputSource.freeze(workingSet, routing)
+                if (activeCycle.frozenInputsFingerprint != expectedFrozenInputs.fingerprint()) {
+                    throw ProductiveConvergenceNotReadyException(
+                        "active-bootengine-cycle-lineage-mismatch:" +
+                            activeCycle.cycleId.value
+                    )
+                }
+            }
+            activeCycle
+        } else {
+            val inputSource = cycleInputs
+                ?: throw ProductiveConvergenceNotReadyException(
+                    "active-bootengine-cycle-unavailable"
+                )
+            val expectedFrozenInputs = inputSource.freeze(workingSet, routing)
             try {
                 bootEngine.startCycle(expectedFrozenInputs)
             } catch (race: IllegalArgumentException) {
