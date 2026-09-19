@@ -277,207 +277,22 @@ class LifeOsKernelFactory(
         val bootEngineRuntime = world.bootEngineRuntime
         val productiveGoalConvergence = world.productiveGoalConvergence
 
-        val universalFieldShadow = UniversalFieldRuntimeAdapter(
-            snapshotRepository = fieldSnapshotRepository,
-            requestEnricher = DurableContextFieldEnricher(store),
-            engineProvider = { learnedFieldCalibration.engine() },
-            healthGate = healthGate,
-            thoughtGraphProjection = fieldThoughtGraphProjection,
-        )
-        val schedulerSignal = ConflatedTaskSchedulerSignal()
-        val taskEngine = DurableTaskEngine(taskRepository, schedulerSignal)
-
-        val cognitiveEventJournal = PhotonBackedRuntimeEventJournal(
-            store = store,
-            journalIndex = cognitionJournalIndex,
-        )
-        val learningWatermarks = EncryptedLearningWatermarkRepository(appContext)
-        val continuousLearning = ContinuousLearningCoordinator(
-            sources = listOf(CognitiveEventLearningSource(cognitiveEventJournal)),
-            watermarks = learningWatermarks,
-            gapDetector = RegistryLearningCapabilityGapDetector(
-                CapabilityGapDetector(capabilityRegistry)
-            ),
-            workSink = DurableLearningWorkSink(taskEngine),
-        )
-        val bootEngineLearning = BootEngineLearningPhase(continuousLearning)
-        val goalOutcomeLearning = BootEngineGoalOutcomeLearning(
-            worldFormula = worldFormulaCoordinator,
-            learning = bootEngineLearning,
-        )
-        val cognitiveSnapshotManager = CognitiveSnapshotManager(
-            repository = EncryptedCognitiveSnapshotRepository(appContext),
-        )
-        CognitiveSnapshotRuntimeRegistry.install(
-            CognitiveSnapshotProducer(
-                manager = cognitiveSnapshotManager,
-                journal = cognitiveEventJournal,
-                worlds = worldFormulaSnapshotRepository,
-                activeWorldSnapshotId = {
-                    productiveWorldHeadRepository.load()?.activeSnapshot?.snapshotId
-                },
-                dependencyState = {
-                    thoughtGraph.snapshot().let { snapshot ->
-                        CognitiveSnapshotDependencyState(
-                            revision = snapshot.revision,
-                            fingerprint = snapshot.contentFingerprint,
-                        )
-                    }
-                },
-                memoryFingerprint = {
-                    DurableLifeMemoryRuntimeRegistry.current()?.current()?.fingerprint
-                },
-            )
-        )
-        SelfObservationAuthorityRuntimeRegistry.install(
-            object : SelfObservationAuthorityReader {
-                override suspend fun loadProductiveWorldHead() =
-                    productiveWorldHeadRepository.load()
-
-                override suspend fun loadWorldEquationHead() =
-                    worldEquationHeads.load()
-
-                override suspend fun loadCommittedBootCycle() =
-                    bootEngineCycleRepository.loadLatestCommitted()
-
-                override suspend fun loadCognitiveSnapshot() =
-                    cognitiveSnapshotManager.latestVerified()
-            }
-        )
-        val cognitiveScheduler = CognitiveScheduler()
-        val cognitionAdmission = DurableCognitionAdmissionController(
-            tasks = taskRepository,
-            taskEngine = taskEngine,
-        )
-        val continuousCognition = ContinuousCognitionEngine(
-            journal = cognitiveEventJournal,
-            scheduler = cognitiveScheduler,
-            durableDispatcher = DurableCognitionDispatcher(
-                taskEngine = taskEngine,
-                admissionController = cognitionAdmission,
-                coverageIndex = cognitionCoverageIndex,
-            ),
-        )
-        val cognitionReconciler = DurableCognitionReconciler(
-            photons = store,
-            tasks = taskRepository,
-            cognition = continuousCognition,
-            taskEngine = taskEngine,
-            coverage = cognitionCoverageIndex,
-        )
-        val photonTransactions = PhotonBackedPhotonTransactionJournal(
-            store = store,
-            journalIndex = cognitionJournalIndex,
-        )
-        val cognitiveOutcomes = PhotonBackedCognitiveOutcomeJournal(
-            store = store,
-            journalIndex = cognitionJournalIndex,
-        )
-        val cognitiveTriggers = DurableCognitiveTriggerSink(
-            journal = PhotonBackedCognitiveTriggerSink(
-                store = store,
-                journalIndex = cognitionJournalIndex,
-            ),
-            photons = store,
-            taskEngine = taskEngine,
-        )
-
-        val workerFactory = CognitiveWorkerFactory(
-            tasks = taskRepository,
-            photons = store,
-            fields = registry,
-            executor = executor,
-            checkpoints = checkpointRepository,
-            fieldShadowProcessor = universalFieldShadow,
-            config = CognitiveWorkerConfig(
-                leaseDuration = TASK_LEASE_DURATION,
-                heartbeatInterval = HEARTBEAT_INTERVAL,
-            ),
-        )
-        val durableStateBridge = DurableRuntimeStateBridge()
-        val hardware = cycleResourceIntelligence.currentHardwareSnapshot()
-        val availableCores = hardware.availableProcessors
-        val activeWorkers = (availableCores - 1).coerceIn(0, 3)
-        val backgroundWorkers = if (availableCores >= 4) 1 else 0
-        val maintenanceWorkers = if (availableCores >= 6) 1 else 0
-
-        fun workerSlot(lane: CognitiveWorkerLane, ordinal: Int): CognitiveWorkerSlot {
-            val workerId = WorkerId("cognitive-${lane.name.lowercase()}-$ordinal")
-            val worker = workerFactory.create(workerId)
-            val observer = CompositeDurableTaskExecutionObserver(
-                listOf(
-                    durableStateBridge,
-                    PhotonTransactionObserver(photonTransactions),
-                    OutcomeTriggerObserver(
-                        outcomes = cognitiveOutcomes,
-                        triggers = cognitiveTriggers,
-                    ),
-                    HealthTaskExecutionObserver(
-                        workerNodeId = HealthNodeId("worker:${workerId.value}"),
-                        graph = healthGraph,
-                    ),
-                    DurableCognitionRecoveryObserver(cognitionReconciler),
-                )
-            )
-            return CognitiveWorkerSlot(
-                lane = lane,
-                workerId = workerId,
-                dispatcher = ReportingCognitiveTaskDispatcher(
-                    worker = worker,
-                    observer = observer,
-                ),
-            )
-        }
-
-        val workerPool = CognitiveWorkerPool(
-            buildList {
-                add(workerSlot(CognitiveWorkerLane.INTERACTIVE, 0))
-                repeat(activeWorkers) { add(workerSlot(CognitiveWorkerLane.ACTIVE, it)) }
-                repeat(backgroundWorkers) { add(workerSlot(CognitiveWorkerLane.BACKGROUND, it)) }
-                repeat(maintenanceWorkers) { add(workerSlot(CognitiveWorkerLane.MAINTENANCE, it)) }
-            }
-        )
-        val taskScheduler = PooledTaskScheduler(
-            tasks = taskRepository,
-            workers = workerPool,
-            scope = scope,
-            workerAvailableSignal = schedulerSignal,
-            leaseDuration = TASK_LEASE_DURATION,
-        )
-        val schedulerLoop = TaskSchedulerLoop(
-            scope = scope,
-            scheduler = taskScheduler,
-            wakeSource = schedulerSignal,
-            rescanInterval = SCHEDULER_RESCAN_INTERVAL,
-        )
-        val leaseRecovery = LeaseRecoveryService(
-            tasks = taskRepository,
-            schedulerSignal = schedulerSignal,
-        )
-        val recoveryLoop = LeaseRecoveryLoop(
-            scope = scope,
-            recovery = leaseRecovery,
-            interval = LEASE_RECOVERY_INTERVAL,
-        )
-        val durablePipeline = DurableCognitivePipeline(
-            taskEngine = taskEngine,
-            schedulerLoop = schedulerLoop,
-            recoveryLoop = recoveryLoop,
-        )
-        val durableRuntime = DurableLifeOsRuntime(
-            scope = scope,
-            pipeline = durablePipeline,
-            stateBridge = durableStateBridge,
-            executionGuard = RuntimeExecutionGuard {
-                protectionCoordinator.snapshot().mode != ProtectionMode.SAFE_MODE
-            },
-        )
-        RuntimeHealthMonitor(
-            scope = scope,
-            runtime = durableRuntime,
-            graph = healthGraph,
-        ).start()
-        val supervisor = RuntimeSupervisor(durableRuntime)
+        val cognition = KernelCognitionComposition(
+            foundation = foundation,
+            world = world,
+        ).compose()
+        val learningWatermarks = cognition.learningWatermarks
+        val cognitiveEventJournal = cognition.cognitiveEventJournal
+        val goalOutcomeLearning = cognition.goalOutcomeLearning
+        val cognitiveSnapshotManager = cognition.cognitiveSnapshotManager
+        val continuousCognition = cognition.continuousCognition
+        val cognitionReconciler = cognition.cognitionReconciler
+        val photonTransactions = cognition.photonTransactions
+        val cognitiveOutcomes = cognition.cognitiveOutcomes
+        val cognitiveTriggers = cognition.cognitiveTriggers
+        val leaseRecovery = cognition.leaseRecovery
+        val durableRuntime = cognition.durableRuntime
+        val supervisor = cognition.supervisor
 
         val primaryStateRehydrator = object : StateRehydrator {
             override suspend fun rehydrate(): RehydratedRuntimeState {
