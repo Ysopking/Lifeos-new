@@ -2,51 +2,23 @@ name: Core Fast Gate
 
 on:
   push:
-    # Pull-request updates already run this gate through pull_request below.
-    # Restrict push execution to main so the same branch SHA is not tested twice.
     branches: [main]
-    paths:
-      - "core/**"
-      - "app/src/main/**"
-      - "app/src/test/**"
-      - "app/src/androidTest/**"
-      - "app/build.gradle*"
-      - "build.gradle*"
-      - "settings.gradle*"
-      - "gradle/**"
-      - "gradle.properties"
-      - ".github/scripts/ci-core-fast.sh"
-      - ".github/scripts/ci-gold-coverage-contract.sh"
-      - ".github/scripts/ci-action-pin-contract.sh"
-      - ".github/scripts/android-emulator-recovery.sh"
-      - ".github/workflows/**"
   pull_request:
-    paths:
-      - "core/**"
-      - "app/src/main/**"
-      - "app/src/test/**"
-      - "app/src/androidTest/**"
-      - "app/build.gradle*"
-      - "build.gradle*"
-      - "settings.gradle*"
-      - "gradle/**"
-      - "gradle.properties"
-      - ".github/scripts/ci-core-fast.sh"
-      - ".github/scripts/ci-gold-coverage-contract.sh"
-      - ".github/scripts/ci-action-pin-contract.sh"
-      - ".github/scripts/android-emulator-recovery.sh"
-      - ".github/workflows/**"
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: core-fast-${{ github.ref }}
-  cancel-in-progress: true
+  group: core-fast-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   core-fast:
+    name: Core Fast Gate
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
