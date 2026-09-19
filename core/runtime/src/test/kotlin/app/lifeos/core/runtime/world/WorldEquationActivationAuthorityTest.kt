@@ -1,5 +1,7 @@
 package app.lifeos.core.runtime.world
 
+import app.lifeos.core.runtime.evolution.WorldEquationEvolutionAdmissionGate
+import app.lifeos.core.runtime.evolution.WorldEquationEvolutionValidation
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -24,10 +26,19 @@ class WorldEquationActivationAuthorityTest {
         assertNull(seeded.predecessorEquationVersion)
 
         val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
-        authority.registerCandidate(candidate)
-        val promoted = authority.activate(
-            version = candidate.version,
-            promotionId = "promotion:test-v2",
+        val admission = WorldEquationEvolutionAdmissionGate.admit(
+            candidate = candidate,
+            baseline = baseline,
+            validation = WorldEquationEvolutionValidation(
+                holdoutEvidenceId = "holdout:test-v2",
+                shadowEvidenceId = "shadow:test-v2",
+                trialEvidenceId = "trial:test-v2",
+                promotionDecisionId = "promotion:test-v2",
+            ),
+        )
+        val promoted = authority.promote(
+            candidate = candidate,
+            admission = admission,
         )
 
         assertEquals(2L, promoted.revision)
@@ -50,7 +61,19 @@ class WorldEquationActivationAuthorityTest {
         )
 
         assertEquals(baseline.version, first.activeVersion())
-        first.activate(candidate.version, "promotion:test-v2")
+        first.promote(
+            candidate = candidate,
+            admission = WorldEquationEvolutionAdmissionGate.admit(
+                candidate = candidate,
+                baseline = baseline,
+                validation = WorldEquationEvolutionValidation(
+                    holdoutEvidenceId = "holdout:test-v2",
+                    shadowEvidenceId = "shadow:test-v2",
+                    trialEvidenceId = "trial:test-v2",
+                    promotionDecisionId = "promotion:test-v2",
+                ),
+            ),
+        )
         assertEquals(candidate.version, first.activeVersion())
 
         val rehydrated = WorldEquationActivationAuthority(
@@ -71,18 +94,30 @@ class WorldEquationActivationAuthorityTest {
     }
 
     @Test
-    fun unregisteredPhysicsCannotBecomeActive() = runBlocking {
+    fun promotionAdmissionCannotBeReusedForDifferentPhysics() = runBlocking {
         val baseline = CognitiveWorldEquationProfile().spec
+        val candidate = baseline.copy(version = "lifeos-world-cognitive-v2")
+        val other = baseline.copy(version = "lifeos-world-cognitive-v3")
         val authority = WorldEquationActivationAuthority(
             equations = InMemoryWorldEquationRegistry(listOf(baseline)),
             heads = MemoryHeadRepository(),
             baseline = baseline,
         )
+        val admission = WorldEquationEvolutionAdmissionGate.admit(
+            candidate = candidate,
+            baseline = baseline,
+            validation = WorldEquationEvolutionValidation(
+                holdoutEvidenceId = "holdout:test-v2",
+                shadowEvidenceId = "shadow:test-v2",
+                trialEvidenceId = "trial:test-v2",
+                promotionDecisionId = "promotion:test-v2",
+            ),
+        )
 
         assertFailsWith<IllegalArgumentException> {
-            authority.activate(
-                version = "missing-v2",
-                promotionId = "promotion:missing",
+            authority.promote(
+                candidate = other,
+                admission = admission,
             )
         }
     }
