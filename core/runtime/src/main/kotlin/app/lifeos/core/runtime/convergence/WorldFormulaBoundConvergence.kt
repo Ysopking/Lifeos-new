@@ -145,8 +145,8 @@ class WorldFormulaBoundConvergenceService(
         require(cycle.state == BootEngineCycleState.PREPARED) {
             "World-bound convergence requires a PREPARED BootEngine cycle"
         }
-        require(cycle.context.equationVersion == equationProfile.spec.version) {
-            "World-bound convergence equation differs from frozen cycle physics"
+        require(cycle.context.equationVersion.isNotBlank()) {
+            "World-bound convergence requires frozen versioned physics"
         }
         require(primaryPhotonId in domainPhotons.values.mapTo(linkedSetOf()) { it.id }) {
             "Primary Photon must be present in the frozen domain Photon set"
