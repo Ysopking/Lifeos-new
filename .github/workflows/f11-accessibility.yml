@@ -1,4 +1,4 @@
-name: F11 Accessibility Device Gate
+name: F11 UI Semantics + Launcher Device Gate
 on:
   pull_request:
     paths:
