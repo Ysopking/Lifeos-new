@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gradle test :app:lintDebug :app:assembleDebug --stacktrace
+          ./gradlew test :app:lintDebug :app:assembleDebug --stacktrace
 
       - name: Seal candidate evidence
         shell: bash
