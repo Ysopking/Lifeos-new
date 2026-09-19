@@ -25,6 +25,7 @@ import app.lifeos.core.runtime.livedata.LiveDataDeltaOperation
 import app.lifeos.core.runtime.livedata.LiveDataPermission
 import app.lifeos.core.runtime.livedata.LiveDataPermissionState
 import app.lifeos.core.runtime.livedata.LiveDataStreamKind
+import app.lifeos.core.runtime.livedata.canonicalLiveDataMetadata
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicReference
 
@@ -161,6 +162,17 @@ internal class AndroidInitialSourceLiveConnector(
                 occurredAt = observedAt,
                 observedAt = observedAt,
                 payload = null,
+                metadata = canonicalLiveDataMetadata(
+                    connectorId = connectorId,
+                    accountKey = accountKey,
+                    kind = streamKind,
+                    externalId = delta.externalKey,
+                    externalVersion = delta.deltaId,
+                    occurredAt = observedAt,
+                    observedAt = observedAt,
+                    mimeType = streamKind.defaultMimeType,
+                    privacyZone = delta.privacyZone,
+                ),
             )
         } else {
             val record = requireNotNull(currentRecords.get()[delta.externalKey]) {
@@ -180,6 +192,17 @@ internal class AndroidInitialSourceLiveConnector(
                 observedAt = observedAt,
                 payload = record.payload,
                 mimeType = record.mimeType,
+                metadata = canonicalLiveDataMetadata(
+                    connectorId = connectorId,
+                    accountKey = accountKey,
+                    kind = streamKind,
+                    externalId = delta.externalKey,
+                    externalVersion = record.fingerprint,
+                    occurredAt = minOf(record.sourceObservedAt, observedAt),
+                    observedAt = observedAt,
+                    mimeType = record.mimeType,
+                    privacyZone = delta.privacyZone,
+                ),
             )
         }
     }

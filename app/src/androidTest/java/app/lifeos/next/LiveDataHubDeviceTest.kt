@@ -12,6 +12,7 @@ import app.lifeos.core.runtime.livedata.LiveDataIngestResult
 import app.lifeos.core.runtime.livedata.LiveDataPermission
 import app.lifeos.core.runtime.livedata.LiveDataPermissionState
 import app.lifeos.core.runtime.livedata.LiveDataStreamKind
+import app.lifeos.core.runtime.source.SourceMetadataRepository
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import java.time.Instant
 import kotlinx.coroutines.flow.first
@@ -68,10 +69,16 @@ class LiveDataHubDeviceTest {
         )
         val accepted = hub.ingest(message)
         assertTrue(accepted is LiveDataIngestResult.Accepted)
+        val acceptedResult = accepted as LiveDataIngestResult.Accepted
         val persisted = app.kernel.photonStore.load(message.photonId)
         assertNotNull(persisted)
         assertEquals(setOf(grantedPhoton.id), persisted!!.provenance.parentIds)
         assertTrue(persisted.tags.none { it.contains("private-message-id") })
+        val metadataRecord = SourceMetadataRepository(app.kernel.photonStore)
+            .load(app.lifeos.core.model.PhotonRevisionRef(message.photonId, 1L))
+        assertNotNull(metadataRecord)
+        assertEquals(message.metadata, metadataRecord!!.metadata)
+        assertNotNull(app.kernel.photonStore.load(acceptedResult.metadataPhotonId))
 
         val revokeAt = Instant.now().let { current ->
             if (current.isAfter(observedAt)) current else observedAt.plusNanos(1)

@@ -9,6 +9,7 @@ import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.PhotonRevisionWriteResult
 import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.runtime.source.SourceMetadataRepository
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,6 +36,17 @@ class LiveDataHubTest {
 
         assertEquals(accountPhoton.id, result.permissionSnapshotId)
         assertEquals(accountPhoton.revision, result.permissionSnapshotRevision)
+        assertEquals(delta.photonId, result.sourcePhotonId)
+        val metadataRecord = requireNotNull(
+            SourceMetadataRepository(repository).load(PhotonRevisionRef(delta.photonId, 1L))
+        )
+        assertEquals(delta.metadata, metadataRecord.metadata)
+        assertEquals(
+            result.metadataPhotonId,
+            app.lifeos.core.runtime.source.SourceMetadataPhotonFactory.photonId(
+                PhotonRevisionRef(delta.photonId, 1L)
+            ),
+        )
         assertEquals(setOf(accountPhoton.id), photon.provenance.parentIds)
         assertTrue("live-data-stream:message" in photon.tags)
         assertTrue(

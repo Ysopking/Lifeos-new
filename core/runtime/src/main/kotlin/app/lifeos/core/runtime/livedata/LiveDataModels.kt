@@ -1,6 +1,16 @@
 package app.lifeos.core.runtime.livedata
 
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.source.CanonicalSourceMetadata
+import app.lifeos.core.model.source.SourceAccountRef
+import app.lifeos.core.model.source.SourceExternalObjectRef
+import app.lifeos.core.model.source.SourceFileMetadata
+import app.lifeos.core.model.source.SourceMetadataOrigin
+import app.lifeos.core.model.source.SourceObjectKind
+import app.lifeos.core.model.source.SourcePrivacyZone
+import app.lifeos.core.model.source.SourceProviderRef
+import app.lifeos.core.model.source.SourceTechnicalMetadata
+import app.lifeos.core.model.source.SourceTimestamps
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.time.Instant
@@ -119,6 +129,17 @@ data class LiveDataDelta(
     val payload: String? = null,
     val mimeType: String = kind.defaultMimeType,
     val confidence: Double = 1.0,
+    val metadata: CanonicalSourceMetadata = canonicalLiveDataMetadata(
+        connectorId = connectorId,
+        accountKey = accountKey,
+        kind = kind,
+        externalId = externalId,
+        externalVersion = externalVersion,
+        occurredAt = occurredAt,
+        observedAt = observedAt,
+        mimeType = mimeType,
+        privacyZone = SourcePrivacyZone.PRIVATE,
+    ),
 ) {
     init {
         require(externalId.isNotBlank())
@@ -129,6 +150,30 @@ data class LiveDataDelta(
         require(confidence in 0.0..1.0)
         require(!observedAt.isBefore(occurredAt)) {
             "Live-data observation cannot precede source occurrence"
+        }
+        require(metadata.objectKind == sourceObjectKind(kind)) {
+            "Live-data metadata object kind does not match stream kind"
+        }
+        require(metadata.externalObject.provider.providerId == connectorId.value) {
+            "Live-data metadata provider does not match connector"
+        }
+        require(metadata.externalObject.account.providerId == connectorId.value) {
+            "Live-data metadata account provider does not match connector"
+        }
+        require(metadata.externalObject.account.accountId == accountKey.value) {
+            "Live-data metadata account does not match connector account"
+        }
+        require(metadata.externalObject.externalId == externalId) {
+            "Live-data metadata external id does not match delta"
+        }
+        require(metadata.externalObject.externalVersion == externalVersion) {
+            "Live-data metadata external version does not match delta"
+        }
+        require(metadata.timestamps.occurredAt == occurredAt) {
+            "Live-data metadata occurrence time does not match delta"
+        }
+        require(metadata.timestamps.observedAt == observedAt) {
+            "Live-data metadata observation time does not match delta"
         }
         when (operation) {
             LiveDataDeltaOperation.UPSERT -> {
@@ -171,6 +216,7 @@ data class LiveDataDelta(
             externalId,
             externalVersion,
             operation.name,
+            metadata.metadataFingerprint,
         )
     )
 
@@ -184,7 +230,11 @@ sealed interface LiveDataIngestResult {
         val photonId: PhotonId,
         val permissionSnapshotId: PhotonId,
         val permissionSnapshotRevision: Long,
-    ) : LiveDataIngestResult
+        val metadataPhotonId: PhotonId = photonId,
+    ) : LiveDataIngestResult {
+        val sourcePhotonId: PhotonId
+            get() = photonId
+    }
 
     data class Blocked(
         val reasons: List<String>,
@@ -193,6 +243,65 @@ sealed interface LiveDataIngestResult {
             require(reasons.isNotEmpty() && reasons.none { it.isBlank() })
         }
     }
+}
+
+fun canonicalLiveDataMetadata(
+    connectorId: LiveDataConnectorId,
+    accountKey: LiveDataAccountKey,
+    kind: LiveDataStreamKind,
+    externalId: String,
+    externalVersion: String,
+    occurredAt: Instant,
+    observedAt: Instant,
+    mimeType: String,
+    privacyZone: SourcePrivacyZone,
+): CanonicalSourceMetadata {
+    val objectKind = sourceObjectKind(kind)
+    val file = if (objectKind == SourceObjectKind.FILE) {
+        val normalized = externalId.replace('\\', '/')
+        SourceFileMetadata(
+            name = normalized.substringAfterLast('/').ifBlank { "source-file" },
+            logicalPath = externalId,
+            parentPath = normalized.substringBeforeLast('/', "").ifBlank { null },
+            mimeType = mimeType,
+        )
+    } else {
+        null
+    }
+    return CanonicalSourceMetadata(
+        objectKind = objectKind,
+        origin = SourceMetadataOrigin.CONNECTOR,
+        privacyZone = privacyZone,
+        externalObject = SourceExternalObjectRef(
+            provider = SourceProviderRef(connectorId.value),
+            account = SourceAccountRef(
+                providerId = connectorId.value,
+                accountId = accountKey.value,
+            ),
+            objectKind = objectKind,
+            externalId = externalId,
+            externalVersion = externalVersion,
+        ),
+        timestamps = SourceTimestamps(
+            occurredAt = occurredAt,
+            observedAt = observedAt,
+            importedAt = observedAt,
+        ),
+        file = file,
+        technical = SourceTechnicalMetadata(
+            format = mimeType,
+            producer = connectorId.value,
+            attributes = mapOf(
+                "livedata:stream" to kind.name.lowercase(),
+            ),
+        ),
+    )
+}
+
+private fun sourceObjectKind(kind: LiveDataStreamKind): SourceObjectKind = when (kind) {
+    LiveDataStreamKind.MESSAGE -> SourceObjectKind.MESSAGE
+    LiveDataStreamKind.CALENDAR -> SourceObjectKind.CALENDAR_EVENT
+    LiveDataStreamKind.FILE -> SourceObjectKind.FILE
 }
 
 internal object LiveDataIdentity {

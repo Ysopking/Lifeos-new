@@ -4,6 +4,7 @@ import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.runtime.source.SourceMetadataRepository
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -22,6 +23,7 @@ fun interface LiveDataPhotonIngress {
 class LiveDataHub(
     private val photons: RevisionedPhotonRepository,
     private val ingress: LiveDataPhotonIngress,
+    private val sourceMetadata: SourceMetadataRepository = SourceMetadataRepository(photons),
 ) {
     private val mutationMutex = Mutex()
 
@@ -94,10 +96,15 @@ class LiveDataHub(
         // process, so a revocation cannot overtake this exact admission/publish pair.
         val photon = deltaPhoton(delta, account)
         ingress.publish(photon)
+        check(photons.load(photon.id) == photon) {
+            "Live-data canonical ingress returned before source Photon became durable"
+        }
+        val metadataPhoton = sourceMetadata.commit(photon, delta.metadata)
         LiveDataIngestResult.Accepted(
             photonId = photon.id,
             permissionSnapshotId = account.id,
             permissionSnapshotRevision = account.revision,
+            metadataPhotonId = metadataPhoton.id,
         )
     }
 
