@@ -116,7 +116,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -236,7 +236,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             try {
                 initializeRuntime()
                 mutableStartupState.value = LifeOsProcessStartupState.ready()
-            } catch (error: Throwable) {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
                 mutableStartupState.value = LifeOsProcessStartupState.failed(
                     error.message ?: error::class.simpleName ?: "lifeos-startup-failed",
                 )
@@ -244,7 +246,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         }
     }
 
-    private fun initializeRuntime() {
+    private suspend fun initializeRuntime() {
         generatedToolStatusReader = GeneratedToolRuntimeStatusReader(
             EncryptedGeneratedToolStateRepository(this),
         )
@@ -279,9 +281,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     goalDecisionTraceRecorder = GoalDecisionTraceRecorder(decisionTraces)
                     DecisionTraceRuntimeRegistry.install(SubsystemDecisionTraceRecorder(decisionTraces))
                     LifecycleDecisionTraceRuntimeRegistry.install(LifecycleDecisionTraceRecorder(decisionTraces))
-                    runBlocking {
-                        PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
-                    }
+                    PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
                     GeneratedProviderRestoreAuthorityRuntimeRegistry.install(
                         GeneratedProviderRestoreAuthority(
                             ownerPolicy = ownerPolicy,
@@ -318,7 +318,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     lifeMemoryRuntime = DurableLifeMemoryRuntime(lifePhotonRepository)
                     DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
                     multimodalPerception = MultimodalPerceptionRuntime(kernel)
-                    runBlocking { multimodalPerception.install() }
+                    multimodalPerception.install()
                     val integratedCognition = requireNotNull(LifeOsIntegratedCognitionSuiteRegistry.current()) {
                         "Integrated cognition suite must be installed before kernel composition"
                     }
@@ -342,19 +342,16 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                         delegate = domainPersistence,
                         planning = futurePlanning,
                     )
-                    runBlocking {
-                        lifePhotonRepository.reconcilePersisted()
-                        lifeMemoryRuntime.rebuild(Instant.now())
-                        CognitiveSnapshotRuntimeRegistry.captureLatest()
-                        futurePlanning.reconsiderAll().forEach { planned ->
-                            photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
-                        }
+                    lifePhotonRepository.reconcilePersisted()
+                    lifeMemoryRuntime.rebuild(Instant.now())
+                    CognitiveSnapshotRuntimeRegistry.captureLatest()
+                    futurePlanning.reconsiderAll().forEach { planned ->
+                        photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
                     }
-                    val frozenCognitiveModules = runBlocking {
+                    val frozenCognitiveModules =
                         kernel.freezeCognitiveModulesForCurrentCycle(
                             integratedCognition.domainModules
                         )
-                    }
                     val causalCoordinator = RecursiveCausalCognitionCoordinator(
                         modules = frozenCognitiveModules,
                         engine = CausalCognitionEngine(
@@ -458,10 +455,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                         protection = protectionCoordinator,
                         selfHealing = selfHealingRuntime,
                     )
-                    runBlocking {
-                        selfHealingRuntime.verifyLedgerIntegrity()
-                        escalationRuntime.verifyLedgerIntegrity()
-                    }
+                    selfHealingRuntime.verifyLedgerIntegrity()
+                    escalationRuntime.verifyLedgerIntegrity()
                     LifeOsHealthPhotonBridge.start(
                         scope = selfHealingScope,
                         graph = healthGraph,
@@ -536,17 +531,15 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         refreshLiveSources()
     }
 
-    private fun startSelfObservation(
+    private suspend fun startSelfObservation(
         healthGraph: app.lifeos.core.runtime.health.HealthGraph,
     ) {
         if (selfObservationJob?.isActive == true) return
         // Register before any event/UI-triggered refresh can emit the derived node with UNKNOWN scope.
-        runBlocking {
-            healthGraph.register(
-                app.lifeos.core.runtime.health.HealthNodeId(SELF_OBSERVATION_HEALTH_NODE_ID),
-                app.lifeos.core.runtime.health.HealthScope.RUNTIME,
-            )
-        }
+        healthGraph.register(
+            app.lifeos.core.runtime.health.HealthNodeId(SELF_OBSERVATION_HEALTH_NODE_ID),
+            app.lifeos.core.runtime.health.HealthScope.RUNTIME,
+        )
         selfObservationJob = selfObservationScope.launch {
             launch {
                 healthGraph.observations.collect { observation ->
