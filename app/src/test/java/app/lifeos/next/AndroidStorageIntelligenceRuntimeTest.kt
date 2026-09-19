@@ -88,6 +88,8 @@ class AndroidStorageIntelligenceRuntimeTest {
         assertEquals("Download/photo-copy.jpg", duplicate.relativePath)
         assertEquals(100, duplicate.reclaimableBytes)
         assertTrue(duplicate.safeToTrashAfterOwnerApproval)
+        assertEquals("primary", duplicate.verificationPeerVolumeId)
+        assertEquals("Pictures/photo.jpg", duplicate.verificationPeerRelativePath)
         assertTrue("Pictures/photo.jpg" in duplicate.reason)
     }
 
@@ -104,6 +106,36 @@ class AndroidStorageIntelligenceRuntimeTest {
         ).single { it.kind == StorageCleanupKind.EXACT_DUPLICATE }
 
         assertFalse(duplicate.safeToTrashAfterOwnerApproval)
+    }
+
+    @Test
+    fun `recent temporary files and installers are not cleanup candidates`() {
+        val now = 2_000_000_000_000L
+        val files = listOf(
+            indexed(
+                "Download/active.part",
+                10,
+                AndroidFileCategory.UNKNOWN,
+                null,
+                modifiedAtMillis = now - 60_000L,
+            ),
+            indexed(
+                "Download/new.apk",
+                100,
+                AndroidFileCategory.ARCHIVE,
+                null,
+                modifiedAtMillis = now - 24L * 60L * 60L * 1000L,
+            ),
+        )
+
+        val candidates = StorageCleanupPlanner.plan(
+            duplicateGroups = emptyList(),
+            reviewEntries = files,
+            nowMillis = now,
+        )
+
+        assertTrue(candidates.none { it.kind == StorageCleanupKind.TEMPORARY_FILE })
+        assertTrue(candidates.none { it.kind == StorageCleanupKind.STALE_INSTALLER })
     }
 
     @Test
@@ -153,12 +185,13 @@ class AndroidStorageIntelligenceRuntimeTest {
         size: Long,
         category: AndroidFileCategory,
         fingerprint: String?,
+        modifiedAtMillis: Long = 1L,
     ) = StorageIndexedFile(
         volumeId = "primary",
         relativePath = path,
         absolutePath = "/storage/emulated/0/" + path,
         sizeBytes = size,
-        modifiedAtMillis = 1L,
+        modifiedAtMillis = modifiedAtMillis,
         category = category,
         suspectedEncrypted = false,
         contentFingerprint = fingerprint,
