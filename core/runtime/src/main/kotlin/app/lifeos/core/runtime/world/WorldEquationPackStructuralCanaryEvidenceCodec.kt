@@ -193,7 +193,7 @@ object WorldEquationPackStructuralCanaryEvidenceCodec {
         metrics.activeCoefficientIds
             .map { it.value }
             .sorted()
-            .forEach(data::writeString)
+            .forEach { data.writeString(it) }
     }
 
     private fun readMetrics(
