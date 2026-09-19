@@ -3,13 +3,19 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
 permissions:
   contents: read
 concurrency:
-  group: android-${{ github.ref }}
-  cancel-in-progress: true
+  group: android-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   debug-build:
+    name: Android Debug CI
     runs-on: ubuntu-latest
     timeout-minutes: 22
     steps:
