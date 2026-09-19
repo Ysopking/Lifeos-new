@@ -1,6 +1,8 @@
 package app.lifeos.next.ui.system
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -10,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -23,9 +26,6 @@ import app.lifeos.next.OwnerAssetReviewViewModel
 import app.lifeos.next.R
 import app.lifeos.next.StorageMaintenanceViewModel
 import app.lifeos.next.ui.theme.LifeOsTokens
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.ui.Alignment
 
 @Composable
 fun LifeOsSystemOverlay(
@@ -34,6 +34,7 @@ fun LifeOsSystemOverlay(
     toolCenterModel: LifeOsToolCenterViewModel,
     assetReviewModel: OwnerAssetReviewViewModel,
     storageMaintenanceModel: StorageMaintenanceViewModel,
+    ownerAttention: OwnerAttentionUiState,
     onDismiss: () -> Unit,
 ) {
     Dialog(
@@ -81,6 +82,7 @@ fun LifeOsSystemOverlay(
                     toolCenterModel = toolCenterModel,
                     assetReviewModel = assetReviewModel,
                     storageMaintenanceModel = storageMaintenanceModel,
+                    ownerAttention = ownerAttention,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

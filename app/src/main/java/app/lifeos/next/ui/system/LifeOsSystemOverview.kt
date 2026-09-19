@@ -2,6 +2,7 @@ package app.lifeos.next.ui.system
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -11,6 +12,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.next.LifeOsChatViewModel
@@ -21,6 +23,7 @@ import app.lifeos.next.ui.theme.LifeOsTokens
 @Composable
 internal fun LifeOsSystemOverview(
     model: LifeOsChatViewModel,
+    ownerAttention: OwnerAttentionUiState,
     onOpenStorage: () -> Unit,
     onOpenAssets: () -> Unit,
     onOpenTools: () -> Unit,
@@ -48,7 +51,11 @@ internal fun LifeOsSystemOverview(
                 style = MaterialTheme.typography.titleLarge,
             )
             Text(
-                text = health.compactLabel,
+                text = if (ownerAttention.hasAttention) {
+                    "${ownerAttention.totalCount} Punkte brauchen deine Aufmerksamkeit"
+                } else {
+                    health.compactLabel
+                },
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -62,7 +69,12 @@ internal fun LifeOsSystemOverview(
         )
         SystemNavigationRow(
             label = "Freigaben",
-            supporting = "Assets prüfen und Owner-Entscheidungen treffen",
+            supporting = if (ownerAttention.pendingAssetReviews > 0) {
+                "${ownerAttention.pendingAssetReviews} offene Freigaben warten auf deine Entscheidung"
+            } else {
+                "Assets prüfen und Owner-Entscheidungen treffen"
+            },
+            attentionCount = ownerAttention.pendingAssetReviews,
             onClick = onOpenAssets,
         )
 
@@ -71,7 +83,12 @@ internal fun LifeOsSystemOverview(
         SystemSectionLabel("Kontrolle")
         SystemNavigationRow(
             label = "Tools",
-            supporting = "Generierte Tools und ihr Lifecycle",
+            supporting = if (ownerAttention.toolActions > 0) {
+                "${ownerAttention.toolActions} Tool-Entscheidungen brauchen dich"
+            } else {
+                "Generierte Tools und ihr Lifecycle"
+            },
+            attentionCount = ownerAttention.toolActions,
             onClick = onOpenTools,
         )
         SystemNavigationRow(
@@ -86,6 +103,7 @@ internal fun LifeOsSystemOverview(
         SystemNavigationRow(
             label = "Runtime-Diagnose",
             supporting = health.summary,
+            attentionCount = if (ownerAttention.runtimeNeedsAttention) 1 else 0,
             onClick = onOpenRuntime,
         )
     }
@@ -109,6 +127,7 @@ private fun SystemNavigationRow(
     label: String,
     supporting: String,
     onClick: () -> Unit,
+    attentionCount: Int = 0,
 ) {
     Surface(
         onClick = onClick,
@@ -123,10 +142,23 @@ private fun SystemNavigationRow(
             ),
             verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.xSmall),
         ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleMedium,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                if (attentionCount > 0) {
+                    Text(
+                        text = attentionCount.toString(),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
             Text(
                 text = supporting,
                 style = MaterialTheme.typography.bodySmall,

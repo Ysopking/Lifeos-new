@@ -48,6 +48,7 @@ fun LifeOsSystemHub(
     toolCenterModel: LifeOsToolCenterViewModel,
     assetReviewModel: OwnerAssetReviewViewModel,
     storageMaintenanceModel: StorageMaintenanceViewModel,
+    ownerAttention: OwnerAttentionUiState,
     modifier: Modifier = Modifier,
 ) {
     var selectedPageName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -65,6 +66,7 @@ fun LifeOsSystemHub(
         mainContent = { contentModifier ->
             LifeOsSystemOverview(
                 model = model,
+                ownerAttention = ownerAttention,
                 onOpenStorage = { selectedPageName = SystemHubPage.STORAGE.name },
                 onOpenAssets = { selectedPageName = SystemHubPage.ASSETS.name },
                 onOpenTools = { selectedPageName = SystemHubPage.TOOLS.name },

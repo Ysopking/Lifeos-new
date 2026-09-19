@@ -1,11 +1,12 @@
 package app.lifeos.next.ui.layout
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -22,8 +23,12 @@ import app.lifeos.next.ui.theme.LifeOsTokens
 
 data class LifeOsTopBarState(
     val title: String,
-    val attention: Boolean = false,
-)
+    val attentionCount: Int = 0,
+) {
+    init {
+        require(attentionCount >= 0)
+    }
+}
 
 @Composable
 fun LifeOsTopBar(
@@ -49,12 +54,20 @@ fun LifeOsTopBar(
                 text = state.title,
                 style = MaterialTheme.typography.titleLarge,
             )
-            Box(contentAlignment = Alignment.TopEnd) {
+            BadgedBox(
+                badge = {
+                    if (state.attentionCount > 0) {
+                        Badge {
+                            Text(attentionBadgeLabel(state.attentionCount))
+                        }
+                    }
+                },
+            ) {
                 IconButton(
                     modifier = Modifier
                         .size(LifeOsTokens.Size.minimumTouchTarget)
                         .semantics {
-                            contentDescription = "System öffnen"
+                            contentDescription = systemActionDescription(state.attentionCount)
                         },
                     onClick = onOpenSystem,
                 ) {
@@ -64,14 +77,19 @@ fun LifeOsTopBar(
                         modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
                     )
                 }
-                if (state.attention) {
-                    Text(
-                        text = "!",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
             }
         }
     }
 }
+
+internal fun attentionBadgeLabel(attentionCount: Int): String =
+    if (attentionCount > MAX_BADGE_COUNT) "$MAX_BADGE_COUNT+" else attentionCount.toString()
+
+internal fun systemActionDescription(attentionCount: Int): String =
+    if (attentionCount > 0) {
+        "System öffnen, $attentionCount Punkte brauchen dich"
+    } else {
+        "System öffnen"
+    }
+
+private const val MAX_BADGE_COUNT = 9
