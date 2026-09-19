@@ -180,11 +180,17 @@ class CognitiveSnapshotProducer(
     private val manager: CognitiveSnapshotManager,
     private val journal: CognitiveEventJournal,
     private val worlds: WorldFormulaSnapshotRepository,
+    private val activeWorldSnapshotId: suspend () -> String?,
     private val dependencyState: suspend () -> CognitiveSnapshotDependencyState,
     private val memoryFingerprint: () -> String?,
 ) {
-    suspend fun captureLatest(): CognitiveSnapshot? =
-        worlds.loadLatest()?.let { capture(it) }
+    suspend fun captureLatest(): CognitiveSnapshot? {
+        val snapshotId = activeWorldSnapshotId()?.takeIf { it.isNotBlank() } ?: return null
+        val world = requireNotNull(worlds.load(snapshotId)) {
+            "Productive world head points to a missing WorldFormula snapshot: $snapshotId"
+        }
+        return capture(world)
+    }
 
     suspend fun capture(world: WorldFormulaSnapshot): CognitiveSnapshot? {
         val memory = memoryFingerprint()?.takeIf { it.isNotBlank() } ?: return null

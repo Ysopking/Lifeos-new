@@ -545,6 +545,9 @@ class LifeOsKernelFactory(
                 manager = cognitiveSnapshotManager,
                 journal = cognitiveEventJournal,
                 worlds = worldFormulaSnapshotRepository,
+                activeWorldSnapshotId = {
+                    productiveWorldHeadRepository.load()?.activeSnapshot?.snapshotId
+                },
                 dependencyState = {
                     thoughtGraph.snapshot().let { snapshot ->
                         CognitiveSnapshotDependencyState(
