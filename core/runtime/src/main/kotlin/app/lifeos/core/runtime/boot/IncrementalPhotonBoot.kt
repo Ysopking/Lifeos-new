@@ -82,7 +82,7 @@ class IncrementalPhotonRepositoryBootSource(
             val loadedManifest = manifests.loadReport()
             val previous = loadedManifest.manifest.takeUnless { loadedManifest.corrupted }
             val target = resolveTarget(previous)
-            val hydrated = hydrate(target.refs)
+            val hydrated = hydrate(target.refs, target.indexFailures)
             val stableHead = incrementalIndex.indexHead()
             if (stableHead != target.head) return@repeat
 
@@ -170,9 +170,12 @@ class IncrementalPhotonRepositoryBootSource(
         throw IllegalStateException("Photon index did not stabilize during snapshot fallback")
     }
 
-    private suspend fun hydrate(targetRefs: List<PhotonRevisionRef>): PhotonLoadReport {
+    private suspend fun hydrate(
+        targetRefs: List<PhotonRevisionRef>,
+        indexFailures: List<String>,
+    ): PhotonLoadReport {
         val photons = mutableListOf<Photon>()
-        val failures = mutableListOf<String>()
+        val failures = indexFailures.toMutableList()
         targetRefs.forEach { ref ->
             try {
                 val photon = repository.load(ref)
