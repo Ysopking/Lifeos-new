@@ -10,6 +10,7 @@ import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -74,6 +75,32 @@ class ProductiveWorldFormulaTest {
         assertNull(committed.currentHead.predecessorSnapshotId)
         assertEquals(candidate.snapshot, snapshots.load(candidate.snapshot.id))
         assertEquals(committed.currentHead, heads.load())
+    }
+
+
+    @Test
+    fun nonProductiveExecutionCannotAdvanceProductiveWorld() = runTest {
+        val snapshots = InMemorySnapshots()
+        val profile = CognitiveWorldEquationProfile()
+        val productive = profile.request(
+            projection = projection(),
+            links = emptyList(),
+            observedAt = observedAt,
+            cycle = cycle(previous = null, id = "cycle-resource-scope"),
+            sourceTaskId = TaskId("task-resource-scope"),
+            photonId = PhotonId("photon-resource-scope"),
+            config = WorldFormulaConfig(requiredStableRounds = 1),
+        )
+        val execution = WorldFormulaCoordinator(
+            equations = InMemoryWorldEquationRegistry(listOf(profile.spec)),
+            snapshots = snapshots,
+        ).evaluate(productive.request).copy(
+            scope = WorldFormulaExecutionScope.RESOURCE,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            ProductiveWorldCandidate.from(productive, execution)
+        }
     }
 
     @Test
