@@ -63,6 +63,58 @@ class WorldEquationEvidenceRepositoryTest {
     }
 
     @Test
+    fun persistenceRejectsLifecycleJumpThatBypassesShadowEvidence() = runTest {
+        val repository = InMemoryWorldEquationEvidenceRepository()
+        val initial = WorldEquationEvidenceRecord.create(
+            revision = 1L,
+            state = WorldEquationLifecycleState.CONJECTURE,
+            evidence = WorldEquationEvidenceSet.empty(
+                candidate,
+                baseline,
+                protocol,
+                policy.fingerprint(),
+            ),
+        )
+        assertTrue(repository.compareAndSet(candidate.fingerprint(), null, initial))
+        val forgedActive = WorldEquationEvidenceRecord.create(
+            revision = 2L,
+            state = WorldEquationLifecycleState.ACTIVE,
+            evidence = initial.evidence,
+            latestVerdictId = "forged-verdict",
+            activationHeadFingerprint = "a".repeat(64),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            repository.compareAndSet(
+                candidate.fingerprint(),
+                1L,
+                forgedActive,
+            )
+        }
+    }
+
+    @Test
+    fun initialPersistenceRejectsPreActivatedEvidence() = runTest {
+        val repository = InMemoryWorldEquationEvidenceRepository()
+        val forged = WorldEquationEvidenceRecord.create(
+            revision = 1L,
+            state = WorldEquationLifecycleState.ACTIVE,
+            evidence = WorldEquationEvidenceSet.empty(
+                candidate,
+                baseline,
+                protocol,
+                policy.fingerprint(),
+            ),
+            latestVerdictId = "forged-verdict",
+            activationHeadFingerprint = "b".repeat(64),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            repository.compareAndSet(candidate.fingerprint(), null, forged)
+        }
+    }
+
+    @Test
     fun staleRevisionCannotOverwriteEvidence() = runTest {
         val repository = InMemoryWorldEquationEvidenceRepository()
         val initial = WorldEquationEvidenceRecord.create(

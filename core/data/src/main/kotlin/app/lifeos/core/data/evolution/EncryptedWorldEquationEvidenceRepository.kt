@@ -59,20 +59,9 @@ class EncryptedWorldEquationEvidenceRepository(
             if (current?.revision != expectedRevision) return@withLock false
             if (current == null) {
                 require(expectedRevision == null)
-                require(next.revision == 1L)
+                next.requireInitialRecord()
             } else {
-                require(next.id == current.id) {
-                    "WorldEquation evidence identity is immutable"
-                }
-                require(next.evidence.protocol.fingerprint() ==
-                    current.evidence.protocol.fingerprint()) {
-                    "WorldEquation evaluation protocol is immutable"
-                }
-                require(next.evidence.policyFingerprint ==
-                    current.evidence.policyFingerprint) {
-                    "WorldEquation promotion policy is immutable"
-                }
-                require(next.revision == Math.addExact(current.revision, 1L))
+                next.requireSuccessorOf(current)
             }
             write(target, next)
             val durable = readValidated(target)

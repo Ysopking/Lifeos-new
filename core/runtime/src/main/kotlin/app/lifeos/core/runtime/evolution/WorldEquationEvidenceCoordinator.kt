@@ -127,7 +127,6 @@ class WorldEquationEvidenceCoordinator(
             current,
             current.transition(
                 nextState = WorldEquationLifecycleState.QUARANTINED,
-                verdictId = verdictId,
                 rollbackDecisionId = verdictId,
             ),
         )

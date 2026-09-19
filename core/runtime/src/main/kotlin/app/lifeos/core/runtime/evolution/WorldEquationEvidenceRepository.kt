@@ -183,6 +183,111 @@ data class WorldEquationEvidenceRecord(
         postActivationSafetyObservations = postActivationSafetyObservations,
     )
 
+    fun requireInitialRecord() {
+        require(revision == 1L) {
+            "Initial WorldEquation evidence revision must be 1"
+        }
+        require(state == WorldEquationLifecycleState.CONJECTURE) {
+            "Initial WorldEquation evidence state must be CONJECTURE"
+        }
+        require(evidence.observations.isEmpty()) {
+            "Initial WorldEquation evidence cannot contain observations"
+        }
+        require(latestVerdictId == null)
+        require(activationHeadFingerprint == null)
+        require(rollbackDecisionId == null)
+        require(postActivationSafetyObservations.isEmpty())
+    }
+
+    fun requireSuccessorOf(
+        previous: WorldEquationEvidenceRecord,
+    ) {
+        require(revision == Math.addExact(previous.revision, 1L)) {
+            "WorldEquation evidence revision must advance by exactly one"
+        }
+        require(id == previous.id) {
+            "WorldEquation evidence identity is immutable"
+        }
+        require(evidence.candidateEquationFingerprint ==
+            previous.evidence.candidateEquationFingerprint)
+        require(evidence.baselineEquationFingerprint ==
+            previous.evidence.baselineEquationFingerprint)
+        require(evidence.protocol.fingerprint() ==
+            previous.evidence.protocol.fingerprint()) {
+            "WorldEquation evaluation protocol is immutable"
+        }
+        require(evidence.policyFingerprint == previous.evidence.policyFingerprint) {
+            "WorldEquation promotion policy is immutable"
+        }
+
+        val sameMutableState = state == previous.state &&
+            previous.state in setOf(
+                WorldEquationLifecycleState.SHADOW,
+                WorldEquationLifecycleState.SUPPORTED,
+                WorldEquationLifecycleState.ACTIVE,
+            )
+        require(sameMutableState || state in allowedTransitions(previous.state)) {
+            "Illegal persisted WorldEquation lifecycle transition: " +
+                previous.state + " -> " + state
+        }
+
+        val previousObservationIds = previous.evidence.observations
+            .map { it.fingerprint() }
+            .toSet()
+        val nextObservationIds = evidence.observations
+            .map { it.fingerprint() }
+            .toSet()
+        require(nextObservationIds.containsAll(previousObservationIds)) {
+            "WorldEquation evaluation evidence is append-only"
+        }
+        if (previous.state !in setOf(
+                WorldEquationLifecycleState.SHADOW,
+                WorldEquationLifecycleState.SUPPORTED,
+            )
+        ) {
+            require(evidence.fingerprint() == previous.evidence.fingerprint()) {
+                "WorldEquation evaluation evidence is frozen outside SHADOW/SUPPORTED"
+            }
+        }
+
+        require(
+            postActivationSafetyObservations.take(
+                previous.postActivationSafetyObservations.size
+            ) == previous.postActivationSafetyObservations
+        ) {
+            "WorldEquation post-activation safety evidence is append-only"
+        }
+        if (previous.state != WorldEquationLifecycleState.ACTIVE) {
+            require(
+                postActivationSafetyObservations ==
+                    previous.postActivationSafetyObservations
+            ) {
+                "WorldEquation safety evidence may only grow while ACTIVE"
+            }
+        }
+
+        previous.activationHeadFingerprint?.let {
+            require(activationHeadFingerprint == it) {
+                "WorldEquation activation head fingerprint is immutable once set"
+            }
+        }
+        previous.rollbackDecisionId?.let {
+            require(rollbackDecisionId == it) {
+                "WorldEquation rollback decision id is immutable once set"
+            }
+        }
+        if (previous.state in setOf(
+                WorldEquationLifecycleState.PROMOTABLE,
+                WorldEquationLifecycleState.ACTIVE,
+                WorldEquationLifecycleState.QUARANTINED,
+            )
+        ) {
+            require(latestVerdictId == previous.latestVerdictId) {
+                "WorldEquation promotion verdict is immutable after PROMOTABLE"
+            }
+        }
+    }
+
     private fun expectedId(): String = stableId(evidence)
 
     private fun expectedFingerprint(): String = StableFieldIds.fingerprint(
@@ -327,24 +432,9 @@ class InMemoryWorldEquationEvidenceRepository(
         if (current?.revision != expectedRevision) return@withLock false
         if (current == null) {
             require(expectedRevision == null)
-            require(next.revision == 1L)
+            next.requireInitialRecord()
         } else {
-            require(next.id == current.id) {
-                "World equation evidence identity is immutable"
-            }
-            require(next.evidence.candidateEquationFingerprint ==
-                current.evidence.candidateEquationFingerprint)
-            require(next.evidence.baselineEquationFingerprint ==
-                current.evidence.baselineEquationFingerprint)
-            require(next.evidence.protocol.fingerprint() ==
-                current.evidence.protocol.fingerprint()) {
-                "World equation evaluation protocol is immutable"
-            }
-            require(next.evidence.policyFingerprint ==
-                current.evidence.policyFingerprint) {
-                "World equation promotion policy is immutable"
-            }
-            require(next.revision == Math.addExact(current.revision, 1L))
+            next.requireSuccessorOf(current)
         }
         byCandidate[candidateEquationFingerprint] = next
         true
