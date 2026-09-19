@@ -1,6 +1,12 @@
 package app.lifeos.next.ui.chat
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
@@ -12,15 +18,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.core.runtime.chat.ChatEvent
 import app.lifeos.core.runtime.chat.ChatRole
 import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.kernel.InitialCognitiveContextRuntimeRegistry
-import app.lifeos.next.ui.components.LifeOsRuntimeStatus
+import app.lifeos.next.ui.components.LifeOsContentFrame
+import app.lifeos.next.ui.components.LifeOsRuntimeAlert
 import app.lifeos.next.ui.components.buildRuntimeHealthUiModel
 import app.lifeos.next.ui.system.RuntimeHealthModalSheet
+import app.lifeos.next.ui.theme.LifeOsTokens
 
 @Composable
 fun LifeOsChatScreen(
@@ -38,23 +45,24 @@ fun LifeOsChatScreen(
         selfStateEvidence = state.selfState,
     )
 
-    Column(
+    LifeOsContentFrame(
         modifier = modifier
             .fillMaxSize()
-            .imePadding()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .imePadding(),
     ) {
-        Text("LIFEOS", style = MaterialTheme.typography.headlineMedium)
-        LifeOsRuntimeStatus(
+        LifeOsRuntimeAlert(
             model = runtimeHealth,
             onOpenDetails = { showRuntimeHealth = true },
         )
+
         LazyColumn(
-            Modifier
+            modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                vertical = LifeOsTokens.Spacing.small,
+            ),
         ) {
             if (state.timeline.isEmpty()) {
                 item {
@@ -83,7 +91,15 @@ fun LifeOsChatScreen(
                 }
             }
         }
-        state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+        state.error?.let {
+            Text(
+                text = it,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(bottom = LifeOsTokens.Spacing.small),
+            )
+        }
+
         ChatComposer(
             draft = state.draft,
             bootStatus = state.bootStatus,
@@ -121,7 +137,7 @@ private fun ChatMessage(event: ChatEvent) {
         horizontalArrangement = if (event.role == ChatRole.USER) Arrangement.End else Arrangement.Start,
     ) {
         Card {
-            Column(Modifier.padding(12.dp)) {
+            Column(Modifier.padding(LifeOsTokens.Spacing.medium)) {
                 Text(
                     when (event.role) {
                         ChatRole.USER -> "Du"
