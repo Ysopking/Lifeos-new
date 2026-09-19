@@ -84,12 +84,17 @@ object SelfStateFingerprint {
         }.toTypedArray()
     )
 
-    private fun canonicalSet(prefix: String, values: Set<String>): List<String> =
-        values.asSequence()
-            .map(::canonicalText)
-            .sorted()
-            .mapIndexed { index, value -> prefix + "[" + index + "]=" + value }
-            .toList()
+    private fun canonicalSet(prefix: String, values: Set<String>?): List<String> =
+        if (values == null) {
+            listOf(prefix + "=null:")
+        } else {
+            listOf(prefix + "=present") +
+                values.asSequence()
+                    .map(::canonicalText)
+                    .sorted()
+                    .mapIndexed { index, value -> prefix + "[" + index + "]=" + value }
+                    .toList()
+        }
 
     private fun encode(value: Any?): String = when (value) {
         null -> "null:"

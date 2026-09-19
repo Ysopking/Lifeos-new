@@ -67,11 +67,11 @@ data class SelfWorldState(
 
 data class SelfRuntimeState(
     val topologyFingerprint: String?,
-    val registeredSubsystems: Set<String>,
-    val operationalSubsystems: Set<String>,
-    val degradedSubsystems: Set<String>,
-    val unavailableSubsystems: Set<String>,
-    val unboundSubsystems: Set<String>,
+    val registeredSubsystems: Set<String>?,
+    val operationalSubsystems: Set<String>?,
+    val degradedSubsystems: Set<String>?,
+    val unavailableSubsystems: Set<String>?,
+    val unboundSubsystems: Set<String>?,
 ) {
     init {
         validateOptionalFingerprint(topologyFingerprint, "topologyFingerprint")
@@ -120,7 +120,7 @@ data class SelfHealthState(
 }
 
 data class SelfRecoveryState(
-    val activeRepairIds: Set<String>,
+    val activeRepairIds: Set<String>?,
     val recoveryStateFingerprint: String?,
 ) {
     init {
@@ -128,8 +128,8 @@ data class SelfRecoveryState(
         validateOptionalFingerprint(recoveryStateFingerprint, "recoveryStateFingerprint")
     }
 
-    val activeRepairs: Int
-        get() = activeRepairIds.size
+    val activeRepairs: Int?
+        get() = activeRepairIds?.size
 }
 
 data class SelfToolState(
@@ -210,6 +210,6 @@ private fun validateOptionalText(value: String?, name: String) {
 private fun validateOptionalFingerprint(value: String?, name: String) =
     validateOptionalText(value, name)
 
-private fun validateNames(values: Set<String>, name: String) {
-    require(values.none { it.isBlank() }) { "$name must not contain blank ids" }
+private fun validateNames(values: Set<String>?, name: String) {
+    require(values == null || values.none { it.isBlank() }) { "$name must not contain blank ids" }
 }

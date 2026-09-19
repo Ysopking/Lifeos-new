@@ -30,6 +30,15 @@ class SelfStateFingerprintTest {
     }
 
     @Test
+    fun unavailableCollectionDoesNotCollapseToKnownEmptyCollection() {
+        val unavailable = snapshot(registered = null, repairs = null)
+        val knownEmpty = snapshot(registered = emptySet(), repairs = emptySet())
+
+        assertNotEquals(unavailable.authorityFingerprint, knownEmpty.authorityFingerprint)
+        assertNotEquals(unavailable.stateFingerprint, knownEmpty.stateFingerprint)
+    }
+
+    @Test
     fun operationalOnlyChangeDoesNotRewriteAuthorityIdentity() {
         val first = snapshot(operational = setOf("world"))
         val second = snapshot(operational = setOf("world", "health"))
@@ -39,9 +48,9 @@ class SelfStateFingerprintTest {
     }
 
     private fun snapshot(
-        registered: Set<String> = setOf("world", "health"),
-        operational: Set<String> = setOf("world"),
-        repairs: Set<String> = emptySet(),
+        registered: Set<String>? = setOf("world", "health"),
+        operational: Set<String>? = setOf("world"),
+        repairs: Set<String>? = emptySet(),
         indexFingerprint: String? = "index-a",
     ) = LifeOsSelfStateSnapshot(
         capturedAt = Instant.parse("2026-09-19T00:00:00Z"),
