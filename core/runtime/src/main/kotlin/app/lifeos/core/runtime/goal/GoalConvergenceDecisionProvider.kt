@@ -191,13 +191,27 @@ class GoalConvergenceDecisionProvider(
             source = source,
             at = at,
         )
-        val cycle = bootEngine.activeCycle() ?: run {
-            val inputSource = cycleInputs
-                ?: throw ProductiveConvergenceNotReadyException(
-                    "active-bootengine-cycle-unavailable"
+        val inputSource = cycleInputs
+            ?: throw ProductiveConvergenceNotReadyException(
+                "bootengine-cycle-input-source-unavailable"
+            )
+        val expectedFrozenInputs = inputSource.freeze(workingSet, routing)
+        val cycle = bootEngine.activeCycle()?.also { active ->
+            if (active.frozenInputsFingerprint != expectedFrozenInputs.fingerprint()) {
+                throw ProductiveConvergenceNotReadyException(
+                    "active-bootengine-cycle-lineage-mismatch:" +
+                        active.cycleId.value
                 )
+            }
+            if (active.context.representationSnapshotId != workingSet.sourceSnapshotId) {
+                throw ProductiveConvergenceNotReadyException(
+                    "active-bootengine-cycle-representation-mismatch:" +
+                        active.cycleId.value
+                )
+            }
+        } ?: run {
             try {
-                bootEngine.startCycle(inputSource.freeze(workingSet, routing))
+                bootEngine.startCycle(expectedFrozenInputs)
             } catch (race: IllegalArgumentException) {
                 throw ProductiveConvergenceNotReadyException(
                     "bootengine-cycle-start-unavailable:${race.message.orEmpty().take(160)}"
