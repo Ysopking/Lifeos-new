@@ -40,7 +40,7 @@ class MemorySearchIndex private constructor(
         revisionKey == canonicalPhotonRevisionKey(photons)
 
     companion object {
-        const val DEFAULT_MAX_INDEXED_SOURCES = 4096
+        const val DEFAULT_MAX_INDEXED_SOURCES = 1024
 
         fun reuseOrBuild(
             existing: MemorySearchIndex?,

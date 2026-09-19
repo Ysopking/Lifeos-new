@@ -9,6 +9,8 @@ import app.lifeos.core.runtime.life.DurableLifeMemorySnapshot
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.ui.components.PhotonImagePreviewLoader
 import app.lifeos.next.ui.components.PhotonImagePreviewState
+import app.lifeos.next.ui.memory.MemoryPhotonPager
+import app.lifeos.next.ui.memory.MemoryPhotonWindow
 import app.lifeos.next.ui.memory.MemorySearchIndex
 import app.lifeos.next.ui.memory.MemorySourceUi
 import app.lifeos.next.ui.memory.MemoryWorkspaceProjector
@@ -25,6 +27,8 @@ data class LifeOsMemoryUiState(
     val query: String = "",
     val selectedSourceId: PhotonId? = null,
     val selectedSource: MemorySourceUi? = null,
+    val pageLoading: Boolean = false,
+    val hasOlderSources: Boolean = false,
     val error: String? = null,
 )
 
@@ -33,9 +37,9 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
     private val owner = application as LifeOsApplication
     private val kernel = owner.kernel
     private val imagePreviewLoader = PhotonImagePreviewLoader(kernel)
+    private val photonPager = MemoryPhotonPager(kernel.productivePhotonQueries)
     private val mutableState = MutableStateFlow(LifeOsMemoryUiState())
 
-    private var latestPhotons: List<Photon> = emptyList()
     private var latestSnapshot: DurableLifeMemorySnapshot? = null
     private var searchIndex: MemorySearchIndex = MemorySearchIndex.build(emptyList())
 
@@ -59,7 +63,7 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun selectSource(photonId: PhotonId) {
-        val resolved = MemoryWorkspaceProjector.resolveSource(
+        val local = MemoryWorkspaceProjector.resolveSource(
             photonId = photonId,
             searchIndex = searchIndex,
             snapshot = latestSnapshot,
@@ -67,8 +71,37 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
         mutableState.update {
             it.copy(
                 selectedSourceId = photonId,
-                selectedSource = resolved,
+                selectedSource = local,
             )
+        }
+        if (local != null) return
+
+        viewModelScope.launch {
+            try {
+                val exact = kernel.productivePhotonQueries.exact(setOf(photonId), limit = 1).singleOrNull()
+                val resolved = exact?.let { photon ->
+                    MemoryWorkspaceProjector.resolveSource(
+                        photonId = photonId,
+                        searchIndex = MemorySearchIndex.build(listOf(photon), maxIndexedSources = 1),
+                        snapshot = latestSnapshot,
+                    )
+                }
+                mutableState.update { current ->
+                    if (current.selectedSourceId == photonId) {
+                        current.copy(selectedSource = resolved)
+                    } else {
+                        current
+                    }
+                }
+            } catch (error: Exception) {
+                mutableState.update { current ->
+                    if (current.selectedSourceId == photonId) {
+                        current.copy(error = error.message ?: error::class.simpleName)
+                    } else {
+                        current
+                    }
+                }
+            }
         }
     }
 
@@ -80,16 +113,63 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
 
     suspend fun loadImagePreview(photonId: PhotonId): PhotonImagePreviewState {
         val photon = searchIndex.source(photonId)
+            ?: kernel.productivePhotonQueries.exact(setOf(photonId), limit = 1).singleOrNull()
             ?: return PhotonImagePreviewState.Failed("Quell-Photon ist nicht verfügbar.")
         return imagePreviewLoader.load(photon)
+    }
+
+    fun loadOlderSources() {
+        val current = mutableState.value
+        if (current.pageLoading || !current.hasOlderSources) return
+        mutableState.update { it.copy(pageLoading = true) }
+        viewModelScope.launch {
+            try {
+                var window = photonPager.loadMore()
+                if (window.loadedPages == 0) {
+                    window = photonPager.refreshFront()
+                }
+                applyMemoryWindow(window)
+                mutableState.update {
+                    it.copy(
+                        pageLoading = false,
+                        hasOlderSources = window.hasMore,
+                    )
+                }
+            } catch (error: Exception) {
+                mutableState.update {
+                    it.copy(
+                        pageLoading = false,
+                        error = error.message ?: error::class.simpleName ?: "Gedächtnisquellen konnten nicht geladen werden",
+                    )
+                }
+            }
+        }
     }
 
     private fun observeKernel() {
         viewModelScope.launch {
             kernel.bootstrapState.collect { boot ->
-                latestPhotons = boot.photons
-                searchIndex = MemorySearchIndex.reuseOrBuild(searchIndex, latestPhotons)
+                val window = if (boot.ready) {
+                    try {
+                        photonPager.refreshFront(boot.photons)
+                    } catch (_: Exception) {
+                        photonPager.seedFallback(boot.photons)
+                    }
+                } else {
+                    photonPager.clear()
+                    MemoryPhotonWindow(
+                        photons = emptyList(),
+                        next = null,
+                        hasMore = false,
+                        loadedPages = 0,
+                    )
+                }
                 latestSnapshot = owner.lifeMemoryRuntime.current()
+                searchIndex = MemorySearchIndex.reuseOrBuild(
+                    existing = searchIndex,
+                    photons = window.photons,
+                    maxIndexedSources = MemoryPhotonPager.DEFAULT_MAX_LOADED_PHOTONS,
+                )
                 mutableState.update { current ->
                     val selected = current.selectedSourceId?.let { id ->
                         MemoryWorkspaceProjector.resolveSource(
@@ -97,7 +177,7 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
                             searchIndex = searchIndex,
                             snapshot = latestSnapshot,
                         )
-                    }
+                    } ?: current.selectedSource
                     current.copy(
                         workspace = MemoryWorkspaceProjector.project(
                             snapshot = latestSnapshot,
@@ -106,11 +186,30 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
                         ),
                         loading = boot.status == KernelBootstrapStatus.CREATED ||
                             boot.status == KernelBootstrapStatus.LOADING,
+                        hasOlderSources = window.hasMore,
                         selectedSource = selected,
                         error = boot.failureMessage ?: current.error,
                     )
                 }
             }
+        }
+    }
+
+    private fun applyMemoryWindow(window: MemoryPhotonWindow) {
+        searchIndex = MemorySearchIndex.reuseOrBuild(
+            existing = searchIndex,
+            photons = window.photons,
+            maxIndexedSources = MemoryPhotonPager.DEFAULT_MAX_LOADED_PHOTONS,
+        )
+        mutableState.update { current ->
+            current.copy(
+                workspace = MemoryWorkspaceProjector.project(
+                    snapshot = latestSnapshot,
+                    searchIndex = searchIndex,
+                    query = current.query,
+                ),
+                hasOlderSources = window.hasMore,
+            )
         }
     }
 

@@ -79,6 +79,21 @@ fun LifeOsMemoryScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
+        if (state.hasOlderSources || state.pageLoading) {
+            TextButton(
+                onClick = model::loadOlderSources,
+                enabled = state.hasOlderSources && !state.pageLoading,
+            ) {
+                Text(
+                    if (state.pageLoading) {
+                        "Ältere Gedächtnisquellen werden geladen …"
+                    } else {
+                        "Ältere Gedächtnisquellen laden"
+                    }
+                )
+            }
+        }
+
         if (state.loading && !state.workspace.projectionAvailable && state.workspace.now.isEmpty()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
