@@ -11,6 +11,7 @@ include(
     ":core:model",
     ":core:field",
     ":core:runtime",
+    ":core:runtime-contracts",
     ":core:runtime-personal",
     ":core:data",
     ":core:image",
