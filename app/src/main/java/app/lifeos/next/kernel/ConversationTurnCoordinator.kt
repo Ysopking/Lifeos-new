@@ -33,7 +33,7 @@ internal class ConversationTurnCoordinator(
     private val languageContextRetriever: LanguageContextRetriever,
     private val languageUnderstanding: LanguageUnderstandingEngine,
     private val goalPhotonFactory: GoalPhotonFactory,
-    private val routeGoal: (GoalFrame) -> GoalCapabilityResolution,
+    private val routeGoal: suspend (GoalFrame) -> GoalCapabilityResolution,
     private val semanticActionGraphRouter: SemanticActionGraphRouter,
     private val goalActions: GoalActionCoordinator,
     private val scope: CoroutineScope,
