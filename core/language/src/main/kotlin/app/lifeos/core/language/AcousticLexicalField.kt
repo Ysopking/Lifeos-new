@@ -74,7 +74,7 @@ class CoarsePhonemeTemplateEncoder(
  * Raw AcousticFrameFeatures are never modified. Only candidate activations are revised.
  */
 class AcousticLexicalFieldBridge(
-    private val lexicon: DeterministicLinguisticFieldLexicon = DeterministicLinguisticFieldLexicon(),
+    private val lexicon: LinguisticLexicon = DeterministicLinguisticFieldLexicon(),
     private val templateEncoder: CoarsePhonemeTemplateEncoder = CoarsePhonemeTemplateEncoder(),
     private val acousticWeight: Double = 0.72,
     private val sentenceWeight: Double = 0.16,

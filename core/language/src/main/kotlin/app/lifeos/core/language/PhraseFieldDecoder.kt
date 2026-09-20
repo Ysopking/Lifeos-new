@@ -128,7 +128,7 @@ data class PhraseFieldResult(
  * evidence merely by increasing the number of words in a hypothesis.
  */
 class PhraseFieldDecoder(
-    private val lexicon: DeterministicLinguisticFieldLexicon = DeterministicLinguisticFieldLexicon(),
+    private val lexicon: LinguisticLexicon = DeterministicLinguisticFieldLexicon(),
     private val templateEncoder: CoarsePhonemeTemplateEncoder = CoarsePhonemeTemplateEncoder(),
     private val beamWidth: Int = 12,
     private val maxWords: Int = 16,

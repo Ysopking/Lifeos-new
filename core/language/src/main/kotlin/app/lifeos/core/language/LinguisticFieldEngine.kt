@@ -5,7 +5,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 class LinguisticFieldEngine(
-    private val lexicon: DeterministicLinguisticFieldLexicon = DeterministicLinguisticFieldLexicon(),
+    private val lexicon: LinguisticLexicon = DeterministicLinguisticFieldLexicon(),
     private val weights: LinguisticFieldWeights = LinguisticFieldWeights(),
     private val graphemeFieldEngine: GraphemeFieldEngine = GraphemeFieldEngine(),
     private val morphologyEngine: GermanMorphologyEngine = GermanMorphologyEngine(),

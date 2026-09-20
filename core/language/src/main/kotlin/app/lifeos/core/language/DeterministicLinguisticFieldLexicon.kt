@@ -3,8 +3,8 @@ package app.lifeos.core.language
 /** Small deterministic seed lexicon. It is intentionally data-driven so later photon-learned
  * lexicon entries can be added without changing the convergence algorithm. */
 class DeterministicLinguisticFieldLexicon(
-    val concepts: List<LinguisticConcept> = defaultConcepts(),
-) {
+    override val concepts: List<LinguisticConcept> = defaultConcepts(),
+) : LinguisticLexicon {
     init {
         require(concepts.isNotEmpty())
         require(concepts.map { it.id }.distinct().size == concepts.size)
@@ -12,7 +12,7 @@ class DeterministicLinguisticFieldLexicon(
 
     private val conceptsById: Map<String, LinguisticConcept> = concepts.associateBy { it.id }
 
-    fun byId(id: String): LinguisticConcept? = conceptsById[id]
+    override fun byId(id: String): LinguisticConcept? = conceptsById[id]
 
     companion object {
         private fun defaultConcepts(): List<LinguisticConcept> = listOf(

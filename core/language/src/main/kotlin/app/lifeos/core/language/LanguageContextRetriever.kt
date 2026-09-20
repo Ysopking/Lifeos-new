@@ -27,10 +27,12 @@ class LanguageContextRetriever(
     private val builder: PhotonLanguageContextBuilder = PhotonLanguageContextBuilder(),
     private val maxCandidates: Int = 160,
     private val maxSelected: Int = 96,
+    private val excludedTags: Set<String> = setOf("corpus:archive"),
 ) {
     init {
         require(maxCandidates >= 32)
         require(maxSelected in 16..maxCandidates)
+        require(excludedTags.none { it.isBlank() })
     }
 
     suspend fun retrieve(
@@ -43,34 +45,40 @@ class LanguageContextRetriever(
         val querySpecs = buildList {
             add("recent" to PhotonIndexQuery(
                 latestOnly = true,
+                excludedTags = excludedTags,
                 order = PhotonIndexOrder.NEWEST_FIRST,
                 limit = 64,
             ))
             add("semantic" to PhotonIndexQuery(
                 latestOnly = true,
+                excludedTags = excludedTags,
                 order = PhotonIndexOrder.HIGHEST_SEMANTIC_MASS,
                 limit = 48,
             ))
             add("confidence" to PhotonIndexQuery(
                 latestOnly = true,
+                excludedTags = excludedTags,
                 order = PhotonIndexOrder.HIGHEST_CONFIDENCE,
                 limit = 24,
             ))
             add("goal" to PhotonIndexQuery(
                 allTags = setOf("goal"),
                 latestOnly = true,
+                excludedTags = excludedTags,
                 order = PhotonIndexOrder.NEWEST_FIRST,
                 limit = 16,
             ))
             add("matter" to PhotonIndexQuery(
                 allTags = setOf("life-matter"),
                 latestOnly = true,
+                excludedTags = excludedTags,
                 order = PhotonIndexOrder.NEWEST_FIRST,
                 limit = 16,
             ))
             add("result" to PhotonIndexQuery(
                 allTags = setOf("result"),
                 latestOnly = true,
+                excludedTags = excludedTags,
                 order = PhotonIndexOrder.NEWEST_FIRST,
                 limit = 16,
             ))
@@ -78,6 +86,7 @@ class LanguageContextRetriever(
                 add("inferred:$tag" to PhotonIndexQuery(
                     allTags = setOf(tag),
                     latestOnly = true,
+                excludedTags = excludedTags,
                     order = PhotonIndexOrder.NEWEST_FIRST,
                     limit = 24,
                 ))
@@ -129,6 +138,7 @@ class LanguageContextRetriever(
                         query.order.name,
                         query.limit.toString(),
                         query.allTags.sorted().joinToString(","),
+                        query.excludedTags.sorted().joinToString(","),
                     ).joinToString(":")
                 },
             ),
