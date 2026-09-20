@@ -12,7 +12,6 @@ import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
 import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.next.kernel.KernelBootstrapStatus
 import app.lifeos.next.kernel.LocalShareIntentFactory
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
