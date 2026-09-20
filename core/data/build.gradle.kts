@@ -11,6 +11,7 @@ dependencies {
     implementation(project(":core:language"))
     implementation(project(":core:field"))
     implementation(project(":core:runtime"))
+    implementation(project(":core:runtime-deepsearch"))
     implementation(project(":core:runtime-personal"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     testImplementation(kotlin("test-junit"))

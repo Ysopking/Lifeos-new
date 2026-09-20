@@ -32,6 +32,7 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchMissionCoordinator
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionLedger
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRuntimeRegistry
+import app.lifeos.core.runtime.deepsearch.DeepSearchMissionTraceRecorder
 import app.lifeos.core.runtime.deepsearch.DeepSearchResultPhotonPersistence
 import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
@@ -353,6 +354,15 @@ internal class ProcessRuntimeInstaller(
                                     appContext
                                 )
                             ),
+                            traces = DeepSearchMissionTraceRecorder { definition, product ->
+                                DecisionTraceRuntimeRegistry.currentOrNull()?.recordDeepSearch(
+                                    goalPhotonId = definition.goalPhotonId,
+                                    goalPhotonRevision = 1L,
+                                    recordedAt = definition.createdAt,
+                                    result = product.result,
+                                    missionId = definition.id,
+                                )
+                            },
                             resultPhotons =
                                 object : DeepSearchResultPhotonPersistence {
                                     override suspend fun save(photon: Photon) {

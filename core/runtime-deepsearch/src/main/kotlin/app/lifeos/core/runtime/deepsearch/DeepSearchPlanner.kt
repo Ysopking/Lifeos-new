@@ -1,7 +1,7 @@
 package app.lifeos.core.runtime.deepsearch
 
 import app.lifeos.core.field.StableFieldIds
-import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.CapabilityProviderCatalog
 import app.lifeos.core.runtime.capability.ProviderState
 import java.time.Duration
 import java.time.Instant
@@ -44,7 +44,7 @@ object DescriptorDeepSearchPermissionGate : DeepSearchPermissionGate {
  * both a usable provider and GRANTED permission are required.
  */
 class CapabilityRegistryDeepSearchGate(
-    private val registry: CapabilityRegistry,
+    private val registry: CapabilityProviderCatalog,
     private val permissionGate: DeepSearchPermissionGate = DescriptorDeepSearchPermissionGate,
 ) : DeepSearchCapabilityGate {
     override suspend fun authorize(source: DeepSearchSourceDescriptor): DeepSearchSourceAuthorization {

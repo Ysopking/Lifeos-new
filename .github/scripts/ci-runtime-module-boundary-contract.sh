@@ -9,6 +9,9 @@ fail() {
 test -f core/runtime-contracts/build.gradle.kts ||
   fail "runtime-contracts-module-missing"
 
+test -f core/runtime-deepsearch/build.gradle.kts ||
+  fail "runtime-deepsearch-module-missing"
+
 test -f core/runtime-personal/build.gradle.kts ||
   fail "runtime-personal-module-missing"
 
@@ -30,6 +33,26 @@ if test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/capability/Capab
   fail "capability-models-remain-in-runtime-monolith"
 fi
 
+grep -Fq '":core:runtime-deepsearch"' settings.gradle.kts ||
+  fail "runtime-deepsearch-not-registered"
+
+grep -Fq 'api(project(":core:runtime-deepsearch"))' core/runtime/build.gradle.kts ||
+  fail "runtime-monolith-deepsearch-edge-missing"
+
+grep -Fq 'implementation(project(":core:runtime-deepsearch"))' app/build.gradle.kts ||
+  fail "app-runtime-deepsearch-dependency-missing"
+
+grep -Fq 'implementation(project(":core:runtime-deepsearch"))' core/data/build.gradle.kts ||
+  fail "data-runtime-deepsearch-dependency-missing"
+
+if grep -Fq 'project(":core:runtime")' core/runtime-deepsearch/build.gradle.kts; then
+  fail "runtime-deepsearch-depends-on-runtime-monolith"
+fi
+
+if find core/runtime/src -type f -path '*/app/lifeos/core/runtime/deepsearch/*' -print -quit | grep -q .; then
+  fail "deepsearch-sources-remain-in-runtime-monolith"
+fi
+
 grep -Fq '":core:runtime-personal"' settings.gradle.kts ||
   fail "runtime-personal-not-registered"
 
@@ -45,14 +68,22 @@ fi
 
 contracts_main_count="$(find core/runtime-contracts/src/main/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 contracts_test_count="$(find core/runtime-contracts/src/test/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
+deepsearch_main_count="$(find core/runtime-deepsearch/src/main/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
+deepsearch_test_count="$(find core/runtime-deepsearch/src/test/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 personal_main_count="$(find core/runtime-personal/src/main/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 personal_test_count="$(find core/runtime-personal/src/test/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 
-test "$contracts_main_count" -eq 1 ||
+test "$contracts_main_count" -eq 2 ||
   fail "runtime-contracts-main-source-count:$contracts_main_count"
 
 test "$contracts_test_count" -eq 1 ||
   fail "runtime-contracts-test-source-count:$contracts_test_count"
+
+test "$deepsearch_main_count" -eq 16 ||
+  fail "runtime-deepsearch-main-source-count:$deepsearch_main_count"
+
+test "$deepsearch_test_count" -eq 10 ||
+  fail "runtime-deepsearch-test-source-count:$deepsearch_test_count"
 
 test "$personal_main_count" -eq 6 ||
   fail "runtime-personal-main-source-count:$personal_main_count"
@@ -62,6 +93,9 @@ test "$personal_test_count" -eq 8 ||
 
 grep -Fq ':core:runtime-contracts:test' .github/scripts/ci-core-fast.sh ||
   fail "runtime-contracts-test-gate-missing"
+
+grep -Fq ':core:runtime-deepsearch:test' .github/scripts/ci-core-fast.sh ||
+  fail "runtime-deepsearch-test-gate-missing"
 
 grep -Fq ':core:runtime-personal:test' .github/scripts/ci-core-fast.sh ||
   fail "runtime-personal-test-gate-missing"

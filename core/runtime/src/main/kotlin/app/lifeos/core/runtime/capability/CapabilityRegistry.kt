@@ -37,7 +37,7 @@ data class GeneratedProviderHotSwapMutation(
 
 class CapabilityRegistry(
     initialProviders: Iterable<CapabilityDescriptor> = emptyList(),
-) {
+) : CapabilityProviderCatalog {
     private val mutex = Mutex()
     private val providers = linkedMapOf<Pair<CapabilityId, String>, CapabilityDescriptor>()
     private val novelActivationClaims = mutableMapOf<CapabilityId, GeneratedToolNovelActivationClaim>()
@@ -259,9 +259,9 @@ class CapabilityRegistry(
         providers.remove(capabilityId to providerId)
     }
 
-    suspend fun providersFor(
+    override suspend fun providersFor(
         capabilityId: CapabilityId,
-        includeUnavailable: Boolean = false,
+        includeUnavailable: Boolean,
     ): List<CapabilityDescriptor> = mutex.withLock {
         providers.values
             .asSequence()
