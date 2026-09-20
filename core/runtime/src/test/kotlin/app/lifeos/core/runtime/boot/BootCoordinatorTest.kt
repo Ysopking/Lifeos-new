@@ -13,6 +13,11 @@ class BootCoordinatorTest {
     @Test
     fun completesReadyBootAndPersistsTransitions() = runTest {
         val states = mutableListOf<BootState>()
+        var tick = 0L
+        val performance = BootPerformanceRecorder {
+            tick += 1_000_000L
+            tick
+        }
         val coordinator = BootCoordinator(
             runtimeBootstrapper = object : RuntimeBootstrapper {
                 override suspend fun bootstrap() = Unit
@@ -44,6 +49,7 @@ class BootCoordinatorTest {
                 override suspend fun validate(context: BootContext): BootValidationResult = BootValidationResult.Ready
             },
             stateSink = BootStateSink { states += it.state },
+            performance = performance,
             newBootId = { "boot-1" },
         )
 
@@ -55,6 +61,21 @@ class BootCoordinatorTest {
         assertEquals(2, result.snapshot.detectedDeltaCount)
         assertEquals(BootState.INITIALIZING, states.first())
         assertEquals(BootState.READY, states.last())
+        assertEquals(
+            listOf(
+                BootPhaseId.RUNTIME_BOOTSTRAP,
+                BootPhaseId.STORE_VERIFY,
+                BootPhaseId.STATE_REHYDRATE,
+                BootPhaseId.PHOTON_REHYDRATE,
+                BootPhaseId.MODULE_REHYDRATE,
+                BootPhaseId.THOUGHT_MATRIX_WARMUP,
+                BootPhaseId.CAPABILITY_WARMUP,
+                BootPhaseId.DELTA_DETECT,
+                BootPhaseId.VALIDATE,
+            ),
+            result.snapshot.phaseTimings.map { it.phase },
+        )
+        assertEquals(List(9) { 1L }, result.snapshot.phaseTimings.map { it.elapsedMillis })
     }
 
     private class EmptyPhotonRepository : PhotonRepository {
