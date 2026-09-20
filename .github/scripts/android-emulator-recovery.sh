@@ -110,7 +110,7 @@ run_test \
 # replaying the exact same export must be idempotent.
 run_suite \
   'app.lifeos.next.PersonalConversationImportDeviceTest' \
-  '2' \
+  '3' \
   "$report_dir/personal-conversation-import.txt"
 
 run_test \

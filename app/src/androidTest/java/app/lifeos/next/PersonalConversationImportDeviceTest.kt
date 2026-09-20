@@ -16,6 +16,8 @@ import app.lifeos.core.runtime.personal.PersonalConversationCorpusImporter
 import app.lifeos.core.runtime.personal.PersonalConversationSpeaker
 import java.io.File
 import java.time.ZoneId
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -109,6 +111,53 @@ class PersonalConversationImportDeviceTest {
             }
         }
         assertTrue(repository.loadAll().isEmpty())
+        file.delete()
+    }
+
+    @Test
+    fun whatsappZipImportsOnlyChatTextAndPreservesOwnerBoundary() = runBlocking {
+        val file = File(context.cacheDir, "whatsapp-personal-import-test.zip")
+        ZipOutputStream(file.outputStream().buffered()).use { zip ->
+            zip.putNextEntry(ZipEntry("_chat.txt"))
+            zip.write(
+                (
+                    "[20.09.26, 10:01] Tava: Mach bitte weiter\n" +
+                        "[20.09.26, 10:02] Alex: Mache ich.\n"
+                    ).encodeToByteArray()
+            )
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("IMG-0001.jpg"))
+            zip.write(byteArrayOf(1, 2, 3, 4))
+            zip.closeEntry()
+        }
+
+        val repository = InMemoryRevisionedPhotonRepository()
+        val runtime = AndroidPersonalConversationImportRuntime(
+            context = context,
+            importer = PersonalConversationCorpusImporter(repository),
+            zoneId = ZoneId.of("Europe/Berlin"),
+        )
+        val preview = runtime.preview(
+            kind = PersonalConversationImportKind.WHATSAPP,
+            uri = Uri.fromFile(file),
+            ownerNames = setOf("Tava"),
+        )
+
+        assertEquals(2, preview.turnCount)
+        assertEquals(1, preview.ownerTurns)
+        assertEquals(1, preview.otherTurns)
+        assertEquals(1, preview.archiveEntries)
+        assertTrue(repository.loadAll().isEmpty())
+
+        val imported = runtime.import(
+            preview = preview,
+            ownerNames = setOf("Tava"),
+        )
+
+        assertEquals(2, imported.created)
+        assertEquals(1, imported.speakerCounts[PersonalConversationSpeaker.OWNER])
+        assertEquals(1, imported.speakerCounts[PersonalConversationSpeaker.OTHER])
+        assertTrue(repository.loadAll().all { it.mimeType.contains("personal-conversation") })
         file.delete()
     }
 
