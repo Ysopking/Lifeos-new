@@ -13,6 +13,7 @@ class MmsiSyncFence internal constructor(
     val isValid: Boolean get() = descriptor >= 0
 
     internal fun take(): Int {
+        check(descriptor >= 0) { "Sync fence ownership has already been transferred or closed" }
         val current = descriptor
         descriptor = -1
         return current
