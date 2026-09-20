@@ -39,6 +39,12 @@ step "gate 02: core field tests"
 step "gate 03: core runtime tests"
 ./gradlew :core:runtime:test --stacktrace
 
+step "gate 02d: runtime module boundary contract"
+bash .github/scripts/ci-runtime-module-boundary-contract.sh
+
+step "gate 02e: runtime-personal unit tests"
+./gradlew :core:runtime-personal:test --stacktrace
+
 step "gate 04: core language tests"
 ./gradlew :core:language:test --stacktrace
 

@@ -11,6 +11,7 @@ include(
     ":core:model",
     ":core:field",
     ":core:runtime",
+    ":core:runtime-personal",
     ":core:data",
     ":core:image",
     ":core:image-native",
