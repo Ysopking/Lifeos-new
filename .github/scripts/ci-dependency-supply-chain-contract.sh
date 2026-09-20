@@ -112,7 +112,7 @@ for path in Path(".").rglob("*"):
     if path.as_posix() == ".github/scripts/ci-dependency-supply-chain-contract.sh":
         continue
     source = path.read_text(encoding="utf-8", errors="ignore")
-    if re.search(r"--dependency-verification(?:=|\\s+)(?:off|lenient)\\b", source, re.I):
+    if re.search(r"--dependency-verification(?:=|\s+)(?:off|lenient)\b", source, re.I):
         raise SystemExit(f"dependency-verification-bypass:{path}")
 
 print("DEPENDENCY_SUPPLY_CHAIN_OK")
