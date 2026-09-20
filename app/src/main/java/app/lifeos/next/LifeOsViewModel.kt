@@ -81,7 +81,6 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private val kernel = owner.kernel
     private val multimodalPerception = owner.multimodalPerception
     private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
-    private val localShareIntentFactory = LocalShareIntentFactory(application.applicationContext, kernel)
     private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
     private val toolCenter = ToolCenterUiController(
@@ -91,6 +90,12 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         scope = viewModelScope,
     )
     private val imagePreviewLoader = ImagePreviewLoader(kernel::loadImageAsset)
+    private val shareInteraction = ShareInteractionController(
+        kernel = kernel,
+        intentFactory = LocalShareIntentFactory(application.applicationContext, kernel),
+        state = mutableState,
+        scope = viewModelScope,
+    )
 
     val state = mutableState.asStateFlow()
     val runtimeState = kernel.runtime.state
@@ -197,34 +202,15 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     suspend fun createShareIntent(share: LocalSharePreparation): Intent =
-        localShareIntentFactory.create(share)
+        shareInteraction.createIntent(share)
 
-    fun communicationShareOpened(share: LocalSharePreparation) {
-        if (mutableState.value.pendingShare != share) return
-        mutableState.update { it.copy(pendingShare = null, shareStatus = "Android-Teilen wurde geöffnet.") }
-        viewModelScope.launch {
-            val receipt = kernel.recordCommunicationHandoff(share)
-            if (!receipt.processingQueued) {
-                mutableState.update {
-                    it.copy(shareStatus = "Android-Teilen wurde geöffnet; der lokale Handoff-Beleg konnte aber nicht vollständig eingereiht werden.")
-                }
-            }
-        }
-    }
+    fun communicationShareOpened(share: LocalSharePreparation) =
+        shareInteraction.opened(share)
 
-    fun communicationShareFailed(share: LocalSharePreparation) {
-        if (mutableState.value.pendingShare != share) return
-        mutableState.update {
-            it.copy(
-                pendingShare = null,
-                error = "Das Android-Teilen konnte nicht geöffnet werden.",
-            )
-        }
-    }
+    fun communicationShareFailed(share: LocalSharePreparation) =
+        shareInteraction.failed(share)
 
-    fun dismissShareStatus() {
-        mutableState.update { it.copy(shareStatus = null) }
-    }
+    fun dismissShareStatus() = shareInteraction.dismissStatus()
 
     fun saveDraft() {
         val current = mutableState.value
