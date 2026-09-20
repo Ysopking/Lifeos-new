@@ -41,6 +41,7 @@ data class PhotonIndexQuery(
     val phases: Set<PhotonPhase> = emptySet(),
     val mimeTypes: Set<String> = emptySet(),
     val allTags: Set<String> = emptySet(),
+    val anyTags: Set<String> = emptySet(),
     val latestOnly: Boolean = true,
     val includeTombstoned: Boolean = false,
     val order: PhotonIndexOrder = PhotonIndexOrder.IDENTITY,
@@ -57,6 +58,7 @@ data class PhotonIndexQuery(
         }
         require(mimeTypes.none { it.isBlank() })
         require(allTags.none { it.isBlank() })
+        require(anyTags.none { it.isBlank() })
         require(excludedTags.none { it.isBlank() })
     }
 
@@ -129,6 +131,7 @@ fun PhotonIndexEntry.matches(query: PhotonIndexQuery): Boolean {
     if (query.phases.isNotEmpty() && phase !in query.phases) return false
     if (query.mimeTypes.isNotEmpty() && mimeType !in query.mimeTypes) return false
     if (!tags.containsAll(query.allTags)) return false
+    if (query.anyTags.isNotEmpty() && tags.none { it in query.anyTags }) return false
     if (tags.any { it in query.excludedTags }) return false
     return true
 }
