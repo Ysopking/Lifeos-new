@@ -214,6 +214,161 @@ class PersonalLanguagePromotionCoordinator(
     }
 }
 
+
+data class PersonalLanguageShadowReport(
+    val candidateFingerprint: String,
+    val candidateIntent: IntentType,
+    val candidateRecognized: Boolean,
+    val protectedCasesStable: Boolean,
+    val passed: Boolean,
+) {
+    init {
+        require(candidateFingerprint.isNotBlank())
+        require(passed == (candidateRecognized && protectedCasesStable))
+    }
+}
+
+/**
+ * Deterministic holdout/shadow gate for one lexical extension. The candidate is evaluated in an
+ * isolated language runtime; it cannot change the productive head until every protected case stays
+ * semantically identical and the new surface resolves to the intended existing intent.
+ */
+class PersonalLanguageShadowEvaluator {
+    fun evaluate(
+        current: LinguisticLexiconSnapshot,
+        candidate: PersonalLanguageCandidate,
+    ): PersonalLanguageShadowReport {
+        val target = current.byId(candidate.targetConceptId)
+            ?: return PersonalLanguageShadowReport(
+                candidateFingerprint = candidate.fingerprint,
+                candidateIntent = IntentType.UNKNOWN,
+                candidateRecognized = false,
+                protectedCasesStable = false,
+                passed = false,
+            )
+        val targetIntent = target.intentBias.entries
+            .maxWithOrNull(compareBy<Map.Entry<IntentType, Double>> { it.value }.thenBy { it.key.name })
+            ?.key
+            ?: IntentType.UNKNOWN
+        if (targetIntent !in SHADOW_ELIGIBLE_INTENTS) {
+            return PersonalLanguageShadowReport(
+                candidateFingerprint = candidate.fingerprint,
+                candidateIntent = targetIntent,
+                candidateRecognized = false,
+                protectedCasesStable = false,
+                passed = false,
+            )
+        }
+
+        val updated = current.concepts.map { concept ->
+            if (concept.id == target.id) concept.copy(variants = concept.variants + candidate.surface)
+            else concept
+        }
+        val candidateSnapshot = LinguisticLexiconSnapshot.create(
+            revision = current.revision + 1L,
+            concepts = updated,
+            predecessorFingerprint = current.fingerprint,
+            promotionEvidenceFingerprint = candidate.fingerprint,
+        )
+        val baselineEngine = VersionedLanguageRuntime(current).current().understanding
+        val candidateEngine = VersionedLanguageRuntime(candidateSnapshot).current().understanding
+
+        val candidateResult = candidateEngine.understand(candidate.surface)
+        val candidateRecognized =
+            candidateResult.goal.intent == targetIntent &&
+                candidateResult.goal.interpretationQuality.contradictionCount == 0 &&
+                candidateResult.goal.interpretationQuality.ambiguityCount == 0
+
+        val protectedStable = PROTECTED_CASES.all { text ->
+            val baseline = baselineEngine.understand(text)
+            val shadow = candidateEngine.understand(text)
+            baseline.goal.intent == shadow.goal.intent &&
+                baseline.goal.semanticActionGraph.fingerprint == shadow.goal.semanticActionGraph.fingerprint &&
+                baseline.goal.semanticActionGraph.hasExecutableExternalSideEffect() ==
+                    shadow.goal.semanticActionGraph.hasExecutableExternalSideEffect()
+        }
+
+        return PersonalLanguageShadowReport(
+            candidateFingerprint = candidate.fingerprint,
+            candidateIntent = targetIntent,
+            candidateRecognized = candidateRecognized,
+            protectedCasesStable = protectedStable,
+            passed = candidateRecognized && protectedStable,
+        )
+    }
+
+    private companion object {
+        val SHADOW_ELIGIBLE_INTENTS = setOf(
+            IntentType.CONTINUE,
+            IntentType.SEARCH,
+            IntentType.QUERY,
+            IntentType.CONVERSATION,
+            IntentType.STORE_OR_REMEMBER,
+        )
+        val PROTECTED_CASES = listOf(
+            "Sende diese Mail nicht.",
+            "Er sagte: „Sende die Mail.“",
+            "Wenn X passiert, sende die Mail.",
+            "Wie erstelle ich ein Bild?",
+        )
+    }
+}
+
+sealed interface DurablePersonalLanguagePromotionResult {
+    data class Promoted(
+        val snapshot: LinguisticLexiconSnapshot,
+        val shadow: PersonalLanguageShadowReport,
+    ) : DurablePersonalLanguagePromotionResult
+
+    data class Rejected(
+        val reason: String,
+        val shadow: PersonalLanguageShadowReport? = null,
+    ) : DurablePersonalLanguagePromotionResult {
+        init { require(reason.isNotBlank()) }
+    }
+}
+
+/**
+ * Productive promotion path. Policy and shadow validation happen before the encrypted durable
+ * language-runtime authority advances its CAS head.
+ */
+class DurablePersonalLanguagePromotionCoordinator(
+    private val runtime: DurableLanguageRuntimeCoordinator,
+    private val policy: PersonalLanguagePromotionPolicy = PersonalLanguagePromotionPolicy(),
+    private val shadow: PersonalLanguageShadowEvaluator = PersonalLanguageShadowEvaluator(),
+) {
+    suspend fun promote(candidate: PersonalLanguageCandidate): DurablePersonalLanguagePromotionResult {
+        if (!policy.allows(candidate)) {
+            return DurablePersonalLanguagePromotionResult.Rejected("insufficient-evidence")
+        }
+        val current = runtime.current().lexicon
+        val target = current.byId(candidate.targetConceptId)
+            ?: return DurablePersonalLanguagePromotionResult.Rejected("target-concept-missing")
+        val normalizedAlias = SemanticSearchTerms.normalizeToken(candidate.surface)
+        if (target.allForms.map(SemanticSearchTerms::normalizeToken).contains(normalizedAlias)) {
+            return DurablePersonalLanguagePromotionResult.Rejected("alias-already-active")
+        }
+
+        val report = shadow.evaluate(current, candidate)
+        if (!report.passed) {
+            return DurablePersonalLanguagePromotionResult.Rejected(
+                reason = "shadow-regression",
+                shadow = report,
+            )
+        }
+
+        val updated = current.concepts.map { concept ->
+            if (concept.id == target.id) concept.copy(variants = concept.variants + candidate.surface)
+            else concept
+        }
+        val promoted = runtime.promote(
+            concepts = updated,
+            promotionEvidenceFingerprint = candidate.fingerprint,
+        ).lexicon
+        return DurablePersonalLanguagePromotionResult.Promoted(promoted, report)
+    }
+}
+
 object PersonalLanguageFeedbackProjector {
     fun classify(text: String): PersonalLanguageFeedbackKind {
         val normalized = text.trim().lowercase()
