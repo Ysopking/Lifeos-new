@@ -36,6 +36,9 @@ bash .github/scripts/ci-native-toolchain-contract.sh
 step "gate 00d: repository authority contract"
 bash .github/scripts/ci-main-authority-contract.sh
 
+step "gate 00e: performance evidence parser contract"
+python3 .github/scripts/test-performance-gold.py
+
 step "gate 01: core model tests"
 ./gradlew :core:model:test --stacktrace
 
