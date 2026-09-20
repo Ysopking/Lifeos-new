@@ -68,6 +68,7 @@ class LifeOsKernelFactory(
             languageUnderstanding = foundation.languageUnderstanding,
             languageRuntime = foundation.languageRuntime,
             personalLanguageLearning = foundation.personalLanguageLearning,
+            personalCorpusLanguage = foundation.personalCorpusLanguage,
             goalPhotonFactory = foundation.goalPhotonFactory,
             goalPlans = foundation.goalPlans,
             productiveGoalConvergence = world.productiveGoalConvergence,

@@ -42,6 +42,8 @@ import app.lifeos.core.runtime.learning.LearnedFieldCalibration
 import app.lifeos.core.runtime.learning.LearnedProviderReliabilityResolver
 import app.lifeos.core.runtime.personal.DurableLanguageRuntimeCoordinator
 import app.lifeos.core.runtime.personal.DurablePersonalLanguagePromotionCoordinator
+import app.lifeos.core.runtime.personal.PersonalCorpusLanguageRuntime
+import app.lifeos.core.runtime.personal.PersonalCorpusRetriever
 import app.lifeos.core.runtime.personal.ProductivePersonalLanguageLearningRuntime
 import app.lifeos.core.runtime.thought.DurableThoughtGraph
 import app.lifeos.core.scene.ProceduralSceneCompiler
@@ -87,6 +89,7 @@ internal data class KernelFoundationGraph(
     val languageRuntime: VersionedLanguageRuntime,
     val languageRuntimeState: DurableLanguageRuntimeCoordinator,
     val personalLanguageLearning: ProductivePersonalLanguageLearningRuntime,
+    val personalCorpusLanguage: PersonalCorpusLanguageRuntime,
 )
 
 /**
@@ -152,6 +155,10 @@ internal class KernelFoundationComposition(
             photons = store,
             promotion = DurablePersonalLanguagePromotionCoordinator(languageRuntimeState),
             currentLexicon = { languageRuntime.current().lexicon },
+        )
+        val personalCorpusLanguage = PersonalCorpusLanguageRuntime(
+            corpus = PersonalCorpusRetriever(store),
+            runtime = languageRuntime,
         )
         val goalPhotonFactory = GoalPhotonFactory()
         val languageContextBuilder = PhotonLanguageContextBuilder()
@@ -251,6 +258,7 @@ internal class KernelFoundationComposition(
             languageRuntime = languageRuntime,
             languageRuntimeState = languageRuntimeState,
             personalLanguageLearning = personalLanguageLearning,
+            personalCorpusLanguage = personalCorpusLanguage,
             goalPhotonFactory = goalPhotonFactory,
             languageContextBuilder = languageContextBuilder,
             sceneCompiler = sceneCompiler,

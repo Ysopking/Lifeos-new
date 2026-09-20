@@ -66,6 +66,7 @@ import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalResult
 import app.lifeos.core.runtime.goal.LocalDeepSearchGoalEngine
 import app.lifeos.core.runtime.goal.LocalDeepSearchGoalResult
+import app.lifeos.core.runtime.personal.PersonalCorpusLanguageRuntime
 import app.lifeos.core.runtime.personal.ProductivePersonalLanguageLearningRuntime
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
@@ -135,6 +136,7 @@ class LifeOsKernel internal constructor(
     private val sceneGraphPhotonFactory: SceneGraphPhotonFactory = SceneGraphPhotonFactory(),
     private val languageRuntime: VersionedLanguageRuntime? = null,
     private val personalLanguageLearning: ProductivePersonalLanguageLearningRuntime? = null,
+    private val personalCorpusLanguage: PersonalCorpusLanguageRuntime? = null,
 ) {
     private val startLock = Any()
     private val conversationClassifier = ConversationSignalClassifier()
@@ -465,8 +467,19 @@ class LifeOsKernel internal constructor(
         ).context
         val source = persistAndIngest(photon)
         return try {
-            val understandingEngine = languageRuntime?.current()?.understanding ?: languageUnderstanding
-            val understanding = understandingEngine.understand(photon.content, context)
+            val corpusDecision = personalCorpusLanguage?.understand(
+                utterance = photon.content,
+                context = context,
+                now = photon.provenance.createdAt,
+            )
+            val understanding = corpusDecision?.understanding ?: run {
+                val understandingEngine =
+                    languageRuntime?.current()?.understanding ?: languageUnderstanding
+                understandingEngine.understand(photon.content, context)
+            }
+            corpusDecision?.evidencePhoton(source.photon)?.let { evidence ->
+                persistAndIngest(evidence, PhotonIngressMode.DERIVED)
+            }
             observePersonalLanguageLearning(source.photon, understanding)
             val routing = goalCapabilityRouter.route(understanding.goal)
             val goalPhoton = goalPhotonFactory.create(
