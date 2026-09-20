@@ -80,11 +80,11 @@ printf 'event_name=%s\n' "${GITHUB_EVENT_NAME:-local}" | tee -a "$evidence_dir/c
 printf 'git_ref=%s\n' "${GITHUB_REF:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'git_ref_name=%s\n' "${GITHUB_REF_NAME:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'product_gold_requires_emulator=true\n' | tee -a "$evidence_dir/candidate.txt"
-python3 .github/scripts/seal-gold-evidence.py pre \\
-  --candidate-sha "$candidate_sha" \\
-  --source-head-sha "$source_head_sha" \\
-  --apk "$apk_path" \\
-  --reports-root . \\
+python3 .github/scripts/seal-gold-evidence.py pre \
+  --candidate-sha "$candidate_sha" \
+  --source-head-sha "$source_head_sha" \
+  --apk "$apk_path" \
+  --reports-root . \
   --out "$evidence_dir/pre-emulator.json"
 test -s "$evidence_dir/pre-emulator.json"
 
