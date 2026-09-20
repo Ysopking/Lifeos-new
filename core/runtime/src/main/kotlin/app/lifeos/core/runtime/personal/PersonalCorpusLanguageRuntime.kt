@@ -380,7 +380,15 @@ class PersonalCorpusLanguageRuntime(
             revision = current.revision + 1L,
             concepts = current.concepts.map { concept ->
                 if (concept.id == target.id) {
-                    concept.copy(variants = concept.variants + hypothesis.surface)
+                    // The productive rule layer assigns UNKNOWN a fixed fallback score. A newly
+                    // learned alias has no rule entry by design, so the one-turn shadow must give
+                    // its exact lexical field enough mass to compete with that fallback. This lift
+                    // exists only in the ephemeral shadow snapshot; the productive concept and its
+                    // semantic mass remain byte/fingerprint-identical.
+                    concept.copy(
+                        variants = concept.variants + hypothesis.surface,
+                        semanticMass = maxOf(concept.semanticMass, MIN_SHADOW_ALIAS_SEMANTIC_MASS),
+                    )
                 } else {
                     concept
                 }
@@ -482,6 +490,7 @@ class PersonalCorpusLanguageRuntime(
         const val MIN_CORPUS_CONSISTENCY = 0.85
         private const val MIN_ALIAS_LENGTH = 3
         private const val MAX_SURFACES_PER_TURN = 3
+        private const val MIN_SHADOW_ALIAS_SEMANTIC_MASS = 1.25
         private const val MIN_EXAMPLE_CONFIDENCE = 0.75
         private const val MIN_EXAMPLE_EVIDENCE = 0.65
         // A newly injected exact alias is field-backed rather than rule-backed, so its composite
