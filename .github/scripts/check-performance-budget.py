@@ -58,12 +58,21 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
     head_sha = require_string(baseline.get("head_sha"), "baseline-head-sha")
     if len(head_sha) != 40 or any(ch not in "0123456789abcdef" for ch in head_sha.lower()):
         fail("baseline-head-sha-invalid")
-    run_ids = baseline.get("run_ids")
-    if not isinstance(run_ids, list) or not run_ids:
-        fail("baseline-run-ids")
-    for run_id in run_ids:
-        require_int(run_id, "baseline-run-id", 1)
-    require_int(baseline.get("sample_count"), "baseline-sample-count", 1)
+    require_int(baseline.get("workflow_run_id"), "baseline-workflow-run-id", 1)
+    attempts = baseline.get("attempts")
+    if not isinstance(attempts, list) or not attempts:
+        fail("baseline-attempts")
+    normalized_attempts: set[int] = set()
+    for attempt in attempts:
+        normalized_attempts.add(require_int(attempt, "baseline-attempt", 1))
+    if len(normalized_attempts) != len(attempts):
+        fail("baseline-attempts-duplicate")
+    measurement_count = require_int(baseline.get("measurement_count"), "baseline-measurement-count", 1)
+    if measurement_count != len(attempts):
+        fail(
+            f"baseline-measurement-count-mismatch:"
+            f"declared={measurement_count}:actual={len(attempts)}"
+        )
 
     cold = evidence.get("cold_start")
     cold_budget = budget.get("cold_start")
