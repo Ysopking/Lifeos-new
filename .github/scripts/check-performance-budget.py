@@ -98,6 +98,8 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
     samples = timing.get("samples")
     if not isinstance(samples, list):
         fail("instrumentation-samples-not-list")
+    if len(samples) != sample_count:
+        fail(f"instrumentation-sample-count-mismatch:declared={sample_count}:actual={len(samples)}")
     actual_files: set[str] = set()
     for sample in samples:
         if not isinstance(sample, dict):
