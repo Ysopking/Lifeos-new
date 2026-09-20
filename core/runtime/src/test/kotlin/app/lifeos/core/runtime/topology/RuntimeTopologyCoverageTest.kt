@@ -10,22 +10,26 @@ class RuntimeTopologyCoverageTest {
         val manifests = LifeOsProcessTopology.canonicalManifestGraph.topologicalOrder
         val byOwner = manifests.groupBy { it.startupOwner }
             .mapValues { (_, values) -> values.mapTo(linkedSetOf<String>()) { it.id.value } }
+        val owned: (SubsystemStartupOwner) -> Set<String> = { owner ->
+            byOwner[owner]?.toSet().orEmpty()
+        }
 
-        assertTrue(
-            byOwner[SubsystemStartupOwner.SHARED_RESOURCES] ==
-                setOf("owner-policy", "resource-intelligence", "resource-budgets", "decision-trace")
+        assertEquals(
+            setOf("owner-policy", "resource-intelligence", "resource-budgets", "decision-trace"),
+            owned(SubsystemStartupOwner.SHARED_RESOURCES),
         )
-        assertTrue(byOwner[SubsystemStartupOwner.DEEP_SEARCH] == setOf("deep-search"))
-        assertTrue(byOwner[SubsystemStartupOwner.SELF_HEALING] == setOf("self-healing"))
-        assertTrue(byOwner[SubsystemStartupOwner.DURABLE_GOALS] == setOf("goal-planning"))
-        assertTrue(byOwner[SubsystemStartupOwner.OPTIONAL_RUNTIME] == setOf("hot-swap-runtime"))
-        assertTrue(byOwner[SubsystemStartupOwner.EXTERNAL_HOST] == setOf("build-studio"))
+        assertEquals(setOf("deep-search"), owned(SubsystemStartupOwner.DEEP_SEARCH))
+        assertEquals(setOf("self-healing"), owned(SubsystemStartupOwner.SELF_HEALING))
+        assertEquals(setOf("goal-planning"), owned(SubsystemStartupOwner.DURABLE_GOALS))
+        assertEquals(setOf("hot-swap-runtime"), owned(SubsystemStartupOwner.OPTIONAL_RUNTIME))
+        assertEquals(setOf("build-studio"), owned(SubsystemStartupOwner.EXTERNAL_HOST))
 
         val classified = byOwner.values.flatten().toSet()
         assertEquals(43, classified.size)
-        assertTrue(
-            classified == manifests.mapTo(linkedSetOf<String>()) { it.id.value }
+        assertEquals(
+            manifests.mapTo(linkedSetOf<String>()) { it.id.value },
+            classified,
         )
-        assertTrue(byOwner[SubsystemStartupOwner.KERNEL_GRAPH].orEmpty().isNotEmpty())
+        assertTrue(owned(SubsystemStartupOwner.KERNEL_GRAPH).isNotEmpty())
     }
 }
