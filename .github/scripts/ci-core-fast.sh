@@ -27,6 +27,12 @@ bash .github/scripts/ci-language-semantic-contract.sh
 step "gate 00c: Gradle wrapper integrity contract"
 bash .github/scripts/ci-gradle-wrapper-contract.sh
 
+step "gate 00c2: dependency supply-chain contract"
+bash .github/scripts/ci-dependency-supply-chain-contract.sh
+
+step "gate 00c3: native toolchain contract"
+bash .github/scripts/ci-native-toolchain-contract.sh
+
 step "gate 00d: repository authority contract"
 bash .github/scripts/ci-main-authority-contract.sh
 
@@ -65,6 +71,9 @@ step "gate 05: core scene tests"
 
 step "gate 06: core data debug unit tests"
 ./gradlew :core:data:testDebugUnitTest --stacktrace
+
+step "gate 06b: BuildStudio wrapper-only contract"
+bash .github/scripts/ci-buildstudio-wrapper-contract.sh
 
 step "gate 07: BuildStudio authorized host tests"
 ./gradlew :host:buildstudio:test --stacktrace
