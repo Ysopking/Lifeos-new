@@ -50,9 +50,9 @@ jobs:
       - name: Seal Product Gold evidence
         shell: bash
         run: |
-          python3 .github/scripts/seal-gold-evidence.py final \\
-            --pre product-gold-evidence/pre-emulator.json \\
-            --emulator-root android-emulator-recovery \\
+          python3 .github/scripts/seal-gold-evidence.py final \
+            --pre product-gold-evidence/pre-emulator.json \
+            --emulator-root android-emulator-recovery \
             --out product-gold-evidence/product-gold.json
           test -s product-gold-evidence/product-gold.json
       - name: Upload Product Gold debug APK
