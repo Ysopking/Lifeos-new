@@ -7,6 +7,7 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.deepsearch.DeepSearchBranch
+import app.lifeos.core.runtime.deepsearch.DeepSearchClaimCompatibility
 import app.lifeos.core.runtime.deepsearch.DeepSearchEvidenceDraft
 import app.lifeos.core.runtime.deepsearch.DeepSearchFindingDraft
 import app.lifeos.core.runtime.deepsearch.DeepSearchPermissionState
@@ -317,6 +318,7 @@ internal class AndroidWebDeepSearchSource(
     private val documentTransport: WebDocumentTransport = BoundedHttpsDocumentTransport(),
 ) : DeepSearchSource {
     private val effects = OwnerPolicyEffectGate(ownerPolicy)
+    private val claimCompatibility = DeepSearchClaimCompatibility()
 
     override val descriptor = DeepSearchSourceDescriptor(
         sourceId = WebDeepSearchOwnerPolicy.SOURCE_ID,
@@ -333,14 +335,22 @@ internal class AndroidWebDeepSearchSource(
     ): List<DeepSearchFindingDraft> {
         val query = queryFor(request, branch)
         return when (val exposure = effects.expose(WebDeepSearchOwnerPolicy.request()) {
-            searchAndFetch(query, branch.depth)
+            searchAndFetch(
+                query = query,
+                depth = branch.depth,
+                referenceStatement = branch.hypothesis.statement.takeIf { branch.depth > 0 },
+            )
         }) {
             is OwnerEffectExposureResult.Exposed -> exposure.value
             is OwnerEffectExposureResult.Blocked -> error("deepsearch-web-owner-policy-blocked")
         }
     }
 
-    private suspend fun searchAndFetch(query: String, depth: Int): List<DeepSearchFindingDraft> {
+    private suspend fun searchAndFetch(
+        query: String,
+        depth: Int,
+        referenceStatement: String?,
+    ): List<DeepSearchFindingDraft> {
         val hits = transport.search(query, SEARCH_RESPONSE_BYTES)
         return hits.take(MAX_RESULTS).mapIndexed { index, hit ->
             val document = if (index < MAX_FETCHED_DOCUMENTS) {
@@ -352,7 +362,13 @@ internal class AndroidWebDeepSearchSource(
             } else {
                 null
             }
-            finding(hit, document, query, depth)
+            finding(
+                hit = hit,
+                document = document,
+                query = query,
+                depth = depth,
+                referenceStatement = null,
+            )
         }
     }
 
@@ -361,6 +377,7 @@ internal class AndroidWebDeepSearchSource(
         document: WebDocumentHit?,
         query: String,
         depth: Int,
+        referenceStatement: String?,
     ): DeepSearchFindingDraft {
         val sourceUrl = document?.url ?: hit.url
         val evidenceText = document?.passage?.takeIf { it.isNotBlank() } ?: hit.snippet
@@ -370,6 +387,9 @@ internal class AndroidWebDeepSearchSource(
             .joinToString(" — ")
             .take(MAX_STATEMENT_CHARS)
         val confidence = evidenceConfidence(query, title, evidenceText, document != null, hit.confidence)
+        val contradiction = referenceStatement
+            ?.let { reference -> claimCompatibility.evaluate(reference, statement).contradiction }
+            ?: false
         val evidencePhoton = evidencePhoton(
             title = title,
             url = sourceUrl,
@@ -389,6 +409,7 @@ internal class AndroidWebDeepSearchSource(
                     confidence = confidence,
                     sourcePhotonId = evidencePhoton.id,
                     sourcePhotonRevision = evidencePhoton.revision,
+                    contradiction = contradiction,
                 )
             ),
         )
