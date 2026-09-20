@@ -8,6 +8,7 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:language"))
     implementation(project(":core:field"))
     implementation(project(":core:runtime"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
