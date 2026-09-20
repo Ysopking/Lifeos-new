@@ -479,9 +479,9 @@ internal class AndroidWebDeepSearchSource(
                 add("web-evidence")
                 add("web-evidence:v2")
                 add("deepsearch-evidence")
-                add("deepsearch-source:\${descriptor.sourceId}")
-                add("web-url:\${StableFieldIds.fingerprint("web-url/v1", url)}")
-                add("web-query:\${StableFieldIds.fingerprint("web-query/v1", query)}")
+                add("deepsearch-source:${descriptor.sourceId}")
+                add("web-url:${StableFieldIds.fingerprint("web-url/v1", url)}")
+                add("web-query:${StableFieldIds.fingerprint("web-query/v1", query)}")
                 add("web-depth:$depth")
                 add(if (fullDocument) "web-content:fetched" else "web-content:snippet-only")
             },

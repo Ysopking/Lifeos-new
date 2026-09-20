@@ -90,7 +90,7 @@ data class LinguisticLexiconSnapshot private constructor(
             addAll(concept.attractsTags.sorted().map { "attract:$it" })
             addAll(concept.repelsTags.sorted().map { "repel:$it" })
             addAll(concept.intentBias.entries.sortedBy { it.key.name }.map {
-                "intent:\${it.key.name}:\${java.lang.Double.toHexString(it.value)}"
+                "intent:${it.key.name}:${java.lang.Double.toHexString(it.value)}"
             })
         }
     }

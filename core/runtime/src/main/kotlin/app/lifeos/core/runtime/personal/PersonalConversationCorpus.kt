@@ -67,7 +67,7 @@ data class PersonalConversationTurn(
         energy = 0.0,
         confidence = 1.0,
         provenance = Provenance(
-            source = "personal-conversation:\${source.name.lowercase()}",
+            source = "personal-conversation:${source.name.lowercase()}",
             actor = when (speaker) {
                 PersonalConversationSpeaker.OWNER -> "owner"
                 PersonalConversationSpeaker.ASSISTANT -> "assistant"
@@ -80,9 +80,9 @@ data class PersonalConversationTurn(
             add("corpus:archive")
             add("corpus:personal")
             add("privacy:private-conversation")
-            add("conversation-source:\${source.name.lowercase()}")
-            add("conversation:\${StableCognitiveIds.fingerprint("personal-conversation-id/v1", source.name, conversationId)}")
-            add("speaker:\${speaker.name.lowercase()}")
+            add("conversation-source:${source.name.lowercase()}")
+            add("conversation:${StableCognitiveIds.fingerprint("personal-conversation-id/v1", source.name, conversationId)}")
+            add("speaker:${speaker.name.lowercase()}")
             SemanticSearchTerms.tokens(text)
                 .take(MAX_INDEXED_TERMS)
                 .forEach { add("corpus-term:$it") }
@@ -116,7 +116,7 @@ class PersonalConversationCorpusImporter(
                 is PhotonRevisionWriteResult.Advanced ->
                     error("Personal conversation import must never advance an immutable turn")
                 is PhotonRevisionWriteResult.Conflict ->
-                    error("Personal conversation import conflict: \${write.reason}")
+                    error("Personal conversation import conflict: ${write.reason}")
             }
             refs += PhotonRevisionRef(photon.id, photon.revision)
         }
