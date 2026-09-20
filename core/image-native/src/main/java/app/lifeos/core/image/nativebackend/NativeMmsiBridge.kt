@@ -26,10 +26,10 @@ class NativeMmsiBridge {
         require(normals.isDirect) { "Normal buffer must be direct" }
         require(roughness.isDirect) { "Roughness buffer must be direct" }
         require(output.isDirect) { "Output buffer must be direct" }
-        require(rgb.capacity() >= pixelCount * RGB_BYTES_PER_PIXEL)
-        require(normals.capacity() >= pixelCount * NORMAL_BYTES_PER_PIXEL)
-        require(roughness.capacity() >= pixelCount * ROUGHNESS_BYTES_PER_PIXEL)
-        require(output.capacity() >= pixelCount * OUTPUT_BYTES_PER_PIXEL)
+        require(rgb.capacity() >= checkedByteCount(pixelCount, RGB_BYTES_PER_PIXEL))
+        require(normals.capacity() >= checkedByteCount(pixelCount, NORMAL_BYTES_PER_PIXEL))
+        require(roughness.capacity() >= checkedByteCount(pixelCount, ROUGHNESS_BYTES_PER_PIXEL))
+        require(output.capacity() >= checkedByteCount(pixelCount, OUTPUT_BYTES_PER_PIXEL))
         require(sunIntensity >= 0f && sunIntensity.isFinite())
         require(ambientIntensity >= 0f && ambientIntensity.isFinite())
         val sun = sunDirection.normalized()
@@ -80,10 +80,23 @@ class NativeMmsiBridge {
             }
         }
 
-        fun allocateRgb(pixelCount: Int): ByteBuffer = direct(pixelCount * RGB_BYTES_PER_PIXEL)
-        fun allocateNormals(pixelCount: Int): ByteBuffer = direct(pixelCount * NORMAL_BYTES_PER_PIXEL)
-        fun allocateRoughness(pixelCount: Int): ByteBuffer = direct(pixelCount * ROUGHNESS_BYTES_PER_PIXEL)
-        fun allocateOutput(pixelCount: Int): ByteBuffer = direct(pixelCount * OUTPUT_BYTES_PER_PIXEL)
+        fun allocateRgb(pixelCount: Int): ByteBuffer = direct(checkedByteCount(pixelCount, RGB_BYTES_PER_PIXEL))
+        fun allocateNormals(pixelCount: Int): ByteBuffer = direct(checkedByteCount(pixelCount, NORMAL_BYTES_PER_PIXEL))
+        fun allocateRoughness(pixelCount: Int): ByteBuffer = direct(checkedByteCount(pixelCount, ROUGHNESS_BYTES_PER_PIXEL))
+        fun allocateOutput(pixelCount: Int): ByteBuffer = direct(checkedByteCount(pixelCount, OUTPUT_BYTES_PER_PIXEL))
+
+        internal fun checkedByteCount(pixelCount: Int, bytesPerPixel: Int): Int {
+            require(pixelCount >= 0) { "pixelCount must be non-negative" }
+            require(bytesPerPixel > 0) { "bytesPerPixel must be positive" }
+            return try {
+                Math.multiplyExact(pixelCount, bytesPerPixel)
+            } catch (overflow: ArithmeticException) {
+                throw IllegalArgumentException(
+                    "Native buffer byte count overflow: pixelCount=$pixelCount bytesPerPixel=$bytesPerPixel",
+                    overflow,
+                )
+            }
+        }
 
         private fun direct(bytes: Int): ByteBuffer {
             require(bytes >= 0)
