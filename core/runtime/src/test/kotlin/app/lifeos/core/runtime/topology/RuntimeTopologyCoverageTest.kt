@@ -8,9 +8,8 @@ class RuntimeTopologyCoverageTest {
     @Test
     fun `all non kernel owners are explicit and singleton where required`() {
         val manifests = LifeOsProcessTopology.canonicalManifestGraph.topologicalOrder
-        val byOwner: Map<SubsystemStartupOwner, Set<String>> = manifests
-            .groupBy { it.startupOwner }
-            .mapValues { (_, values) -> values.map { it.id.value }.toSet() }
+        val byOwner = manifests.groupBy { it.startupOwner }
+            .mapValues { (_, values) -> values.mapTo(linkedSetOf<String>()) { it.id.value } }
 
         assertEquals(
             setOf("owner-policy", "resource-intelligence", "resource-budgets", "decision-trace"),
@@ -25,7 +24,7 @@ class RuntimeTopologyCoverageTest {
         val classified = byOwner.values.flatten().toSet()
         assertEquals(43, classified.size)
         assertEquals(
-            manifests.mapTo(linkedSetOf()) { it.id.value },
+            manifests.mapTo(linkedSetOf<String>()) { it.id.value },
             classified,
         )
         assertTrue(byOwner[SubsystemStartupOwner.KERNEL_GRAPH].orEmpty().isNotEmpty())
