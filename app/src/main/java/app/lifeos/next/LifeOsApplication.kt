@@ -102,6 +102,7 @@ import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
 import app.lifeos.next.kernel.SelfObservationRuntime
+import app.lifeos.next.kernel.WebDeepSearchRuntime
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
@@ -282,6 +283,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                     DecisionTraceRuntimeRegistry.install(SubsystemDecisionTraceRecorder(decisionTraces))
                     LifecycleDecisionTraceRuntimeRegistry.install(LifecycleDecisionTraceRecorder(decisionTraces))
                     PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
+                    WebDeepSearchRuntime.installPolicy(ownerPolicy)
                     GeneratedProviderRestoreAuthorityRuntimeRegistry.install(
                         GeneratedProviderRestoreAuthority(
                             ownerPolicy = ownerPolicy,
