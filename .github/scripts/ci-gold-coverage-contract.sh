@@ -217,4 +217,13 @@ grep -Fq 'ci-core-fast.sh' .github/scripts/ci-v17-gold.sh
 grep -Fq 'ci-android-debug.sh' .github/scripts/ci-v17-gold.sh
 grep -Fq 'ci-emulator-preflight.sh' .github/scripts/ci-v17-gold.sh
 
+test -s .github/performance-budget.json || {
+  echo "gold-performance-budget-file-missing" >&2
+  exit 1
+}
+grep -Fq 'check-performance-budget.py' .github/scripts/ci-product-gold.sh || {
+  echo "gold-performance-budget-gate-missing" >&2
+  exit 1
+}
+
 echo "V17_GOLD_COVERAGE_CONTRACT_OK"
