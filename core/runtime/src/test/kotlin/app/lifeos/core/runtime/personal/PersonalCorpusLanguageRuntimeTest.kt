@@ -265,6 +265,7 @@ class PersonalCorpusLanguageRuntimeTest {
                     (query.phases.isEmpty() || photon.phase in query.phases) &&
                     (query.mimeTypes.isEmpty() || photon.mimeType in query.mimeTypes) &&
                     photon.tags.containsAll(query.allTags) &&
+                    (query.anyTags.isEmpty() || photon.tags.any { it in query.anyTags }) &&
                     photon.tags.none { it in query.excludedTags }
             }
             val sorted = when (query.order) {
