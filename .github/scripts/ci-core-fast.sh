@@ -30,6 +30,9 @@ bash .github/scripts/ci-gradle-wrapper-contract.sh
 step "gate 00c2: dependency supply-chain contract"
 bash .github/scripts/ci-dependency-supply-chain-contract.sh
 
+step "gate 00c3: native toolchain contract"
+bash .github/scripts/ci-native-toolchain-contract.sh
+
 step "gate 00d: repository authority contract"
 bash .github/scripts/ci-main-authority-contract.sh
 
