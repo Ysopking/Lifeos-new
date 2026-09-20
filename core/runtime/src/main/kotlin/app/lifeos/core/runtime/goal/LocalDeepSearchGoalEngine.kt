@@ -34,6 +34,8 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchSourceSnapshot
 import app.lifeos.core.runtime.deepsearch.DeepSearchStatus
 import app.lifeos.core.runtime.deepsearch.RuntimeAwareDeepSearchCapabilityGate
 import app.lifeos.core.runtime.deepsearch.RuntimeDeepSearchPermissionGate
+import app.lifeos.core.runtime.level7.EvidenceActionKind
+import app.lifeos.core.runtime.level7.LanguageActiveEvidenceBridge
 import app.lifeos.core.runtime.resource.ResourceBudgetDemand
 import app.lifeos.core.runtime.resource.ResourceBudgetDomain
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
@@ -70,6 +72,7 @@ class LocalDeepSearchGoalEngine(
     private val sharedBudgets: SharedResourceBudgetGate? = SharedResourceBudgetRuntimeRegistry.current(),
     private val externalSourcesProvider: () -> List<DeepSearchSource> = DeepSearchExternalRuntimeRegistry::sources,
     private val searchQueryPlanner: SemanticSearchQueryPlanner = SemanticSearchQueryPlanner(),
+    private val activeEvidence: LanguageActiveEvidenceBridge = LanguageActiveEvidenceBridge(),
 ) {
     fun supports(intent: IntentType): Boolean = intent == IntentType.SEARCH
 
@@ -146,14 +149,33 @@ class LocalDeepSearchGoalEngine(
             .filter(::isPrimarySearchEvidence)
             .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
             .toList()
-        val sources = searchSources(candidates)
-        val wantsExternal = sources
+        val allSources = searchSources(candidates)
+        val externalAvailable = allSources
             .asSequence()
             .filter { it.descriptor.kind == DeepSearchSourceKind.EXTERNAL }
             .any { source ->
                 RuntimeDeepSearchPermissionGate.permissionFor(source.descriptor) == DeepSearchPermissionState.GRANTED
             }
         val terminalResume = resume != null && checkpointProjector.isTerminal(resume)
+        val evidencePlan = if (terminalResume) {
+            null
+        } else {
+            val provisionalBudget = effectiveBudget(goal, externalAvailable)
+            activeEvidence.plan(
+                goal = goal,
+                sourceCycleId = missionId?.value ?: goalPhotonId.value,
+                budget = provisionalBudget,
+                externalAvailable = externalAvailable,
+            )
+        }
+        val wantsExternal =
+            externalAvailable &&
+                (evidencePlan?.selected(EvidenceActionKind.DEEP_SEARCH) != false)
+        val sources = if (wantsExternal || terminalResume) {
+            allSources
+        } else {
+            allSources.filter { it.descriptor.kind == DeepSearchSourceKind.LOCAL }
+        }
         val request = if (terminalResume) {
             // A sealed terminal checkpoint is already authoritative. Re-rendering it must not
             // depend on later query-planner refinements, source authorization or resource state.
