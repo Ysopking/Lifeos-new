@@ -74,13 +74,13 @@ internal data class KernelFoundationGraph(
     val healthGate: HealthGate,
     val mmsiRuntime: MmsiRuntimeBackendProbe,
     val languageUnderstanding: LanguageUnderstandingEngine,
-    val languageRuntime: VersionedLanguageRuntime,
     val goalPhotonFactory: GoalPhotonFactory,
     val languageContextBuilder: PhotonLanguageContextBuilder,
     val sceneCompiler: ProceduralSceneCompiler,
     val sceneRasterizer: SceneRasterizer,
     val proceduralImageGenerator: ProceduralImageGenerationEngine,
     val capabilityRegistry: CapabilityRegistry,
+    val languageRuntime: VersionedLanguageRuntime,
 )
 
 /**

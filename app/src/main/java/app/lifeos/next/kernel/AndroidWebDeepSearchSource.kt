@@ -32,7 +32,7 @@ internal data class WebSearchHit(
     val title: String,
     val url: String,
     val snippet: String,
-    val confidence: Double,
+    val confidence: Double = 0.50,
 ) {
     init {
         require(title.isNotBlank())
@@ -311,10 +311,10 @@ private fun readBoundedUtf8(input: InputStream, maxBytes: Int): String {
 internal class AndroidWebDeepSearchSource(
     ownerPolicy: OwnerPolicyLedger,
     private val transport: WebSearchTransport,
-    private val documentTransport: WebDocumentTransport = BoundedHttpsDocumentTransport(),
     private val loadPhoton: suspend (PhotonId) -> Photon?,
     private val persistPhoton: suspend (Photon) -> Photon,
     private val now: () -> Instant = Instant::now,
+    private val documentTransport: WebDocumentTransport = BoundedHttpsDocumentTransport(),
 ) : DeepSearchSource {
     private val effects = OwnerPolicyEffectGate(ownerPolicy)
 

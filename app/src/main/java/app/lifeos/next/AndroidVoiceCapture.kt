@@ -48,9 +48,9 @@ data class VoiceWordHypothesis(
 class AndroidVoiceCaptureEngine(
     private val context: Context,
     private val segmenter: DeterministicVoiceActivitySegmenter = DeterministicVoiceActivitySegmenter(),
-    private val languageSnapshotProvider: (() -> LanguageRuntimeSnapshot)? = null,
     private val speechEngine: BidirectionalSpeechFieldEngine = BidirectionalSpeechFieldEngine(),
     private val phraseDecoder: PhraseFieldDecoder = PhraseFieldDecoder(),
+    private val languageSnapshotProvider: (() -> LanguageRuntimeSnapshot)? = null,
 ) {
     fun hasPermission(): Boolean =
         context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED

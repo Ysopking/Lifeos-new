@@ -41,12 +41,12 @@ data class PhotonIndexQuery(
     val phases: Set<PhotonPhase> = emptySet(),
     val mimeTypes: Set<String> = emptySet(),
     val allTags: Set<String> = emptySet(),
-    val excludedTags: Set<String> = emptySet(),
     val latestOnly: Boolean = true,
     val includeTombstoned: Boolean = false,
     val order: PhotonIndexOrder = PhotonIndexOrder.IDENTITY,
     val after: PhotonIndexCursor? = null,
     val limit: Int = DEFAULT_PAGE_LIMIT,
+    val excludedTags: Set<String> = emptySet(),
 ) {
     init {
         require(limit in 1..HARD_PAGE_LIMIT) {

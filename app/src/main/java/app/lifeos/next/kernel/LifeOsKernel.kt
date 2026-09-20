@@ -110,7 +110,6 @@ class LifeOsKernel internal constructor(
     val imageAssets: BinaryAssetStore,
     private val proceduralImageGenerator: ProceduralImageGenerationEngine,
     private val languageUnderstanding: LanguageUnderstandingEngine,
-    private val languageRuntime: VersionedLanguageRuntime? = null,
     private val goalPhotonFactory: GoalPhotonFactory,
     private val languageContextBuilder: PhotonLanguageContextBuilder,
     private val goalCapabilityRouter: LanguageGoalCapabilityRouter,
@@ -133,6 +132,7 @@ class LifeOsKernel internal constructor(
     private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
     private val imagePhotonFactory: ImagePhotonFactory = ImagePhotonFactory(),
     private val sceneGraphPhotonFactory: SceneGraphPhotonFactory = SceneGraphPhotonFactory(),
+    private val languageRuntime: VersionedLanguageRuntime? = null,
 ) {
     private val startLock = Any()
     private val conversationClassifier = ConversationSignalClassifier()
