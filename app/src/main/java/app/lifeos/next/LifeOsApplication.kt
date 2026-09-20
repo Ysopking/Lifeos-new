@@ -122,7 +122,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private lateinit var liveSourceController: LiveSourceProcessController
     private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
-    private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private lateinit var initialDataController: InitialDataProcessController
     private lateinit var storageIntelligenceController: StorageIntelligenceProcessController
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
@@ -246,6 +246,16 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             memory = lifeMemoryRuntime,
             sources = initialDataSources.sources + AndroidSharedFilesInitialDataSource(this),
         )
+        initialDataController = InitialDataProcessController(
+            bootstrap = { initialDataBootstrap },
+            startupReady = { startupState.value.ready },
+            onSnapshot = { snapshot ->
+                latestInitialDataBootstrap = snapshot
+            },
+            onFailure = { failure ->
+                initialDataBootstrapFailure = failure
+            },
+        )
         refreshInitialDataBootstrap()
         refreshLiveSources()
     }
@@ -298,16 +308,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         permissionController.markAllRuntimePermissionsRequested()
 
     fun refreshInitialDataBootstrap() {
-        if (!startupState.value.ready && !::initialDataBootstrap.isInitialized) return
-        initialDataScope.launch {
-            try {
-                latestInitialDataBootstrap = initialDataBootstrap.run()
-                initialDataBootstrapFailure = null
-            } catch (error: Exception) {
-                initialDataBootstrapFailure = error.message ?: error::class.simpleName ?: "initial-data-bootstrap-failed"
-            }
-        }
+        if (!::initialDataController.isInitialized) return
+        initialDataController.refresh()
     }
-
 
 }
