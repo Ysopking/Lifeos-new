@@ -301,8 +301,9 @@ class PersonalLanguageShadowEvaluator {
         val candidateEngine = VersionedLanguageRuntime(candidateSnapshot).current().understanding
 
         val candidateResult = candidateEngine.understand(candidate.surface)
-        val fieldContribution = candidateResult.linguisticField.intentField
-            .firstOrNull { it.intent == targetIntent }
+        val fieldContribution = candidateResult.linguisticField
+            ?.intentField
+            ?.firstOrNull { it.intent == targetIntent }
             ?.contributingConcepts
             ?.contains(target.id) == true
         val candidateRecognized =
