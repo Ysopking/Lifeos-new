@@ -10,16 +10,19 @@ class RuntimeTopologyCoverageTest {
         val manifests = LifeOsProcessTopology.canonicalManifestGraph.topologicalOrder
         val byOwner = manifests.groupBy { it.startupOwner }
             .mapValues { (_, values) -> values.mapTo(linkedSetOf<String>()) { it.id.value } }
+        val owned: (SubsystemStartupOwner) -> Set<String> = { owner ->
+            byOwner[owner]?.toSet().orEmpty()
+        }
 
         assertEquals(
             setOf("owner-policy", "resource-intelligence", "resource-budgets", "decision-trace"),
-            byOwner[SubsystemStartupOwner.SHARED_RESOURCES],
+            owned(SubsystemStartupOwner.SHARED_RESOURCES),
         )
-        assertEquals(setOf("deep-search"), byOwner[SubsystemStartupOwner.DEEP_SEARCH])
-        assertEquals(setOf("self-healing"), byOwner[SubsystemStartupOwner.SELF_HEALING])
-        assertEquals(setOf("goal-planning"), byOwner[SubsystemStartupOwner.DURABLE_GOALS])
-        assertEquals(setOf("hot-swap-runtime"), byOwner[SubsystemStartupOwner.OPTIONAL_RUNTIME])
-        assertEquals(setOf("build-studio"), byOwner[SubsystemStartupOwner.EXTERNAL_HOST])
+        assertEquals(setOf("deep-search"), owned(SubsystemStartupOwner.DEEP_SEARCH))
+        assertEquals(setOf("self-healing"), owned(SubsystemStartupOwner.SELF_HEALING))
+        assertEquals(setOf("goal-planning"), owned(SubsystemStartupOwner.DURABLE_GOALS))
+        assertEquals(setOf("hot-swap-runtime"), owned(SubsystemStartupOwner.OPTIONAL_RUNTIME))
+        assertEquals(setOf("build-studio"), owned(SubsystemStartupOwner.EXTERNAL_HOST))
 
         val classified = byOwner.values.flatten().toSet()
         assertEquals(43, classified.size)
@@ -27,6 +30,6 @@ class RuntimeTopologyCoverageTest {
             manifests.mapTo(linkedSetOf<String>()) { it.id.value },
             classified,
         )
-        assertTrue(byOwner[SubsystemStartupOwner.KERNEL_GRAPH].orEmpty().isNotEmpty())
+        assertTrue(owned(SubsystemStartupOwner.KERNEL_GRAPH).isNotEmpty())
     }
 }
