@@ -298,13 +298,11 @@ class PersonalCorpusLanguageRuntime(
                 continue
             }
 
+            // Corpus examples may be understood by either the deterministic rule layer or
+            // the linguistic field. Both are local LIFEOS evidence; requiring a field-only
+            // contribution would discard valid personal phrasing that is disambiguated by a
+            // known cue in the same historical turn.
             val target = targetConcept(intent, snapshot) ?: continue
-            val contributes = understood.linguisticField
-                ?.intentField
-                ?.firstOrNull { it.intent == intent }
-                ?.contributingConcepts
-                ?.contains(target.id) == true
-            if (!contributes) continue
 
             val conversationKey = example.photon.tags
                 .firstOrNull { it.startsWith("conversation:") }
