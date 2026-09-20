@@ -28,8 +28,17 @@ jobs:
         with:
           gradle-version: "9.3.1"
       - name: Unit tests, debug lint and debug APK
+        env:
+          BOOTSTRAP_DEPENDENCY_VERIFICATION: "1"
         shell: bash
         run: bash .github/scripts/ci-android-debug.sh
+      - name: Upload B306 dependency verification metadata
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: B306-gradle-verification-metadata
+          path: gradle/verification-metadata.xml
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload debug APK
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:

@@ -21,7 +21,19 @@ printf 'ANDROID_HOME=%s\n' "${ANDROID_HOME:-}"
 printf 'ANDROID_SDK_ROOT=%s\n' "${ANDROID_SDK_ROOT:-}"
 
 step "gates 01-03: unit tests, app debug lint and debug APK"
-./gradlew test :app:lintDebug :app:assembleDebug --stacktrace
+if [[ "${BOOTSTRAP_DEPENDENCY_VERIFICATION:-0}" == "1" ]]; then
+  rm -f gradle/verification-metadata.xml
+  ./gradlew --write-verification-metadata sha256 \
+    test \
+    :app:lintDebug \
+    :app:assembleDebug \
+    :app:assembleDebugAndroidTest \
+    :host:buildstudio:test \
+    --stacktrace
+  test -s gradle/verification-metadata.xml
+else
+  ./gradlew test :app:lintDebug :app:assembleDebug --stacktrace
+fi
 
 step "gate 04: APK existence"
 test -f "$apk_path"
