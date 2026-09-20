@@ -153,8 +153,16 @@ class LifeOsKernel internal constructor(
         requireNotNull(languageRuntime) { "Versioned language runtime is unavailable" }.current()
     private var bootstrapJob: Job? = null
 
-    private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
-    val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
+    private val bootLifecycle = KernelBootLifecycle(
+        runtime = runtime,
+        matrix = matrix,
+        supervisor = supervisor,
+        scope = scope,
+        bootCoordinator = bootCoordinator,
+        bootEngineRuntime = bootEngineRuntime,
+        bootReadyMaintenanceTrigger = bootReadyMaintenanceTrigger,
+    )
+    val bootstrapState: StateFlow<KernelBootstrapState> = bootLifecycle.bootstrapState
 
     private val photonIngress = PhotonIngressCoordinator(
         photonStore = photonStore,
@@ -168,14 +176,7 @@ class LifeOsKernel internal constructor(
                 budget = budget,
             )
         },
-        onPhotonPersisted = { photon ->
-            mutableBootstrapState.update { current ->
-                current.copy(
-                    photons = (current.photons.filterNot { it.id == photon.id } + photon)
-                        .sortedBy { it.provenance.createdAt }
-                )
-            }
-        },
+        onPhotonPersisted = bootLifecycle::onPhotonPersisted,
     )
 
     suspend fun freezeCognitiveModulesForCurrentCycle(
@@ -305,11 +306,7 @@ class LifeOsKernel internal constructor(
         fastBackgroundBudget = FAST_CHAT_BACKGROUND_BUDGET,
     )
 
-    fun start(): Job = synchronized(startLock) {
-        bootstrapJob ?: scope.launch {
-            bootstrap()
-        }.also { bootstrapJob = it }
-    }
+    fun start(): Job = bootLifecycle.start()
 
     suspend fun startWorldEquationEvolution(
         candidate: WorldEquationSpec,
@@ -334,44 +331,11 @@ class LifeOsKernel internal constructor(
         return worldEquationAutoEvolution.promoteIfEligible(candidate)
     }
 
-    fun retryBootstrap(): Job = synchronized(startLock) {
-        val existing = bootstrapJob
-        if (mutableBootstrapState.value.status != KernelBootstrapStatus.FAILED && existing != null) {
-            existing
-        } else {
-            scope.launch {
-                bootstrap()
-            }.also { bootstrapJob = it }
-        }
-    }
+    fun retryBootstrap(): Job = bootLifecycle.retryBootstrap()
 
-    fun stop(): Job = scope.launch {
-        synchronized(startLock) {
-            bootstrapJob?.cancel()
-            bootstrapJob = null
-        }
-        bootEngineRuntime.recover()
-        supervisor.stop()
-    }
+    fun stop(): Job = bootLifecycle.stop()
 
-    fun requireCognitiveReady() {
-        val bootstrap = mutableBootstrapState.value
-        val state = bootstrap.status
-        require(
-            state == KernelBootstrapStatus.READY || state == KernelBootstrapStatus.DEGRADED
-        ) {
-            buildString {
-                append("Cognitive runtime is not ready: ")
-                append(state)
-                bootstrap.failureMessage
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let {
-                        append(" · ")
-                        append(it)
-                    }
-            }
-        }
-    }
+    fun requireCognitiveReady() = bootLifecycle.requireCognitiveReady()
 
     /** Single kernel-owned conversation entrypoint. */
     suspend fun submitConversationTurn(photon: Photon): ConversationTurnResult =
@@ -385,7 +349,7 @@ class LifeOsKernel internal constructor(
         conversationTurns.persistUserUtterance(photon)
 
     suspend fun generateExplicitlyApprovedTool(gap: CapabilityGap): GeneratedToolUserActionResult {
-        requireCompletedBoot("Generated-tool action")
+        bootLifecycle.requireCompletedBoot("Generated-tool action")
         return generatedToolUserActions.generateExplicitlyApproved(gap)
     }
 
@@ -394,7 +358,7 @@ class LifeOsKernel internal constructor(
      * non-productive Novel Canary probes and the independent evidence gates before guarded ACTIVE.
      */
     suspend fun reviewAndActivateGeneratedTool(toolId: String): PrivateNovelCapabilityActivationResult {
-        requireCompletedBoot("Generated-tool review and activation")
+        bootLifecycle.requireCompletedBoot("Generated-tool review and activation")
         return evolutionRuntime.privateNovelActivation.reviewAndActivate(
             toolId = toolId,
             ownerActorId = PRIVATE_OWNER_ACTOR_ID,
@@ -431,105 +395,7 @@ class LifeOsKernel internal constructor(
 
 
     /** Final process teardown hook; normal Activity/ViewModel destruction must not call this. */
-    internal fun shutdown() {
-        synchronized(startLock) {
-            bootstrapJob?.cancel()
-            bootstrapJob = null
-        }
-        runtime.stop()
-        scope.cancel()
-    }
-
-    private suspend fun bootstrap() {
-        mutableBootstrapState.update {
-            it.copy(
-                status = KernelBootstrapStatus.LOADING,
-                warnings = emptyList(),
-                failureMessage = null,
-            )
-        }
-
-        try {
-            when (val result = bootCoordinator.boot()) {
-                is BootRunResult.Ready -> completeBoot(
-                    context = result.context,
-                    warnings = result.snapshot.warnings,
-                    degraded = false,
-                )
-
-                is BootRunResult.Degraded -> completeBoot(
-                    context = result.context,
-                    warnings = result.snapshot.warnings,
-                    degraded = true,
-                )
-
-                is BootRunResult.RecoveryRequired -> {
-                    mutableBootstrapState.value = KernelBootstrapState(
-                        status = KernelBootstrapStatus.FAILED,
-                        unreadableFiles = result.context.photons.unreadableFiles.size,
-                        warnings = result.snapshot.warnings,
-                        failureMessage = result.snapshot.failures
-                            .joinToString("; ")
-                            .ifBlank { "Runtime recovery is required" },
-                    )
-                }
-
-                is BootRunResult.Failed -> {
-                    mutableBootstrapState.value = KernelBootstrapState(
-                        status = KernelBootstrapStatus.FAILED,
-                        warnings = result.snapshot.warnings,
-                        failureMessage = result.cause.message ?: result.cause::class.simpleName,
-                    )
-                }
-            }
-        } catch (cancelled: CancellationException) {
-            mutableBootstrapState.update {
-                it.copy(
-                    status = KernelBootstrapStatus.CREATED,
-                    warnings = emptyList(),
-                    failureMessage = null,
-                )
-            }
-            throw cancelled
-        } catch (error: Exception) {
-            runCatching { supervisor.stop() }
-            mutableBootstrapState.update {
-                it.copy(
-                    status = KernelBootstrapStatus.FAILED,
-                    failureMessage = error.message ?: error::class.simpleName,
-                )
-            }
-        }
-    }
-
-    private suspend fun completeBoot(
-        context: BootContext,
-        warnings: List<String>,
-        degraded: Boolean,
-    ) {
-        val cognitiveRecovery = bootEngineRuntime.recover()
-        when (cognitiveRecovery) {
-            BootEngineRecoveryResult.NoActiveCycle,
-            is BootEngineRecoveryResult.ResumePrepared,
-            is BootEngineRecoveryResult.ResumeCommit,
-            is BootEngineRecoveryResult.RecoveredCommitted -> Unit
-        }
-
-        supervisor.start()
-        bootReadyMaintenanceTrigger()
-
-        val runtimePhotons = context.photons.hot + context.photons.warm
-        // Restore the process-local read model without enqueuing a second task family.
-        // Durable reconciliation has already restored missing work; terminal work stays terminal.
-        runtimePhotons.forEach { matrix.influence(it) }
-
-        mutableBootstrapState.value = KernelBootstrapState(
-            status = if (degraded) KernelBootstrapStatus.DEGRADED else KernelBootstrapStatus.READY,
-            photons = context.photons.allPhotons,
-            unreadableFiles = context.photons.unreadableFiles.size,
-            warnings = warnings,
-        )
-    }
+    internal fun shutdown() = bootLifecycle.shutdown()
 
     private companion object {
         const val BUILTIN_EXTENSION_SNAPSHOT_ID = "extension-registry:builtin-baseline"
