@@ -218,3 +218,12 @@ grep -Fq 'ci-android-debug.sh' .github/scripts/ci-v17-gold.sh
 grep -Fq 'ci-emulator-preflight.sh' .github/scripts/ci-v17-gold.sh
 
 echo "V17_GOLD_COVERAGE_CONTRACT_OK"
+
+grep -Fq 'ci-architecture-budget.py' .github/scripts/ci-core-fast.sh || {
+  echo "gold-architecture-budget-gate-missing" >&2
+  exit 1
+}
+test -s .github/architecture-budget.json || {
+  echo "gold-architecture-budget-file-missing" >&2
+  exit 1
+}

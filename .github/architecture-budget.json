@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "canonical_subsystem_count": 43,
+  "runtime_monolith_max_kotlin_files": 505,
+  "line_budgets": {
+    "app/src/main/java/app/lifeos/next/kernel/LifeOsKernel.kt": 386,
+    "app/src/main/java/app/lifeos/next/LifeOsApplication.kt": 302,
+    "app/src/main/java/app/lifeos/next/LifeOsViewModel.kt": 221,
+    "app/src/main/java/app/lifeos/next/LifeOsChatViewModel.kt": 568,
+    "app/src/main/java/app/lifeos/next/ProcessRuntimeInstaller.kt": 506,
+    "core/runtime-deepsearch/src/main/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchPlannerV2.kt": 791,
+    "host/buildstudio/src/main/kotlin/app/lifeos/host/buildstudio/JvmBuildStudioHost.kt": 472
+  },
+  "module_dependencies": {
+    "app/build.gradle.kts": [
+      ":core:data",
+      ":core:image",
+      ":core:image-native",
+      ":core:language",
+      ":core:model",
+      ":core:runtime",
+      ":core:runtime-deepsearch",
+      ":core:runtime-personal",
+      ":core:scene"
+    ],
+    "core/runtime/build.gradle.kts": [
+      ":core:field",
+      ":core:image",
+      ":core:language",
+      ":core:model",
+      ":core:runtime-buildstudio",
+      ":core:runtime-contracts",
+      ":core:runtime-deepsearch"
+    ],
+    "core/runtime-contracts/build.gradle.kts": [],
+    "core/runtime-deepsearch/build.gradle.kts": [
+      ":core:field",
+      ":core:language",
+      ":core:model",
+      ":core:runtime-contracts"
+    ],
+    "core/runtime-buildstudio/build.gradle.kts": [
+      ":core:field",
+      ":core:model",
+      ":core:runtime-contracts"
+    ],
+    "core/runtime-personal/build.gradle.kts": [
+      ":core:language",
+      ":core:model"
+    ],
+    "core/data/build.gradle.kts": [
+      ":core:field",
+      ":core:language",
+      ":core:model",
+      ":core:runtime",
+      ":core:runtime-deepsearch",
+      ":core:runtime-personal"
+    ],
+    "core/image-native/build.gradle.kts": [
+      ":core:image"
+    ],
+    "host/buildstudio/build.gradle.kts": [
+      ":core:runtime-buildstudio"
+    ]
+  },
+  "forbidden_runtime_package_prefixes": [
+    "core/runtime/src/main/kotlin/app/lifeos/core/runtime/personal/",
+    "core/runtime/src/main/kotlin/app/lifeos/core/runtime/deepsearch/"
+  ],
+  "allowed_runtime_buildstudio_files": [
+    "core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildStudioHostProcessRegistry.kt"
+  ],
+  "unified_vault_files": [
+    "core/data/src/main/kotlin/app/lifeos/core/data/security/UnifiedVault.kt",
+    "core/data/src/main/kotlin/app/lifeos/core/data/security/UnifiedVaultEnvelope.kt",
+    "core/data/src/main/kotlin/app/lifeos/core/data/security/UnifiedVaultIo.kt",
+    "core/data/src/main/kotlin/app/lifeos/core/data/security/UnifiedVaultKeyProvider.kt",
+    "core/data/src/main/kotlin/app/lifeos/core/data/security/VaultAssociatedData.kt"
+  ],
+  "compatibility_vault_adapters": [
+    "core/data/src/main/kotlin/app/lifeos/core/data/security/EncryptedLedgerVaultSupport.kt",
+    "core/data/src/main/kotlin/app/lifeos/core/data/security/VersionedPathBoundVaultSupport.kt"
+  ],
+  "permission_profile_file": "app/src/main/java/app/lifeos/next/PermissionProfile.kt"
+}
