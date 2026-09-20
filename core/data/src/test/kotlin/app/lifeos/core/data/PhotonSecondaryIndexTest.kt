@@ -165,7 +165,7 @@ class PhotonSecondaryIndexTest {
         val query = PhotonIndexQuery(
             phases = setOf(PhotonPhase.ACTIVE),
             allTags = setOf("bulk"),
-            anyTags = setOf("bucket:7", "bucket:11"),
+            anyTags = setOf("bucket:6", "bucket:10"),
             order = PhotonIndexOrder.NEWEST_FIRST,
             limit = PhotonIndexQuery.HARD_PAGE_LIMIT,
         )
