@@ -274,6 +274,28 @@ class LifeOsKernel internal constructor(
         dispatcher = goalActionDispatcher,
     )
 
+    private val conversationTurns = ConversationTurnCoordinator(
+        revisionedPhotonStore = revisionedPhotonStore,
+        languageContextRetriever = languageContextRetriever,
+        languageUnderstanding = languageUnderstanding,
+        goalPhotonFactory = goalPhotonFactory,
+        routeGoal = goalCapabilityRouter::route,
+        semanticActionGraphRouter = semanticActionGraphRouter,
+        goalActions = goalActions,
+        scope = scope,
+        continuousCognition = continuousCognition,
+        persistWithoutCognition = { photon, mode ->
+            persistWithoutCognition(photon, mode)
+        },
+        persistAndIngest = { photon, mode ->
+            persistAndIngest(photon, mode)
+        },
+        languageRuntime = languageRuntime,
+        personalLanguageLearning = personalLanguageLearning,
+        personalCorpusLanguage = personalCorpusLanguage,
+        fastBackgroundBudget = FAST_CHAT_BACKGROUND_BUDGET,
+    )
+
     fun start(): Job = synchronized(startLock) {
         bootstrapJob ?: scope.launch {
             bootstrap()
@@ -342,250 +364,16 @@ class LifeOsKernel internal constructor(
         }
     }
 
-    /**
-     * Single kernel-owned conversation entrypoint. FAST_CHAT persists the turn without scheduling
-     * cognition; all other routes execute the existing full semantic/action path.
-     */
-    suspend fun submitConversationTurn(photon: Photon): ConversationTurnResult {
-        require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
-        val route = conversationClassifier.classify(photon.content, photon.tags)
-        return if (route.path == ConversationPath.FAST_CHAT) {
-            val context = fastConversationContext(photon)
-            val source = persistWithoutCognition(photon, PhotonIngressMode.ORIGIN)
-            observePersonalLanguageLearning(source.photon, understanding = null)
-            val response = fastConversationReply(photon.content, context)
-            val assistantPhoton = assistantPhotonFor(photon, response, fast = true)
-            val assistant = persistWithoutCognition(assistantPhoton, PhotonIngressMode.DERIVED)
-            enqueueFastConversationBackground(photon)
-            ConversationTurnResult(
-                route = route,
-                responseText = response,
-                source = source,
-                assistant = assistant,
-                language = null,
-            )
-        } else {
-            val language = persistUserUtterance(photon)
-            val responseGenerator = languageRuntime?.current()?.responseGeneration
-            val response = if (responseGenerator != null) {
-                LifeOsResponseComposer(responseGenerator).compose(language)
-            } else {
-                LifeOsResponseComposer.compose(language)
-            }
-            val assistant = persistAndIngest(
-                assistantPhotonFor(photon, response, fast = false),
-                PhotonIngressMode.DERIVED,
-            )
-            ConversationTurnResult(
-                route = route,
-                responseText = response,
-                source = language.source,
-                assistant = assistant,
-                language = language,
-            )
-        }
-    }
-
-    private fun enqueueFastConversationBackground(photon: Photon) {
-        scope.launch {
-            try {
-                continuousCognition.submit(
-                    delta = PhotonDelta(
-                        deltaId = CognitiveDeltaIdentity.photonRevision(photon.id, photon.revision),
-                        source = "kernel-fast-chat-background",
-                        photonId = photon.id,
-                        revisionAfter = photon.revision,
-                        type = PhotonDeltaType.CREATED,
-                        importanceHint = photon.semanticMass,
-                        timestamp = photon.provenance.createdAt,
-                        correlationId = photon.id.value,
-                    ),
-                    priority = CognitivePriority.BACKGROUND,
-                    salience = SalienceVector(
-                        novelty = 0.35,
-                        relevance = 0.35,
-                        urgency = 0.0,
-                        semanticMass = photon.semanticMass,
-                        confidenceImpact = photon.confidence,
-                        goalAffinity = 0.15,
-                    ),
-                    targetModules = setOf("Gedankenmatrix"),
-                    budget = FAST_CHAT_BACKGROUND_BUDGET,
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                // Fast response stays authoritative; durable cognition reconciliation can recover
-                // persisted conversation Photons if background admission is temporarily unavailable.
-            }
-        }
-    }
-
-    private suspend fun fastConversationContext(photon: Photon): FastConversationContext {
-        val conversationTag = photon.tags.firstOrNull { it.startsWith("conversation:") }
-            ?: "conversation:default"
-        val refs = revisionedPhotonStore.query(
-            PhotonIndexQuery(
-                allTags = setOf("chat", conversationTag),
-                latestOnly = true,
-                order = PhotonIndexOrder.NEWEST_FIRST,
-                limit = 8,
-            )
-        )
-        val recent = refs.mapNotNull { ref: app.lifeos.core.model.PhotonRevisionRef ->
-            revisionedPhotonStore.load(ref)
-        }
-        return FastConversationContext(
-            conversationId = conversationTag.substringAfter(':', "default"),
-            recentTurnCount = recent.size,
-            lastUserText = recent.firstOrNull { "chat:user" in it.tags }?.content,
-        )
-    }
-
-    private fun fastConversationReply(
-        text: String,
-        context: FastConversationContext,
-    ): String {
-        val normalized = text.trim().lowercase()
-        return when {
-            normalized.startsWith("danke") || normalized.startsWith("thanks") ||
-                normalized.startsWith("thank you") -> "Gern."
-            normalized.startsWith("wie geht") || normalized.startsWith("how are you") ->
-                "Mir geht es gut. Was möchtest du als Nächstes machen?"
-            normalized in setOf("ok", "okay", "alles klar", "verstanden", "passt", "gut") ->
-                "Alles klar."
-            else -> if (context.recentTurnCount > 0) "Hallo, ich bin da." else "Hallo."
-        }
-    }
-
-    private fun assistantPhotonFor(
-        source: Photon,
-        response: String,
-        fast: Boolean,
-    ): Photon = Photon(
-        content = response,
-        provenance = source.provenance.copy(
-            source = "lifeos-chat",
-            actor = "lifeos",
-            parentIds = setOf(source.id),
-        ),
-        relations = setOf(
-            app.lifeos.core.model.PhotonRelation(
-                target = source.id,
-                type = app.lifeos.core.model.RelationType.DERIVED_FROM,
-            )
-        ),
-        tags = buildSet {
-            add("chat")
-            add("chat:assistant")
-            if (fast) add("conversation-fast-path")
-            source.tags
-                .filter { it.startsWith("conversation:") || it.startsWith("turn:") }
-                .forEach(::add)
-        },
-    )
+    /** Single kernel-owned conversation entrypoint. */
+    suspend fun submitConversationTurn(photon: Photon): ConversationTurnResult =
+        conversationTurns.submitConversationTurn(photon)
 
     /**
-     * Persists the user's exact utterance first, derives a GoalPhoton, resolves capabilities, and
-     * executes supported action-ready goals entirely offline before returning to the caller.
-     * CONTINUE first resumes the exact persisted substantive goal and then re-routes that goal.
+     * Persists the exact utterance and executes the existing semantic/action path through the
+     * extracted conversation coordinator.
      */
-    suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
-        require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
-        val context = languageContextRetriever.retrieve(
-            utterance = photon.content,
-            now = photon.provenance.createdAt,
-            excludeIds = setOf(photon.id),
-        ).context
-        val source = persistAndIngest(photon)
-        return try {
-            val corpusDecision = personalCorpusLanguage?.understand(
-                utterance = photon.content,
-                context = context,
-                now = photon.provenance.createdAt,
-            )
-            val understanding = corpusDecision?.understanding ?: run {
-                val understandingEngine =
-                    languageRuntime?.current()?.understanding ?: languageUnderstanding
-                understandingEngine.understand(photon.content, context)
-            }
-            corpusDecision?.evidencePhoton(source.photon)?.let { evidence ->
-                persistAndIngest(evidence, PhotonIngressMode.DERIVED)
-            }
-            observePersonalLanguageLearning(source.photon, understanding)
-            val routing = goalCapabilityRouter.route(understanding.goal)
-            val goalPhoton = goalPhotonFactory.create(
-                result = understanding,
-                sourcePhotonId = photon.id,
-                createdAt = photon.provenance.createdAt,
-            )
-            val goal = persistAndIngest(goalPhoton.photon, PhotonIngressMode.DERIVED)
-            val goalResume = when {
-                understanding.goal.intent != IntentType.CONTINUE -> null
-                !routing.ready -> null
-                else -> goalActions.executeGoalResume(
-                    requestGoal = understanding.goal,
-                    requestSource = photon,
-                    requestGoalPhotonId = goalPhoton.photon.id,
-                )
-            }
-            val resumed = goalResume as? GoalResumeExecutionResult.Resumed
-            val effectiveGoal = resumed?.frame ?: understanding.goal
-            val effectiveRouting = resumed?.routing ?: routing
-            val effectiveSource = resumed?.sourcePhoton ?: photon
-            val effectiveGoalPhotonId = resumed?.resumedGoal?.photon?.id ?: goalPhoton.photon.id
-            val actionGraphExecution = semanticActionGraphRouter.execute(
-                goal = effectiveGoal,
-                sourcePhoton = effectiveSource,
-                goalPhotonId = effectiveGoalPhotonId,
-                goalPhotonRevision = resumed?.resumedGoal?.photon?.revision ?: goalPhoton.photon.revision,
-            )
-            val actions = actionGraphExecution.primaryDispatch ?: GoalActionDispatchResult()
-
-            LanguageSubmissionResult(
-                source = source,
-                understanding = understanding,
-                goalPhoton = goalPhoton,
-                goal = goal,
-                routing = routing,
-                goalResume = goalResume,
-                imageGeneration = actions.imageGeneration,
-                localImageTransform = actions.localImageTransform,
-                localKnowledge = actions.localKnowledge,
-                localDeepSearch = actions.localDeepSearch,
-                localSchedule = actions.localSchedule,
-                localCommunication = actions.localCommunication,
-                externalEffect = actions.externalEffect,
-                actionGraphExecution = actionGraphExecution,
-            )
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            LanguageSubmissionResult(
-                source = source,
-                languageFailure = error.message ?: error::class.simpleName,
-            )
-        }
-    }
-
-    /**
-     * Explicit private-user action for one blocking gap. It persists a typed request and a separate
-     * exact approval before bounded Genesis runs. The result can only become TRIAL or REJECTED here.
-     */
-    private suspend fun observePersonalLanguageLearning(
-        source: Photon,
-        understanding: app.lifeos.core.language.LanguageUnderstandingResult?,
-    ) {
-        val learning = personalLanguageLearning ?: return
-        try {
-            learning.observePersistedTurn(source, understanding)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            // Personalization is auxiliary. Learning failure must not fail a user turn or bypass
-            // the existing semantic/action authorities.
-        }
-    }
+    suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult =
+        conversationTurns.persistUserUtterance(photon)
 
     suspend fun generateExplicitlyApprovedTool(gap: CapabilityGap): GeneratedToolUserActionResult {
         requireCompletedBoot("Generated-tool action")
