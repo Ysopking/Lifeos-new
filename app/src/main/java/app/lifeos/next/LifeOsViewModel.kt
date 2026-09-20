@@ -6,8 +6,6 @@ import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.lifeos.core.language.GoalFrame
-import app.lifeos.core.language.LanguageContext
-import app.lifeos.core.language.LanguageContextItem
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
@@ -15,10 +13,7 @@ import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
 import app.lifeos.core.runtime.goal.LocalSharePreparation
-import app.lifeos.core.runtime.life.PerceptionCandidate
 import app.lifeos.core.runtime.life.PerceptionModality
-import app.lifeos.core.runtime.life.SpeechObservation
-import app.lifeos.core.runtime.life.SpeechWordObservation
 import app.lifeos.next.kernel.GoalResumeExecutionResult
 import app.lifeos.next.kernel.ImageGenerationResult
 import app.lifeos.next.kernel.KernelBootstrapStatus
@@ -28,9 +23,7 @@ import app.lifeos.next.kernel.LocalImageTransformExecutionResult
 import app.lifeos.next.kernel.LocalKnowledgeExecutionResult
 import app.lifeos.next.kernel.LocalScheduleExecutionResult
 import app.lifeos.next.kernel.LocalShareIntentFactory
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
@@ -80,8 +73,6 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private val owner = application as LifeOsApplication
     private val kernel = owner.kernel
     private val multimodalPerception = owner.multimodalPerception
-    private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
-    private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
     private val toolCenter = ToolCenterUiController(
         kernel = kernel,
@@ -93,6 +84,12 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private val shareInteraction = ShareInteractionController(
         kernel = kernel,
         intentFactory = LocalShareIntentFactory(application.applicationContext, kernel),
+        state = mutableState,
+        scope = viewModelScope,
+    )
+    private val voiceInteraction = VoiceInteractionController(
+        context = application.applicationContext,
+        multimodalPerception = multimodalPerception,
         state = mutableState,
         scope = viewModelScope,
     )
@@ -154,52 +151,13 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     fun dismissCapabilityActivationStatus() =
         toolCenter.dismissActivationStatus()
 
-    fun voicePermissionDenied() {
-        mutableState.update {
-            it.copy(
-                voicePhase = VoiceCapturePhase.IDLE,
-                voiceStatus = "Mikrofonberechtigung wurde nicht erteilt.",
-            )
-        }
-    }
+    fun voicePermissionDenied() = voiceInteraction.permissionDenied()
 
-    fun startVoiceCapture() {
-        val current = mutableState.value
-        if (current.loading || current.loadFailed || current.saving || current.voicePhase != VoiceCapturePhase.IDLE) return
-        if (!voiceCapture.hasPermission()) {
-            voicePermissionDenied()
-            return
-        }
+    fun startVoiceCapture() = voiceInteraction.start()
 
-        voiceStopRequested.set(false)
-        val context = buildLanguageContext(current.photons)
-        mutableState.update {
-            it.copy(
-                voicePhase = VoiceCapturePhase.RECORDING,
-                voiceStatus = "Lokale Sprachaufnahme läuft …",
-                error = null,
-            )
-        }
+    fun stopVoiceCapture() = voiceInteraction.stop()
 
-        viewModelScope.launch(Dispatchers.IO) {
-            applyVoiceCaptureResult(voiceCapture.capture(voiceStopRequested, context))
-        }
-    }
-
-    fun stopVoiceCapture() {
-        if (mutableState.value.voicePhase != VoiceCapturePhase.RECORDING) return
-        voiceStopRequested.set(true)
-        mutableState.update {
-            it.copy(
-                voicePhase = VoiceCapturePhase.PROCESSING,
-                voiceStatus = "Sprachfeld wird lokal ausgewertet …",
-            )
-        }
-    }
-
-    fun dismissVoiceStatus() {
-        mutableState.update { it.copy(voiceStatus = null) }
-    }
+    fun dismissVoiceStatus() = voiceInteraction.dismissStatus()
 
     suspend fun createShareIntent(share: LocalSharePreparation): Intent =
         shareInteraction.createIntent(share)
@@ -338,120 +296,6 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         imagePreviewLoader.load(photon)
 
 
-    private suspend fun applyVoiceCaptureResult(result: LocalVoiceCaptureResult) {
-        if (result !is LocalVoiceCaptureResult.Success) {
-            mutableState.update { state -> applyVoiceResult(state, result) }
-            return
-        }
-
-        var recognition: Photon? = null
-        var perceptionFailure: String? = null
-        try {
-            recognition = multimodalPerception.observeSpeech(
-                observation = buildSpeechObservation(result),
-                sampleRateHz = AndroidVoiceCaptureEngine.SAMPLE_RATE_HZ,
-                capturedMillis = result.capturedMillis,
-            ).recognition?.photon
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            perceptionFailure = error.message ?: error::class.simpleName ?: "unbekannter Fehler"
-        }
-        mutableState.update { state ->
-            applyVoiceResult(
-                state = state,
-                result = result,
-                recognition = recognition,
-                perceptionFailure = perceptionFailure,
-            )
-        }
-    }
-
-    private fun buildSpeechObservation(result: LocalVoiceCaptureResult.Success): SpeechObservation = SpeechObservation(
-        sourceId = "android-microphone",
-        observedAt = result.observedAt,
-        observedUntil = result.observedUntil,
-        words = result.words.mapIndexed { index, word ->
-            val candidates = buildList {
-                add(PerceptionCandidate(word.canonical, word.confidence, word.semanticTag))
-                word.alternatives.forEach { (value, confidence) ->
-                    if (value != word.canonical) add(PerceptionCandidate(value, confidence))
-                }
-            }.distinctBy { candidate -> candidate.value to candidate.semanticTag }
-            SpeechWordObservation(index = index, candidates = candidates)
-        },
-        tags = setOf(
-            "conversation:default",
-            "input:speech",
-            "privacy:local-only",
-        ),
-    )
-
-    private fun applyVoiceResult(
-        state: LifeOsState,
-        result: LocalVoiceCaptureResult,
-        recognition: Photon? = null,
-        perceptionFailure: String? = null,
-    ): LifeOsState = when (result) {
-        is LocalVoiceCaptureResult.Success -> {
-            val transcript = result.transcript.trim()
-            val combinedDraft = when {
-                transcript.isBlank() -> state.draft
-                state.draft.isBlank() -> transcript
-                else -> "${state.draft.trimEnd()} $transcript"
-            }
-            val confidence = result.words.map { it.confidence }.average()
-            val recognitions = recognition?.let { persisted ->
-                (state.pendingVoiceRecognitions.filterNot { it.id == persisted.id } + persisted)
-            } ?: state.pendingVoiceRecognitions
-            state.copy(
-                draft = combinedDraft,
-                pendingVoiceRecognitions = recognitions,
-                voicePhase = VoiceCapturePhase.IDLE,
-                voiceStatus = buildString {
-                    append("Lokales Sprachfeld: ")
-                    append(result.words.size).append(" Wortkandidat(en), ")
-                    append(result.segmentCount).append(" Sprachsegment(e), ")
-                    append("Konfidenz ").append("%.0f".format(confidence * 100.0)).append(" %")
-                    if (result.stoppedByLimit) append(" · 20-s-Limit erreicht")
-                    when {
-                        recognition != null -> append(" · Observation & Recognition als Photonen persistiert")
-                        perceptionFailure != null -> append(" · Photon-Lineage nicht persistiert: ").append(perceptionFailure)
-                    }
-                },
-            )
-        }
-        LocalVoiceCaptureResult.NoSpeech -> state.copy(
-            voicePhase = VoiceCapturePhase.IDLE,
-            voiceStatus = "Keine ausreichend stabile Sprache im lokalen Akustikfeld erkannt.",
-        )
-        LocalVoiceCaptureResult.PermissionMissing -> state.copy(
-            voicePhase = VoiceCapturePhase.IDLE,
-            voiceStatus = "Mikrofonberechtigung fehlt.",
-        )
-        is LocalVoiceCaptureResult.Failed -> state.copy(
-            voicePhase = VoiceCapturePhase.IDLE,
-            voiceStatus = result.message,
-        )
-    }
-
-    private fun buildLanguageContext(photons: List<Photon>): LanguageContext = LanguageContext(
-        items = photons.take(MAX_VOICE_CONTEXT_PHOTONS).mapIndexed { index, photon ->
-            LanguageContextItem(
-                photonId = photon.id,
-                kind = photon.mimeType,
-                tags = photon.tags,
-                createdAt = photon.provenance.createdAt,
-                active = index < ACTIVE_VOICE_CONTEXT_PHOTONS,
-                contentTerms = CONTEXT_TERM_REGEX.findAll(photon.content)
-                    .map { it.value.lowercase() }
-                    .filter { it.length >= 2 }
-                    .take(MAX_TERMS_PER_PHOTON)
-                    .toSet(),
-                confidence = photon.confidence,
-            )
-        },
-    )
 
     private fun observeKernel() {
         viewModelScope.launch {
@@ -484,7 +328,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
-        voiceStopRequested.set(true)
+        voiceInteraction.clear()
         imagePreviewLoader.clear()
         super.onCleared()
     }
@@ -499,9 +343,5 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
 
     private companion object {
         const val LOAD_ERROR_MESSAGE = "Speicher konnte nicht geladen werden. Bitte erneut versuchen."
-        const val MAX_VOICE_CONTEXT_PHOTONS = 24
-        const val ACTIVE_VOICE_CONTEXT_PHOTONS = 6
-        const val MAX_TERMS_PER_PHOTON = 32
-        val CONTEXT_TERM_REGEX = Regex("[\\p{L}\\p{N}]+")
     }
 }
