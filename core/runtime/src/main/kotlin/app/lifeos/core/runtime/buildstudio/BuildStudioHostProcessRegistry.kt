@@ -10,45 +10,7 @@ import app.lifeos.core.runtime.capability.TrustLevel
 import app.lifeos.core.runtime.topology.LifeOsRuntimeBindingRegistry
 import app.lifeos.core.runtime.topology.LifeOsRuntimeBindingState
 
-enum class BuildStudioHostState {
-    READY,
-    DEGRADED,
-    QUARANTINED,
-    STOPPED,
-}
-
-data class BuildStudioHostStatus(
-    val state: BuildStudioHostState,
-    val detail: String? = null,
-)
-
-/**
- * Trusted host boundary for J01/N BuildStudio execution.
- *
- * The Android/runtime side owns intent/evidence contracts. A host adapter owns repository identity,
- * exact source commit, isolated workspace, build commands and APK collection. Installing a host never
- * grants candidate activation authority; BuildStudioResult remains non-activating and promotion stays
- * in the existing ToolWorkshop/Evolution/Owner-policy path.
- */
-interface BuildStudioHostAdapter {
-    val id: String
-    suspend fun status(): BuildStudioHostStatus
-    suspend fun run(spec: BuildSpec): BuildStudioResult
-
-    /**
-     * N credential-free expansion seam. A real authorized host may bind the request to its exact
-     * repository/source commit and delegate to [run]. The APK never needs GitHub credentials or SHA
-     * discovery authority. Existing J01 hosts remain source-compatible and fail closed until upgraded.
-     */
-    suspend fun expand(request: BuildStudioExpansionRequest): BuildStudioResult =
-        BuildStudioResult.Failed("host", "buildstudio-expansion-not-supported")
-}
-
-/**
- * Process-owned BuildStudio host seam. CapabilityRegistry remains the single provider truth:
- * `buildstudio.run` exists only while a concrete host is installed, and host health is projected
- * into the same provider/topology state used by ordinary goal routing.
- */
+/** Runtime-owned bridge for BuildStudio host capability and topology state. */
 object BuildStudioHostProcessRegistry {
     private data class Installed(
         val host: BuildStudioHostAdapter,
