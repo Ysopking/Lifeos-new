@@ -8,6 +8,8 @@ import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingEngine
+import app.lifeos.core.language.LanguageRuntimeSnapshot
+import app.lifeos.core.language.VersionedLanguageRuntime
 import app.lifeos.core.language.LanguageContextRetriever
 import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.BinaryAssetStore
@@ -108,6 +110,7 @@ class LifeOsKernel internal constructor(
     val imageAssets: BinaryAssetStore,
     private val proceduralImageGenerator: ProceduralImageGenerationEngine,
     private val languageUnderstanding: LanguageUnderstandingEngine,
+    private val languageRuntime: VersionedLanguageRuntime? = null,
     private val goalPhotonFactory: GoalPhotonFactory,
     private val languageContextBuilder: PhotonLanguageContextBuilder,
     private val goalCapabilityRouter: LanguageGoalCapabilityRouter,
@@ -143,6 +146,9 @@ class LifeOsKernel internal constructor(
     )
     val productivePhotonQueries: ProductivePhotonQueryService =
         ProductivePhotonQueryService(revisionedPhotonStore)
+
+    fun currentLanguageSnapshot(): LanguageRuntimeSnapshot =
+        requireNotNull(languageRuntime) { "Versioned language runtime is unavailable" }.current()
     private var bootstrapJob: Job? = null
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
@@ -323,7 +329,12 @@ class LifeOsKernel internal constructor(
             )
         } else {
             val language = persistUserUtterance(photon)
-            val response = LifeOsResponseComposer.compose(language)
+            val responseGenerator = languageRuntime?.current()?.responseGeneration
+            val response = if (responseGenerator != null) {
+                LifeOsResponseComposer(responseGenerator).compose(language)
+            } else {
+                LifeOsResponseComposer.compose(language)
+            }
             val assistant = persistAndIngest(
                 assistantPhotonFor(photon, response, fast = false),
                 PhotonIngressMode.DERIVED,
@@ -451,7 +462,8 @@ class LifeOsKernel internal constructor(
         ).context
         val source = persistAndIngest(photon)
         return try {
-            val understanding = languageUnderstanding.understand(photon.content, context)
+            val understandingEngine = languageRuntime?.current()?.understanding ?: languageUnderstanding
+            val understanding = understandingEngine.understand(photon.content, context)
             val routing = goalCapabilityRouter.route(understanding.goal)
             val goalPhoton = goalPhotonFactory.create(
                 result = understanding,

@@ -14,6 +14,7 @@ import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.LanguageUnderstandingEngine
+import app.lifeos.core.language.VersionedLanguageRuntime
 import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.StaticFieldRegistry
@@ -73,6 +74,7 @@ internal data class KernelFoundationGraph(
     val healthGate: HealthGate,
     val mmsiRuntime: MmsiRuntimeBackendProbe,
     val languageUnderstanding: LanguageUnderstandingEngine,
+    val languageRuntime: VersionedLanguageRuntime,
     val goalPhotonFactory: GoalPhotonFactory,
     val languageContextBuilder: PhotonLanguageContextBuilder,
     val sceneCompiler: ProceduralSceneCompiler,
@@ -134,7 +136,8 @@ internal class KernelFoundationComposition(
             protectionAdmission = protectionCoordinator,
         )
         val mmsiRuntime = MmsiRuntimeBackendProbe(appContext)
-        val languageUnderstanding = LanguageUnderstandingEngine()
+        val languageRuntime = VersionedLanguageRuntime()
+        val languageUnderstanding = languageRuntime.current().understanding
         val goalPhotonFactory = GoalPhotonFactory()
         val languageContextBuilder = PhotonLanguageContextBuilder()
         val sceneCompiler = ProceduralSceneCompiler()
@@ -230,6 +233,7 @@ internal class KernelFoundationComposition(
             healthGate = healthGate,
             mmsiRuntime = mmsiRuntime,
             languageUnderstanding = languageUnderstanding,
+            languageRuntime = languageRuntime,
             goalPhotonFactory = goalPhotonFactory,
             languageContextBuilder = languageContextBuilder,
             sceneCompiler = sceneCompiler,

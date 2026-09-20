@@ -66,6 +66,7 @@ class LifeOsKernelFactory(
             cognitiveTriggers = cognition.cognitiveTriggers,
             mmsiRuntime = foundation.mmsiRuntime,
             languageUnderstanding = foundation.languageUnderstanding,
+            languageRuntime = foundation.languageRuntime,
             goalPhotonFactory = foundation.goalPhotonFactory,
             goalPlans = foundation.goalPlans,
             productiveGoalConvergence = world.productiveGoalConvergence,

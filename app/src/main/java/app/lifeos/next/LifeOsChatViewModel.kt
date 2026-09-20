@@ -64,7 +64,10 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
     private val owner = application as LifeOsApplication
     private val kernel = owner.kernel
     private val multimodalPerception = owner.multimodalPerception
-    private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
+    private val voiceCapture = AndroidVoiceCaptureEngine(
+        context = application.applicationContext,
+        languageSnapshotProvider = kernel::currentLanguageSnapshot,
+    )
     private val voiceStopRequested = AtomicBoolean(false)
     private val imagePreviewLoader = ChatImagePreviewLoader(kernel)
     private val stableChatProjection = StableChatProjection()

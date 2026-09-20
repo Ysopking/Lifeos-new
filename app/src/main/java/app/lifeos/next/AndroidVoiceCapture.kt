@@ -11,6 +11,7 @@ import app.lifeos.core.language.AcousticLexemeCandidate
 import app.lifeos.core.language.BidirectionalSpeechFieldEngine
 import app.lifeos.core.language.DeterministicVoiceActivitySegmenter
 import app.lifeos.core.language.LanguageContext
+import app.lifeos.core.language.LanguageRuntimeSnapshot
 import app.lifeos.core.language.Pcm16MonoAudio
 import app.lifeos.core.language.PhraseFieldDecoder
 import app.lifeos.core.language.PhraseWordCandidate
@@ -47,6 +48,7 @@ data class VoiceWordHypothesis(
 class AndroidVoiceCaptureEngine(
     private val context: Context,
     private val segmenter: DeterministicVoiceActivitySegmenter = DeterministicVoiceActivitySegmenter(),
+    private val languageSnapshotProvider: (() -> LanguageRuntimeSnapshot)? = null,
     private val speechEngine: BidirectionalSpeechFieldEngine = BidirectionalSpeechFieldEngine(),
     private val phraseDecoder: PhraseFieldDecoder = PhraseFieldDecoder(),
 ) {
@@ -63,6 +65,9 @@ class AndroidVoiceCaptureEngine(
         languageContext: LanguageContext,
     ): LocalVoiceCaptureResult {
         if (!hasPermission()) return LocalVoiceCaptureResult.PermissionMissing
+        val languageSnapshot = languageSnapshotProvider?.invoke()
+        val activeSpeechEngine = languageSnapshot?.speechEngine ?: speechEngine
+        val activePhraseDecoder = languageSnapshot?.phraseDecoder ?: phraseDecoder
 
         val minimumBuffer = AudioRecord.getMinBufferSize(
             SAMPLE_RATE_HZ,
@@ -131,8 +136,8 @@ class AndroidVoiceCaptureEngine(
         if (segments.isEmpty()) return LocalVoiceCaptureResult.NoSpeech
 
         val hypotheses = segments.flatMap { segment ->
-            val result = speechEngine.understand(segment.extract(audio), context = languageContext)
-            val phrase = phraseDecoder.decode(result.rawAcousticLattice, context = languageContext)
+            val result = activeSpeechEngine.understand(segment.extract(audio), context = languageContext)
+            val phrase = activePhraseDecoder.decode(result.rawAcousticLattice, context = languageContext)
             val phraseWinner = phrase.winner
             if (phraseWinner != null && phraseWinner.activation >= MIN_PHRASE_CONFIDENCE) {
                 phraseWinner.words
