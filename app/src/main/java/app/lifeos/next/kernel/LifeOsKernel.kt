@@ -618,6 +618,13 @@ class LifeOsKernel internal constructor(
         return imageAssets.load(descriptor.asset)
     }
 
+    private fun requireCompletedBoot(action: String) {
+        require(
+            mutableBootstrapState.value.status == KernelBootstrapStatus.READY ||
+                mutableBootstrapState.value.status == KernelBootstrapStatus.DEGRADED
+        ) { "$action requires a completed kernel boot" }
+    }
+
     private suspend fun persistWithoutCognition(
         photon: Photon,
         mode: PhotonIngressMode,
