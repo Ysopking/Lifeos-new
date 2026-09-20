@@ -1,7 +1,5 @@
 package app.lifeos.core.runtime.deepsearch
 
-import app.lifeos.core.runtime.capability.GeneratedToolRuntimeProcessRegistry
-
 /**
  * Process-local source extension point for productive DeepSearch.
  *
@@ -56,23 +54,5 @@ object RuntimeDeepSearchPermissionGate : DeepSearchPermissionGate {
         return DeepSearchPermissionRuntimeRegistry.currentOrNull()
             ?.permissionFor(source)
             ?: DeepSearchPermissionState.DENIED
-    }
-}
-
-/**
- * Productive external admission reuses the single process CapabilityRegistry plus the dynamic
- * Owner-Policy permission view. Absence of either authority fails closed.
- */
-object RuntimeAwareDeepSearchCapabilityGate : DeepSearchCapabilityGate {
-    override suspend fun authorize(source: DeepSearchSourceDescriptor): DeepSearchSourceAuthorization {
-        if (source.kind == DeepSearchSourceKind.LOCAL) {
-            return DeepSearchSourceAuthorization(true, "local-source")
-        }
-        val capabilities = GeneratedToolRuntimeProcessRegistry.capabilities()
-            ?: return DeepSearchSourceAuthorization(false, "productive-capability-registry-unavailable")
-        return CapabilityRegistryDeepSearchGate(
-            registry = capabilities,
-            permissionGate = RuntimeDeepSearchPermissionGate,
-        ).authorize(source)
     }
 }

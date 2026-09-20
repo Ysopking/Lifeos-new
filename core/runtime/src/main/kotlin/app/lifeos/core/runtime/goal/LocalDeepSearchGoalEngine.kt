@@ -32,7 +32,6 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchSourceDescriptor
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceKind
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceSnapshot
 import app.lifeos.core.runtime.deepsearch.DeepSearchStatus
-import app.lifeos.core.runtime.deepsearch.RuntimeAwareDeepSearchCapabilityGate
 import app.lifeos.core.runtime.deepsearch.RuntimeDeepSearchPermissionGate
 import app.lifeos.core.runtime.level7.EvidenceActionKind
 import app.lifeos.core.runtime.level7.LanguageActiveEvidenceBridge

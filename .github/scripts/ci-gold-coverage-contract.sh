@@ -6,7 +6,7 @@ required_jvm_tests=(
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/capability/BoundedGeneratedToolBootRecoveryTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/capability/DurableToolWorkshopOwnerRevocationTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/capability/HotSwapRoutingRecoveryTest.kt"
-  "core/runtime/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt"
+  "core/runtime-deepsearch/src/test/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchMissionRecoveryAuditTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/resource/HardwareAdaptiveResourceIntelligenceTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/resource/ResourceIntelligenceCompletionTest.kt"
   "core/runtime/src/test/kotlin/app/lifeos/core/runtime/resource/WorldFormulaBudgetBrokerTest.kt"

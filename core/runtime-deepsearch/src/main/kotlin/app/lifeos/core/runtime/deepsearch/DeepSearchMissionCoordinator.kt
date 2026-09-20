@@ -2,7 +2,6 @@ package app.lifeos.core.runtime.deepsearch
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
-import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import kotlinx.coroutines.CancellationException
 
 /** Durable final product returned by one V12 mission. */
@@ -20,6 +19,10 @@ interface DeepSearchResultPhotonPersistence {
     suspend fun findForMission(missionId: DeepSearchMissionId): Photon?
 }
 
+fun interface DeepSearchMissionTraceRecorder {
+    suspend fun record(definition: DeepSearchMissionDefinition, product: DeepSearchMissionProduct)
+}
+
 /**
  * Coordinates V12 mission state, planner checkpoints and the durable result Photon.
  *
@@ -33,6 +36,7 @@ class DeepSearchMissionCoordinator(
     private val resultPhotons: DeepSearchResultPhotonPersistence,
     private val projector: DeepSearchCheckpointResultProjector = DeepSearchCheckpointResultProjector(),
     private val verifier: DeepSearchMissionVerifier = DeepSearchMissionVerifier(projector),
+    private val traces: DeepSearchMissionTraceRecorder = DeepSearchMissionTraceRecorder { _, _ -> },
 ) {
     suspend fun run(
         definition: DeepSearchMissionDefinition,
@@ -137,13 +141,7 @@ class DeepSearchMissionCoordinator(
         // Goal Photons are created as immutable revision-1 Photons in the current V7/V12 production
         // path; the mission identity itself binds the exact goal Photon id. If that contract becomes
         // revisioned, the revision must be added to DeepSearchMissionDefinition rather than inferred.
-        DecisionTraceRuntimeRegistry.currentOrNull()?.recordDeepSearch(
-            goalPhotonId = definition.goalPhotonId,
-            goalPhotonRevision = 1L,
-            recordedAt = definition.createdAt,
-            result = product.result,
-            missionId = definition.id,
-        )
+        traces.record(definition, product)
         return product
     }
 

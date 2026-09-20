@@ -12,6 +12,7 @@ include(
     ":core:field",
     ":core:runtime",
     ":core:runtime-contracts",
+    ":core:runtime-deepsearch",
     ":core:runtime-personal",
     ":core:data",
     ":core:image",

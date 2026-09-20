@@ -2,7 +2,7 @@ package app.lifeos.core.runtime.deepsearch
 
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
 import app.lifeos.core.runtime.capability.CapabilityId
-import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.CapabilityProviderCatalog
 import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.capability.TrustLevel
@@ -58,17 +58,21 @@ class DeepSearchPlannerTest {
     @Test
     fun `external source requires both usable capability and granted permission`() = runTest {
         val capabilityId = CapabilityId("search.external")
-        val registry = CapabilityRegistry(
-            listOf(
-                CapabilityDescriptor(
-                    capabilityId = capabilityId,
-                    providerId = "connector-search",
-                    providerType = ProviderType.CONNECTOR,
-                    state = ProviderState.ACTIVE,
-                    trustLevel = TrustLevel.SYSTEM,
-                )
+        val providers = listOf(
+            CapabilityDescriptor(
+                capabilityId = capabilityId,
+                providerId = "connector-search",
+                providerType = ProviderType.CONNECTOR,
+                state = ProviderState.ACTIVE,
+                trustLevel = TrustLevel.SYSTEM,
             )
         )
+        val registry = object : CapabilityProviderCatalog {
+            override suspend fun providersFor(
+                capabilityId: CapabilityId,
+                includeUnavailable: Boolean,
+            ): List<CapabilityDescriptor> = providers.filter { it.capabilityId == capabilityId }
+        }
         val granted = FakeSource(
             DeepSearchSourceDescriptor(
                 sourceId = "external-granted",
