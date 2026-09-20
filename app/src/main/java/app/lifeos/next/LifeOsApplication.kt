@@ -186,7 +186,6 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private lateinit var liveSourceController: LiveSourceProcessController
     private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
-    private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val storageIntelligenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var storageIntelligenceJob: Job? = null
@@ -226,256 +225,36 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private suspend fun initializeRuntime() {
-        generatedToolStatusReader = GeneratedToolRuntimeStatusReader(
-            EncryptedGeneratedToolStateRepository(this),
-        )
-        hardwareResourceIntelligence = HardwareResourceIntelligenceRuntime(this)
-        storageIntelligence = AndroidStorageIntelligenceRuntime(
+        val installed = ProcessRuntimeInstaller(
             context = this,
-            hardware = hardwareResourceIntelligence,
-        )
-        storageMaintenance = AndroidStorageMaintenanceRuntime(
-            context = this,
-            hardware = hardwareResourceIntelligence,
-        )
-        LifeOsIntegratedCognitionSuiteRegistry.install(LifeOsIntegratedCognitionSuite())
+            onSelfObservationRequested = ::requestSelfObservation,
+            onStorageMaintenanceRequested = ::refreshStorageIntelligence,
+            onStageReady = { evidence ->
+                mutableStartupState.value = LifeOsProcessStartupState.starting(
+                    stage =
+                        "BootEngine · " +
+                            evidence.stage.name.lowercase().replace('_', ' '),
+                )
+            },
+        ).install()
 
-        LifeOsStartupComposition.start(
-            LifeOsStartupHooks(
-                installSharedResourceRuntime = {
-                    SharedResourceBudgetRuntimeRegistry.install(hardwareResourceIntelligence)
-                    ownerPolicy = OwnerPolicyLedger(EncryptedOwnerPolicyRepository(this))
-                    ExternalEffectRuntimeRegistry.install(
-                        PolicyGatedExternalEffectExecutor(
-                            policyGate = OwnerPolicyEffectGate(ownerPolicy),
-                            receipts = EncryptedExternalEffectReceiptRepository(this),
-                            payloads = EncryptedExternalPayloadRepository(this),
-                            transport = ExternalTransportRuntimeRegistry.transport(),
-                            observationReconciler = ExternalTransportRuntimeRegistry.reconciler(),
-                        )
-                    )
-                    resourceBudgets = ResourceBudgetCoordinator(EncryptedResourceBudgetRepository(this))
-                    decisionTraces = DecisionTraceLedger(EncryptedDecisionTraceRepository(this))
-                    selfObservationDecisionTraceRecorder = SelfObservationDecisionTraceRecorder(decisionTraces)
-                    goalDecisionTraceRecorder = GoalDecisionTraceRecorder(decisionTraces)
-                    DecisionTraceRuntimeRegistry.install(SubsystemDecisionTraceRecorder(decisionTraces))
-                    LifecycleDecisionTraceRuntimeRegistry.install(LifecycleDecisionTraceRecorder(decisionTraces))
-                    PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
-                    WebDeepSearchRuntime.installPolicy(ownerPolicy)
-                    GeneratedProviderRestoreAuthorityRuntimeRegistry.install(
-                        GeneratedProviderRestoreAuthority(
-                            ownerPolicy = ownerPolicy,
-                            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
-                            scope = PrivateOwnerPolicyBaseline.GENERATED_PROVIDER_RESTORE_SCOPE,
-                        )
-                    )
-                },
-                installGoalExecutionRuntime = {
-                    GoalExecutionRuntimeRegistry.install(
-                        PrivateGoalActionExecutionGuard(
-                            ownerPolicy = ownerPolicy,
-                            budgets = resourceBudgets,
-                            hardware = hardwareResourceIntelligence,
-                            sharedBudgets = hardwareResourceIntelligence,
-                            traces = goalDecisionTraceRecorder,
-                        )
-                    )
-                },
-                createKernel = {
-                    kernel = LifeOsKernelFactory(
-                        context = this,
-                        hardwareResourceIntelligence = hardwareResourceIntelligence,
-                        bootReadyMaintenanceTrigger = {
-                            refreshStorageIntelligence()
-                        },
-                    ).create()
-                    val ownerAssetReviews = EncryptedOwnerAssetReviewRepository(this)
-                    photonIngress = CanonicalPhotonIngress(kernel, ownerAssetReviews)
-                    lifePhotonRepository = CanonicalLifePhotonRepository(
-                        delegate = kernel.photonStore,
-                        productiveIngress = photonIngress::ingest,
-                    )
-                    lifeMemoryRuntime = DurableLifeMemoryRuntime(lifePhotonRepository)
-                    DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
-                    multimodalPerception = MultimodalPerceptionRuntime(kernel)
-                    multimodalPerception.install()
-                    val integratedCognition = requireNotNull(LifeOsIntegratedCognitionSuiteRegistry.current()) {
-                        "Integrated cognition suite must be installed before kernel composition"
-                    }
-                    val basePersistence = CausalDerivedPhotonPersistence { derived, _ ->
-                        photonIngress.ingest(derived, PhotonIngressMode.DERIVED)
-                    }
-                    val domainPersistence = DomainEvidenceConvergingPersistence(
-                        delegate = basePersistence,
-                        convergence = DomainEvidenceConvergenceCoordinator(kernel.photonStore),
-                    )
-                    val futurePlanning = FuturePlanningCoordinator(
-                        photons = kernel.photonStore,
-                        authority = PrivateFuturePlanningAuthority(
-                            ownerPolicy = ownerPolicy,
-                            resources = hardwareResourceIntelligence,
-                        ),
-                        planner = integratedCognition.lifePlanner,
-                        evaluator = integratedCognition.seinEvaluator,
-                    )
-                    val productivePersistence = FuturePlanningPersistence(
-                        delegate = domainPersistence,
-                        planning = futurePlanning,
-                    )
-                    lifePhotonRepository.reconcilePersisted()
-                    lifeMemoryRuntime.rebuild(Instant.now())
-                    CognitiveSnapshotRuntimeRegistry.captureLatest()
-                    futurePlanning.reconsiderAll().forEach { planned ->
-                        photonIngress.ingest(planned, PhotonIngressMode.DERIVED)
-                    }
-                    val frozenCognitiveModules =
-                        kernel.freezeCognitiveModulesForCurrentCycle(
-                            integratedCognition.domainModules
-                        )
-                    val causalCoordinator = RecursiveCausalCognitionCoordinator(
-                        modules = frozenCognitiveModules,
-                        engine = CausalCognitionEngine(
-                            ledger = PhotonBackedCausalLedgerStore(kernel.photonStore),
-                        ),
-                        persistence = productivePersistence,
-                    )
-                    CausalCognitionTaskObserverRegistry.install(
-                        CausalCognitionTaskObserver(
-                            photons = kernel.photonStore,
-                            cognition = causalCoordinator,
-                        )
-                    )
-                    LifeOsAutomationPhotonBridge.install { photon ->
-                        photonIngress.ingest(photon, PhotonIngressMode.ORIGIN)
-                        photon
-                    }
-                    NovelPromotionRuntimeEventRegistry.install { promotion ->
-                        val capability = promotion.activeRecord.manifest.sourceCapability.value
-                        val toolId = promotion.activeRecord.manifest.toolId
-                        photonIngress.ingest(
-                            Photon(
-                                content = "Controlled Evolution aktiviert $capability über $toolId nach " +
-                                    "Novel-Canary-, Readiness-, Owner- und Promotion-Gates.",
-                                provenance = Provenance(
-                                    source = "controlled-evolution",
-                                    actor = "system",
-                                    createdAt = promotion.seal.sealedAt,
-                                ),
-                                tags = setOf(
-                                    "chat",
-                                    "chat:system",
-                                    "conversation:default",
-                                    "system:evolution",
-                                    "evolution:activated",
-                                    "capability:$capability",
-                                    "tool:$toolId",
-                                ),
-                            ),
-                            PhotonIngressMode.ORIGIN,
-                        )
-                        requestSelfObservation(SelfObservationTrigger.TOOL_STATE_TRANSITION)
-                        Unit
-                    }
-                },
-                installDeepSearchRuntime = {
-                    DeepSearchMissionRuntimeRegistry.install(
-                        DeepSearchMissionCoordinator(
-                            ledger = DeepSearchMissionLedger(EncryptedDeepSearchMissionRepository(this)),
-                            checkpoints = DeepSearchCheckpointStore(EncryptedDeepSearchCheckpointRepository(this)),
-                            resultPhotons = object : DeepSearchResultPhotonPersistence {
-                                override suspend fun save(photon: Photon) {
-                                    photonIngress.ingest(photon, PhotonIngressMode.DERIVED)
-                                }
-
-                                override suspend fun load(id: PhotonId): Photon? = kernel.photonStore.load(id)
-
-                                override suspend fun findForMission(missionId: DeepSearchMissionId): Photon? {
-                                    val tag = "deepsearch-mission:${missionId.value}"
-                                    val matches = kernel.productivePhotonQueries.tags(
-                                        allTags = setOf(tag),
-                                        limit = 2,
-                                    ).photons
-                                    check(matches.size <= 1) {
-                                        "DeepSearch mission resolved to multiple result Photons"
-                                    }
-                                    return matches.singleOrNull()
-                                }
-                            },
-                        )
-                    )
-                },
-                startSelfHealingRuntime = {
-                    val healthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
-                        "Kernel did not install its HealthGraph"
-                    }
-                    val quarantineRegistry = requireNotNull(QuarantineRegistryProcessRegistry.current()) {
-                        "Kernel did not install its QuarantineRegistry"
-                    }
-                    val supervisor = requireNotNull(RuntimeSupervisorProcessRegistry.current()) {
-                        "Kernel did not install its RuntimeSupervisor"
-                    }
-                    val protectionCoordinator = requireNotNull(
-                        ProtectionCoordinatorProcessRegistry.current()
-                    ) {
-                        "Kernel did not install its ProtectionCoordinator"
-                    }
-                    selfHealingRuntime = PrivateSelfHealingRuntime.create(
-                        context = this,
-                        scope = selfHealingScope,
-                        graph = healthGraph,
-                        quarantineRegistry = quarantineRegistry,
-                        budgets = resourceBudgets,
-                        runtime = kernel.runtime,
-                        supervisor = supervisor,
-                    )
-                    escalationRuntime = PrivateEscalationRuntime.create(
-                        context = this,
-                        scope = selfHealingScope,
-                        graph = healthGraph,
-                        protection = protectionCoordinator,
-                        selfHealing = selfHealingRuntime,
-                    )
-                    selfHealingRuntime.verifyLedgerIntegrity()
-                    escalationRuntime.verifyLedgerIntegrity()
-                    LifeOsHealthPhotonBridge.start(
-                        scope = selfHealingScope,
-                        graph = healthGraph,
-                        persist = { photon ->
-                            photonIngress.ingest(photon, PhotonIngressMode.ORIGIN)
-                            Unit
-                        },
-                    )
-                    escalationRuntime.orchestrator.start()
-                },
-                installDurableGoalPlanRuntime = {
-                    DurableGoalPlanRuntimeRegistry.install(
-                        DurableGoalPlanRuntime(
-                            ledger = kernel.goalPlans,
-                            convergence = kernel.productiveGoalConvergence,
-                            persistDerivedOutcome = { photon ->
-                                photonIngress.ingestWithReceipt(photon, PhotonIngressMode.DERIVED)
-                            },
-                            outcomeLookup = kernel.productivePhotonQueries,
-                            cognitiveBindings = EncryptedGoalCognitiveCycleBindingRepository(this),
-                            outcomeLearning = kernel.goalOutcomeLearning,
-                            traces = goalDecisionTraceRecorder,
-                        )
-                    )
-                },
-                startKernel = {
-                    kernel.start().join()
-                },
-                requireCognitiveStateReady = {
-                    kernel.requireCognitiveReady()
-                },
-                stageObserver = { evidence ->
-                    LifeOsRuntimeWiring.onStageReady(evidence)
-                    mutableStartupState.value = LifeOsProcessStartupState.starting(
-                        stage = "BootEngine · ${evidence.stage.name.lowercase().replace('_', ' ')}",
-                    )
-                },
-            )
-        )
+        kernel = installed.kernel
+        photonIngress = installed.photonIngress
+        generatedToolStatusReader = installed.generatedToolStatusReader
+        hardwareResourceIntelligence = installed.hardwareResourceIntelligence
+        storageIntelligence = installed.storageIntelligence
+        storageMaintenance = installed.storageMaintenance
+        ownerPolicy = installed.ownerPolicy
+        resourceBudgets = installed.resourceBudgets
+        decisionTraces = installed.decisionTraces
+        selfObservationDecisionTraceRecorder =
+            installed.selfObservationDecisionTraceRecorder
+        goalDecisionTraceRecorder = installed.goalDecisionTraceRecorder
+        lifePhotonRepository = installed.lifePhotonRepository
+        lifeMemoryRuntime = installed.lifeMemoryRuntime
+        multimodalPerception = installed.multimodalPerception
+        selfHealingRuntime = installed.selfHealingRuntime
+        escalationRuntime = installed.escalationRuntime
 
         val selfObservationHealthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
             "Self observation requires the productive HealthGraph"
