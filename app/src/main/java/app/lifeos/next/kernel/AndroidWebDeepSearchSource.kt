@@ -25,6 +25,8 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.util.Base64
+import java.util.Locale
 import javax.net.ssl.HttpsURLConnection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -51,6 +53,42 @@ internal data class WebDocumentHit(
         require(url.isNotBlank())
         require(passage.isNotBlank())
     }
+}
+
+internal data class WebEvidenceCacheEntry(
+    val title: String,
+    val url: String,
+    val passage: String,
+) {
+    init {
+        require(url.isNotBlank())
+        require(passage.isNotBlank())
+    }
+}
+
+internal object WebEvidenceCacheCodec {
+    fun encode(entry: WebEvidenceCacheEntry): String = listOf(
+        "web-evidence-cache/v1",
+        encodePart(entry.title),
+        encodePart(entry.url),
+        encodePart(entry.passage),
+    ).joinToString("\n")
+
+    fun decode(content: String): WebEvidenceCacheEntry? = runCatching {
+        val lines = content.lineSequence().toList()
+        require(lines.size == 4 && lines[0] == "web-evidence-cache/v1")
+        WebEvidenceCacheEntry(
+            title = decodePart(lines[1]),
+            url = decodePart(lines[2]),
+            passage = decodePart(lines[3]),
+        )
+    }.getOrNull()
+
+    private fun encodePart(value: String): String =
+        Base64.getUrlEncoder().withoutPadding().encodeToString(value.encodeToByteArray())
+
+    private fun decodePart(value: String): String =
+        Base64.getUrlDecoder().decode(value).decodeToString()
 }
 
 internal fun interface WebSearchTransport {
@@ -352,16 +390,29 @@ internal class AndroidWebDeepSearchSource(
         referenceStatement: String?,
     ): List<DeepSearchFindingDraft> {
         val hits = transport.search(query, SEARCH_RESPONSE_BYTES)
-        return hits.take(MAX_RESULTS).mapIndexed { index, hit ->
-            val document = if (index < MAX_FETCHED_DOCUMENTS) {
-                try {
-                    documentTransport.fetch(hit.url, query, DOCUMENT_RESPONSE_BYTES)
+        val fetchedHosts = linkedSetOf<String>()
+        var fetchedDocuments = 0
+
+        return hits.take(MAX_RESULTS).map { hit ->
+            val host = canonicalHost(hit.url)
+            val mayFetchHost =
+                fetchedDocuments < MAX_FETCHED_DOCUMENTS &&
+                    host != null &&
+                    fetchedHosts.add(host)
+
+            val document = if (mayFetchHost) {
+                loadCachedDocument(hit.url) ?: try {
+                    documentTransport.fetch(hit.url, query, DOCUMENT_RESPONSE_BYTES)?.also { fetched ->
+                        persistDocumentCache(fetched)
+                    }
                 } catch (_: Exception) {
                     null
                 }
             } else {
                 null
             }
+            if (document != null) fetchedDocuments += 1
+
             finding(
                 hit = hit,
                 document = document,
@@ -414,6 +465,71 @@ internal class AndroidWebDeepSearchSource(
             ),
         )
     }
+
+    private suspend fun loadCachedDocument(url: String): WebDocumentHit? {
+        val cachePhoton = loadPhoton(cachePhotonId(url, cacheBucket(now()))) ?: return null
+        if ("web-evidence-cache" !in cachePhoton.tags) return null
+        val entry = WebEvidenceCacheCodec.decode(cachePhoton.content) ?: return null
+        if (entry.url != url) return null
+        return WebDocumentHit(
+            title = entry.title,
+            url = entry.url,
+            passage = entry.passage,
+        )
+    }
+
+    private suspend fun persistDocumentCache(document: WebDocumentHit) {
+        val bucket = cacheBucket(now())
+        val id = cachePhotonId(document.url, bucket)
+        val entry = WebEvidenceCacheEntry(
+            title = document.title,
+            url = document.url,
+            passage = document.passage,
+        )
+        val content = WebEvidenceCacheCodec.encode(entry)
+        loadPhoton(id)?.let { existing ->
+            require(existing.content == content) { "web-evidence-cache-id-collision" }
+            return
+        }
+        persistPhoton(
+            Photon(
+                id = id,
+                content = content,
+                mimeType = "application/vnd.lifeos.web-evidence-cache+text",
+                phase = PhotonPhase.ARCHIVED,
+                semanticMass = 0.0,
+                energy = 0.0,
+                confidence = 1.0,
+                provenance = Provenance(
+                    source = document.url,
+                    actor = descriptor.sourceId,
+                    createdAt = now(),
+                ),
+                tags = setOf(
+                    "web-evidence-cache",
+                    "web-cache-bucket:" + bucket,
+                    "web-url:" + StableFieldIds.fingerprint("web-url/v1", document.url),
+                ),
+            )
+        )
+    }
+
+    private fun cachePhotonId(url: String, bucket: Long): PhotonId =
+        PhotonId(
+            "web-evidence-cache_" + StableFieldIds.fingerprint(
+                "web-evidence-cache/v1",
+                url,
+                bucket.toString(),
+            )
+        )
+
+    private fun cacheBucket(instant: Instant): Long =
+        instant.epochSecond / WEB_CACHE_TTL_SECONDS
+
+    private fun canonicalHost(url: String): String? =
+        runCatching { URI(url).host?.lowercase(Locale.ROOT) }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
 
     private fun evidenceConfidence(
         query: String,
@@ -519,5 +635,6 @@ internal class AndroidWebDeepSearchSource(
         const val MAX_STATEMENT_CHARS = 1_200
         const val MAX_REFINEMENT_TERMS = 8
         const val MAX_ROOT_TERMS = 8
+        const val WEB_CACHE_TTL_SECONDS = 6L * 60L * 60L
     }
 }
