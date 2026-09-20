@@ -29,6 +29,11 @@ python3 .github/scripts/extract-performance-gold.py \
   --out "$evidence_dir/performance-baseline.json"
 test -s "$evidence_dir/performance-baseline.json"
 
+step "Product Gold 03c: blocking performance budget"
+python3 .github/scripts/check-performance-budget.py \
+  --evidence "$evidence_dir/performance-baseline.json" \
+  --budget .github/performance-budget.json
+
 step "Product Gold 04: integration contract presence"
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeBindings.kt
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeTopology.kt

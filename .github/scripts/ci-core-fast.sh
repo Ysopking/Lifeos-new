@@ -43,6 +43,9 @@ bash .github/scripts/ci-main-authority-contract.sh
 step "gate 00e: performance evidence parser contract"
 python3 .github/scripts/test-performance-gold.py
 
+step "gate 00e2: blocking performance budget contract"
+python3 .github/scripts/test-performance-budget.py
+
 step "gate 01: core model tests"
 ./gradlew :core:model:test --stacktrace
 

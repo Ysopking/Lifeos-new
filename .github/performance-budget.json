@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "blocking": true,
+  "source": "android-emulator-recovery",
+  "baseline": {
+    "head_sha": "e3b2adcea6ee87fd415ec0121a2e2096873c9ef5",
+    "derivation": "upper=max_observed+(max_observed-min_observed)",
+    "measurements": [
+      {
+        "run_id": 35534351228,
+        "attempt": 1,
+        "artifact_id": 10612363554,
+        "artifact_sha256": "05e7b4b0c747d0e5c022378825f0ad0b9630e304f951408e8cde429ad53bca23",
+        "cold_total_ms": 711,
+        "cold_wait_ms": 713,
+        "sample_count": 40,
+        "median_ms": 1593,
+        "max_ms": 25904
+      },
+      {
+        "run_id": 35534351228,
+        "attempt": 2,
+        "artifact_id": 10612044759,
+        "artifact_sha256": "5c8192bc17f6d9e5bd452e108b27397bac9e9a05536cdda771263f0bc6989ea9",
+        "cold_total_ms": 627,
+        "cold_wait_ms": 630,
+        "sample_count": 40,
+        "median_ms": 1729,
+        "max_ms": 28278
+      },
+      {
+        "run_id": 35534351228,
+        "attempt": 3,
+        "artifact_id": 10612661122,
+        "artifact_sha256": "14bde30e247932d75c58be2ee390fddb69b9adf2d7fc065f8731fdf28834f3f6",
+        "cold_total_ms": 692,
+        "cold_wait_ms": 695,
+        "sample_count": 40,
+        "median_ms": 1589,
+        "max_ms": 25141
+      }
+    ]
+  },
+  "cold_start": {
+    "total_ms_max": 795,
+    "wait_ms_max": 796
+  },
+  "instrumentation": {
+    "sample_count_min": 40,
+    "median_ms_max": 1869,
+    "max_ms_max": 31415,
+    "required_sample_files": [
+      "deepsearch-encrypted-recovery-corruption.txt",
+      "field-snapshot-atomic-recovery.txt",
+      "goals-workspace-read-only.txt",
+      "hardware-resource-intelligence.txt",
+      "level7-equation-rollback-recovered.txt",
+      "level7-equation-rollback-seed.txt",
+      "level7-process-death-recovered.txt",
+      "level7-process-death-seed.txt",
+      "level7-productive-world-persistence.txt",
+      "level7-truth-closure-gold.txt",
+      "level7-truth-closure-seed.txt",
+      "m01-live-data-permission-ingress.txt",
+      "m02-live-source-cursor-recovery.txt",
+      "m02-live-source-snapshot-recovery.txt",
+      "memory-workspace-read-only.txt",
+      "offline-image-artifact-e2e.txt",
+      "owner-policy-asset-revoke-restart.txt",
+      "personal-conversation-import.txt",
+      "personal-corpus-language.txt",
+      "recovered-active.txt",
+      "recovered-convergence-decision.txt",
+      "recovered-goal-plan.txt",
+      "recovered-goals-workspace.txt",
+      "recovered-graph-compaction.txt",
+      "recovered-language-runtime.txt",
+      "recovered-outcome-learning.txt",
+      "recovered-product-gold-chat.txt",
+      "recovered-semantic-action-dataflow.txt",
+      "seed-active.txt",
+      "seed-convergence-decision.txt",
+      "seed-goal-plan.txt",
+      "seed-graph-compaction.txt",
+      "seed-language-runtime.txt",
+      "seed-outcome-learning.txt",
+      "seed-product-gold-chat.txt",
+      "seed-semantic-action-dataflow.txt",
+      "seed-semantic-goal-v4.txt",
+      "self-observation-recovered.txt",
+      "self-observation-seed.txt",
+      "world-equation-auto-evolution-recovery.txt"
+    ]
+  }
+}
