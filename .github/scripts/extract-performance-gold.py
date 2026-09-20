@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import statistics
+import math
 import tempfile
 from pathlib import Path
 
@@ -76,6 +77,7 @@ def build(root: Path) -> dict:
             "sample_count": len(values),
             "min_ms": min(values),
             "median_ms": int(round(statistics.median(values))),
+            "p95_ms": sorted(values)[max(0, math.ceil(len(values) * 0.95) - 1)],
             "max_ms": max(values),
             "samples": samples,
         },
