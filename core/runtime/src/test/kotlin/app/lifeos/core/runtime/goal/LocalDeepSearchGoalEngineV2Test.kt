@@ -99,6 +99,43 @@ class LocalDeepSearchGoalEngineV2Test {
         assertTrue(produced.photon.id.value.startsWith("deep-search-result_"))
     }
 
+    @Test
+    fun `private no-export photons never become local DeepSearch evidence`() = runTest {
+        val privatePhoton = Photon(
+            id = PhotonId("private-corpus-evidence"),
+            content = "lifeos photons private owner archive",
+            confidence = 1.0,
+            semanticMass = 4.0,
+            provenance = Provenance("private-test", "owner", at.minusSeconds(2)),
+            tags = setOf(
+                "memory",
+                "privacy:no-deepsearch-export",
+                "privacy:no-external-export",
+            ),
+        )
+        val publicPhoton = photon(
+            id = "public-search-evidence",
+            content = "lifeos photons public evidence",
+        )
+        val source = photon("search-source", "suche lifeos photons")
+        val goalId = PhotonId("search-goal-private-boundary")
+        val engine = LocalDeepSearchGoalEngine(sharedBudgets = null)
+
+        val produced = assertIs<LocalDeepSearchGoalResult.Produced>(
+            engine.execute(
+                goal = searchGoal(),
+                sourcePhoton = source,
+                goalPhotonId = goalId,
+                photons = listOf(privatePhoton, publicPhoton),
+                createdAt = at,
+            )
+        )
+
+        assertTrue(publicPhoton.id in produced.evidencePhotonIds)
+        assertTrue(privatePhoton.id !in produced.evidencePhotonIds)
+        assertTrue(privatePhoton.id !in produced.photon.provenance.parentIds)
+    }
+
     private fun searchGoal() = GoalFrame(
         intent = IntentType.SEARCH,
         objective = "search: lifeos photons",

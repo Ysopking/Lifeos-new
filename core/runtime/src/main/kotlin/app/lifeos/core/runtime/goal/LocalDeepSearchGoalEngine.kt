@@ -416,6 +416,10 @@ class LocalDeepSearchGoalEngine(
     }
 
     private fun isPrimarySearchEvidence(photon: Photon): Boolean {
+        if (
+            "privacy:no-deepsearch-export" in photon.tags ||
+            "privacy:no-external-export" in photon.tags
+        ) return false
         if (photon.phase == PhotonPhase.ARCHIVED) return false
         if ("goal" in photon.tags || "scene-graph" in photon.tags) return false
         if ("tool-request" in photon.tags || "capability-gap" in photon.tags) return false
