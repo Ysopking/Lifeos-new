@@ -25,6 +25,7 @@ import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.LifeOsDecisionTraceViewModel
 import app.lifeos.next.LifeOsToolCenterViewModel
 import app.lifeos.next.OwnerAssetReviewViewModel
+import app.lifeos.next.PersonalConversationImportViewModel
 import app.lifeos.next.R
 import app.lifeos.next.StorageMaintenanceViewModel
 import app.lifeos.next.ui.assets.OwnerAssetReviewScreen
@@ -38,6 +39,7 @@ private enum class SystemHubPage {
     TOOLS,
     ASSETS,
     STORAGE,
+    PERSONAL_DATA,
     RUNTIME,
 }
 
@@ -48,6 +50,7 @@ fun LifeOsSystemHub(
     toolCenterModel: LifeOsToolCenterViewModel,
     assetReviewModel: OwnerAssetReviewViewModel,
     storageMaintenanceModel: StorageMaintenanceViewModel,
+    personalConversationImportModel: PersonalConversationImportViewModel,
     ownerAttention: OwnerAttentionUiState,
     modifier: Modifier = Modifier,
 ) {
@@ -68,6 +71,7 @@ fun LifeOsSystemHub(
                 model = model,
                 ownerAttention = ownerAttention,
                 onOpenStorage = { selectedPageName = SystemHubPage.STORAGE.name },
+                onOpenPersonalData = { selectedPageName = SystemHubPage.PERSONAL_DATA.name },
                 onOpenAssets = { selectedPageName = SystemHubPage.ASSETS.name },
                 onOpenTools = { selectedPageName = SystemHubPage.TOOLS.name },
                 onOpenWhy = { selectedPageName = SystemHubPage.WHY.name },
@@ -107,6 +111,17 @@ fun LifeOsSystemHub(
                     modifier = contentModifier,
                 ) { detailModifier ->
                     StorageMaintenanceScreen(storageMaintenanceModel, detailModifier)
+                }
+
+                SystemHubPage.PERSONAL_DATA -> SystemDetailPage(
+                    title = "Persönliche Gespräche",
+                    onBack = { selectedPageName = null },
+                    modifier = contentModifier,
+                ) { detailModifier ->
+                    PersonalConversationImportScreen(
+                        model = personalConversationImportModel,
+                        modifier = detailModifier,
+                    )
                 }
 
                 SystemHubPage.RUNTIME -> SystemDetailPage(

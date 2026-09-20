@@ -14,6 +14,7 @@ import app.lifeos.next.LifeOsGoalsViewModel
 import app.lifeos.next.LifeOsMemoryViewModel
 import app.lifeos.next.LifeOsToolCenterViewModel
 import app.lifeos.next.OwnerAssetReviewViewModel
+import app.lifeos.next.PersonalConversationImportViewModel
 import app.lifeos.next.StorageMaintenanceViewModel
 import app.lifeos.next.ui.chat.LifeOsChatScreen
 import app.lifeos.next.ui.components.buildRuntimeHealthUiModel
@@ -33,6 +34,7 @@ fun LifeOsRoot(
     decisionTraceModel: LifeOsDecisionTraceViewModel,
     toolCenterModel: LifeOsToolCenterViewModel,
     storageMaintenanceModel: StorageMaintenanceViewModel,
+    personalConversationImportModel: PersonalConversationImportViewModel,
     onRequestMicrophonePermission: () -> Unit = {},
 ) {
     var selectedKey by rememberSaveable {
@@ -102,6 +104,7 @@ fun LifeOsRoot(
                 toolCenterModel = toolCenterModel,
                 assetReviewModel = assetReviewModel,
                 storageMaintenanceModel = storageMaintenanceModel,
+                personalConversationImportModel = personalConversationImportModel,
                 ownerAttention = ownerAttention,
                 onDismiss = { showSystem = false },
             )

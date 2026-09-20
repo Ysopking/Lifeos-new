@@ -26,6 +26,7 @@ import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.LifeOsDecisionTraceViewModel
 import app.lifeos.next.LifeOsToolCenterViewModel
 import app.lifeos.next.OwnerAssetReviewViewModel
+import app.lifeos.next.PersonalConversationImportViewModel
 import app.lifeos.next.R
 import app.lifeos.next.StorageMaintenanceViewModel
 import app.lifeos.next.ui.theme.LifeOsTokens
@@ -37,6 +38,7 @@ fun LifeOsSystemOverlay(
     toolCenterModel: LifeOsToolCenterViewModel,
     assetReviewModel: OwnerAssetReviewViewModel,
     storageMaintenanceModel: StorageMaintenanceViewModel,
+    personalConversationImportModel: PersonalConversationImportViewModel,
     ownerAttention: OwnerAttentionUiState,
     onDismiss: () -> Unit,
 ) {
@@ -89,6 +91,7 @@ fun LifeOsSystemOverlay(
                     toolCenterModel = toolCenterModel,
                     assetReviewModel = assetReviewModel,
                     storageMaintenanceModel = storageMaintenanceModel,
+                    personalConversationImportModel = personalConversationImportModel,
                     ownerAttention = ownerAttention,
                     modifier = Modifier.fillMaxSize(),
                 )

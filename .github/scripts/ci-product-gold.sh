@@ -29,6 +29,7 @@ test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRunt
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeTopology.kt
 test -f app/src/androidTest/java/app/lifeos/next/ProductGoldenChatDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/LanguageRuntimeRecoveryDeviceTest.kt
+test -f app/src/androidTest/java/app/lifeos/next/PersonalConversationImportDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/ProductiveWorldPersistenceDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/Level7ProcessDeathGoldDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/Level7WorldEquationRollbackDeviceTest.kt
@@ -38,6 +39,7 @@ grep -q 'ProductGoldenChatDeviceTest#seedProductGoldChatRoundTrip' .github/scrip
 grep -q 'ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' .github/scripts/android-emulator-recovery.sh
 grep -q 'LanguageRuntimeRecoveryDeviceTest#seedPromotedPersonalLanguageSnapshot' .github/scripts/android-emulator-recovery.sh
 grep -q 'LanguageRuntimeRecoveryDeviceTest#recoverPromotedSnapshotThenRollbackDurablyAfterColdStart' .github/scripts/android-emulator-recovery.sh
+grep -q 'PersonalConversationImportDeviceTest' .github/scripts/android-emulator-recovery.sh
 grep -q 'ProductiveWorldPersistenceDeviceTest' .github/scripts/android-emulator-recovery.sh
 grep -q 'Level7ProcessDeathGoldDeviceTest#seedLevel7SemanticCheckpoint' .github/scripts/android-emulator-recovery.sh
 grep -q 'Level7ProcessDeathGoldDeviceTest#recoverExactHeadsAndDoNotApplyLearningTwice' .github/scripts/android-emulator-recovery.sh
@@ -109,6 +111,11 @@ printf '%s\n' \
   'web_contradiction_detection=PASS' \
   'web_source_diversity=PASS' \
   'web_evidence_cache=PASS' \
-  'web_private_corpus_non_export=PASS' > "$evidence_dir/gates.txt"
+  'web_private_corpus_non_export=PASS' \
+  'personal_conversation_preview_before_write=PASS' \
+  'personal_conversation_import_idempotent=PASS' \
+  'personal_conversation_owner_boundary=PASS' \
+  'gemini_unknown_schema_fail_closed=PASS' \
+  'whatsapp_streaming_import=PASS' > "$evidence_dir/gates.txt"
 
 step "Product Gold pre-emulator matrix complete"

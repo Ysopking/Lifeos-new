@@ -67,6 +67,8 @@ jobs:
             'language_runtime_process_death=PASS' \
             'language_runtime_rollback=PASS' \
             'personal_language_feedback=PASS' \
+            'personal_conversation_import_device=PASS' \
+            'personal_conversation_import_replay=PASS' \
             'web_contradiction_detection=PASS' \
             'web_source_diversity=PASS' \
             'web_evidence_cache=PASS' \
