@@ -235,6 +235,15 @@ class LifeOsKernel internal constructor(
         localCommunicationGoalEngine = localCommunicationGoalEngine,
     )
 
+    private val imageActions = ImageActionCoordinator(
+        proceduralImageGenerator = proceduralImageGenerator,
+        pngEncoder = pngEncoder,
+        imageAssets = imageAssets,
+        imagePhotonFactory = imagePhotonFactory,
+        sceneGraphPhotonFactory = sceneGraphPhotonFactory,
+        ownerReviewPending = OWNER_ASSET_REVIEW_PENDING,
+    )
+
     private val goalActionDispatcher = GoalActionDispatcher(
         executeKnowledge = { context ->
             goalActions.executeLocalKnowledge(
@@ -251,7 +260,7 @@ class LifeOsKernel internal constructor(
             )
         },
         executeImageGeneration = { context ->
-            generateImage(
+            imageActions.generateImage(
                 goal = context.goal,
                 sourcePhotonId = context.sourcePhoton.id,
                 goalPhotonId = context.goalPhotonId,
@@ -400,11 +409,8 @@ class LifeOsKernel internal constructor(
         )
 
     /** Reads and integrity-verifies an image asset referenced by a generated image photon. */
-    suspend fun loadImageAsset(photon: Photon): ByteArray? {
-        if (photon.mimeType != ImagePhotonFactory.IMAGE_REFERENCE_MIME) return null
-        val descriptor = runCatching { ImageAssetDescriptor.decode(photon.content) }.getOrNull() ?: return null
-        return imageAssets.load(descriptor.asset)
-    }
+    suspend fun loadImageAsset(photon: Photon): ByteArray? =
+        imageActions.loadImageAsset(photon)
 
     private fun requireCompletedBoot(action: String) {
         require(
@@ -430,75 +436,6 @@ class LifeOsKernel internal constructor(
         photonIngress.persistAndIngest(photon, mode)
 
 
-    private suspend fun generateImage(
-        goal: GoalFrame,
-        sourcePhotonId: PhotonId,
-        goalPhotonId: PhotonId,
-        referenceInstant: Instant,
-    ): ImageGenerationResult {
-        return try {
-            when (val rendered = proceduralImageGenerator.render(goal, referenceInstant)) {
-                is ProceduralImageRenderResult.Blocked -> ImageGenerationResult.Blocked(rendered.reasons)
-                is ProceduralImageRenderResult.Rendered -> {
-                    val createdAt = Instant.now()
-                    val sceneGraphPhoton = sceneGraphPhotonFactory.create(
-                        graph = rendered.graph,
-                        goalPhotonId = goalPhotonId,
-                        createdAt = createdAt,
-                    )
-                    val sceneSubmission = PhotonSubmissionResult(
-                        photon = sceneGraphPhoton.photon,
-                        processingQueued = false,
-                        processingFailure = OWNER_ASSET_REVIEW_PENDING,
-                    )
-                    val pngBytes = pngEncoder.encode(rendered.image)
-                    val asset = imageAssets.save(pngBytes, "image/png")
-                    try {
-                        val descriptor = ImageAssetDescriptor(
-                            asset = asset,
-                            width = rendered.image.width,
-                            height = rendered.image.height,
-                            pixelSha256 = sha256(rendered.image.copyRgba()),
-                            sceneId = rendered.graph.sceneId,
-                            rendererId = rendered.rendererId,
-                        )
-                        val imagePhoton = imagePhotonFactory.create(
-                            descriptor = descriptor,
-                            parentIds = setOf(sourcePhotonId, goalPhotonId, sceneGraphPhoton.photon.id),
-                            confidence = rendered.graph.confidence,
-                            createdAt = createdAt,
-                        )
-                        val imageSubmission = PhotonSubmissionResult(
-                            photon = imagePhoton,
-                            processingQueued = false,
-                            processingFailure = OWNER_ASSET_REVIEW_PENDING,
-                        )
-                        ImageGenerationResult.Generated(
-                            GeneratedImageResult(
-                                scene = sceneSubmission,
-                                image = imageSubmission,
-                                descriptor = descriptor,
-                                rendererId = rendered.rendererId,
-                            ),
-                        )
-                    } catch (cancelled: CancellationException) {
-                        runCatching { imageAssets.delete(asset.id) }
-                        throw cancelled
-                    } catch (error: Exception) {
-                        runCatching { imageAssets.delete(asset.id) }
-                        ImageGenerationResult.Failed(error.message ?: error::class.simpleName ?: "image commit failed")
-                    }
-                }
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            ImageGenerationResult.Failed(error.message ?: error::class.simpleName ?: "image generation failed")
-        }
-    }
-
-    private fun sha256(bytes: ByteArray): String =
-        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     /** Final process teardown hook; normal Activity/ViewModel destruction must not call this. */
     internal fun shutdown() {
