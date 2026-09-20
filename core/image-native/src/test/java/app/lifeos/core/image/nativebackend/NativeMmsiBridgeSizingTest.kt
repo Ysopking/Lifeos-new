@@ -24,4 +24,12 @@ class NativeMmsiBridgeSizingTest {
             NativeMmsiBridge.checkedByteCount(Int.MAX_VALUE, 12)
         }
     }
+
+    @Test
+    fun `sync fence ownership can be transferred only once`() {
+        val fence = MmsiSyncFence.fromNative(42)!!
+        assertEquals(42, fence.take())
+        assertFailsWith<IllegalStateException> { fence.take() }
+        fence.close()
+    }
 }
