@@ -124,6 +124,12 @@ ruleset_contract=".github/scripts/ci-main-authority-contract.sh"
 test -s "$ruleset_contract" || { echo "missing-main-authority-contract" >&2; exit 1; }
 bash "$ruleset_contract"
 
+gold_sealer=".github/scripts/seal-gold-evidence.py"
+gold_sealer_selftest=".github/scripts/test-seal-gold-evidence.py"
+test -s "$gold_sealer" || { echo "gold-evidence-sealer-missing" >&2; exit 1; }
+test -s "$gold_sealer_selftest" || { echo "gold-evidence-sealer-selftest-missing" >&2; exit 1; }
+python3 "$gold_sealer_selftest"
+
 product_gold_workflow=".github/workflows/product-gold.yml"
 grep -Fq 'CANDIDATE_SHA: ${{ github.sha }}' "$product_gold_workflow" || {
   echo "product-gold-candidate-sha-not-bound-to-checkout-ref" >&2
@@ -133,24 +139,22 @@ grep -Fq 'SOURCE_HEAD_SHA:' "$product_gold_workflow" || {
   echo "product-gold-source-head-sha-not-recorded" >&2
   exit 1
 }
-grep -Fq 'offline_image_artifact_e2e=PASS' "$product_gold_workflow" || {
-  echo "product-gold-image-e2e-not-sealed" >&2
+grep -Fq 'seal-gold-evidence.py final' "$product_gold_workflow" || {
+  echo "product-gold-final-attestation-missing" >&2
   exit 1
 }
-grep -Fq 'field_snapshot_atomic_recovery=PASS' "$product_gold_workflow" || {
-  echo "product-gold-field-snapshot-recovery-not-sealed" >&2
+grep -Fq -- '--emulator-root android-emulator-recovery' "$product_gold_workflow" || {
+  echo "product-gold-emulator-evidence-not-bound" >&2
   exit 1
 }
-for seal in \
-  'semantic_action_recovery=PASS' \
-  'semantic_reference_revision_recovery=PASS' \
-  'external_effect_no_duplicate=PASS' \
-  'language_gold_device=PASS'; do
-  grep -Fq "$seal" "$product_gold_workflow" || {
-    echo "product-gold-semantic-device-seal-missing:$seal" >&2
-    exit 1
-  }
-done
+grep -Fq 'product-gold-evidence/product-gold.json' "$product_gold_workflow" || {
+  echo "product-gold-final-json-not-produced" >&2
+  exit 1
+}
+if grep -Fq 'product_gold=PASS' "$product_gold_workflow"; then
+  echo "product-gold-bare-pass-string-forbidden" >&2
+  exit 1
+fi
 
 product_gold_script=".github/scripts/ci-product-gold.sh"
 grep -Fq 'candidate-sha-checkout-mismatch' "$product_gold_script" || {
@@ -161,21 +165,14 @@ grep -Fq 'source_head_sha=' "$product_gold_script" || {
   echo "product-gold-source-head-evidence-missing" >&2
   exit 1
 }
-for seal in \
-  'language_semantic_gold=PASS' \
-  'semantic_action_router=PASS' \
-  'semantic_execution_gate=PASS' \
-  'revision_reference_binding=PASS' \
-  'bounded_language_retrieval=PASS' \
-  'goal_v4_restart_parity=PASS' \
-  'linguistic_index_bounded=PASS' \
-  'domain_semantic_packs=PASS' \
-  'no_external_side_effect_without_executable_semantic_action=PASS'; do
-  grep -Fq "$seal" "$product_gold_script" || {
-    echo "product-gold-semantic-pre-emulator-seal-missing:$seal" >&2
-    exit 1
-  }
-done
+grep -Fq 'seal-gold-evidence.py pre' "$product_gold_script" || {
+  echo "product-gold-pre-attestation-missing" >&2
+  exit 1
+}
+grep -Fq 'pre-emulator.json' "$product_gold_script" || {
+  echo "product-gold-pre-json-not-produced" >&2
+  exit 1
+}
 
 semantic_contract=".github/scripts/ci-language-semantic-contract.sh"
 test -s "$semantic_contract" || {

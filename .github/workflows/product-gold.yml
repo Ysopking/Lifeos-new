@@ -50,39 +50,11 @@ jobs:
       - name: Seal Product Gold evidence
         shell: bash
         run: |
-          printf '%s\n' \
-            'emulator_cold_restart=PASS' \
-            'product_chat_roundtrip=PASS' \
-            'conversation_rehydration=PASS' \
-            'thought_matrix_rehydration=PASS' \
-            'runtime_topology=PASS' \
-            'self_healing_recovery=PASS' \
-            'controlled_evolution_recovery=PASS' \
-            'offline_image_artifact_e2e=PASS' \
-            'field_snapshot_atomic_recovery=PASS' \
-            'semantic_action_recovery=PASS' \
-            'semantic_reference_revision_recovery=PASS' \
-            'external_effect_no_duplicate=PASS' \
-            'language_gold_device=PASS' \
-            'language_runtime_process_death=PASS' \
-            'language_runtime_rollback=PASS' \
-            'personal_language_feedback=PASS' \
-            'personal_conversation_import_device=PASS' \
-            'personal_conversation_import_replay=PASS' \
-            'personal_corpus_language_shadow=PASS' \
-            'personal_corpus_language_non_authoritative=PASS' \
-            'web_contradiction_detection=PASS' \
-            'web_source_diversity=PASS' \
-            'web_evidence_cache=PASS' \
-            'level7_productive_world_persistence=PASS' \
-            'level7_process_death_semantics=PASS' \
-            'level7_world_equation_rollback=PASS' \
-            'level7_truth_closure_gold=PASS' \
-            'world_equation_auto_evolution_recovery=PASS' \
-            'self_observation_gold=PASS' \
-            'level7_functional_gold=PASS' \
-            'escalation_functional_gold=PASS' >> product-gold-evidence/gates.txt
-          printf 'product_gold=PASS\n' >> product-gold-evidence/gates.txt
+          python3 .github/scripts/seal-gold-evidence.py final \
+            --pre product-gold-evidence/pre-emulator.json \
+            --emulator-root android-emulator-recovery \
+            --out product-gold-evidence/product-gold.json
+          test -s product-gold-evidence/product-gold.json
       - name: Upload Product Gold debug APK
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:

@@ -80,49 +80,12 @@ printf 'event_name=%s\n' "${GITHUB_EVENT_NAME:-local}" | tee -a "$evidence_dir/c
 printf 'git_ref=%s\n' "${GITHUB_REF:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'git_ref_name=%s\n' "${GITHUB_REF_NAME:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'product_gold_requires_emulator=true\n' | tee -a "$evidence_dir/candidate.txt"
-printf '%s\n' \
-  'security_static=PASS' \
-  'coverage_contract=PASS' \
-  'core_fast=PASS' \
-  'level7_contract_invariants=PASS' \
-  'level7_architecture_guards=PASS' \
-  'level7_functional_gold_jvm=PASS' \
-  'level7_novel_domain_gold=PASS' \
-  'level7_transfer_gold=PASS' \
-  'level7_truth_closure_gold_preflight=PASS' \
-  'self_observation_gold_preflight=PASS' \
-  'unit_tests=PASS' \
-  'lint_debug=PASS' \
-  'assemble_debug=PASS' \
-  'assemble_debug_android_test=PASS' \
-  'integration_contract=PASS' \
-  'language_semantic_gold=PASS' \
-  'semantic_action_router=PASS' \
-  'semantic_execution_gate=PASS' \
-  'revision_reference_binding=PASS' \
-  'bounded_language_retrieval=PASS' \
-  'goal_v4_restart_parity=PASS' \
-  'linguistic_index_bounded=PASS' \
-  'domain_semantic_packs=PASS' \
-  'no_external_side_effect_without_executable_semantic_action=PASS' \
-  'language_runtime_snapshot=PASS' \
-  'personal_language_shadow=PASS' \
-  'personal_language_feedback=PASS' \
-  'personal_corpus_isolation=PASS' \
-  'web_source_page_evidence=PASS' \
-  'web_contradiction_detection=PASS' \
-  'web_source_diversity=PASS' \
-  'web_evidence_cache=PASS' \
-  'web_private_corpus_non_export=PASS' \
-  'personal_conversation_preview_before_write=PASS' \
-  'personal_conversation_import_idempotent=PASS' \
-  'personal_conversation_owner_boundary=PASS' \
-  'gemini_unknown_schema_fail_closed=PASS' \
-  'whatsapp_streaming_import=PASS' \
-  'personal_corpus_shadow_alias=PASS' \
-  'personal_corpus_no_durable_promotion=PASS' \
-  'personal_corpus_owner_only=PASS' \
-  'personal_corpus_private_provenance=PASS' \
-  'personal_corpus_raw_context_excluded=PASS' > "$evidence_dir/gates.txt"
+python3 .github/scripts/seal-gold-evidence.py pre \
+  --candidate-sha "$candidate_sha" \
+  --source-head-sha "$source_head_sha" \
+  --apk "$apk_path" \
+  --reports-root . \
+  --out "$evidence_dir/pre-emulator.json"
+test -s "$evidence_dir/pre-emulator.json"
 
 step "Product Gold pre-emulator matrix complete"
