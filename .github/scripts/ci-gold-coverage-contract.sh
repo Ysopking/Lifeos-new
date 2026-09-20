@@ -156,6 +156,28 @@ if grep -Fq 'product_gold=PASS' "$product_gold_workflow"; then
   exit 1
 fi
 
+sibling_fetcher=".github/scripts/fetch-sibling-gold-inputs.py"
+test -s "$sibling_fetcher" || {
+  echo "product-gold-sibling-evidence-fetcher-missing" >&2
+  exit 1
+}
+grep -Fq 'actions: read' "$product_gold_workflow" || {
+  echo "product-gold-actions-read-permission-missing" >&2
+  exit 1
+}
+grep -Fq 'fetch-sibling-gold-inputs.py' "$product_gold_workflow" || {
+  echo "product-gold-exact-head-reuse-missing" >&2
+  exit 1
+}
+if grep -Fq 'android-emulator-runner@' "$product_gold_workflow"; then
+  echo "product-gold-duplicate-emulator-forbidden" >&2
+  exit 1
+fi
+grep -Fq '**/build/test-results/**/TEST-*.xml' .github/workflows/android.yml || {
+  echo "android-debug-junit-artifact-missing" >&2
+  exit 1
+}
+
 product_gold_script=".github/scripts/ci-product-gold.sh"
 grep -Fq 'candidate-sha-checkout-mismatch' "$product_gold_script" || {
   echo "product-gold-checkout-sha-not-verified" >&2
@@ -173,6 +195,13 @@ grep -Fq 'pre-emulator.json' "$product_gold_script" || {
   echo "product-gold-pre-json-not-produced" >&2
   exit 1
 }
+
+for duplicate_gate in 'ci-core-fast.sh' 'ci-android-debug.sh' 'ci-emulator-preflight.sh'; do
+  if grep -Fq "$duplicate_gate" "$product_gold_script"; then
+    echo "product-gold-duplicate-gate-forbidden:$duplicate_gate" >&2
+    exit 1
+  fi
+done
 
 semantic_contract=".github/scripts/ci-language-semantic-contract.sh"
 test -s "$semantic_contract" || {

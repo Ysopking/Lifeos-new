@@ -7,6 +7,7 @@ step() {
 
 evidence_dir="product-gold-evidence"
 apk_path="app/build/outputs/apk/debug/app-debug.apk"
+sibling_evidence="$evidence_dir/sibling-runs.json"
 mkdir -p "$evidence_dir"
 
 step "Product Gold 01: private security invariants"
@@ -15,16 +16,14 @@ bash .github/scripts/ci-private-debug-security.sh
 step "Product Gold 02: mandatory coverage contract"
 bash .github/scripts/ci-gold-coverage-contract.sh
 
-step "Product Gold 03: complete core regression set"
-bash .github/scripts/ci-core-fast.sh
+step "Product Gold 03: exact-head sibling evidence"
+test -s "$sibling_evidence"
+test -s "$apk_path"
+find . -path '*/build/test-results/*/TEST-*.xml' -type f -print -quit | grep -q .
+find app/build/reports -maxdepth 1 -type f -name 'lint-results-debug.*' -print -quit | grep -q .
+find android-emulator-recovery -type f -print -quit | grep -q .
 
-step "Product Gold 04: unit tests, lint and debug APK"
-bash .github/scripts/ci-android-debug.sh
-
-step "Product Gold 05: AndroidTest and emulator preflight"
-bash .github/scripts/ci-emulator-preflight.sh
-
-step "Product Gold 06: integration contract presence"
+step "Product Gold 04: integration contract presence"
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeBindings.kt
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeTopology.kt
 test -f app/src/androidTest/java/app/lifeos/next/ProductGoldenChatDeviceTest.kt
@@ -53,8 +52,7 @@ grep -q 'SelfObservationGoldDeviceTest#seedAuthoritativeSelfStateBeforeProcessDe
 grep -q 'SelfObservationGoldDeviceTest#recoverAuthorityFingerprintAndObserveLiveState' .github/scripts/android-emulator-recovery.sh
 grep -q 'ChatMainActivity' app/src/main/AndroidManifest.xml
 
-step "Product Gold 07: immutable candidate evidence"
-test -s "$apk_path"
+step "Product Gold 05: immutable candidate evidence"
 checkout_sha="$(git rev-parse HEAD)"
 candidate_sha="${CANDIDATE_SHA:-$checkout_sha}"
 source_head_sha="${SOURCE_HEAD_SHA:-$candidate_sha}"
@@ -70,7 +68,28 @@ if [[ "$candidate_sha" != "$checkout_sha" ]]; then
   echo "candidate-sha-checkout-mismatch:candidate=$candidate_sha checkout=$checkout_sha" >&2
   exit 1
 fi
+python3 - "$sibling_evidence" "$source_head_sha" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+expected = sys.argv[2]
+payload = json.loads(path.read_text(encoding="utf-8"))
+if payload.get("head_sha") != expected:
+    raise SystemExit("sibling-evidence-head-mismatch")
+required = {"Core Fast Gate", "Android Debug CI", "Android Emulator Recovery"}
+workflows = payload.get("workflows") or {}
+if set(workflows) != required:
+    raise SystemExit("sibling-evidence-required-workflows-mismatch")
+for name in sorted(required):
+    item = workflows[name]
+    if item.get("head_sha") != expected or item.get("conclusion") != "success":
+        raise SystemExit(f"sibling-evidence-not-green:{name}")
+print("EXACT_HEAD_SIBLING_EVIDENCE_OK")
+PY
 sha256sum "$apk_path" | tee "$evidence_dir/app-debug.sha256"
+sha256sum "$sibling_evidence" | tee "$evidence_dir/sibling-runs.sha256"
 printf 'candidate_sha=%s\n' "$candidate_sha" | tee "$evidence_dir/candidate.txt"
 printf 'source_head_sha=%s\n' "$source_head_sha" | tee -a "$evidence_dir/candidate.txt"
 printf 'checkout_sha=%s\n' "$checkout_sha" | tee -a "$evidence_dir/candidate.txt"
@@ -80,6 +99,7 @@ printf 'event_name=%s\n' "${GITHUB_EVENT_NAME:-local}" | tee -a "$evidence_dir/c
 printf 'git_ref=%s\n' "${GITHUB_REF:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'git_ref_name=%s\n' "${GITHUB_REF_NAME:-local}" | tee -a "$evidence_dir/candidate.txt"
 printf 'product_gold_requires_emulator=true\n' | tee -a "$evidence_dir/candidate.txt"
+printf 'product_gold_reuses_exact_head_gates=true\n' | tee -a "$evidence_dir/candidate.txt"
 python3 .github/scripts/seal-gold-evidence.py pre \
   --candidate-sha "$candidate_sha" \
   --source-head-sha "$source_head_sha" \
@@ -88,4 +108,4 @@ python3 .github/scripts/seal-gold-evidence.py pre \
   --out "$evidence_dir/pre-emulator.json"
 test -s "$evidence_dir/pre-emulator.json"
 
-step "Product Gold pre-emulator matrix complete"
+step "Product Gold evidence preflight complete"

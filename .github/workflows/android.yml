@@ -44,5 +44,6 @@ jobs:
           name: LIFEOS-validation
           path: |
             **/build/reports/tests/
+            **/build/test-results/**/TEST-*.xml
             app/build/reports/lint-results-debug.*
           retention-days: 14
