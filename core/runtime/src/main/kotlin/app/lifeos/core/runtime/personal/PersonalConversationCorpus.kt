@@ -15,6 +15,7 @@ import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.util.Locale
 
 enum class PersonalConversationSource {
     WHATSAPP,
@@ -99,16 +100,51 @@ data class PersonalConversationImportResult(
     val created: Int,
     val replayed: Int,
     val refs: List<PhotonRevisionRef>,
-)
+    val sourceCounts: Map<PersonalConversationSource, Int> = emptyMap(),
+    val speakerCounts: Map<PersonalConversationSpeaker, Int> = emptyMap(),
+) {
+    init {
+        require(created >= 0)
+        require(replayed >= 0)
+        require(sourceCounts.values.all { it >= 0 })
+        require(speakerCounts.values.all { it >= 0 })
+    }
+
+    val total: Int get() = created + replayed
+
+    operator fun plus(other: PersonalConversationImportResult): PersonalConversationImportResult =
+        PersonalConversationImportResult(
+            created = created + other.created,
+            replayed = replayed + other.replayed,
+            refs = (refs + other.refs)
+                .distinct()
+                .sortedWith(
+                    compareBy<PhotonRevisionRef> { it.photonId.value }.thenBy { it.revision }
+                ),
+            sourceCounts = mergeCounts(sourceCounts, other.sourceCounts),
+            speakerCounts = mergeCounts(speakerCounts, other.speakerCounts),
+        )
+
+    private fun <T> mergeCounts(left: Map<T, Int>, right: Map<T, Int>): Map<T, Int> =
+        (left.keys + right.keys).associateWith { key ->
+            left.getOrDefault(key, 0) + right.getOrDefault(key, 0)
+        }
+}
 
 class PersonalConversationCorpusImporter(
     private val photons: RevisionedPhotonRepository,
 ) {
-    suspend fun import(turns: Iterable<PersonalConversationTurn>): PersonalConversationImportResult {
+    suspend fun import(turns: Iterable<PersonalConversationTurn>): PersonalConversationImportResult =
+        import(turns.asSequence())
+
+    suspend fun import(turns: Sequence<PersonalConversationTurn>): PersonalConversationImportResult {
         var created = 0
         var replayed = 0
         val refs = mutableListOf<PhotonRevisionRef>()
-        turns.forEach { turn ->
+        val sourceCounts = mutableMapOf<PersonalConversationSource, Int>()
+        val speakerCounts = mutableMapOf<PersonalConversationSpeaker, Int>()
+
+        for (turn in turns) {
             val photon = turn.toPhoton()
             when (val write = photons.saveRevision(photon, expectedPreviousRevision = null)) {
                 is PhotonRevisionWriteResult.Created -> created += 1
@@ -119,6 +155,8 @@ class PersonalConversationCorpusImporter(
                     error("Personal conversation import conflict: ${write.reason}")
             }
             refs += PhotonRevisionRef(photon.id, photon.revision)
+            sourceCounts[turn.source] = sourceCounts.getOrDefault(turn.source, 0) + 1
+            speakerCounts[turn.speaker] = speakerCounts.getOrDefault(turn.speaker, 0) + 1
         }
         return PersonalConversationImportResult(
             created = created,
@@ -126,6 +164,8 @@ class PersonalConversationCorpusImporter(
             refs = refs.distinct().sortedWith(
                 compareBy<PhotonRevisionRef> { it.photonId.value }.thenBy { it.revision }
             ),
+            sourceCounts = sourceCounts.toSortedMap(compareBy { it.name }),
+            speakerCounts = speakerCounts.toSortedMap(compareBy { it.name }),
         )
     }
 }
@@ -225,41 +265,65 @@ class WhatsAppTextArchiveParser(
 ) {
     init { require(ownerNames.none { it.isBlank() }) }
 
+    private val normalizedOwnerNames: Set<String> = ownerNames
+        .map { it.trim().lowercase(Locale.ROOT) }
+        .filter { it.isNotBlank() }
+        .toSet()
+
     fun parse(
         content: String,
         conversationId: String,
-    ): List<PersonalConversationTurn> {
+    ): List<PersonalConversationTurn> =
+        parseLines(content.lineSequence(), conversationId).toList()
+
+    fun parseLines(
+        lines: Sequence<String>,
+        conversationId: String,
+    ): Sequence<PersonalConversationTurn> = sequence {
         require(conversationId.isNotBlank())
-        val turns = mutableListOf<MutableTurn>()
-        content.lineSequence().forEach { rawLine ->
+        var current: MutableTurn? = null
+        var index = 0
+
+        for (rawLine in lines) {
             val line = rawLine.trimEnd()
             val header = parseHeader(line)
             if (header != null) {
-                turns += MutableTurn(
+                current?.toTurn(conversationId, index)?.let {
+                    yield(it)
+                    index += 1
+                }
+                current = MutableTurn(
                     speakerName = header.speaker,
                     observedAt = header.observedAt,
                     text = StringBuilder(header.text),
                 )
-            } else if (turns.isNotEmpty() && line.isNotBlank()) {
-                turns.last().text.append('\n').append(line)
+            } else if (current != null && line.isNotBlank()) {
+                current.text.append('\n').append(line)
             }
         }
-        return turns.mapIndexedNotNull { index, turn ->
-            val text = turn.text.toString().trim()
-            if (text.isBlank()) return@mapIndexedNotNull null
-            PersonalConversationTurn(
-                source = PersonalConversationSource.WHATSAPP,
-                conversationId = conversationId,
-                speaker = if (turn.speakerName in ownerNames) {
-                    PersonalConversationSpeaker.OWNER
-                } else {
-                    PersonalConversationSpeaker.OTHER
-                },
-                text = text,
-                observedAt = turn.observedAt,
-                externalMessageId = "whatsapp-$index",
-            )
-        }
+
+        current?.toTurn(conversationId, index)?.let { yield(it) }
+    }
+
+    private fun MutableTurn.toTurn(
+        conversationId: String,
+        index: Int,
+    ): PersonalConversationTurn? {
+        val normalizedText = text.toString().trim()
+        if (normalizedText.isBlank()) return null
+        val normalizedSpeaker = speakerName.trim().lowercase(Locale.ROOT)
+        return PersonalConversationTurn(
+            source = PersonalConversationSource.WHATSAPP,
+            conversationId = conversationId,
+            speaker = if (normalizedSpeaker in normalizedOwnerNames) {
+                PersonalConversationSpeaker.OWNER
+            } else {
+                PersonalConversationSpeaker.OTHER
+            },
+            text = normalizedText,
+            observedAt = observedAt,
+            externalMessageId = "whatsapp-$index",
+        )
     }
 
     private fun parseHeader(line: String): Header? {
