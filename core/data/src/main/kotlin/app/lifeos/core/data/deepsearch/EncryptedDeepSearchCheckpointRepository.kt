@@ -2,6 +2,7 @@ package app.lifeos.core.data.deepsearch
 
 import android.content.Context
 import app.lifeos.core.data.security.EncryptedLedgerVaultSupport
+import app.lifeos.core.data.security.VaultAssociatedData
 import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointLoadReport
 import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointRepository
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
@@ -32,7 +33,7 @@ class EncryptedDeepSearchCheckpointRepository(context: Context) : DeepSearchChec
                 val file = fileFor(missionId)
                 if (!exists(file)) return@withLock DeepSearchCheckpointLoadReport(null)
                 try {
-                    val value = readStrict(file)
+                    val value = readStrict(file, missionId)
                     require(value.missionId == missionId) { "DeepSearch checkpoint mission mismatch" }
                     DeepSearchCheckpointLoadReport(value)
                 } catch (_: Exception) {
@@ -57,7 +58,7 @@ class EncryptedDeepSearchCheckpointRepository(context: Context) : DeepSearchChec
             }
             ensureDirectory()
             val file = fileFor(missionId)
-            val current = if (exists(file)) readStrict(file) else null
+            val current = if (exists(file)) readStrict(file, missionId) else null
             val currentRevision = current?.revision ?: 0L
             if (currentRevision != expectedRevision) return@withLock false
             write(file, updated)
@@ -65,17 +66,24 @@ class EncryptedDeepSearchCheckpointRepository(context: Context) : DeepSearchChec
         }
     }
 
-    private fun readStrict(file: File): DeepSearchStoredCheckpoint {
+    private fun readStrict(
+        file: File,
+        expectedMissionId: DeepSearchMissionId,
+    ): DeepSearchStoredCheckpoint {
         val container = EncryptedLedgerVaultSupport.readAtomic(
             target = file,
             maxPlaintextBytes = DeepSearchStoredCheckpointCodec.MAX_PAYLOAD_BYTES,
         )
-        val plaintext = EncryptedLedgerVaultSupport.decrypt(
+        val decrypted = EncryptedLedgerVaultSupport.decryptPathBoundOrLegacy(
             container = container,
             key = key,
             maxPlaintextBytes = DeepSearchStoredCheckpointCodec.MAX_PAYLOAD_BYTES,
+            associatedData = associatedData(file),
         )
-        return DeepSearchStoredCheckpointCodec.decode(plaintext)
+        val value = DeepSearchStoredCheckpointCodec.decode(decrypted.plaintext)
+        require(value.missionId == expectedMissionId) { "DeepSearch checkpoint mission mismatch" }
+        if (decrypted.migratedFromUnboundLegacy) write(file, value)
+        return value
     }
 
     private fun write(file: File, value: DeepSearchStoredCheckpoint) {
@@ -84,9 +92,13 @@ class EncryptedDeepSearchCheckpointRepository(context: Context) : DeepSearchChec
             plaintext = plaintext,
             key = key,
             maxPlaintextBytes = DeepSearchStoredCheckpointCodec.MAX_PAYLOAD_BYTES,
+            associatedData = associatedData(file),
         )
         EncryptedLedgerVaultSupport.atomicWrite(file, container)
     }
+
+    private fun associatedData(file: File): ByteArray =
+        VaultAssociatedData.forPath("deep-search-checkpoint/v2", directory, file)
 
     private fun fileFor(missionId: DeepSearchMissionId): File =
         directory.resolve("${missionId.value}.dscp")
