@@ -83,6 +83,7 @@ data class PersonalConversationTurn(
             add("privacy:private-conversation")
             add("privacy:local-only")
             add("privacy:no-external-export")
+            add("privacy:no-deepsearch-export")
             add("privacy:no-autonomous-share")
             add("conversation-source:${source.name.lowercase()}")
             add("conversation:${StableCognitiveIds.fingerprint("personal-conversation-id/v1", source.name, conversationId)}")

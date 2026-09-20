@@ -73,6 +73,7 @@ class PersonalCorpusLanguageRuntimeTest {
         val evidence = assertNotNull(decision.evidencePhoton(source))
         assertTrue("privacy:local-only" in evidence.tags)
         assertTrue("privacy:no-external-export" in evidence.tags)
+        assertTrue("privacy:no-deepsearch-export" in evidence.tags)
         assertTrue("personal-corpus-language-evidence" in evidence.tags)
         assertFalse(evidence.content.contains("weiter glorpax"))
     }
@@ -163,6 +164,7 @@ class PersonalCorpusLanguageRuntimeTest {
         assertTrue("privacy:private-conversation" in photon.tags)
         assertTrue("privacy:local-only" in photon.tags)
         assertTrue("privacy:no-external-export" in photon.tags)
+        assertTrue("privacy:no-deepsearch-export" in photon.tags)
         assertTrue("privacy:no-autonomous-share" in photon.tags)
     }
 

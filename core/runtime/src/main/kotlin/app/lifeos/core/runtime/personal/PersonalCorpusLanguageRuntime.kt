@@ -156,6 +156,7 @@ data class PersonalCorpusLanguageDecision(
                 "privacy:private-conversation",
                 "privacy:local-only",
                 "privacy:no-external-export",
+                "privacy:no-deepsearch-export",
                 "privacy:no-autonomous-share",
             ),
         )
