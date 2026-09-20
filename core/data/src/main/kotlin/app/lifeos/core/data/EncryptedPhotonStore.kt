@@ -9,7 +9,6 @@ import app.lifeos.core.model.PhotonCodec
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonIndexEntry
 import app.lifeos.core.model.PhotonIndexQuery
-import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonIndexReport
 import app.lifeos.core.model.PhotonLoadReport
 import app.lifeos.core.model.PhotonPhase
@@ -17,7 +16,6 @@ import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.PhotonRevisionWriteResult
 import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.model.canonicalPhotonIndexOrder
-import app.lifeos.core.model.matches
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -107,51 +105,8 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
 
     override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> =
         withContext(Dispatchers.IO) {
-            mutex.withLock {
-                val ordering = when (query.order) {
-                    PhotonIndexOrder.IDENTITY ->
-                        compareBy<PhotonIndexEntry> { it.ref.photonId.value }
-                            .thenBy { it.ref.revision }
-
-                    PhotonIndexOrder.NEWEST_FIRST ->
-                        compareByDescending<PhotonIndexEntry> { it.createdAt }
-                            .thenBy { it.ref.photonId.value }
-                            .thenByDescending { it.ref.revision }
-
-                    PhotonIndexOrder.OLDEST_FIRST ->
-                        compareBy<PhotonIndexEntry> { it.createdAt }
-                            .thenBy { it.ref.photonId.value }
-                            .thenBy { it.ref.revision }
-
-                    PhotonIndexOrder.HIGHEST_SEMANTIC_MASS ->
-                        compareByDescending<PhotonIndexEntry> { it.semanticMass }
-                            .thenByDescending { it.createdAt }
-                            .thenBy { it.ref.photonId.value }
-
-                    PhotonIndexOrder.HIGHEST_CONFIDENCE ->
-                        compareByDescending<PhotonIndexEntry> { it.confidence }
-                            .thenByDescending { it.createdAt }
-                            .thenBy { it.ref.photonId.value }
-                }
-                val ordered = ensureIndexLocked().entries.values
-                    .asSequence()
-                    .filter { it.matches(query) }
-                    .sortedWith(ordering)
-                    .toList()
-                val startIndex = query.after?.let { cursor ->
-                    val cursorIndex = ordered.indexOfFirst { it.ref == cursor.lastRef }
-                    require(cursorIndex >= 0) {
-                        "Photon index cursor is not present in the filtered result set"
-                    }
-                    cursorIndex + 1
-                } ?: 0
-                ordered
-                    .asSequence()
-                    .drop(startIndex)
-                    .take(query.limit)
-                    .map { it.ref }
-                    .toList()
-            }
+            val snapshot = mutex.withLock { ensureIndexLocked() }
+            snapshot.secondary.query(query)
         }
 
     override suspend fun indexReport(): PhotonIndexReport = withContext(Dispatchers.IO) {
@@ -850,6 +805,10 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
         val entries: Map<PhotonRevisionRef, PhotonIndexEntry>,
         val unreadableRevisionFiles: List<String> = emptyList(),
     ) {
+        val secondary: PhotonSecondaryIndex by lazy {
+            PhotonSecondaryIndex.build(entries.values)
+        }
+
         fun head(id: PhotonId): PhotonIndexEntry? =
             entries.values.firstOrNull { it.ref.photonId == id && it.latest }
     }
