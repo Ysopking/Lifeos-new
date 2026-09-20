@@ -454,8 +454,8 @@ class LocalDeepSearchGoalEngine(
     companion object {
         const val RESULT_MIME = "application/vnd.lifeos.deepsearch+text"
         const val LOCAL_SOURCE_ID = "local-photon-evidence"
-        const val SEARCH_POLICY_VERSION = "deepsearch-v2-hybrid-2026-09"
-        const val WEB_NETWORK_BYTES = 256L * 1024L
+        const val SEARCH_POLICY_VERSION = "deepsearch-v3-semantic-web-2026-09"
+        const val WEB_NETWORK_BYTES = 640L * 1024L
         private const val MAX_RESULTS = 6
         private const val MAX_WORK_UNITS = 16
         private const val MAX_SECONDS = 4L
