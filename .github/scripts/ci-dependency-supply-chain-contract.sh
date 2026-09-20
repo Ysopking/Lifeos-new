@@ -9,6 +9,7 @@ fail() {
 test -s settings.gradle.kts || fail "settings-missing"
 test -s build.gradle.kts || fail "root-build-missing"
 test -s gradle/wrapper/gradle-wrapper.properties || fail "wrapper-properties-missing"
+test -s gradle/verification-metadata.xml || fail "verification-metadata-missing"
 
 grep -Fq 'repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)' settings.gradle.kts ||
   fail "project-repositories-not-forbidden"
@@ -16,6 +17,7 @@ grep -Fq 'repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)' settings
 python3 - <<'PY'
 from pathlib import Path
 import re
+import xml.etree.ElementTree as ET
 
 root = Path(".")
 build_files = sorted(
