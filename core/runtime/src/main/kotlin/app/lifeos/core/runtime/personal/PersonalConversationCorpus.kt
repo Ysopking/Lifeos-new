@@ -152,6 +152,15 @@ class PersonalCorpusRetriever(
         require(maxSelected in 1..maxCandidates)
     }
 
+    suspend fun retrieveOwnerLanguageExamples(
+        query: String,
+        now: Instant,
+    ): List<PersonalCorpusMatch> = retrieve(
+        query = query,
+        now = now,
+        ownerOnly = true,
+    )
+
     suspend fun retrieve(
         query: String,
         now: Instant,
