@@ -44,10 +44,27 @@ class DurableTaskEngine(
             expected = TaskState.CREATED,
             next = TaskState.QUEUED,
             at = now(),
-        ) ?: error("Created task could not transition to QUEUED: ${task.id.value}")
+        )
+        if (queued != null) {
+            schedulerSignal.wake()
+            return queued
+        }
 
-        schedulerSignal.wake()
-        return queued
+        // A concurrent duplicate submission may observe the same CREATED idempotency record and
+        // win the CREATED -> QUEUED transition between create() and this CAS. Treat that as the
+        // same durable task, never as a submission failure. Missing/still-CREATED state remains
+        // fail-closed because no other actor can have completed the transition in that case.
+        val raced = tasks.get(task.id)
+        check(raced != null && raced.idempotencyKey == task.idempotencyKey) {
+            "Created task disappeared before QUEUED transition: ${task.id.value}"
+        }
+        check(raced.state != TaskState.CREATED) {
+            "Created task could not transition to QUEUED: ${task.id.value}"
+        }
+        if (raced.state == TaskState.QUEUED || raced.state == TaskState.RETRY_WAIT) {
+            schedulerSignal.wake()
+        }
+        return raced
     }
 
     private suspend fun resumeExisting(task: LifeTask): LifeTask = when (task.state) {

@@ -2,9 +2,11 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.model.health.ProtectionMode
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootRehydrationGraph
+import app.lifeos.core.runtime.boot.BootRehydrationNode
+import app.lifeos.core.runtime.boot.BootRehydrationNodeId
 import app.lifeos.core.runtime.boot.CapabilityWarmup
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
-import app.lifeos.core.runtime.boot.ChainedStateRehydrator
 import app.lifeos.core.runtime.boot.CognitiveHeadConsistencyDeltaSource
 import app.lifeos.core.runtime.boot.CompositeBootDeltaDetector
 import app.lifeos.core.runtime.boot.CompositeStoreVerifier
@@ -14,7 +16,6 @@ import app.lifeos.core.runtime.boot.ModuleRestoreSummary
 import app.lifeos.core.runtime.boot.PhotonRehydrator
 import app.lifeos.core.runtime.boot.RehydratedRuntimeState
 import app.lifeos.core.runtime.boot.RuntimeBootstrapper
-import app.lifeos.core.runtime.boot.RuntimeStateRehydrationStep
 import app.lifeos.core.runtime.boot.StateRehydrator
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmup
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
@@ -39,26 +40,34 @@ internal class KernelBootComposition(
     private val cognition: KernelCognitionGraph,
 ) {
     fun compose(): KernelBootGraph {
-        val primaryStateRehydrator = object : StateRehydrator {
-            override suspend fun rehydrate(): RehydratedRuntimeState {
-                foundation.protectionCoordinator.rehydrate()
-                recoverExpiredLeases(cognition.leaseRecovery)
-                return RehydratedRuntimeState()
-            }
-        }
-        val stateRehydrator = ChainedStateRehydrator(
-            primary = primaryStateRehydrator,
-            additionalSteps = listOf(
-                RuntimeStateRehydrationStep {
+        fun node(
+            id: String,
+            dependsOn: Set<String> = emptySet(),
+            action: suspend () -> Unit,
+        ): BootRehydrationNode = BootRehydrationNode(
+            id = BootRehydrationNodeId(id),
+            dependsOn = dependsOn.mapTo(linkedSetOf(), ::BootRehydrationNodeId),
+            action = action,
+        )
+
+        val rehydrationGraph = BootRehydrationGraph(
+            listOf(
+                node("protection") {
+                    foundation.protectionCoordinator.rehydrate()
+                },
+                node("leases", setOf("protection")) {
+                    recoverExpiredLeases(cognition.leaseRecovery)
+                },
+                node("extension-registry", setOf("leases")) {
                     world.extensionRegistryRehydrator.rehydrate()
                 },
-                RuntimeStateRehydrationStep {
+                node("world-equation-authority", setOf("extension-registry")) {
                     world.worldEquationAuthority.activeVersion()
                 },
-                RuntimeStateRehydrationStep {
+                node("world-equation-safety", setOf("world-equation-authority")) {
                     world.worldEquationSafetyMonitor.reconcile()
                 },
-                RuntimeStateRehydrationStep {
+                node("world-model", setOf("world-equation-authority")) {
                     val head = world.worldModelRepository.loadHead()
                     if (head != null) {
                         val snapshot = requireNotNull(
@@ -70,44 +79,53 @@ internal class KernelBootComposition(
                         require(snapshot.predecessorSnapshotId == head.predecessorSnapshotId)
                     }
                 },
-                RuntimeStateRehydrationStep {
+                node("goal-plans", setOf("leases")) {
                     foundation.goalPlans.rehydrate()
                 },
-                RuntimeStateRehydrationStep {
+                node("learning-adaptations", setOf("leases")) {
                     foundation.learningAdaptations.rehydrate()
                 },
-                RuntimeStateRehydrationStep {
+                node("language-runtime", setOf("learning-adaptations")) {
                     foundation.languageRuntimeState.rehydrate()
                 },
-                RuntimeStateRehydrationStep {
+                node("thought-graph", setOf("leases")) {
                     foundation.thoughtGraph.rehydrate()
                 },
-                RuntimeStateRehydrationStep {
+                node("field-thought-projection", setOf("thought-graph")) {
                     world.fieldThoughtGraphProjection.reconcile()
                 },
-                RuntimeStateRehydrationStep {
+                node("cognition-journal-index", setOf("leases")) {
                     foundation.cognitionJournalIndex.reconcile()
                 },
-                RuntimeStateRehydrationStep {
+                node("cognitive-snapshot", setOf("cognition-journal-index")) {
                     cognition.cognitiveSnapshotManager.replay(cognition.cognitiveEventJournal)
                 },
-                RuntimeStateRehydrationStep {
+                node(
+                    "cognition-reconciler",
+                    setOf("cognitive-snapshot", "field-thought-projection"),
+                ) {
                     cognition.cognitionReconciler.reconcile()
                 },
-                RuntimeStateRehydrationStep {
+                node("evolution-kill-switch", setOf("leases")) {
                     evolution.evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
                 },
-                RuntimeStateRehydrationStep {
+                node("generated-tool-state", setOf("evolution-kill-switch")) {
                     evolution.generatedToolStateRepository.loadAll()
                 },
-                RuntimeStateRehydrationStep {
+                node("generated-artifact-verify", setOf("generated-tool-state")) {
                     evolution.privateGeneratedToolRuntime.artifactBootVerifier.verify()
                 },
-                RuntimeStateRehydrationStep {
+                node("generated-tool-rehydrate", setOf("generated-artifact-verify")) {
                     evolution.generatedToolBootRehydrator.rehydrateOrVerify()
                 },
-            ),
+            )
         )
+        val stateRehydrator = object : StateRehydrator {
+            override suspend fun rehydrate(): RehydratedRuntimeState {
+                rehydrationGraph.rehydrate()
+                return RehydratedRuntimeState()
+            }
+        }
 
         val bootCoordinator = BootCoordinator(
             runtimeBootstrapper = object : RuntimeBootstrapper {
