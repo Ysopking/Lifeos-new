@@ -41,6 +41,8 @@ import app.lifeos.core.runtime.learning.DurableLearningAdaptationLedger
 import app.lifeos.core.runtime.learning.LearnedFieldCalibration
 import app.lifeos.core.runtime.learning.LearnedProviderReliabilityResolver
 import app.lifeos.core.runtime.personal.DurableLanguageRuntimeCoordinator
+import app.lifeos.core.runtime.personal.DurablePersonalLanguagePromotionCoordinator
+import app.lifeos.core.runtime.personal.ProductivePersonalLanguageLearningRuntime
 import app.lifeos.core.runtime.thought.DurableThoughtGraph
 import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.ReferenceCpuSceneRasterizer
@@ -84,6 +86,7 @@ internal data class KernelFoundationGraph(
     val capabilityRegistry: CapabilityRegistry,
     val languageRuntime: VersionedLanguageRuntime,
     val languageRuntimeState: DurableLanguageRuntimeCoordinator,
+    val personalLanguageLearning: ProductivePersonalLanguageLearningRuntime,
 )
 
 /**
@@ -145,6 +148,11 @@ internal class KernelFoundationComposition(
             EncryptedLanguageRuntimeRepository(appContext),
         )
         val languageUnderstanding = languageRuntime.current().understanding
+        val personalLanguageLearning = ProductivePersonalLanguageLearningRuntime(
+            photons = store,
+            promotion = DurablePersonalLanguagePromotionCoordinator(languageRuntimeState),
+            currentLexicon = { languageRuntime.current().lexicon },
+        )
         val goalPhotonFactory = GoalPhotonFactory()
         val languageContextBuilder = PhotonLanguageContextBuilder()
         val sceneCompiler = ProceduralSceneCompiler()
@@ -242,6 +250,7 @@ internal class KernelFoundationComposition(
             languageUnderstanding = languageUnderstanding,
             languageRuntime = languageRuntime,
             languageRuntimeState = languageRuntimeState,
+            personalLanguageLearning = personalLanguageLearning,
             goalPhotonFactory = goalPhotonFactory,
             languageContextBuilder = languageContextBuilder,
             sceneCompiler = sceneCompiler,
