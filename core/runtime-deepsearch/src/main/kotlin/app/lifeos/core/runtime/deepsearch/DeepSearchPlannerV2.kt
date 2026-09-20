@@ -4,7 +4,10 @@ import app.lifeos.core.field.StableFieldIds
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /**
@@ -19,6 +22,7 @@ import kotlinx.coroutines.withTimeout
 class DeepSearchPlannerV2(
     private val evaluator: DeepSearchEvaluator = DeepSearchEvaluator(),
     private val capabilityGate: DeepSearchCapabilityGate = LocalOnlyDeepSearchCapabilityGate,
+    private val retryPolicy: DeepSearchRetryPolicy = DeepSearchRetryPolicy(),
     private val now: () -> Instant = Instant::now,
 ) {
     suspend fun search(
@@ -195,7 +199,7 @@ class DeepSearchPlannerV2(
                 continue
             }
 
-            for (source in authorized) {
+            sourceLoop@ for (source in authorized) {
                 val sourceId = source.descriptor.sourceId
                 if (expansionFinished(trace, current.id, sourceId)) continue
 
@@ -235,41 +239,86 @@ class DeepSearchPlannerV2(
                     persistCheckpoint()
                 }
 
-                val drafts = try {
-                    withTimeout(remainingMillis()) {
-                        source.expand(request, current)
+                var drafts: List<DeepSearchFindingDraft>? = null
+                sourceAttempt@ while (drafts == null) {
+                    try {
+                        drafts = withTimeout(remainingMillis()) {
+                            source.expand(request, current)
+                        }
+                    } catch (timeout: TimeoutCancellationException) {
+                        timeExhausted = true
+                        emit(
+                            DeepSearchTraceType.TIME_LIMIT_REACHED,
+                            current,
+                            sourceId,
+                            detail = "source-expansion-time-budget-v2",
+                        )
+                        persistCheckpoint()
+                        break@searchLoop
+                    } catch (cancelled: CancellationException) {
+                        emit(
+                            DeepSearchTraceType.SEARCH_CANCELLED,
+                            current,
+                            sourceId,
+                            hypothesisId = current.hypothesis.id,
+                            detail = "source-expansion-cancelled",
+                        )
+                        try {
+                            withContext(NonCancellable) {
+                                persistCheckpoint()
+                            }
+                        } catch (checkpointError: Exception) {
+                            cancelled.addSuppressed(checkpointError)
+                        }
+                        throw cancelled
+                    } catch (error: Exception) {
+                        val priorRetries = retryCount(trace, current.id, sourceId)
+                        val failureNumber = priorRetries + 1
+                        val classification = retryPolicy.classify(error)
+                        val canRetry =
+                            classification == DeepSearchSourceFailureClass.RETRYABLE &&
+                                failureNumber < retryPolicy.maxAttemptsPerExpansion &&
+                                !timeExceeded()
+                        if (canRetry) {
+                            val backoff = retryPolicy.backoffMillis(failureNumber)
+                            emit(
+                                DeepSearchTraceType.SOURCE_RETRY_SCHEDULED,
+                                current,
+                                sourceId,
+                                hypothesisId = current.hypothesis.id,
+                                detail =
+                                    "retry:$failureNumber/${retryPolicy.maxAttemptsPerExpansion}:" +
+                                        "backoff-ms:$backoff:${stableError(error)}",
+                            )
+                            persistCheckpoint()
+                            delay(backoff.coerceAtMost(remainingMillis()))
+                            continue@sourceAttempt
+                        }
+
+                        failed += sourceId
+                        emit(
+                            DeepSearchTraceType.SOURCE_FAILED,
+                            current,
+                            sourceId,
+                            hypothesisId = current.hypothesis.id,
+                            detail =
+                                "${classification.name.lowercase()}:" +
+                                    "attempt:$failureNumber/${retryPolicy.maxAttemptsPerExpansion}:" +
+                                    stableError(error),
+                        )
+                        persistCheckpoint()
+                        continue@sourceLoop
                     }
-                } catch (timeout: TimeoutCancellationException) {
-                    timeExhausted = true
-                    emit(
-                        DeepSearchTraceType.TIME_LIMIT_REACHED,
-                        current,
-                        sourceId,
-                        detail = "source-expansion-time-budget-v2",
-                    )
-                    persistCheckpoint()
-                    break@searchLoop
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    failed += sourceId
-                    emit(
-                        DeepSearchTraceType.SOURCE_FAILED,
-                        current,
-                        sourceId,
-                        detail = stableError(error),
-                    )
-                    persistCheckpoint()
-                    continue
                 }
+                val completedDrafts = drafts ?: continue@sourceLoop
 
                 emit(
                     DeepSearchTraceType.BRANCH_EXPANDED,
                     current,
                     sourceId,
-                    detail = "findings:${drafts.size}:work:$workUnits:v2",
+                    detail = "findings:${completedDrafts.size}:work:$workUnits:v2",
                 )
-                val orderedDrafts = drafts.sortedWith(findingOrder())
+                val orderedDrafts = completedDrafts.sortedWith(findingOrder())
                     .take(request.budget.maxBreadth * 2)
                 for ((index, draft) in orderedDrafts.withIndex()) {
                     val candidate = materialize(
@@ -471,6 +520,16 @@ class DeepSearchPlannerV2(
             "DeepSearch checkpoint contains multiple partially expanded branches"
         }
         return unfinished.singleOrNull()
+    }
+
+    private fun retryCount(
+        trace: List<DeepSearchTraceEvent>,
+        branchId: DeepSearchBranchId,
+        sourceId: String,
+    ): Int = trace.count {
+        it.type == DeepSearchTraceType.SOURCE_RETRY_SCHEDULED &&
+            it.branchId == branchId &&
+            it.sourceId == sourceId
     }
 
     private fun expansionFinished(

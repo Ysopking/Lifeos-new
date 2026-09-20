@@ -62,6 +62,40 @@ class LifeOsRuntimeWiringTest {
     }
 
     @Test
+    fun `all productive startup-owned manifests receive a runtime binding`() {
+        listOf(
+            LifeOsStartupStage.SHARED_RESOURCES,
+            LifeOsStartupStage.KERNEL_GRAPH,
+            LifeOsStartupStage.DEEP_SEARCH,
+            LifeOsStartupStage.SELF_HEALING,
+            LifeOsStartupStage.DURABLE_GOALS,
+        ).forEach { stage ->
+            LifeOsRuntimeWiring.onStageReady(evidence(stage))
+        }
+
+        val manifests = LifeOsProcessTopology.canonicalManifestGraph.topologicalOrder
+        val productive = manifests.filter {
+            it.startupOwner != app.lifeos.core.runtime.topology.SubsystemStartupOwner.OPTIONAL_RUNTIME &&
+                it.startupOwner != app.lifeos.core.runtime.topology.SubsystemStartupOwner.EXTERNAL_HOST
+        }
+        val missing = productive.filter {
+            LifeOsRuntimeBindingRegistry.current(it.id) == null
+        }
+
+        assertTrue(
+            missing.isEmpty(),
+            "Productive manifests without runtime binding: ${missing.joinToString { it.id.value }}",
+        )
+        assertNull(LifeOsRuntimeBindingRegistry.current(SubsystemId("build-studio")))
+        assertTrue(
+            LifeOsRuntimeBindingRegistry.current(SubsystemId("hot-swap-runtime"))?.state in setOf(
+                LifeOsRuntimeBindingState.REGISTERED,
+                LifeOsRuntimeBindingState.ACTIVE,
+            )
+        )
+    }
+
+    @Test
     fun `startup evidence from another manifest graph is rejected`() {
         val current = evidence(LifeOsStartupStage.SHARED_RESOURCES)
         val forged = current.copy(manifestGraphFingerprint = "different-manifest-graph")

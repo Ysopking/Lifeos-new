@@ -107,7 +107,7 @@ test "$contracts_main_count" -eq 4 ||
 test "$contracts_test_count" -eq 2 ||
   fail "runtime-contracts-test-source-count:$contracts_test_count"
 
-test "$deepsearch_main_count" -eq 16 ||
+test "$deepsearch_main_count" -eq 17 ||
   fail "runtime-deepsearch-main-source-count:$deepsearch_main_count"
 
 test "$deepsearch_test_count" -eq 10 ||
