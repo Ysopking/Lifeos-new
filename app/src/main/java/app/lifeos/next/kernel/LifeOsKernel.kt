@@ -1,12 +1,10 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.image.DeterministicPngEncoder
-import app.lifeos.core.image.ImageAssetDescriptor
 import app.lifeos.core.image.ImagePhotonFactory
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.GoalPhotonFactory
-import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.language.LanguageRuntimeSnapshot
 import app.lifeos.core.language.VersionedLanguageRuntime
@@ -14,15 +12,9 @@ import app.lifeos.core.language.LanguageContextRetriever
 import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.BinaryAssetStore
 import app.lifeos.core.model.Photon
-import app.lifeos.core.model.PhotonId
-import app.lifeos.core.model.PhotonIndexOrder
-import app.lifeos.core.model.PhotonIndexQuery
-import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
-import app.lifeos.core.runtime.FastConversationContext
 import app.lifeos.core.runtime.ConversationSignalClassifier
-import app.lifeos.core.runtime.ConversationPath
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.CognitiveModule
@@ -30,26 +22,18 @@ import app.lifeos.core.runtime.CognitiveModuleRegistry
 import app.lifeos.core.runtime.CognitiveModuleSnapshotRepository
 import app.lifeos.core.runtime.VersionedCognitiveModuleRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
-import app.lifeos.core.runtime.boot.BootContext
 import app.lifeos.core.runtime.boot.BootCoordinator
-import app.lifeos.core.runtime.boot.BootEngineRecoveryResult
 import app.lifeos.core.runtime.boot.BootEngineRuntime
-import app.lifeos.core.runtime.boot.BootRunResult
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.capability.PrivateGeneratedToolTrialSuite
-import app.lifeos.core.runtime.cognition.CognitiveDeltaIdentity
 import app.lifeos.core.runtime.cognition.CognitiveOutcomeJournal
-import app.lifeos.core.runtime.cognition.CognitivePriority
 import app.lifeos.core.runtime.cognition.CognitiveTriggerSink
 import app.lifeos.core.runtime.cognition.CognitiveWorkBudget
 import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
-import app.lifeos.core.runtime.cognition.PhotonDelta
-import app.lifeos.core.runtime.cognition.PhotonDeltaType
 import app.lifeos.core.runtime.cognition.PhotonTransactionJournal
-import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.evolution.WorldEquationAutoEvolutionCoordinator
 import app.lifeos.core.runtime.evolution.WorldEquationAutoEvolutionResult
@@ -60,31 +44,19 @@ import app.lifeos.core.runtime.goal.GoalResumeEngine
 import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.goal.GoalOutcomeLearningHook
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
-import app.lifeos.core.runtime.goal.GoalResumeResult
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
-import app.lifeos.core.runtime.goal.LocalCommunicationGoalResult
 import app.lifeos.core.runtime.goal.LocalDeepSearchGoalEngine
-import app.lifeos.core.runtime.goal.LocalDeepSearchGoalResult
 import app.lifeos.core.runtime.personal.PersonalCorpusLanguageRuntime
 import app.lifeos.core.runtime.personal.ProductivePersonalLanguageLearningRuntime
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
-import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
 import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.core.runtime.query.ProductivePhotonQueryService
 import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.SceneGraphPhotonFactory
 import app.lifeos.core.scene.SceneRasterizer
-import java.security.MessageDigest
-import java.time.Instant
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 
 /** Process-level owner for the LIFEOS runtime graph and its deterministic boot lifecycle. */
 class LifeOsKernel internal constructor(
@@ -136,7 +108,6 @@ class LifeOsKernel internal constructor(
     private val personalLanguageLearning: ProductivePersonalLanguageLearningRuntime? = null,
     private val personalCorpusLanguage: PersonalCorpusLanguageRuntime? = null,
 ) {
-    private val startLock = Any()
     private val conversationClassifier = ConversationSignalClassifier()
     private val revisionedPhotonStore: RevisionedPhotonRepository =
         requireNotNull(photonStore as? RevisionedPhotonRepository) {
@@ -151,7 +122,6 @@ class LifeOsKernel internal constructor(
 
     fun currentLanguageSnapshot(): LanguageRuntimeSnapshot =
         requireNotNull(languageRuntime) { "Versioned language runtime is unavailable" }.current()
-    private var bootstrapJob: Job? = null
 
     private val bootLifecycle = KernelBootLifecycle(
         runtime = runtime,
