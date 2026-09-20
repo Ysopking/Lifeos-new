@@ -153,29 +153,36 @@ class LocalDeepSearchGoalEngine(
             .any { source ->
                 RuntimeDeepSearchPermissionGate.permissionFor(source.descriptor) == DeepSearchPermissionState.GRANTED
             }
-        val freshRequest = DeepSearchRequest(
-            query = searchPlan.primaryQuery,
-            contextTerms = searchPlan.contextTerms,
-            budget = effectiveBudget(goal, wantsExternal),
-        )
-        val request = if (resume == null) {
-            freshRequest
+        val terminalResume = resume != null && checkpointProjector.isTerminal(resume)
+        val request = if (terminalResume) {
+            // A sealed terminal checkpoint is already authoritative. Re-rendering it must not
+            // depend on later query-planner refinements, source authorization or resource state.
+            requireNotNull(resume).request
         } else {
-            require(resume.request.query == freshRequest.query) {
-                "DeepSearch mission query changed during resume"
+            val freshRequest = DeepSearchRequest(
+                query = searchPlan.primaryQuery,
+                contextTerms = searchPlan.contextTerms,
+                budget = effectiveBudget(goal, wantsExternal),
+            )
+            if (resume == null) {
+                freshRequest
+            } else {
+                require(resume.request.query == freshRequest.query) {
+                    "DeepSearch mission query changed during resume"
+                }
+                require(resume.request.contextTerms == freshRequest.contextTerms) {
+                    "DeepSearch mission context changed during resume"
+                }
+                require(resume.request.minimumResolutionScore == freshRequest.minimumResolutionScore)
+                require(resume.request.minimumWinnerMargin == freshRequest.minimumWinnerMargin)
+                require(budgetFitsWithin(resume.request.budget, freshRequest.budget)) {
+                    "deepsearch-resume-budget-tightened"
+                }
+                resume.request
             }
-            require(resume.request.contextTerms == freshRequest.contextTerms) {
-                "DeepSearch mission context changed during resume"
-            }
-            require(resume.request.minimumResolutionScore == freshRequest.minimumResolutionScore)
-            require(resume.request.minimumWinnerMargin == freshRequest.minimumWinnerMargin)
-            require(budgetFitsWithin(resume.request.budget, freshRequest.budget)) {
-                "deepsearch-resume-budget-tightened"
-            }
-            resume.request
         }
-        val result = if (resume != null && checkpointProjector.isTerminal(resume)) {
-            checkpointProjector.project(resume)
+        val result = if (terminalResume) {
+            checkpointProjector.project(requireNotNull(resume))
         } else {
             planner.search(
                 request = request,
@@ -420,18 +427,25 @@ class LocalDeepSearchGoalEngine(
             val queryTerms = (rootTerms + branchTerms).toSet()
             if (queryTerms.isEmpty()) return emptyList()
             return photons.mapNotNull { photon ->
+                val statement = excerptStatic(photon.content)
+                if (
+                    branch.depth > 0 &&
+                    statement.equals(branch.hypothesis.statement, ignoreCase = true)
+                ) {
+                    return@mapNotNull null
+                }
                 val candidateTerms = terms(photon.content).toSet()
                 val hits = queryTerms.intersect(candidateTerms)
                 if (hits.isEmpty()) return@mapNotNull null
                 val coverage = hits.size.toDouble() / queryTerms.size.toDouble()
                 val confidence = (photon.confidence * (0.65 + coverage * 0.35)).coerceIn(0.0, 1.0)
                 DeepSearchFindingDraft(
-                    statement = excerptStatic(photon.content),
+                    statement = statement,
                     semanticTerms = candidateTerms.intersect(queryTerms),
                     confidence = confidence,
                     evidence = listOf(
                         DeepSearchEvidenceDraft(
-                            statement = excerptStatic(photon.content),
+                            statement = statement,
                             confidence = photon.confidence,
                             sourcePhotonId = photon.id,
                         )

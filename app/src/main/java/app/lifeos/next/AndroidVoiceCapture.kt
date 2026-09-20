@@ -112,7 +112,14 @@ class AndroidVoiceCaptureEngine(
                 }
             }
             stoppedByLimit = accumulator.size >= MAX_CAPTURE_SAMPLES
-            analyze(accumulator.toArray(), languageContext, stoppedByLimit, observedAt)
+            analyze(
+                samples = accumulator.toArray(),
+                languageContext = languageContext,
+                stoppedByLimit = stoppedByLimit,
+                observedAt = observedAt,
+                activeSpeechEngine = activeSpeechEngine,
+                activePhraseDecoder = activePhraseDecoder,
+            )
         } catch (_: SecurityException) {
             LocalVoiceCaptureResult.PermissionMissing
         } catch (_: Exception) {
@@ -129,6 +136,8 @@ class AndroidVoiceCaptureEngine(
         languageContext: LanguageContext,
         stoppedByLimit: Boolean,
         observedAt: Instant,
+        activeSpeechEngine: BidirectionalSpeechFieldEngine,
+        activePhraseDecoder: PhraseFieldDecoder,
     ): LocalVoiceCaptureResult {
         if (samples.size < SAMPLE_RATE_HZ / 5) return LocalVoiceCaptureResult.NoSpeech
         val audio = Pcm16MonoAudio(SAMPLE_RATE_HZ, samples)
