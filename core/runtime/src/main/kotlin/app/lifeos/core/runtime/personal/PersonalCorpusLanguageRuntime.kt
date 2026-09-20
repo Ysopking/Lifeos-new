@@ -477,7 +477,11 @@ class PersonalCorpusLanguageRuntime(
         private const val MAX_SURFACES_PER_TURN = 3
         private const val MIN_EXAMPLE_CONFIDENCE = 0.75
         private const val MIN_EXAMPLE_EVIDENCE = 0.65
-        private const val MIN_SELECTED_CONFIDENCE = 0.65
+        // A newly injected exact alias is field-backed rather than rule-backed, so its composite
+        // GoalFrame confidence is intentionally lower than a built-in lexical rule. The separate
+        // corpus support/consistency gate plus protected shadow suite provide the stronger authority
+        // boundary; 0.55 keeps the one-turn alias usable without granting execution authority.
+        private const val MIN_SELECTED_CONFIDENCE = 0.55
         private const val MIN_CONFIDENCE_GAIN = 0.05
         private const val ASSISTANCE_CONFIDENCE_CEILING = 0.78
         private const val MAX_REPLACEABLE_BASELINE_CONFIDENCE = 0.72
