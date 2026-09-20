@@ -64,6 +64,12 @@ jobs:
             'semantic_reference_revision_recovery=PASS' \
             'external_effect_no_duplicate=PASS' \
             'language_gold_device=PASS' \
+            'language_runtime_process_death=PASS' \
+            'language_runtime_rollback=PASS' \
+            'personal_language_feedback=PASS' \
+            'web_contradiction_detection=PASS' \
+            'web_source_diversity=PASS' \
+            'web_evidence_cache=PASS' \
             'level7_productive_world_persistence=PASS' \
             'level7_process_death_semantics=PASS' \
             'level7_world_equation_rollback=PASS' \

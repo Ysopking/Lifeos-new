@@ -28,6 +28,7 @@ step "Product Gold 06: integration contract presence"
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeBindings.kt
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeTopology.kt
 test -f app/src/androidTest/java/app/lifeos/next/ProductGoldenChatDeviceTest.kt
+test -f app/src/androidTest/java/app/lifeos/next/LanguageRuntimeRecoveryDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/ProductiveWorldPersistenceDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/Level7ProcessDeathGoldDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/Level7WorldEquationRollbackDeviceTest.kt
@@ -35,6 +36,8 @@ test -f app/src/androidTest/java/app/lifeos/next/Level7TruthClosureGoldDeviceTes
 test -f app/src/androidTest/java/app/lifeos/next/SelfObservationGoldDeviceTest.kt
 grep -q 'ProductGoldenChatDeviceTest#seedProductGoldChatRoundTrip' .github/scripts/android-emulator-recovery.sh
 grep -q 'ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' .github/scripts/android-emulator-recovery.sh
+grep -q 'LanguageRuntimeRecoveryDeviceTest#seedPromotedPersonalLanguageSnapshot' .github/scripts/android-emulator-recovery.sh
+grep -q 'LanguageRuntimeRecoveryDeviceTest#recoverPromotedSnapshotThenRollbackDurablyAfterColdStart' .github/scripts/android-emulator-recovery.sh
 grep -q 'ProductiveWorldPersistenceDeviceTest' .github/scripts/android-emulator-recovery.sh
 grep -q 'Level7ProcessDeathGoldDeviceTest#seedLevel7SemanticCheckpoint' .github/scripts/android-emulator-recovery.sh
 grep -q 'Level7ProcessDeathGoldDeviceTest#recoverExactHeadsAndDoNotApplyLearningTwice' .github/scripts/android-emulator-recovery.sh
@@ -97,6 +100,15 @@ printf '%s\n' \
   'goal_v4_restart_parity=PASS' \
   'linguistic_index_bounded=PASS' \
   'domain_semantic_packs=PASS' \
-  'no_external_side_effect_without_executable_semantic_action=PASS' > "$evidence_dir/gates.txt"
+  'no_external_side_effect_without_executable_semantic_action=PASS' \
+  'language_runtime_snapshot=PASS' \
+  'personal_language_shadow=PASS' \
+  'personal_language_feedback=PASS' \
+  'personal_corpus_isolation=PASS' \
+  'web_source_page_evidence=PASS' \
+  'web_contradiction_detection=PASS' \
+  'web_source_diversity=PASS' \
+  'web_evidence_cache=PASS' \
+  'web_private_corpus_non_export=PASS' > "$evidence_dir/gates.txt"
 
 step "Product Gold pre-emulator matrix complete"
