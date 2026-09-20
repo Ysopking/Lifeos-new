@@ -27,6 +27,9 @@ bash .github/scripts/ci-language-semantic-contract.sh
 step "gate 00c: Gradle wrapper integrity contract"
 bash .github/scripts/ci-gradle-wrapper-contract.sh
 
+step "gate 00d: repository authority contract"
+bash .github/scripts/ci-main-authority-contract.sh
+
 step "gate 01: core model tests"
 ./gradlew :core:model:test --stacktrace
 
