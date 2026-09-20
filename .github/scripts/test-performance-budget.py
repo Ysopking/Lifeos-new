@@ -34,8 +34,9 @@ BUDGET = {
     "source": "android-emulator-recovery",
     "baseline": {
         "head_sha": "1" * 40,
-        "run_ids": [1001, 1002, 1003],
-        "sample_count": 3,
+        "workflow_run_id": 1001,
+        "attempts": [1, 2, 3],
+        "measurement_count": 3,
     },
     "cold_start": {"total_ms_max": 500, "wait_ms_max": 550},
     "instrumentation": {
@@ -69,6 +70,7 @@ rejects(lambda e, b: e["instrumentation"].__setitem__("samples", e["instrumentat
 rejects(lambda e, b: e["instrumentation"]["samples"][1].__setitem__("file", "other.txt"), "required-samples-missing")
 rejects(lambda e, b: b.__setitem__("blocking", False), "budget-not-blocking")
 rejects(lambda e, b: b.__setitem__("schema_version", 2), "budget-schema")
+rejects(lambda e, b: b["baseline"].__setitem__("measurement_count", 2), "baseline-measurement-count-mismatch")
 rejects(lambda e, b: e.__setitem__("schema_version", 2), "evidence-schema")
 
 print("PERFORMANCE_BUDGET_TEST_OK")
