@@ -28,6 +28,45 @@ EVIDENCE = {
     },
 }
 
+MEASUREMENTS = [
+    {
+        "workflow_run_id": 1001,
+        "attempt": 1,
+        "job_id": 2001,
+        "artifact_id": 3001,
+        "artifact_sha256": "a" * 64,
+        "cold_total_ms": 400,
+        "cold_wait_ms": 440,
+        "median_ms": 700,
+        "max_ms": 1200,
+        "sample_count": 2,
+    },
+    {
+        "workflow_run_id": 1001,
+        "attempt": 2,
+        "job_id": 2002,
+        "artifact_id": 3002,
+        "artifact_sha256": "b" * 64,
+        "cold_total_ms": 420,
+        "cold_wait_ms": 455,
+        "median_ms": 720,
+        "max_ms": 1280,
+        "sample_count": 2,
+    },
+    {
+        "workflow_run_id": 1001,
+        "attempt": 3,
+        "job_id": 2003,
+        "artifact_id": 3003,
+        "artifact_sha256": "c" * 64,
+        "cold_total_ms": 410,
+        "cold_wait_ms": 450,
+        "median_ms": 710,
+        "max_ms": 1250,
+        "sample_count": 2,
+    },
+]
+
 BUDGET = {
     "schema_version": 1,
     "blocking": True,
@@ -35,10 +74,14 @@ BUDGET = {
     "baseline": {
         "head_sha": "1" * 40,
         "workflow_run_id": 1001,
-        "attempts": [1, 2, 3],
-        "measurement_count": 3,
+        "measurements": MEASUREMENTS,
     },
-    "cold_start": {"total_ms_max": 500, "wait_ms_max": 550},
+    "derivation": {
+        "method": "max-observed-plus-headroom",
+        "headroom_basis_points": 12500,
+        "rounding": "ceil",
+    },
+    "cold_start": {"total_ms_max": 525, "wait_ms_max": 569},
     "instrumentation": {
         "sample_count_min": 2,
         "median_ms_max": 900,
@@ -61,8 +104,8 @@ def rejects(mutator, expected: str) -> None:
 
 
 module.check(copy.deepcopy(EVIDENCE), copy.deepcopy(BUDGET))
-rejects(lambda e, b: e["cold_start"].__setitem__("total_ms", 501), "cold-total")
-rejects(lambda e, b: e["cold_start"].__setitem__("wait_ms", 551), "cold-wait")
+rejects(lambda e, b: e["cold_start"].__setitem__("total_ms", 526), "cold-total")
+rejects(lambda e, b: e["cold_start"].__setitem__("wait_ms", 570), "cold-wait")
 rejects(lambda e, b: e["instrumentation"].__setitem__("median_ms", 901), "instrumentation-median")
 rejects(lambda e, b: e["instrumentation"].__setitem__("max_ms", 1601), "instrumentation-max")
 rejects(lambda e, b: e["instrumentation"].__setitem__("sample_count", 1), "instrumentation-sample-count")
@@ -70,7 +113,10 @@ rejects(lambda e, b: e["instrumentation"].__setitem__("samples", e["instrumentat
 rejects(lambda e, b: e["instrumentation"]["samples"][1].__setitem__("file", "other.txt"), "required-samples-missing")
 rejects(lambda e, b: b.__setitem__("blocking", False), "budget-not-blocking")
 rejects(lambda e, b: b.__setitem__("schema_version", 2), "budget-schema")
-rejects(lambda e, b: b["baseline"].__setitem__("measurement_count", 2), "baseline-measurement-count-mismatch")
+rejects(lambda e, b: b["baseline"].__setitem__("measurements", b["baseline"]["measurements"][:2]), "baseline-measurements-min-3")
+rejects(lambda e, b: b["baseline"]["measurements"][1].__setitem__("attempt", 1), "baseline-attempt-duplicate")
+rejects(lambda e, b: b["cold_start"].__setitem__("total_ms_max", 526), "derived-budget-mismatch:cold-total")
+rejects(lambda e, b: b["derivation"].__setitem__("headroom_basis_points", 9999), "headroom-basis-points-below-min")
 rejects(lambda e, b: e.__setitem__("schema_version", 2), "evidence-schema")
 
 print("PERFORMANCE_BUDGET_TEST_OK")
