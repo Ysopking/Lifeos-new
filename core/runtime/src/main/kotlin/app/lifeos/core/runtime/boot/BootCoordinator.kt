@@ -14,11 +14,13 @@ class BootCoordinator(
     private val capabilityWarmup: CapabilityWarmup,
     private val deltaDetector: BootDeltaDetector,
     private val validator: BootValidator,
+    private val performance: BootPerformanceRecorder = BootPerformanceRecorder(),
     private val stateSink: BootStateSink = NoOpBootStateSink,
     private val now: () -> Instant = Instant::now,
     private val newBootId: () -> String = { UUID.randomUUID().toString() },
 ) {
     suspend fun boot(): BootRunResult {
+        performance.reset()
         var snapshot = BootSnapshot(
             bootId = newBootId(),
             startedAt = now(),
@@ -29,16 +31,23 @@ class BootCoordinator(
             state: BootState,
             mutate: (BootSnapshot) -> BootSnapshot = { it },
         ) {
-            snapshot = mutate(snapshot).copy(state = state)
+            snapshot = mutate(snapshot).copy(
+                state = state,
+                phaseTimings = performance.snapshot().timings,
+            )
             stateSink.record(snapshot)
         }
 
         return try {
             transition(BootState.INITIALIZING)
-            runtimeBootstrapper.bootstrap()
+            performance.measure(BootPhaseId.RUNTIME_BOOTSTRAP) {
+                runtimeBootstrapper.bootstrap()
+            }
 
             transition(BootState.VERIFYING_STORES)
-            val stores = storeVerifier.verify()
+            val stores = performance.measure(BootPhaseId.STORE_VERIFY) {
+                storeVerifier.verify()
+            }
             if (!stores.canBootNormally && !stores.requiresRecovery) {
                 val failures = stores.stores
                     .filter { it.state != StoreState.HEALTHY }
@@ -53,21 +62,27 @@ class BootCoordinator(
             transition(
                 if (stores.requiresRecovery) BootState.RECOVERING else BootState.RESTORING_RUNTIME
             )
-            val runtimeState = stateRehydrator.rehydrate()
+            val runtimeState = performance.measure(BootPhaseId.RUNTIME_REHYDRATE) {
+                stateRehydrator.rehydrate()
+            }
             snapshot = snapshot.copy(lastCheckpointId = runtimeState.checkpointId)
             if (stores.requiresRecovery) {
                 transition(BootState.RESTORING_RUNTIME)
             }
 
             transition(BootState.RESTORING_PHOTONS)
-            val photons = photonRehydrator.rehydrate()
+            val photons = performance.measure(BootPhaseId.PHOTON_REHYDRATE) {
+                photonRehydrator.rehydrate()
+            }
             snapshot = snapshot.copy(
                 restoredPhotonCount = photons.restoredCount,
                 warnings = snapshot.warnings + photons.unreadableFiles.map { "unreadable-photon:$it" },
             )
 
             transition(BootState.RESTORING_MODULES)
-            val modules = moduleRehydrator.rehydrate()
+            val modules = performance.measure(BootPhaseId.MODULE_REHYDRATE) {
+                moduleRehydrator.rehydrate()
+            }
             snapshot = snapshot.copy(
                 restoredModuleCount = modules.restored,
                 warnings = snapshot.warnings + if (modules.degraded > 0) {
@@ -78,8 +93,12 @@ class BootCoordinator(
             )
 
             transition(BootState.WARMING_COGNITION)
-            val matrix = thoughtMatrixWarmup.warmup()
-            val capabilities = capabilityWarmup.warmup()
+            val matrix = performance.measure(BootPhaseId.THOUGHT_MATRIX_WARMUP) {
+                thoughtMatrixWarmup.warmup()
+            }
+            val capabilities = performance.measure(BootPhaseId.CAPABILITY_WARMUP) {
+                capabilityWarmup.warmup()
+            }
 
             val context = BootContext(
                 stores = stores,
@@ -91,12 +110,18 @@ class BootCoordinator(
             )
 
             transition(BootState.ANALYZING_DELTAS)
-            val deltaCount = deltaDetector.detect(context)
+            val deltaCount = performance.measure(BootPhaseId.DELTA_DETECT) {
+                deltaDetector.detect(context)
+            }
             require(deltaCount >= 0) { "Detected delta count must not be negative" }
             snapshot = snapshot.copy(detectedDeltaCount = deltaCount)
 
             transition(BootState.VALIDATING)
-            when (val validation = validator.validate(context)) {
+            when (
+                val validation = performance.measure(BootPhaseId.VALIDATE) {
+                    validator.validate(context)
+                }
+            ) {
                 BootValidationResult.Ready -> {
                     transition(BootState.READY)
                     BootRunResult.Ready(snapshot, context)
