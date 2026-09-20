@@ -13,11 +13,7 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.runtime.capability.CapabilityGap
-import app.lifeos.core.runtime.capability.GeneratedToolGenesisResult
-import app.lifeos.core.runtime.capability.GeneratedToolRequestExecutionResult
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatus
-import app.lifeos.core.runtime.capability.GeneratedToolState
-import app.lifeos.core.runtime.evolution.PrivateNovelCapabilityActivationResult
 import app.lifeos.core.runtime.goal.LocalSharePreparation
 import app.lifeos.core.runtime.life.PerceptionCandidate
 import app.lifeos.core.runtime.life.PerceptionModality
@@ -40,7 +36,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 enum class VoiceCapturePhase { IDLE, RECORDING, PROCESSING }
 
@@ -85,11 +80,16 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private val owner = application as LifeOsApplication
     private val kernel = owner.kernel
     private val multimodalPerception = owner.multimodalPerception
-    private val generatedToolStatusReader = owner.generatedToolStatusReader
     private val voiceCapture = AndroidVoiceCaptureEngine(application.applicationContext)
     private val localShareIntentFactory = LocalShareIntentFactory(application.applicationContext, kernel)
     private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
+    private val toolCenter = ToolCenterUiController(
+        kernel = kernel,
+        generatedToolStatusReader = owner.generatedToolStatusReader,
+        state = mutableState,
+        scope = viewModelScope,
+    )
     private val imagePreviewLoader = ImagePreviewLoader(kernel::loadImageAsset)
 
     val state = mutableState.asStateFlow()
@@ -136,117 +136,18 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun refreshGeneratedToolStatus() {
-        if (mutableState.value.generatedToolStatusLoading) return
-        viewModelScope.launch { loadGeneratedToolStatus() }
-    }
+    fun refreshGeneratedToolStatus() = toolCenter.refreshStatus()
 
-    /** One explicit press approves exactly one blocking gap for bounded local Genesis. */
-    fun requestCapabilityGaps() {
-        val current = mutableState.value
-        val gap = current.lastCapabilityGaps.firstOrNull()
-        if (
-            current.loading ||
-            current.loadFailed ||
-            current.capabilityRequestSaving ||
-            current.capabilityActivationSaving ||
-            gap == null
-        ) return
+    fun requestCapabilityGaps() = toolCenter.requestCapabilityGaps()
 
-        mutableState.update {
-            it.copy(
-                capabilityRequestSaving = true,
-                capabilityRequestStatus = null,
-            )
-        }
-        viewModelScope.launch {
-            try {
-                val result = kernel.generateExplicitlyApprovedTool(gap)
-                val status = when (val execution = result.execution) {
-                    is GeneratedToolRequestExecutionResult.Blocked ->
-                        "Tool-Erzeugung wurde vor Genesis blockiert: ${execution.reason}"
+    fun reviewAndActivateFirstTrialTool() =
+        toolCenter.reviewAndActivateFirstTrialTool()
 
-                    is GeneratedToolRequestExecutionResult.Completed -> when (val genesis = execution.genesis) {
-                        is GeneratedToolGenesisResult.OwnerReviewRequired ->
-                            "${genesis.record.manifest.toolId} wurde lokal erzeugt, gebaut, getestet und verifiziert. Die exakte Code-Revision wartet jetzt in Assets auf deine Freigabe; erst danach darf das Tool in TRIAL."
+    fun dismissCapabilityRequestStatus() =
+        toolCenter.dismissRequestStatus()
 
-                        is GeneratedToolGenesisResult.TrialReady ->
-                            "${genesis.record.manifest.toolId} wurde lokal erzeugt, gebaut, getestet und verifiziert. Das Tool ist jetzt isoliert in TRIAL und noch nicht aktiv."
-
-                        is GeneratedToolGenesisResult.Rejected ->
-                            "Der lokale ToolWorkshop hat ${genesis.record.manifest.toolId} sicher abgelehnt: ${genesis.reasons.joinToString("; ")}"
-                    }
-                }
-                mutableState.update { it.copy(capabilityRequestStatus = status) }
-                loadGeneratedToolStatus()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                mutableState.update {
-                    it.copy(
-                        capabilityRequestStatus =
-                            "Tool-Erzeugung konnte nicht sicher abgeschlossen werden: ${error.message ?: error::class.simpleName ?: "unbekannter Fehler"}"
-                    )
-                }
-            } finally {
-                mutableState.update { it.copy(capabilityRequestSaving = false) }
-            }
-        }
-    }
-
-    /** Separate explicit owner action: five non-productive canaries, review, seal, then guarded ACTIVE. */
-    fun reviewAndActivateFirstTrialTool() {
-        val current = mutableState.value
-        val trial = current.generatedToolStatus?.tools?.firstOrNull { it.state == GeneratedToolState.TRIAL }
-        if (
-            current.loading ||
-            current.loadFailed ||
-            current.capabilityRequestSaving ||
-            current.capabilityActivationSaving ||
-            trial == null
-        ) return
-
-        mutableState.update {
-            it.copy(
-                capabilityActivationSaving = true,
-                capabilityActivationStatus = null,
-            )
-        }
-        viewModelScope.launch {
-            try {
-                val result = kernel.reviewAndActivateGeneratedTool(trial.toolId)
-                val status = when (result) {
-                    is PrivateNovelCapabilityActivationResult.Activated ->
-                        "${result.promotion.activeRecord.manifest.toolId} hat fünf getrennte lokale Novel-Canaries, Readiness, den dauerhaften Promotion-Seal und die getrennte Review-/Owner-Prüfung bestanden. Das Tool ist jetzt ACTIVE mit LOW Trust und wird nach Neustart nur mit exakt passender Evidence wiederhergestellt."
-                    is PrivateNovelCapabilityActivationResult.AlreadyActive ->
-                        "${result.record.manifest.toolId} ist bereits ACTIVE. Es wurden keine weiteren Canary-Trials ausgeführt."
-                    is PrivateNovelCapabilityActivationResult.Blocked ->
-                        "Aktivierung von ${result.toolId} wurde sicher blockiert: ${result.reasons.joinToString("; ")}"
-                }
-                mutableState.update { it.copy(capabilityActivationStatus = status) }
-                loadGeneratedToolStatus()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                mutableState.update {
-                    it.copy(
-                        capabilityActivationStatus =
-                            "Tool-Aktivierung konnte nicht sicher abgeschlossen werden: ${error.message ?: error::class.simpleName ?: "unbekannter Fehler"}"
-                    )
-                }
-            } finally {
-                mutableState.update { it.copy(capabilityActivationSaving = false) }
-            }
-        }
-    }
-
-    fun dismissCapabilityRequestStatus() {
-        mutableState.update { it.copy(capabilityRequestStatus = null) }
-    }
-
-    fun dismissCapabilityActivationStatus() {
-        mutableState.update { it.copy(capabilityActivationStatus = null) }
-    }
+    fun dismissCapabilityActivationStatus() =
+        toolCenter.dismissActivationStatus()
 
     fun voicePermissionDenied() {
         mutableState.update {
@@ -450,26 +351,6 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun loadImagePreview(photon: Photon): ImagePreviewState =
         imagePreviewLoader.load(photon)
 
-    private suspend fun loadGeneratedToolStatus() {
-        mutableState.update { it.copy(generatedToolStatusLoading = true, generatedToolStatusError = null) }
-        try {
-            val status = withContext(Dispatchers.IO) { generatedToolStatusReader.snapshot() }
-            mutableState.update {
-                it.copy(
-                    generatedToolStatus = status,
-                    generatedToolStatusError = null,
-                )
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            mutableState.update {
-                it.copy(generatedToolStatusError = "Generated-Tool-Status konnte nicht gelesen werden.")
-            }
-        } finally {
-            mutableState.update { it.copy(generatedToolStatusLoading = false) }
-        }
-    }
 
     private suspend fun applyVoiceCaptureResult(result: LocalVoiceCaptureResult) {
         if (result !is LocalVoiceCaptureResult.Success) {
@@ -610,7 +491,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                     bootstrap.status == KernelBootstrapStatus.READY ||
                     bootstrap.status == KernelBootstrapStatus.DEGRADED
                 ) {
-                    loadGeneratedToolStatus()
+                    toolCenter.loadStatus()
                 }
             }
         }
