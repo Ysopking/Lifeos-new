@@ -12,11 +12,9 @@ import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.self.SelfObservationCapture
 import app.lifeos.core.runtime.self.SelfObservationCoordinator
-import app.lifeos.core.runtime.self.SelfObservationCycle
 import app.lifeos.core.runtime.self.SelfObservationDecisionTraceRecorder
 import app.lifeos.core.runtime.self.SelfObservationTrigger
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
-import app.lifeos.core.runtime.world.SelfStateWorldFormulaAssessment
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.next.kernel.CanonicalLifePhotonRepository
@@ -35,11 +33,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
-
-data class SelfObservationAnalysisState(
-    val cycle: SelfObservationCycle,
-    val assessment: SelfStateWorldFormulaAssessment,
-)
 
 /** Process-level owner for the LIFEOS kernel instance and read-only private diagnostics. */
 class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
@@ -280,32 +273,23 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         liveSourceController.refresh()
     }
 
-    fun initialDataPermissionsToRequest(): List<String> =
-        permissionController.initialDataPermissionsToRequest()
+    fun initialDataPermissionsToRequest(): List<String> = permissionController.initialDataPermissionsToRequest()
 
-    fun allRuntimePermissionsToRequest(): List<String> =
-        permissionController.allRuntimePermissionsToRequest()
+    fun allRuntimePermissionsToRequest(): List<String> = permissionController.allRuntimePermissionsToRequest()
 
-    fun hasBroadFileAccess(): Boolean =
-        permissionController.hasBroadFileAccess()
+    fun hasBroadFileAccess(): Boolean = permissionController.hasBroadFileAccess()
 
-    fun shouldRequestBroadFileAccess(): Boolean =
-        permissionController.shouldRequestBroadFileAccess()
+    fun shouldRequestBroadFileAccess(): Boolean = permissionController.shouldRequestBroadFileAccess()
 
-    fun markBroadFileAccessRequested() =
-        permissionController.markBroadFileAccessRequested()
+    fun markBroadFileAccessRequested() = permissionController.markBroadFileAccessRequested()
 
-    fun shouldRequestInitialDataPermissions(): Boolean =
-        permissionController.shouldRequestInitialDataPermissions()
+    fun shouldRequestInitialDataPermissions(): Boolean = permissionController.shouldRequestInitialDataPermissions()
 
-    fun shouldRequestAllRuntimePermissions(): Boolean =
-        permissionController.shouldRequestAllRuntimePermissions()
+    fun shouldRequestAllRuntimePermissions(): Boolean = permissionController.shouldRequestAllRuntimePermissions()
 
-    fun markInitialDataPermissionsRequested() =
-        permissionController.markInitialDataPermissionsRequested()
+    fun markInitialDataPermissionsRequested() = permissionController.markInitialDataPermissionsRequested()
 
-    fun markAllRuntimePermissionsRequested() =
-        permissionController.markAllRuntimePermissionsRequested()
+    fun markAllRuntimePermissionsRequested() = permissionController.markAllRuntimePermissionsRequested()
 
     fun refreshInitialDataBootstrap() {
         if (!::initialDataController.isInitialized) return
