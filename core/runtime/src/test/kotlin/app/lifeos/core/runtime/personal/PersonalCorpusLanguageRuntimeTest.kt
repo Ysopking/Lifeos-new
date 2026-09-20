@@ -190,6 +190,91 @@ class PersonalCorpusLanguageRuntimeTest {
         assertTrue("privacy:no-autonomous-share" in photon.tags)
     }
 
+    @Test
+    fun `multi term retrieval uses one combined owner query and preserves score ranking`() = runTest {
+        val repository = InMemoryRevisionedPhotonRepository()
+        val importer = PersonalConversationCorpusImporter(repository)
+        importer.import(
+            listOf(
+                ownerTurn("both-terms", "alpha beta", 90),
+                ownerTurn("single-term", "alpha", 1),
+                PersonalConversationTurn(
+                    source = PersonalConversationSource.GEMINI,
+                    conversationId = "assistant-both",
+                    speaker = PersonalConversationSpeaker.ASSISTANT,
+                    text = "alpha beta",
+                    observedAt = now.minusSeconds(1),
+                    externalMessageId = "assistant-both",
+                ),
+            )
+        )
+        repository.resetQueryTracking()
+
+        val matches = PersonalCorpusRetriever(repository)
+            .retrieveOwnerLanguageExamples("alpha beta", now)
+
+        assertEquals(1, repository.queryCount)
+        val query = repository.queries.single()
+        assertEquals(setOf("corpus:archive", "speaker:owner"), query.allTags)
+        assertEquals(
+            setOf("corpus-term:alpha", "corpus-term:beta"),
+            query.anyTags,
+        )
+        assertEquals(64, query.limit)
+        assertEquals(listOf("alpha beta", "alpha"), matches.map { it.photon.content })
+        assertTrue(matches.all { "speaker:owner" in it.photon.tags })
+        assertTrue(matches.all { "privacy:local-only" in it.photon.tags })
+        assertTrue(matches.all { "privacy:no-external-export" in it.photon.tags })
+        assertTrue(matches.all { "privacy:no-deepsearch-export" in it.photon.tags })
+    }
+
+    @Test
+    fun `personal corpus query plan is normalized bounded and fingerprint stable`() {
+        val first = assertNotNull(
+            PersonalCorpusQueryPlan.create(
+                query = "Alpha alpha beta gamma",
+                ownerOnly = true,
+                maxTerms = 2,
+                perTermLimit = 32,
+                maxCandidates = 48,
+            )
+        )
+        val replay = assertNotNull(
+            PersonalCorpusQueryPlan.create(
+                query = "alpha beta",
+                ownerOnly = true,
+                maxTerms = 2,
+                perTermLimit = 32,
+                maxCandidates = 48,
+            )
+        )
+        val nonOwner = assertNotNull(
+            PersonalCorpusQueryPlan.create(
+                query = "alpha beta",
+                ownerOnly = false,
+                maxTerms = 2,
+                perTermLimit = 32,
+                maxCandidates = 48,
+            )
+        )
+
+        assertEquals(listOf("alpha", "beta"), first.terms)
+        assertEquals(setOf("corpus:archive", "speaker:owner"), first.requiredTags)
+        assertEquals(setOf("corpus-term:alpha", "corpus-term:beta"), first.termTags)
+        assertEquals(48, first.retrievalLimit)
+        assertEquals(first.fingerprint, replay.fingerprint)
+        assertNotEquals(first.fingerprint, nonOwner.fingerprint)
+        assertNull(
+            PersonalCorpusQueryPlan.create(
+                query = "   ",
+                ownerOnly = true,
+                maxTerms = 2,
+                perTermLimit = 32,
+                maxCandidates = 48,
+            )
+        )
+    }
+
     private fun ownerTurn(
         conversationId: String,
         text: String,
@@ -205,6 +290,12 @@ class PersonalCorpusLanguageRuntimeTest {
 
     private class InMemoryRevisionedPhotonRepository : RevisionedPhotonRepository {
         private val photons = linkedMapOf<PhotonId, Photon>()
+        val queries = mutableListOf<PhotonIndexQuery>()
+        val queryCount: Int get() = queries.size
+
+        fun resetQueryTracking() {
+            queries.clear()
+        }
 
         override suspend fun save(photon: Photon) {
             photons[photon.id] = photon
@@ -260,11 +351,13 @@ class PersonalCorpusLanguageRuntimeTest {
         }
 
         override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> {
+            queries += query
             val filtered = photons.values.asSequence().filter { photon ->
                 (query.ids.isEmpty() || photon.id in query.ids) &&
                     (query.phases.isEmpty() || photon.phase in query.phases) &&
                     (query.mimeTypes.isEmpty() || photon.mimeType in query.mimeTypes) &&
                     photon.tags.containsAll(query.allTags) &&
+                    (query.anyTags.isEmpty() || photon.tags.any { it in query.anyTags }) &&
                     photon.tags.none { it in query.excludedTags }
             }
             val sorted = when (query.order) {
