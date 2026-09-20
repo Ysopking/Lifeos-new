@@ -98,6 +98,7 @@ data class BootSnapshot(
     val restoredPhotonCount: Long = 0,
     val restoredModuleCount: Int = 0,
     val detectedDeltaCount: Long = 0,
+    val phaseTimings: List<BootPhaseTiming> = emptyList(),
     val warnings: List<String> = emptyList(),
     val failures: List<String> = emptyList(),
 ) {
@@ -106,6 +107,9 @@ data class BootSnapshot(
         require(restoredPhotonCount >= 0) { "Restored photon count must not be negative" }
         require(restoredModuleCount >= 0) { "Restored module count must not be negative" }
         require(detectedDeltaCount >= 0) { "Detected delta count must not be negative" }
+        require(phaseTimings.map { it.phase }.distinct().size == phaseTimings.size) {
+            "Boot phase timings must not contain duplicate phases"
+        }
     }
 }
 
