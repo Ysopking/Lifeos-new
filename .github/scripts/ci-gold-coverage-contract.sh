@@ -226,4 +226,13 @@ grep -Fq 'check-performance-budget.py' .github/scripts/ci-product-gold.sh || {
   exit 1
 }
 
+grep -Fq 'ci-architecture-budget.py' .github/scripts/ci-core-fast.sh || {
+  echo "gold-architecture-budget-gate-missing" >&2
+  exit 1
+}
+test -s .github/architecture-budget.json || {
+  echo "gold-architecture-budget-file-missing" >&2
+  exit 1
+}
+
 echo "V17_GOLD_COVERAGE_CONTRACT_OK"
