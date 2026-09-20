@@ -1,10 +1,6 @@
 package app.lifeos.next
 
-import android.Manifest
 import android.app.Application
-import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Environment
 import app.lifeos.core.data.EncryptedLiveSourceCursorRepository
 import app.lifeos.core.data.EncryptedLiveSourceSnapshotRepository
 import app.lifeos.core.data.goal.EncryptedGoalCognitiveCycleBindingRepository
@@ -20,7 +16,6 @@ import app.lifeos.core.runtime.agency.ExternalTransportRuntimeRegistry
 import app.lifeos.core.runtime.agency.ExternalEffectRuntimeRegistry
 import app.lifeos.core.data.agency.EncryptedExternalEffectReceiptRepository
 import app.lifeos.core.data.agency.EncryptedExternalPayloadRepository
-import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
 import app.lifeos.core.data.policy.EncryptedOwnerPolicyRepository
@@ -38,7 +33,6 @@ import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
-import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
 import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointStore
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionCoordinator
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
@@ -47,7 +41,6 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRuntimeRegistry
 import app.lifeos.core.runtime.deepsearch.DeepSearchResultPhotonPersistence
 import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
 import app.lifeos.core.runtime.evolution.WorldEquationPostActivationSafetyRuntimeRegistry
-import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.ProtectionCoordinatorProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
@@ -228,6 +221,14 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     override val startupState: StateFlow<LifeOsProcessStartupState> = mutableStartupState.asStateFlow()
     val selfObservationAnalysis: StateFlow<SelfObservationAnalysisState?> =
         mutableSelfObservationAnalysis.asStateFlow()
+
+    private val permissionController by lazy {
+        PrivatePermissionController(
+            application = this,
+            initialDataSources = { initialDataSources },
+            startupReady = { startupState.value.ready },
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -722,72 +723,32 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         }
     }
 
-    fun initialDataPermissionsToRequest(): List<String> = initialDataSources.missingRuntimePermissions()
+    fun initialDataPermissionsToRequest(): List<String> =
+        permissionController.initialDataPermissionsToRequest()
 
-    fun allRuntimePermissionsToRequest(): List<String> {
-        if (!startupState.value.ready) return emptyList()
-        return buildList {
-            addAll(initialDataSources.missingRuntimePermissions())
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                add(Manifest.permission.RECORD_AUDIO)
-            }
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-            ) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-            if (
-                Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
-                checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
-            ) {
-                add(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-        }.distinct().sorted()
-    }
+    fun allRuntimePermissionsToRequest(): List<String> =
+        permissionController.allRuntimePermissionsToRequest()
 
     fun hasBroadFileAccess(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+        permissionController.hasBroadFileAccess()
 
-    fun shouldRequestBroadFileAccess(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || hasBroadFileAccess()) return false
-        return !getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
-            .getBoolean(BROAD_FILE_ACCESS_REQUESTED, false)
-    }
+    fun shouldRequestBroadFileAccess(): Boolean =
+        permissionController.shouldRequestBroadFileAccess()
 
-    fun markBroadFileAccessRequested() {
-        getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
-            .edit()
-            .putBoolean(BROAD_FILE_ACCESS_REQUESTED, true)
-            .apply()
-    }
+    fun markBroadFileAccessRequested() =
+        permissionController.markBroadFileAccessRequested()
 
-    fun shouldRequestInitialDataPermissions(): Boolean {
-        if (initialDataSources.missingRuntimePermissions().isEmpty()) return false
-        val schema = initialDataSources.permissionSchemaFingerprint()
-        return getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
-            .getString(INITIAL_DATA_PERMISSION_SCHEMA, null) != schema
-    }
+    fun shouldRequestInitialDataPermissions(): Boolean =
+        permissionController.shouldRequestInitialDataPermissions()
 
-    fun shouldRequestAllRuntimePermissions(): Boolean {
-        if (allRuntimePermissionsToRequest().isEmpty()) return false
-        return getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
-            .getString(ALL_RUNTIME_PERMISSION_SCHEMA, null) != allRuntimePermissionSchema()
-    }
+    fun shouldRequestAllRuntimePermissions(): Boolean =
+        permissionController.shouldRequestAllRuntimePermissions()
 
-    fun markInitialDataPermissionsRequested() {
-        getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
-            .edit()
-            .putString(INITIAL_DATA_PERMISSION_SCHEMA, initialDataSources.permissionSchemaFingerprint())
-            .apply()
-    }
+    fun markInitialDataPermissionsRequested() =
+        permissionController.markInitialDataPermissionsRequested()
 
-    fun markAllRuntimePermissionsRequested() {
-        getSharedPreferences(INITIAL_DATA_PREFS, MODE_PRIVATE)
-            .edit()
-            .putString(ALL_RUNTIME_PERMISSION_SCHEMA, allRuntimePermissionSchema())
-            .apply()
-    }
+    fun markAllRuntimePermissionsRequested() =
+        permissionController.markAllRuntimePermissionsRequested()
 
     fun refreshInitialDataBootstrap() {
         if (!startupState.value.ready && !::initialDataBootstrap.isInitialized) return
@@ -801,18 +762,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         }
     }
 
-    private fun allRuntimePermissionSchema(): String = buildString {
-        append(initialDataSources.permissionSchemaFingerprint())
-        append("|record-audio")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) append("|post-notifications")
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) append("|read-external-storage")
-    }
 
     private companion object {
         val LIVE_SOURCE_REFRESH_INTERVAL: Duration = Duration.ofMinutes(5)
-        const val INITIAL_DATA_PREFS = "lifeos-initial-data-bootstrap"
-        const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"
-        const val ALL_RUNTIME_PERMISSION_SCHEMA = "all-runtime-permission-schema"
-        const val BROAD_FILE_ACCESS_REQUESTED = "broad-file-access-requested"
     }
 }
