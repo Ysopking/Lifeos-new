@@ -210,33 +210,28 @@ class PersonalCorpusRetriever(
         now: Instant,
         ownerOnly: Boolean = false,
     ): List<PersonalCorpusMatch> {
-        val terms = SemanticSearchTerms.tokens(query).take(maxTerms)
-        if (terms.isEmpty()) return emptyList()
+        val plan = PersonalCorpusQueryPlan.create(
+            query = query,
+            ownerOnly = ownerOnly,
+            maxTerms = maxTerms,
+            perTermLimit = perTermLimit,
+            maxCandidates = maxCandidates,
+        ) ?: return emptyList()
 
-        val refs = linkedSetOf<PhotonRevisionRef>()
-        for (term in terms) {
-            val required = buildSet {
-                add("corpus:archive")
-                add("corpus-term:$term")
-                if (ownerOnly) add("speaker:owner")
-            }
-            photons.query(
-                PhotonIndexQuery(
-                    allTags = required,
-                    latestOnly = true,
-                    includeTombstoned = false,
-                    order = PhotonIndexOrder.NEWEST_FIRST,
-                    limit = perTermLimit,
-                )
-            ).forEach { ref ->
-                if (refs.size < maxCandidates) refs += ref
-            }
-            if (refs.size >= maxCandidates) break
-        }
+        val refs = photons.query(
+            PhotonIndexQuery(
+                allTags = plan.requiredTags,
+                anyTags = plan.termTags,
+                latestOnly = true,
+                includeTombstoned = false,
+                order = PhotonIndexOrder.NEWEST_FIRST,
+                limit = plan.retrievalLimit,
+            )
+        )
 
         return refs.mapNotNull { ref -> photons.load(ref)?.let { ref to it } }
             .map { (ref, photon) ->
-                PersonalCorpusMatch(ref, photon, score(photon, terms.toSet(), now))
+                PersonalCorpusMatch(ref, photon, score(photon, plan.terms.toSet(), now))
             }
             .sortedWith(
                 compareByDescending<PersonalCorpusMatch> { it.score }
