@@ -72,7 +72,7 @@ class ConversationTurnCoordinatorTest {
                 routeGoal = router::route,
                 semanticActionGraphRouter = semantic,
                 goalActions = actions,
-                scope = backgroundScope,
+                scope = this,
                 continuousCognition = cognition,
                 persistWithoutCognition = { photon, mode ->
                     repository.save(photon)
