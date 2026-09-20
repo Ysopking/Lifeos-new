@@ -310,6 +310,11 @@ data class DeepSearchResult(
 interface DeepSearchSource {
     val descriptor: DeepSearchSourceDescriptor
 
+    fun workUnits(
+        request: DeepSearchRequest,
+        branch: DeepSearchBranch,
+    ): Int = descriptor.workUnitsPerExpansion
+
     suspend fun expand(
         request: DeepSearchRequest,
         branch: DeepSearchBranch,

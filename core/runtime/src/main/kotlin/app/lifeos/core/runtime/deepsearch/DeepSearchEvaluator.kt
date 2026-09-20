@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.deepsearch
 
+import app.lifeos.core.language.SemanticSearchTerms
 import kotlin.math.abs
 
 /** Typed deterministic scoring; no single score is treated as unqualified truth. */
@@ -13,10 +14,11 @@ class DeepSearchEvaluator {
     ): DeepSearchScore {
         require(depth in 0..request.budget.maxDepth)
 
-        val queryTerms = request.queryTerms + request.contextTerms.flatMap(::tokenizeSearchText)
-        val candidateTerms = tokenizeSearchText(finding.statement) +
-            finding.semanticTerms.flatMap(::tokenizeSearchText)
-        val relevance = coverage(queryTerms, candidateTerms)
+        val queryTerms = SemanticSearchTerms.expandedTokens(request.query) +
+            request.contextTerms.flatMap(SemanticSearchTerms::expandedTokens)
+        val candidateTerms = SemanticSearchTerms.expandedTokens(finding.statement) +
+            finding.semanticTerms.flatMap(SemanticSearchTerms::expandedTokens)
+        val relevance = coverage(queryTerms.toSet(), candidateTerms.toSet())
 
         val positive = finding.evidence.filterNot { it.contradiction }
         val contradictory = finding.evidence.filter { it.contradiction }

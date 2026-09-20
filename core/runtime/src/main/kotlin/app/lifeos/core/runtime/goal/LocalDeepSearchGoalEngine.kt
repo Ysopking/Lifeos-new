@@ -4,6 +4,8 @@ import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.SemanticSearchQueryPlanner
+import app.lifeos.core.language.SemanticSearchTerms
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
@@ -67,6 +69,7 @@ class LocalDeepSearchGoalEngine(
     private val checkpointProjector: DeepSearchCheckpointResultProjector = DeepSearchCheckpointResultProjector(),
     private val sharedBudgets: SharedResourceBudgetGate? = SharedResourceBudgetRuntimeRegistry.current(),
     private val externalSourcesProvider: () -> List<DeepSearchSource> = DeepSearchExternalRuntimeRegistry::sources,
+    private val searchQueryPlanner: SemanticSearchQueryPlanner = SemanticSearchQueryPlanner(),
 ) {
     fun supports(intent: IntentType): Boolean = intent == IntentType.SEARCH
 
@@ -81,6 +84,7 @@ class LocalDeepSearchGoalEngine(
         missionId: DeepSearchMissionId? = null,
     ): LocalDeepSearchGoalResult {
         if (!supports(goal.intent)) return LocalDeepSearchGoalResult.Unsupported(goal.intent)
+        val searchPlan = searchQueryPlanner.plan(goal)
 
         if (missionId == null && resume == null && checkpointSink == null) {
             val missionRuntime = DeepSearchMissionRuntimeRegistry.currentOrNull()
@@ -96,7 +100,7 @@ class LocalDeepSearchGoalEngine(
                     goalPhotonId = goalPhotonId,
                     sourcePhotonId = sourcePhoton.id,
                     sourceRevision = sourcePhoton.revision,
-                    query = goal.objective,
+                    query = searchPlan.primaryQuery,
                     searchPolicyVersion = SEARCH_POLICY_VERSION,
                     sourceScopeIds = missionSources.mapTo(sortedSetOf()) { it.descriptor.sourceId },
                     sourceSnapshotFingerprint = DeepSearchSourceSnapshot.fingerprint(missionEvidence),
@@ -135,7 +139,6 @@ class LocalDeepSearchGoalEngine(
             }
         }
 
-        val query = extractQuery(goal)
         val excluded = setOf(sourcePhoton.id, goalPhotonId)
         val candidates = photons
             .asSequence()
@@ -151,8 +154,8 @@ class LocalDeepSearchGoalEngine(
                 RuntimeDeepSearchPermissionGate.permissionFor(source.descriptor) == DeepSearchPermissionState.GRANTED
             }
         val freshRequest = DeepSearchRequest(
-            query = query,
-            contextTerms = goal.entities.map { it.normalizedValue }.filter { it.isNotBlank() }.toSet(),
+            query = searchPlan.primaryQuery,
+            contextTerms = searchPlan.contextTerms,
             budget = effectiveBudget(goal, wantsExternal),
         )
         val request = if (resume == null) {
@@ -376,16 +379,6 @@ class LocalDeepSearchGoalEngine(
         }.trimEnd()
     }
 
-    private fun extractQuery(goal: GoalFrame): String {
-        val raw = goal.objective.substringAfter(": ", goal.objective).trim()
-        val meaningful = TERM_REGEX.findAll(raw)
-            .map { it.value }
-            .filterNot { it.lowercase(Locale.ROOT) in SEARCH_DIRECTIVE_WORDS }
-            .joinToString(" ")
-            .trim()
-        return meaningful.ifBlank { raw.ifBlank { goal.objective } }
-    }
-
     private fun isPrimarySearchEvidence(photon: Photon): Boolean {
         if (photon.phase == PhotonPhase.ARCHIVED) return false
         if ("goal" in photon.tags || "scene-graph" in photon.tags) return false
@@ -416,8 +409,15 @@ class LocalDeepSearchGoalEngine(
             request: DeepSearchRequest,
             branch: app.lifeos.core.runtime.deepsearch.DeepSearchBranch,
         ): List<DeepSearchFindingDraft> {
-            if (branch.depth > 0) return emptyList()
-            val queryTerms = request.queryTerms + request.contextTerms.flatMap(::terms)
+            val rootTerms = SemanticSearchTerms.expandedTokens(request.query) +
+                request.contextTerms.flatMap(SemanticSearchTerms::expandedTokens)
+            val branchTerms = if (branch.depth == 0) {
+                emptySet()
+            } else {
+                SemanticSearchTerms.expandedTokens(branch.hypothesis.statement) +
+                    branch.hypothesis.semanticTerms.flatMap(SemanticSearchTerms::expandedTokens)
+            }
+            val queryTerms = (rootTerms + branchTerms).toSet()
             if (queryTerms.isEmpty()) return emptyList()
             return photons.mapNotNull { photon ->
                 val candidateTerms = terms(photon.content).toSet()
@@ -441,11 +441,7 @@ class LocalDeepSearchGoalEngine(
         }
 
         private companion object {
-            fun terms(value: String): Set<String> = TERM_REGEX.findAll(value)
-                .map { it.value.lowercase(Locale.ROOT) }
-                .filter { it.length >= 2 }
-                .filterNot { it in SEARCH_DIRECTIVE_WORDS }
-                .toSet()
+            fun terms(value: String): Set<String> = SemanticSearchTerms.expandedTokens(value)
 
             fun excerptStatic(value: String): String {
                 val normalized = value.replace(WHITESPACE_REGEX, " ").trim()
