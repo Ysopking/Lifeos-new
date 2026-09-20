@@ -9,6 +9,7 @@ import app.lifeos.core.data.cognition.EncryptedCognitiveModuleSnapshotRepository
 import app.lifeos.core.data.goal.EncryptedGoalPlanRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.learning.EncryptedLearningAdaptationRepository
+import app.lifeos.core.data.language.EncryptedLanguageRuntimeRepository
 import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
 import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
@@ -139,7 +140,10 @@ internal class KernelFoundationComposition(
         )
         val mmsiRuntime = MmsiRuntimeBackendProbe(appContext)
         val languageRuntime = VersionedLanguageRuntime()
-        val languageRuntimeState = DurableLanguageRuntimeCoordinator(languageRuntime, store)
+        val languageRuntimeState = DurableLanguageRuntimeCoordinator(
+            languageRuntime,
+            EncryptedLanguageRuntimeRepository(appContext),
+        )
         val languageUnderstanding = languageRuntime.current().understanding
         val goalPhotonFactory = GoalPhotonFactory()
         val languageContextBuilder = PhotonLanguageContextBuilder()

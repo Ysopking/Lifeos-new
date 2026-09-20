@@ -6,29 +6,53 @@ import app.lifeos.core.language.LanguageRuntimeSnapshot
 import app.lifeos.core.language.LinguisticConcept
 import app.lifeos.core.language.LinguisticLexiconSnapshot
 import app.lifeos.core.language.VersionedLanguageRuntime
-import app.lifeos.core.model.Photon
-import app.lifeos.core.model.PhotonId
-import app.lifeos.core.model.PhotonPhase
-import app.lifeos.core.model.PhotonRevisionWriteResult
-import app.lifeos.core.model.Provenance
-import app.lifeos.core.model.RevisionedPhotonRepository
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
-import java.time.Instant
-import java.util.Base64
 
-internal object LinguisticLexiconSnapshotCodec {
-    private const val VERSION = 1
+data class DurableLanguageRuntimeHead(
+    val headRevision: Long,
+    val activeSnapshotFingerprint: String,
+    val activeLexiconRevision: Long,
+    val previousActiveSnapshotFingerprint: String?,
+) {
+    init {
+        require(headRevision > 0L)
+        require(activeSnapshotFingerprint.matches(Regex("[0-9a-f]{64}"))) {
+            "Language runtime head requires a canonical snapshot fingerprint"
+        }
+        require(activeLexiconRevision > 0L)
+        require(
+            previousActiveSnapshotFingerprint == null ||
+                previousActiveSnapshotFingerprint.matches(Regex("[0-9a-f]{64}"))
+        )
+    }
+}
+
+interface LanguageRuntimeStateRepository {
+    suspend fun saveSnapshot(snapshot: LinguisticLexiconSnapshot)
+    suspend fun loadSnapshot(fingerprint: String): LinguisticLexiconSnapshot?
+    suspend fun loadHead(): DurableLanguageRuntimeHead?
+    suspend fun compareAndSetHead(
+        expectedRevision: Long?,
+        next: DurableLanguageRuntimeHead,
+    ): Boolean
+}
+
+object LanguageRuntimeStateCodec {
+    const val MAX_SNAPSHOT_BYTES: Int = 2 * 1024 * 1024
+    const val MAX_HEAD_BYTES: Int = 64 * 1024
+
+    private const val SNAPSHOT_VERSION = 1
+    private const val HEAD_VERSION = 1
     private const val MAX_CONCEPTS = 4096
     private const val MAX_SET_ENTRIES = 512
-    private const val MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
 
-    fun encode(snapshot: LinguisticLexiconSnapshot): String {
-        val payload = ByteArrayOutputStream().let { output ->
+    fun encodeSnapshot(snapshot: LinguisticLexiconSnapshot): ByteArray =
+        ByteArrayOutputStream().let { output ->
             DataOutputStream(output).use { data ->
-                data.writeInt(VERSION)
+                data.writeInt(SNAPSHOT_VERSION)
                 data.writeLong(snapshot.revision)
                 data.writeUTF(snapshot.predecessorFingerprint.orEmpty())
                 data.writeUTF(snapshot.promotionEvidenceFingerprint.orEmpty())
@@ -52,25 +76,20 @@ internal object LinguisticLexiconSnapshotCodec {
                 }
             }
             output.toByteArray()
+        }.also { payload ->
+            require(payload.size in 1..MAX_SNAPSHOT_BYTES) {
+                "Language snapshot payload is outside bounded size"
+            }
         }
-        require(payload.size in 1..MAX_PAYLOAD_BYTES) {
-            "Language snapshot payload is outside bounded size"
-        }
-        return "language-lexicon-snapshot/v1\n" +
-            Base64.getUrlEncoder().withoutPadding().encodeToString(payload)
-    }
 
-    fun decode(content: String): LinguisticLexiconSnapshot {
-        val lines = content.lineSequence().toList()
-        require(lines.size == 2 && lines[0] == "language-lexicon-snapshot/v1") {
-            "Unsupported language snapshot payload"
-        }
-        val payload = Base64.getUrlDecoder().decode(lines[1])
-        require(payload.size in 1..MAX_PAYLOAD_BYTES) {
+    fun decodeSnapshot(bytes: ByteArray): LinguisticLexiconSnapshot {
+        require(bytes.size in 1..MAX_SNAPSHOT_BYTES) {
             "Language snapshot payload is outside bounded size"
         }
-        return DataInputStream(ByteArrayInputStream(payload)).use { input ->
-            require(input.readInt() == VERSION)
+        return DataInputStream(ByteArrayInputStream(bytes)).use { input ->
+            require(input.readInt() == SNAPSHOT_VERSION) {
+                "Unsupported language snapshot codec version"
+            }
             val revision = input.readLong()
             val predecessor = input.readUTF().ifBlank { null }
             val promotion = input.readUTF().ifBlank { null }
@@ -100,7 +119,7 @@ internal object LinguisticLexiconSnapshotCodec {
                     canonical = canonical,
                     variants = variants,
                     semanticTag = semanticTag,
-                    entityType = entityName.takeIf { it.isNotBlank() }?.let(EntityType::valueOf),
+                    entityType = entityName.takeIf(String::isNotBlank)?.let(EntityType::valueOf),
                     intentBias = intentBias,
                     attractsTags = attracts,
                     repelsTags = repels,
@@ -118,6 +137,37 @@ internal object LinguisticLexiconSnapshotCodec {
                     "Language snapshot fingerprint mismatch"
                 }
             }
+        }
+    }
+
+    fun encodeHead(head: DurableLanguageRuntimeHead): ByteArray =
+        ByteArrayOutputStream().let { output ->
+            DataOutputStream(output).use { data ->
+                data.writeInt(HEAD_VERSION)
+                data.writeLong(head.headRevision)
+                data.writeUTF(head.activeSnapshotFingerprint)
+                data.writeLong(head.activeLexiconRevision)
+                data.writeUTF(head.previousActiveSnapshotFingerprint.orEmpty())
+            }
+            output.toByteArray()
+        }.also { payload ->
+            require(payload.size in 1..MAX_HEAD_BYTES)
+        }
+
+    fun decodeHead(bytes: ByteArray): DurableLanguageRuntimeHead {
+        require(bytes.size in 1..MAX_HEAD_BYTES)
+        return DataInputStream(ByteArrayInputStream(bytes)).use { input ->
+            require(input.readInt() == HEAD_VERSION) {
+                "Unsupported language runtime head codec version"
+            }
+            val head = DurableLanguageRuntimeHead(
+                headRevision = input.readLong(),
+                activeSnapshotFingerprint = input.readUTF(),
+                activeLexiconRevision = input.readLong(),
+                previousActiveSnapshotFingerprint = input.readUTF().ifBlank { null },
+            )
+            require(input.available() == 0) { "Trailing bytes in language runtime head" }
+            head
         }
     }
 
@@ -141,35 +191,19 @@ internal object LinguisticLexiconSnapshotCodec {
         readInt().also { require(it in 0..max) { "Invalid bounded language snapshot count" } }
 }
 
-data class DurableLanguageRuntimeHead(
-    val headRevision: Long,
-    val activeSnapshotFingerprint: String,
-    val activeLexiconRevision: Long,
-    val predecessorSnapshotFingerprint: String?,
-) {
-    init {
-        require(headRevision > 0L)
-        require(activeSnapshotFingerprint.isNotBlank())
-        require(activeLexiconRevision > 0L)
-        require(predecessorSnapshotFingerprint == null || predecessorSnapshotFingerprint.isNotBlank())
-    }
-}
-
 class DurableLanguageRuntimeCoordinator(
     private val runtime: VersionedLanguageRuntime,
-    private val photons: RevisionedPhotonRepository,
-    private val now: () -> Instant = Instant::now,
+    private val repository: LanguageRuntimeStateRepository,
 ) {
+    fun current(): LanguageRuntimeSnapshot = runtime.current()
+
     suspend fun rehydrate(): LanguageRuntimeSnapshot {
-        val headPhoton = photons.load(HEAD_ID)
-        if (headPhoton == null) return initializeBuiltin()
-        val head = decodeHead(headPhoton)
-        val snapshot = loadSnapshot(head.activeSnapshotFingerprint)
+        val head = repository.loadHead() ?: return initializeBuiltin()
+        val snapshot = requireNotNull(repository.loadSnapshot(head.activeSnapshotFingerprint)) {
+            "Language runtime head points to missing snapshot"
+        }
         require(snapshot.revision == head.activeLexiconRevision) {
             "Language runtime head/snapshot revision mismatch"
-        }
-        require(snapshot.predecessorFingerprint == head.predecessorSnapshotFingerprint) {
-            "Language runtime head/snapshot predecessor mismatch"
         }
         return runtime.install(snapshot)
     }
@@ -178,35 +212,42 @@ class DurableLanguageRuntimeCoordinator(
         concepts: Collection<LinguisticConcept>,
         promotionEvidenceFingerprint: String,
     ): LanguageRuntimeSnapshot {
-        val current = ensureCurrentHead()
-        require(runtime.current().lexicon.fingerprint == current.activeSnapshotFingerprint) {
+        val currentHead = ensureCurrentHead()
+        require(runtime.current().lexicon.fingerprint == currentHead.activeSnapshotFingerprint) {
             "In-memory language runtime differs from durable head"
         }
+
         val candidate = runtime.nextSnapshot(concepts, promotionEvidenceFingerprint)
-        persistSnapshot(candidate)
+        repository.saveSnapshot(candidate)
         val nextHead = DurableLanguageRuntimeHead(
-            headRevision = current.headRevision + 1L,
+            headRevision = currentHead.headRevision + 1L,
             activeSnapshotFingerprint = candidate.fingerprint,
             activeLexiconRevision = candidate.revision,
-            predecessorSnapshotFingerprint = candidate.predecessorFingerprint,
+            previousActiveSnapshotFingerprint = currentHead.activeSnapshotFingerprint,
         )
-        persistHead(nextHead, expectedPreviousRevision = current.headRevision)
+        require(repository.compareAndSetHead(currentHead.headRevision, nextHead)) {
+            "Language runtime head CAS conflict during promotion"
+        }
         return runtime.install(candidate)
     }
 
     suspend fun rollback(targetSnapshotFingerprint: String): LanguageRuntimeSnapshot {
-        val current = ensureCurrentHead()
-        require(targetSnapshotFingerprint != current.activeSnapshotFingerprint) {
+        val currentHead = ensureCurrentHead()
+        require(targetSnapshotFingerprint != currentHead.activeSnapshotFingerprint) {
             "Language runtime rollback target is already active"
         }
-        val target = loadSnapshot(targetSnapshotFingerprint)
+        val target = requireNotNull(repository.loadSnapshot(targetSnapshotFingerprint)) {
+            "Language runtime rollback target does not exist"
+        }
         val nextHead = DurableLanguageRuntimeHead(
-            headRevision = current.headRevision + 1L,
+            headRevision = currentHead.headRevision + 1L,
             activeSnapshotFingerprint = target.fingerprint,
             activeLexiconRevision = target.revision,
-            predecessorSnapshotFingerprint = target.predecessorFingerprint,
+            previousActiveSnapshotFingerprint = currentHead.activeSnapshotFingerprint,
         )
-        persistHead(nextHead, expectedPreviousRevision = current.headRevision)
+        require(repository.compareAndSetHead(currentHead.headRevision, nextHead)) {
+            "Language runtime head CAS conflict during rollback"
+        }
         return runtime.install(target)
     }
 
@@ -214,160 +255,32 @@ class DurableLanguageRuntimeCoordinator(
 
     private suspend fun initializeBuiltin(): LanguageRuntimeSnapshot {
         val builtin = runtime.current().lexicon
-        persistSnapshot(builtin)
-        val head = DurableLanguageRuntimeHead(
+        repository.saveSnapshot(builtin)
+        val initialHead = DurableLanguageRuntimeHead(
             headRevision = 1L,
             activeSnapshotFingerprint = builtin.fingerprint,
             activeLexiconRevision = builtin.revision,
-            predecessorSnapshotFingerprint = builtin.predecessorFingerprint,
+            previousActiveSnapshotFingerprint = null,
         )
-        when (val result = photons.saveRevision(headPhoton(head, Instant.EPOCH), expectedPreviousRevision = null)) {
-            is PhotonRevisionWriteResult.Created,
-            is PhotonRevisionWriteResult.Idempotent -> Unit
-            is PhotonRevisionWriteResult.Advanced ->
-                error("Language runtime initialization unexpectedly advanced existing head")
-            is PhotonRevisionWriteResult.Conflict -> {
-                val durableHead = requireNotNull(photons.load(HEAD_ID))
-                val winner = decodeHead(durableHead)
-                return runtime.install(loadSnapshot(winner.activeSnapshotFingerprint))
-            }
+        if (repository.compareAndSetHead(expectedRevision = null, next = initialHead)) {
+            return runtime.install(builtin)
         }
-        return runtime.install(builtin)
-    }
 
-    private suspend fun ensureCurrentHead(): DurableLanguageRuntimeHead {
-        val photon = photons.load(HEAD_ID) ?: run {
-            initializeBuiltin()
-            requireNotNull(photons.load(HEAD_ID))
+        val durableWinner = requireNotNull(repository.loadHead()) {
+            "Language runtime initialization lost CAS but durable head is missing"
         }
-        return decodeHead(photon)
-    }
-
-    private suspend fun persistSnapshot(snapshot: LinguisticLexiconSnapshot) {
-        val photon = Photon(
-            id = snapshotId(snapshot.fingerprint),
-            revision = 1L,
-            content = LinguisticLexiconSnapshotCodec.encode(snapshot),
-            mimeType = SNAPSHOT_MIME,
-            phase = PhotonPhase.CONVERGED,
-            semanticMass = 0.0,
-            energy = 0.0,
-            confidence = 1.0,
-            provenance = Provenance(
-                source = "language-runtime",
-                actor = "DurableLanguageRuntimeCoordinator",
-                createdAt = Instant.EPOCH,
-            ),
-            tags = setOf(
-                "language-runtime-state",
-                "language-runtime-snapshot",
-                "language-runtime-fingerprint:${snapshot.fingerprint}",
-                "language-runtime-revision:${snapshot.revision}",
-            ),
-        )
-        when (val result = photons.saveRevision(photon, expectedPreviousRevision = null)) {
-            is PhotonRevisionWriteResult.Created,
-            is PhotonRevisionWriteResult.Idempotent -> Unit
-            is PhotonRevisionWriteResult.Advanced ->
-                error("Immutable language snapshot unexpectedly advanced")
-            is PhotonRevisionWriteResult.Conflict ->
-                error("Language snapshot persistence conflict: ${result.reason}")
-        }
-    }
-
-    private suspend fun loadSnapshot(fingerprint: String): LinguisticLexiconSnapshot {
-        val photon = requireNotNull(photons.load(snapshotId(fingerprint))) {
-            "Language runtime head points to missing snapshot: $fingerprint"
-        }
-        require(photon.mimeType == SNAPSHOT_MIME && "language-runtime-snapshot" in photon.tags) {
-            "Language runtime snapshot identity resolved to incompatible Photon"
-        }
-        val snapshot = LinguisticLexiconSnapshotCodec.decode(photon.content)
-        require(snapshot.fingerprint == fingerprint) { "Language runtime snapshot identity mismatch" }
-        return snapshot
-    }
-
-    private suspend fun persistHead(
-        head: DurableLanguageRuntimeHead,
-        expectedPreviousRevision: Long,
-    ) {
-        when (
-            val result = photons.saveRevision(
-                headPhoton(head, now()),
-                expectedPreviousRevision = expectedPreviousRevision,
-            )
+        val winnerSnapshot = requireNotNull(
+            repository.loadSnapshot(durableWinner.activeSnapshotFingerprint)
         ) {
-            is PhotonRevisionWriteResult.Advanced,
-            is PhotonRevisionWriteResult.Idempotent -> Unit
-            is PhotonRevisionWriteResult.Created ->
-                error("Language runtime promotion created a missing head instead of advancing it")
-            is PhotonRevisionWriteResult.Conflict ->
-                error("Language runtime head CAS conflict: ${result.reason}")
+            "Language runtime initialization winner points to missing snapshot"
         }
+        require(winnerSnapshot.revision == durableWinner.activeLexiconRevision)
+        return runtime.install(winnerSnapshot)
     }
 
-    private fun headPhoton(head: DurableLanguageRuntimeHead, createdAt: Instant): Photon = Photon(
-        id = HEAD_ID,
-        revision = head.headRevision,
-        content = buildString {
-            appendLine("language-runtime-head/v1")
-            appendLine("head_revision=${head.headRevision}")
-            appendLine("snapshot=${head.activeSnapshotFingerprint}")
-            appendLine("lexicon_revision=${head.activeLexiconRevision}")
-            append("predecessor=${head.predecessorSnapshotFingerprint.orEmpty()}")
-        },
-        mimeType = HEAD_MIME,
-        phase = PhotonPhase.ACTIVE,
-        semanticMass = 0.0,
-        energy = 0.0,
-        confidence = 1.0,
-        provenance = Provenance(
-            source = "language-runtime",
-            actor = "DurableLanguageRuntimeCoordinator",
-            createdAt = createdAt,
-            parentIds = setOf(snapshotId(head.activeSnapshotFingerprint)),
-        ),
-        tags = setOf(
-            "language-runtime-state",
-            "language-runtime-head",
-            "language-runtime-active:${head.activeSnapshotFingerprint}",
-        ),
-    )
-
-    private fun decodeHead(photon: Photon): DurableLanguageRuntimeHead {
-        require(
-            photon.id == HEAD_ID &&
-                photon.mimeType == HEAD_MIME &&
-                "language-runtime-head" in photon.tags
-        )
-        val lines = photon.content.lineSequence().toList()
-        require(lines.firstOrNull() == "language-runtime-head/v1")
-        val values = lines.drop(1).associate { line ->
-            val split = line.indexOf('=')
-            require(split > 0) { "Malformed language runtime head" }
-            line.substring(0, split) to line.substring(split + 1)
+    private suspend fun ensureCurrentHead(): DurableLanguageRuntimeHead =
+        repository.loadHead() ?: run {
+            initializeBuiltin()
+            requireNotNull(repository.loadHead())
         }
-        val head = DurableLanguageRuntimeHead(
-            headRevision = requireNotNull(values["head_revision"]).toLong(),
-            activeSnapshotFingerprint = requireNotNull(values["snapshot"]),
-            activeLexiconRevision = requireNotNull(values["lexicon_revision"]).toLong(),
-            predecessorSnapshotFingerprint = values["predecessor"]?.ifBlank { null },
-        )
-        require(head.headRevision == photon.revision) {
-            "Language runtime head revision/path mismatch"
-        }
-        require(snapshotId(head.activeSnapshotFingerprint) in photon.provenance.parentIds) {
-            "Language runtime head dropped active snapshot provenance"
-        }
-        return head
-    }
-
-    private fun snapshotId(fingerprint: String): PhotonId =
-        PhotonId("language-runtime-snapshot-$fingerprint")
-
-    private companion object {
-        val HEAD_ID = PhotonId("language-runtime-head")
-        const val HEAD_MIME = "application/vnd.lifeos.language-runtime-head+text"
-        const val SNAPSHOT_MIME = "application/vnd.lifeos.language-runtime-snapshot+text"
-    }
 }
