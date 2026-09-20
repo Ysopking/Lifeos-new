@@ -158,6 +158,28 @@ class LifeOsKernel internal constructor(
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
     val bootstrapState: StateFlow<KernelBootstrapState> = mutableBootstrapState.asStateFlow()
 
+    private val photonIngress = PhotonIngressCoordinator(
+        photonStore = photonStore,
+        liveSubmissionBudget = LIVE_SUBMISSION_BUDGET,
+        submitCognition = { delta, priority, salience, targetModules, budget ->
+            continuousCognition.submit(
+                delta = delta,
+                priority = priority,
+                salience = salience,
+                targetModules = targetModules,
+                budget = budget,
+            )
+        },
+        onPhotonPersisted = { photon ->
+            mutableBootstrapState.update { current ->
+                current.copy(
+                    photons = (current.photons.filterNot { it.id == photon.id } + photon)
+                        .sortedBy { it.provenance.createdAt }
+                )
+            }
+        },
+    )
+
     suspend fun freezeCognitiveModulesForCurrentCycle(
         builtIns: Collection<CognitiveModule>,
     ): CognitiveModuleRegistry {
@@ -589,117 +611,18 @@ class LifeOsKernel internal constructor(
     private suspend fun persistWithoutCognition(
         photon: Photon,
         mode: PhotonIngressMode,
-    ): PhotonSubmissionResult {
-        ProductivePhotonIngressClassification.requireOrMark(photonStore, photon, mode)
-        if (photonStore is RevisionedPhotonRepository) {
-            when (
-                val write = photonStore.saveRevision(
-                    photon = photon,
-                    expectedPreviousRevision = photon.revision
-                        .takeIf { it > 1L }
-                        ?.minus(1L),
-                )
-            ) {
-                is PhotonRevisionWriteResult.Created,
-                is PhotonRevisionWriteResult.Advanced,
-                is PhotonRevisionWriteResult.Idempotent -> Unit
-                is PhotonRevisionWriteResult.Conflict ->
-                    error("Photon revision conflict: ${write.reason}")
-            }
-        } else {
-            photonStore.load(photon.id)?.let { existing ->
-                check(existing == photon) { "Photon identity conflict on fast conversation path" }
-            } ?: photonStore.save(photon)
-        }
-        mutableBootstrapState.update { current ->
-            current.copy(
-                photons = (current.photons.filterNot { it.id == photon.id } + photon)
-                    .sortedBy { it.provenance.createdAt }
-            )
-        }
-        return PhotonSubmissionResult(
-            photon = photon,
-            processingQueued = false,
-            processingFailure = null,
-        )
-    }
+    ): PhotonSubmissionResult =
+        photonIngress.persistWithoutCognition(photon, mode)
 
     /** Backward-compatible external boundary: direct submissions are ORIGIN. */
     suspend fun persistAndIngest(photon: Photon): PhotonSubmissionResult =
-        persistAndIngest(photon, PhotonIngressMode.ORIGIN)
+        photonIngress.persistAndIngest(photon)
 
     internal suspend fun persistAndIngest(
         photon: Photon,
         mode: PhotonIngressMode,
-    ): PhotonSubmissionResult {
-        ProductivePhotonIngressClassification.requireOrMark(photonStore, photon, mode)
-        val previous = if (photonStore is RevisionedPhotonRepository) {
-            when (
-                val write = photonStore.saveRevision(
-                    photon = photon,
-                    expectedPreviousRevision = photon.revision
-                        .takeIf { it > 1L }
-                        ?.minus(1L),
-                )
-            ) {
-                is PhotonRevisionWriteResult.Created -> null
-                is PhotonRevisionWriteResult.Advanced -> write.previous
-                is PhotonRevisionWriteResult.Idempotent -> write.previous
-                is PhotonRevisionWriteResult.Conflict ->
-                    error("Photon revision conflict: ${write.reason}")
-            }
-        } else {
-            photonStore.load(photon.id).also {
-                photonStore.save(photon)
-            }
-        }
-        mutableBootstrapState.update { current ->
-            val photons = (current.photons.filterNot { it.id == photon.id } + photon)
-                .sortedBy { it.provenance.createdAt }
-            current.copy(photons = photons)
-        }
-
-        return try {
-            val submission = continuousCognition.submit(
-                delta = PhotonDelta(
-                    deltaId = CognitiveDeltaIdentity.photonRevision(photon.id, photon.revision),
-                    source = "kernel-live-submit",
-                    photonId = photon.id,
-                    revisionBefore = previous?.revision,
-                    revisionAfter = photon.revision,
-                    type = if (previous == null) PhotonDeltaType.CREATED else PhotonDeltaType.UPDATED,
-                    importanceHint = photon.semanticMass,
-                    timestamp = photon.provenance.createdAt,
-                    correlationId = photon.id.value,
-                ),
-                priority = CognitivePriority.USER_BLOCKING,
-                salience = SalienceVector(
-                    novelty = if (previous == null) 1.0 else 0.25,
-                    relevance = 1.0,
-                    urgency = 1.0,
-                    semanticMass = photon.semanticMass,
-                    confidenceImpact = abs(photon.confidence - (previous?.confidence ?: 0.0)),
-                    goalAffinity = if ("chat" in photon.tags || "goal" in photon.tags) 1.0 else 0.5,
-                ),
-                targetModules = setOf("Gedankenmatrix"),
-                budget = LIVE_SUBMISSION_BUDGET,
-            )
-            val durable = submission.accepted && submission.durableTaskId != null
-            PhotonSubmissionResult(
-                photon = photon,
-                processingQueued = durable,
-                processingFailure = if (durable) null else "Cognitive work was not durabilized",
-            )
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            PhotonSubmissionResult(
-                photon = photon,
-                processingQueued = false,
-                processingFailure = error.message ?: error::class.simpleName,
-            )
-        }
-    }
+    ): PhotonSubmissionResult =
+        photonIngress.persistAndIngest(photon, mode)
 
     private suspend fun boundedContextPhotons(): List<Photon> =
         productivePhotonQueries.latest(
