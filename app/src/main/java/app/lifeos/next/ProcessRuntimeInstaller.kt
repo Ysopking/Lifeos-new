@@ -87,6 +87,7 @@ internal data class ProcessRuntimeInstallResult(
     val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime,
     val storageIntelligence: AndroidStorageIntelligenceRuntime,
     val storageMaintenance: AndroidStorageMaintenanceRuntime,
+    val storageIntelligenceController: StorageIntelligenceProcessController,
     val ownerPolicy: OwnerPolicyLedger,
     val resourceBudgets: ResourceBudgetCoordinator,
     val decisionTraces: DecisionTraceLedger,
@@ -103,7 +104,9 @@ internal class ProcessRuntimeInstaller(
     context: Context,
     private val onSelfObservationRequested:
         (app.lifeos.core.runtime.self.SelfObservationTrigger) -> Unit,
-    private val onStorageMaintenanceRequested: () -> Unit,
+    private val canRunStorageIntelligence: () -> Boolean,
+    private val onStorageSnapshot: (StorageIntelligenceSnapshot) -> Unit,
+    private val onStorageFailure: (String?) -> Unit,
     private val onStageReady: (LifeOsStartupStageEvidence) -> Unit,
 ) {
     private val appContext = context.applicationContext
@@ -123,6 +126,13 @@ internal class ProcessRuntimeInstaller(
         val storageMaintenance = AndroidStorageMaintenanceRuntime(
             context = appContext,
             hardware = hardwareResourceIntelligence,
+        )
+        val storageIntelligenceController = StorageIntelligenceProcessController(
+            storage = storageIntelligence,
+            hardware = hardwareResourceIntelligence,
+            canRun = canRunStorageIntelligence,
+            onSnapshot = onStorageSnapshot,
+            onFailure = onStorageFailure,
         )
         LifeOsIntegratedCognitionSuiteRegistry.install(
             LifeOsIntegratedCognitionSuite()
@@ -209,7 +219,7 @@ internal class ProcessRuntimeInstaller(
                         hardwareResourceIntelligence =
                             hardwareResourceIntelligence,
                         bootReadyMaintenanceTrigger =
-                            onStorageMaintenanceRequested,
+                            storageIntelligenceController::refresh,
                     ).create()
 
                     val ownerAssetReviews =
@@ -469,6 +479,7 @@ internal class ProcessRuntimeInstaller(
             hardwareResourceIntelligence = hardwareResourceIntelligence,
             storageIntelligence = storageIntelligence,
             storageMaintenance = storageMaintenance,
+            storageIntelligenceController = storageIntelligenceController,
             ownerPolicy = ownerPolicy,
             resourceBudgets = resourceBudgets,
             decisionTraces = decisionTraces,
