@@ -14,7 +14,6 @@ import app.lifeos.core.model.BinaryAssetStore
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.runtime.LifeOsRuntime
-import app.lifeos.core.runtime.ConversationSignalClassifier
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RuntimeSupervisor
 import app.lifeos.core.runtime.CognitiveModule
@@ -108,7 +107,6 @@ class LifeOsKernel internal constructor(
     private val personalLanguageLearning: ProductivePersonalLanguageLearningRuntime? = null,
     private val personalCorpusLanguage: PersonalCorpusLanguageRuntime? = null,
 ) {
-    private val conversationClassifier = ConversationSignalClassifier()
     private val revisionedPhotonStore: RevisionedPhotonRepository =
         requireNotNull(photonStore as? RevisionedPhotonRepository) {
             "LifeOsKernel requires RevisionedPhotonRepository for bounded language retrieval"
