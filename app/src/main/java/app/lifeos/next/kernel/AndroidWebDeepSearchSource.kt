@@ -419,14 +419,18 @@ internal class AndroidWebDeepSearchSource(
 
     private fun queryFor(request: DeepSearchRequest, branch: DeepSearchBranch): String {
         if (branch.depth == 0) return request.query
+        // Never project a local-memory hypothesis into a public Web query. Web refinement may only
+        // build on the owner's current request or on evidence that already came from this Web source.
+        if (branch.sourceId != descriptor.sourceId) return request.query
+        val rootTerms = SemanticSearchTerms.tokens(request.query)
         val refinements = (
             branch.hypothesis.semanticTerms.flatMap(SemanticSearchTerms::tokens) +
                 SemanticSearchTerms.tokens(branch.hypothesis.statement)
             )
-            .filterNot { it in request.queryTerms }
+            .filterNot { it in rootTerms }
             .distinct()
             .take(MAX_REFINEMENT_TERMS)
-        return (SemanticSearchTerms.tokens(request.query).take(MAX_ROOT_TERMS) + refinements)
+        return (rootTerms.take(MAX_ROOT_TERMS) + refinements)
             .distinct()
             .joinToString(" ")
             .ifBlank { request.query }
