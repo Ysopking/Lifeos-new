@@ -72,6 +72,7 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
     if not isinstance(measurements, list) or len(measurements) < 3:
         fail("baseline-measurements-min-3")
 
+    seen_runs: set[int] = set()
     seen_attempts: set[int] = set()
     seen_artifacts: set[int] = set()
     cold_totals: list[int] = []
@@ -83,7 +84,8 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
     for measurement in measurements:
         if not isinstance(measurement, dict):
             fail("baseline-measurement-not-object")
-        require_int(measurement.get("run_id"), "baseline-run-id", 1)
+        run_id = require_int(measurement.get("run_id"), "baseline-run-id", 1)
+        seen_runs.add(run_id)
         attempt = require_int(measurement.get("attempt"), "baseline-attempt", 1)
         artifact_id = require_int(measurement.get("artifact_id"), "baseline-artifact-id", 1)
         digest = require_string(measurement.get("artifact_sha256"), "baseline-artifact-sha256")
@@ -100,6 +102,9 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
         medians.append(require_int(measurement.get("median_ms"), "baseline-median"))
         maxima.append(require_int(measurement.get("max_ms"), "baseline-max"))
         sample_counts.append(require_int(measurement.get("sample_count"), "baseline-sample-count", 1))
+
+    if len(seen_runs) != 1:
+        fail(f"baseline-run-id-mismatch:{sorted(seen_runs)}")
 
     cold_budget = budget.get("cold_start")
     timing_budget = budget.get("instrumentation")
