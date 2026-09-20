@@ -106,6 +106,13 @@ run_test \
   'app.lifeos.next.LanguageRuntimeRecoveryDeviceTest#seedPromotedPersonalLanguageSnapshot' \
   "$report_dir/seed-language-runtime.txt"
 
+# Personal corpus import: preview must remain read-only, unknown Gemini schemas fail closed and
+# replaying the exact same export must be idempotent.
+run_suite \
+  'app.lifeos.next.PersonalConversationImportDeviceTest' \
+  '2' \
+  "$report_dir/personal-conversation-import.txt"
+
 run_test \
   'app.lifeos.next.SemanticActionRecoveryDeviceTest#seedSemanticActionDataflow' \
   "$report_dir/seed-semantic-action-dataflow.txt"

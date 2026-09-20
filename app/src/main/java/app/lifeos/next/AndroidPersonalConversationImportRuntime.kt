@@ -237,10 +237,10 @@ class AndroidPersonalConversationImportRuntime(
         ZipInputStream(BufferedInputStream(input)).use { zip ->
             var entry = zip.nextEntry
             while (entry != null) {
-                require(archiveEntries <= MAX_ARCHIVE_ENTRIES) {
-                    "Conversation archive contains too many supported entries"
-                }
                 if (!entry.isDirectory && supportedEntry(kind, entry.name)) {
+                    require(archiveEntries < MAX_ARCHIVE_ENTRIES) {
+                        "Conversation archive contains too many supported entries"
+                    }
                     archiveEntries += 1
                     val bytes = readBoundedEntry(zip)
                     val entryFingerprint = StableCognitiveIds.fingerprint(
@@ -265,6 +265,9 @@ class AndroidPersonalConversationImportRuntime(
                         }
 
                         PersonalConversationImportKind.GEMINI -> {
+                            require(turns.size < MAX_TURNS_PER_FILE) {
+                                "Conversation archive exceeds bounded turn count"
+                            }
                             val parsed = GeminiJsonArchiveParser(
                                 maxTurns = MAX_TURNS_PER_FILE - turns.size,
                                 maxTextChars = MAX_TEXT_CHARS,
