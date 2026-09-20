@@ -27,11 +27,11 @@ data class PersonalCorpusAliasHypothesis(
     init {
         require(surface.isNotBlank())
         require(targetConceptId.isNotBlank())
-        require(targetIntent in SAFE_CORPUS_INTENTS)
-        require(supportRefs.size >= MIN_CORPUS_SUPPORT)
+        require(targetIntent in PersonalCorpusLanguageRuntime.SAFE_CORPUS_INTENTS)
+        require(supportRefs.size >= PersonalCorpusLanguageRuntime.MIN_CORPUS_SUPPORT)
         require(supportRefs.distinct().size == supportRefs.size)
-        require(distinctConversationCount >= MIN_DISTINCT_CONVERSATIONS)
-        require(consistency in MIN_CORPUS_CONSISTENCY..1.0)
+        require(distinctConversationCount >= PersonalCorpusLanguageRuntime.MIN_DISTINCT_CONVERSATIONS)
+        require(consistency in PersonalCorpusLanguageRuntime.MIN_CORPUS_CONSISTENCY..1.0)
         require(fingerprint == expectedFingerprint(
             surface = surface,
             targetConceptId = targetConceptId,
@@ -203,7 +203,9 @@ class PersonalCorpusLanguageRuntime(
         val hypothesis = inferHypothesis(
             utterance = utterance,
             now = now,
+            zoneId = context.zoneId,
             snapshot = baselineSnapshot.lexicon,
+            baselineEngine = baselineSnapshot.understanding,
         ) ?: return PersonalCorpusLanguageDecision(
             understanding = baseline,
             baseline = baseline,
@@ -254,7 +256,9 @@ class PersonalCorpusLanguageRuntime(
     private suspend fun inferHypothesis(
         utterance: String,
         now: Instant,
+        zoneId: String,
         snapshot: LinguisticLexiconSnapshot,
+        baselineEngine: app.lifeos.core.language.LanguageUnderstandingEngine,
     ): PersonalCorpusAliasHypothesis? {
         val knownForms = snapshot.concepts
             .flatMap { it.allForms }
@@ -269,8 +273,6 @@ class PersonalCorpusLanguageRuntime(
 
         val examples = corpus.retrieveOwnerLanguageExamples(utterance, now)
         if (examples.size < minimumSupport) return null
-        val baselineEngine = runtime.current().understanding
-
         val evidence = mutableListOf<CorpusEvidence>()
         for (example in examples) {
             val exampleTokens = SemanticSearchTerms.tokens(example.photon.content)
@@ -281,7 +283,7 @@ class PersonalCorpusLanguageRuntime(
                 example.photon.content,
                 LanguageContext(
                     now = example.photon.provenance.createdAt,
-                    zoneId = "Europe/Berlin",
+                    zoneId = zoneId,
                 ),
             )
             val intent = understood.goal.intent
