@@ -23,6 +23,12 @@ find . -path '*/build/test-results/*/TEST-*.xml' -type f -print -quit | grep -q 
 find app/build/reports -maxdepth 1 -type f -name 'lint-results-debug.*' -print -quit | grep -q .
 find android-emulator-recovery -type f -print -quit | grep -q .
 
+step "Product Gold 03b: measured non-blocking performance baseline"
+python3 .github/scripts/extract-performance-gold.py \
+  --emulator-root android-emulator-recovery \
+  --out "$evidence_dir/performance-baseline.json"
+test -s "$evidence_dir/performance-baseline.json"
+
 step "Product Gold 04: integration contract presence"
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeBindings.kt
 test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRuntimeTopology.kt
