@@ -60,6 +60,9 @@ bash .github/scripts/ci-runtime-module-boundary-contract.sh
 step "gate 03e: runtime monolith budget"
 bash .github/scripts/ci-runtime-monolith-budget.sh
 
+step "gate 03e2: runtime orphan contract"
+bash .github/scripts/ci-runtime-orphan-contract.sh
+
 step "gate 03f: runtime-personal unit tests"
 ./gradlew :core:runtime-personal:test --stacktrace
 
