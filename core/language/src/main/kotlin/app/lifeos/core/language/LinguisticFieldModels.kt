@@ -162,10 +162,12 @@ data class LinguisticFieldResult(
     val graphemeTraces: List<GraphemeFieldTrace> = emptyList(),
     val compoundBindings: List<CompoundFieldBinding> = emptyList(),
     val topDownRevisions: List<TopDownFieldRevision> = emptyList(),
+    val lexiconSnapshotFingerprint: String? = null,
 ) {
     init {
         require(iterations >= 0)
         require(totalEnergy.isFinite())
+        require(lexiconSnapshotFingerprint == null || lexiconSnapshotFingerprint.isNotBlank())
     }
 
     fun semanticActivation(tag: String): Double = resolutions

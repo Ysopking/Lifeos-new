@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 interface LinguisticLexicon {
     val concepts: List<LinguisticConcept>
+    val snapshotFingerprint: String? get() = null
     fun byId(id: String): LinguisticConcept?
 }
 
@@ -33,6 +34,8 @@ data class LinguisticLexiconSnapshot private constructor(
             promotionEvidenceFingerprint,
         ))
     }
+
+    override val snapshotFingerprint: String get() = fingerprint
 
     override fun byId(id: String): LinguisticConcept? = byId[id]
 
