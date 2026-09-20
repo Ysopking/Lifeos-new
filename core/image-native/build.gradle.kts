@@ -3,6 +3,7 @@ plugins { id("com.android.library") }
 android {
     namespace = "app.lifeos.core.image.nativebackend"
     compileSdk = 37
+    ndkVersion = "28.2.13676358"
     defaultConfig {
         minSdk = 26
         externalNativeBuild {
@@ -13,7 +14,10 @@ android {
         }
     }
     externalNativeBuild {
-        cmake { path = file("src/main/cpp/CMakeLists.txt") }
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 }
 
