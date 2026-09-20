@@ -30,6 +30,7 @@ test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/topology/LifeOsRunt
 test -f app/src/androidTest/java/app/lifeos/next/ProductGoldenChatDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/LanguageRuntimeRecoveryDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/PersonalConversationImportDeviceTest.kt
+test -f app/src/androidTest/java/app/lifeos/next/PersonalCorpusLanguageDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/ProductiveWorldPersistenceDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/Level7ProcessDeathGoldDeviceTest.kt
 test -f app/src/androidTest/java/app/lifeos/next/Level7WorldEquationRollbackDeviceTest.kt
@@ -40,6 +41,7 @@ grep -q 'ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' .github/sc
 grep -q 'LanguageRuntimeRecoveryDeviceTest#seedPromotedPersonalLanguageSnapshot' .github/scripts/android-emulator-recovery.sh
 grep -q 'LanguageRuntimeRecoveryDeviceTest#recoverPromotedSnapshotThenRollbackDurablyAfterColdStart' .github/scripts/android-emulator-recovery.sh
 grep -q 'PersonalConversationImportDeviceTest' .github/scripts/android-emulator-recovery.sh
+grep -q 'PersonalCorpusLanguageDeviceTest' .github/scripts/android-emulator-recovery.sh
 grep -q 'ProductiveWorldPersistenceDeviceTest' .github/scripts/android-emulator-recovery.sh
 grep -q 'Level7ProcessDeathGoldDeviceTest#seedLevel7SemanticCheckpoint' .github/scripts/android-emulator-recovery.sh
 grep -q 'Level7ProcessDeathGoldDeviceTest#recoverExactHeadsAndDoNotApplyLearningTwice' .github/scripts/android-emulator-recovery.sh
@@ -116,6 +118,11 @@ printf '%s\n' \
   'personal_conversation_import_idempotent=PASS' \
   'personal_conversation_owner_boundary=PASS' \
   'gemini_unknown_schema_fail_closed=PASS' \
-  'whatsapp_streaming_import=PASS' > "$evidence_dir/gates.txt"
+  'whatsapp_streaming_import=PASS' \
+  'personal_corpus_shadow_alias=PASS' \
+  'personal_corpus_no_durable_promotion=PASS' \
+  'personal_corpus_owner_only=PASS' \
+  'personal_corpus_private_provenance=PASS' \
+  'personal_corpus_raw_context_excluded=PASS' > "$evidence_dir/gates.txt"
 
 step "Product Gold pre-emulator matrix complete"
