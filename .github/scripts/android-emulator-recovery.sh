@@ -113,6 +113,11 @@ run_suite \
   '3' \
   "$report_dir/personal-conversation-import.txt"
 
+run_suite \
+  'app.lifeos.next.PersonalCorpusLanguageDeviceTest' \
+  '1' \
+  "$report_dir/personal-corpus-language.txt"
+
 run_test \
   'app.lifeos.next.SemanticActionRecoveryDeviceTest#seedSemanticActionDataflow' \
   "$report_dir/seed-semantic-action-dataflow.txt"

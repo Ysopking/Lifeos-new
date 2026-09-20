@@ -69,6 +69,8 @@ jobs:
             'personal_language_feedback=PASS' \
             'personal_conversation_import_device=PASS' \
             'personal_conversation_import_replay=PASS' \
+            'personal_corpus_language_shadow=PASS' \
+            'personal_corpus_language_non_authoritative=PASS' \
             'web_contradiction_detection=PASS' \
             'web_source_diversity=PASS' \
             'web_evidence_cache=PASS' \
