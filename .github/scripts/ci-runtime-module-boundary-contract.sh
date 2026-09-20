@@ -12,6 +12,9 @@ test -f core/runtime-contracts/build.gradle.kts ||
 test -f core/runtime-deepsearch/build.gradle.kts ||
   fail "runtime-deepsearch-module-missing"
 
+test -f core/runtime-buildstudio/build.gradle.kts ||
+  fail "runtime-buildstudio-module-missing"
+
 test -f core/runtime-personal/build.gradle.kts ||
   fail "runtime-personal-module-missing"
 
@@ -53,6 +56,29 @@ if find core/runtime/src -type f -path '*/app/lifeos/core/runtime/deepsearch/*' 
   fail "deepsearch-sources-remain-in-runtime-monolith"
 fi
 
+grep -Fq '":core:runtime-buildstudio"' settings.gradle.kts ||
+  fail "runtime-buildstudio-not-registered"
+
+grep -Fq 'api(project(":core:runtime-buildstudio"))' core/runtime/build.gradle.kts ||
+  fail "runtime-monolith-buildstudio-edge-missing"
+
+grep -Fq 'implementation(project(":core:runtime-buildstudio"))' host/buildstudio/build.gradle.kts ||
+  fail "host-buildstudio-direct-module-edge-missing"
+
+if grep -Fq 'project(":core:runtime")' core/runtime-buildstudio/build.gradle.kts; then
+  fail "runtime-buildstudio-depends-on-runtime-monolith"
+fi
+
+if grep -Fq 'project(":core:runtime")' host/buildstudio/build.gradle.kts; then
+  fail "host-buildstudio-depends-on-runtime-monolith"
+fi
+
+buildstudio_bridge_count="$(find core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio -type f -name '*.kt' 2>/dev/null | wc -l | tr -d ' ')"
+test "$buildstudio_bridge_count" -eq 1 ||
+  fail "runtime-buildstudio-bridge-count:$buildstudio_bridge_count"
+test -f core/runtime/src/main/kotlin/app/lifeos/core/runtime/buildstudio/BuildStudioHostProcessRegistry.kt ||
+  fail "runtime-buildstudio-process-bridge-missing"
+
 grep -Fq '":core:runtime-personal"' settings.gradle.kts ||
   fail "runtime-personal-not-registered"
 
@@ -70,13 +96,15 @@ contracts_main_count="$(find core/runtime-contracts/src/main/kotlin -type f -nam
 contracts_test_count="$(find core/runtime-contracts/src/test/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 deepsearch_main_count="$(find core/runtime-deepsearch/src/main/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 deepsearch_test_count="$(find core/runtime-deepsearch/src/test/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
+buildstudio_main_count="$(find core/runtime-buildstudio/src/main/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
+buildstudio_test_count="$(find core/runtime-buildstudio/src/test/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 personal_main_count="$(find core/runtime-personal/src/main/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 personal_test_count="$(find core/runtime-personal/src/test/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 
-test "$contracts_main_count" -eq 2 ||
+test "$contracts_main_count" -eq 4 ||
   fail "runtime-contracts-main-source-count:$contracts_main_count"
 
-test "$contracts_test_count" -eq 1 ||
+test "$contracts_test_count" -eq 2 ||
   fail "runtime-contracts-test-source-count:$contracts_test_count"
 
 test "$deepsearch_main_count" -eq 16 ||
@@ -84,6 +112,12 @@ test "$deepsearch_main_count" -eq 16 ||
 
 test "$deepsearch_test_count" -eq 10 ||
   fail "runtime-deepsearch-test-source-count:$deepsearch_test_count"
+
+test "$buildstudio_main_count" -eq 11 ||
+  fail "runtime-buildstudio-main-source-count:$buildstudio_main_count"
+
+test "$buildstudio_test_count" -eq 5 ||
+  fail "runtime-buildstudio-test-source-count:$buildstudio_test_count"
 
 test "$personal_main_count" -eq 6 ||
   fail "runtime-personal-main-source-count:$personal_main_count"
@@ -96,6 +130,9 @@ grep -Fq ':core:runtime-contracts:test' .github/scripts/ci-core-fast.sh ||
 
 grep -Fq ':core:runtime-deepsearch:test' .github/scripts/ci-core-fast.sh ||
   fail "runtime-deepsearch-test-gate-missing"
+
+grep -Fq ':core:runtime-buildstudio:test' .github/scripts/ci-core-fast.sh ||
+  fail "runtime-buildstudio-test-gate-missing"
 
 grep -Fq ':core:runtime-personal:test' .github/scripts/ci-core-fast.sh ||
   fail "runtime-personal-test-gate-missing"
