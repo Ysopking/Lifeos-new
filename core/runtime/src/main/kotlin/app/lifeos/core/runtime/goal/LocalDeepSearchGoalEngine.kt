@@ -157,14 +157,16 @@ class LocalDeepSearchGoalEngine(
                 RuntimeDeepSearchPermissionGate.permissionFor(source.descriptor) == DeepSearchPermissionState.GRANTED
             }
         val terminalResume = resume != null && checkpointProjector.isTerminal(resume)
-        val evidencePlan = if (terminalResume) {
+        val provisionalBudget = if (terminalResume) {
             null
         } else {
-            val provisionalBudget = effectiveBudget(goal, externalAvailable)
+            effectiveBudget(goal, externalAvailable)
+        }
+        val evidencePlan = provisionalBudget?.let { budget ->
             activeEvidence.plan(
                 goal = goal,
                 sourceCycleId = missionId?.value ?: goalPhotonId.value,
-                budget = provisionalBudget,
+                budget = budget,
                 externalAvailable = externalAvailable,
             )
         }
@@ -181,10 +183,15 @@ class LocalDeepSearchGoalEngine(
             // depend on later query-planner refinements, source authorization or resource state.
             requireNotNull(resume).request
         } else {
+            val finalBudget = if (externalAvailable && !wantsExternal) {
+                effectiveBudget(goal, wantsExternal = false)
+            } else {
+                requireNotNull(provisionalBudget)
+            }
             val freshRequest = DeepSearchRequest(
                 query = searchPlan.primaryQuery,
                 contextTerms = searchPlan.contextTerms,
-                budget = effectiveBudget(goal, wantsExternal),
+                budget = finalBudget,
             )
             if (resume == null) {
                 freshRequest
