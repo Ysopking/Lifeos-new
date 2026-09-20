@@ -3,7 +3,7 @@ package app.lifeos.core.runtime.boot
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 
 class BootPerformanceRecorderTest {
     @Test
@@ -15,11 +15,12 @@ class BootPerformanceRecorderTest {
         }
 
         recorder.measure(BootPhaseId.RUNTIME_BOOTSTRAP) { "ready" }
-        assertFailsWith<IllegalStateException> {
+        val failure = runCatching {
             recorder.measure(BootPhaseId.STORE_VERIFY) {
                 error("verification-failed")
             }
-        }
+        }.exceptionOrNull()
+        assertIs<IllegalStateException>(failure)
 
         val snapshot = recorder.snapshot()
         assertEquals(
