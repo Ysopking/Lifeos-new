@@ -16,7 +16,6 @@ import app.lifeos.core.runtime.agency.ExternalTransportRuntimeRegistry
 import app.lifeos.core.runtime.agency.ExternalEffectRuntimeRegistry
 import app.lifeos.core.data.agency.EncryptedExternalEffectReceiptRepository
 import app.lifeos.core.data.agency.EncryptedExternalPayloadRepository
-import app.lifeos.core.data.convergence.EncryptedConvergenceDecisionCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
 import app.lifeos.core.data.policy.EncryptedOwnerPolicyRepository
@@ -34,7 +33,6 @@ import app.lifeos.core.runtime.RuntimeSupervisorProcessRegistry
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
-import app.lifeos.core.runtime.convergence.DurableConvergenceDecisionCoordinator
 import app.lifeos.core.runtime.deepsearch.DeepSearchCheckpointStore
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionCoordinator
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionId
@@ -43,7 +41,6 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRuntimeRegistry
 import app.lifeos.core.runtime.deepsearch.DeepSearchResultPhotonPersistence
 import app.lifeos.core.runtime.evolution.NovelPromotionRuntimeEventRegistry
 import app.lifeos.core.runtime.evolution.WorldEquationPostActivationSafetyRuntimeRegistry
-import app.lifeos.core.runtime.goal.GoalConvergenceDecisionProvider
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.ProtectionCoordinatorProcessRegistry
 import app.lifeos.core.runtime.health.QuarantineRegistryProcessRegistry
