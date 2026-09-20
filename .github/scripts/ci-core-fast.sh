@@ -78,6 +78,9 @@ step "gate 05: core scene tests"
 step "gate 06: core data debug unit tests"
 ./gradlew :core:data:testDebugUnitTest --stacktrace
 
+step "gate 06a: native image safety unit tests"
+./gradlew :core:image-native:testDebugUnitTest --stacktrace
+
 step "gate 06b: BuildStudio wrapper-only contract"
 bash .github/scripts/ci-buildstudio-wrapper-contract.sh
 
