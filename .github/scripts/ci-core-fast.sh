@@ -51,7 +51,10 @@ step "gate 03c: runtime-buildstudio unit tests"
 step "gate 03d: runtime module boundary contract"
 bash .github/scripts/ci-runtime-module-boundary-contract.sh
 
-step "gate 03e: runtime-personal unit tests"
+step "gate 03e: runtime monolith budget"
+bash .github/scripts/ci-runtime-monolith-budget.sh
+
+step "gate 03f: runtime-personal unit tests"
 ./gradlew :core:runtime-personal:test --stacktrace
 
 step "gate 04: core language tests"
