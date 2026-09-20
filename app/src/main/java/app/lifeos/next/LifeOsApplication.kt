@@ -1,12 +1,7 @@
 package app.lifeos.next
 
 import android.app.Application
-import app.lifeos.core.data.EncryptedLiveSourceCursorRepository
-import app.lifeos.core.data.EncryptedLiveSourceSnapshotRepository
 import app.lifeos.core.data.goal.EncryptedGoalCognitiveCycleBindingRepository
-import app.lifeos.core.data.HealthGraphLiveSourceHealthReporter
-import app.lifeos.core.data.LiveDataHubAuthority
-import app.lifeos.core.data.LiveSourceDeltaCoordinator
 import app.lifeos.core.data.LiveSourceSyncSnapshot
 import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
@@ -96,7 +91,6 @@ import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
 import app.lifeos.next.kernel.SelfObservationRuntime
 import app.lifeos.next.kernel.WebDeepSearchRuntime
-import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -196,13 +190,11 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         private set
 
     private lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
-    private lateinit var liveSourceCoordinator: LiveSourceDeltaCoordinator
+    private lateinit var liveSourceController: LiveSourceProcessController
     private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private val selfHealingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val liveSourceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var liveSourceRefreshJob: Job? = null
     private val storageIntelligenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var storageIntelligenceJob: Job? = null
     private val selfObservationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -500,10 +492,20 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             )
         )
 
-        installLiveSources()
         selfObservationHealthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
             "Self observation requires the productive HealthGraph"
         }
+        liveSourceController = LiveSourceProcessController(
+            context = this,
+            photonIngress = photonIngress,
+            healthGraph = selfObservationHealthGraph,
+            onSnapshot = { snapshot ->
+                latestLiveSourceSync = snapshot
+            },
+            onFailure = { failure ->
+                liveSourceSyncFailure = failure
+            },
+        )
         selfObservationRuntime = SelfObservationRuntime(
             photonIndex = kernel.photonStore::indexReport,
             memorySnapshot = lifeMemoryRuntime::current,
@@ -522,7 +524,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             }
         )
         startSelfObservation(selfObservationHealthGraph)
-        startContinuousLiveSourceRefresh()
+        liveSourceController.startContinuousRefresh()
 
         initialDataSources = AndroidInitialDataSourceCatalog(this)
         initialDataBootstrap = InitialDataBootstrapRuntime(
@@ -652,21 +654,6 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         }
     }
 
-    private fun installLiveSources() {
-        val healthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
-            "Live sources require the productive HealthGraph"
-        }
-        liveSourceCoordinator = LiveSourceDeltaCoordinator(
-            connectors = AndroidLiveSourceConnectors.create(this),
-            cursors = EncryptedLiveSourceCursorRepository(this),
-            hub = LiveDataHubAuthority.from(photonIngress.liveData),
-            snapshots = EncryptedLiveSourceSnapshotRepository(this),
-            maxInventoryItems = 16_384,
-            maxRawDeltas = 16_384,
-            coalescedCapacity = 16_384,
-            health = HealthGraphLiveSourceHealthReporter(healthGraph),
-        )
-    }
 
     fun refreshStorageIntelligence() {
         if (!::storageIntelligence.isInitialized || !hasBroadFileAccess()) return
@@ -696,31 +683,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     fun refreshLiveSources() {
-        if (!::liveSourceCoordinator.isInitialized) return
-        liveSourceScope.launch {
-            syncLiveSourcesOnce()
-        }
-    }
-
-    private fun startContinuousLiveSourceRefresh() {
-        if (liveSourceRefreshJob?.isActive == true) return
-        liveSourceRefreshJob = liveSourceScope.launch {
-            while (currentCoroutineContext().isActive) {
-                delay(LIVE_SOURCE_REFRESH_INTERVAL.toMillis())
-                syncLiveSourcesOnce()
-            }
-        }
-    }
-
-    private suspend fun syncLiveSourcesOnce() {
-        if (!::liveSourceCoordinator.isInitialized) return
-        try {
-            latestLiveSourceSync = liveSourceCoordinator.syncAll()
-            liveSourceSyncFailure = null
-        } catch (error: Exception) {
-            liveSourceSyncFailure =
-                error.message ?: error::class.simpleName ?: "live-source-sync-failed"
-        }
+        if (!::liveSourceController.isInitialized) return
+        liveSourceController.refresh()
     }
 
     fun initialDataPermissionsToRequest(): List<String> =
@@ -769,7 +733,4 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) append("|read-external-storage")
     }
 
-    private companion object {
-        val LIVE_SOURCE_REFRESH_INTERVAL: Duration = Duration.ofMinutes(5)
-    }
 }
