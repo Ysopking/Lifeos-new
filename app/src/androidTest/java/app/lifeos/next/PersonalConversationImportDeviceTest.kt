@@ -90,6 +90,7 @@ class PersonalConversationImportDeviceTest {
         )
         assertTrue(repository.loadAll().none { "speaker:unknown" in it.tags })
         file.delete()
+        Unit
     }
 
     @Test
@@ -112,6 +113,7 @@ class PersonalConversationImportDeviceTest {
         }
         assertTrue(repository.loadAll().isEmpty())
         file.delete()
+        Unit
     }
 
     @Test
@@ -159,6 +161,7 @@ class PersonalConversationImportDeviceTest {
         assertEquals(1, imported.speakerCounts[PersonalConversationSpeaker.OTHER])
         assertTrue(repository.loadAll().all { it.mimeType.contains("personal-conversation") })
         file.delete()
+        Unit
     }
 
     private class InMemoryRevisionedPhotonRepository : RevisionedPhotonRepository {
