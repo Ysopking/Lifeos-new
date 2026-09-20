@@ -2,6 +2,7 @@ package app.lifeos.core.data.deepsearch
 
 import android.content.Context
 import app.lifeos.core.data.security.EncryptedLedgerVaultSupport
+import app.lifeos.core.data.security.VaultAssociatedData
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionEvent
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionEventLogCodec
 import app.lifeos.core.runtime.deepsearch.DeepSearchMissionRepository
@@ -71,7 +72,7 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
             return
         }
         val legacy = DeepSearchMissionEventLogCodec.decode(
-            decrypt(legacyFile, DeepSearchMissionEventLogCodec.MAX_PAYLOAD_BYTES)
+            decrypt(legacyFile, DeepSearchMissionEventLogCodec.MAX_PAYLOAD_BYTES).plaintext
         )
         legacy.sortedBy { it.revision }.forEachIndexed { index, event ->
             require(event.revision == index.toLong() + 1L) {
@@ -82,15 +83,9 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
         writeHead(legacy.lastOrNull()?.revision ?: 0L)
     }
 
-    private fun readEvent(file: File): DeepSearchMissionEvent {
-        val event = DeepSearchMissionEventLogCodec.decodeSegment(
-            decrypt(file, DeepSearchMissionEventLogCodec.MAX_PAYLOAD_BYTES)
-        )
-        return event
-    }
-
     private fun readValidatedEvent(file: File): DeepSearchMissionEvent {
-        val event = readEvent(file)
+        val decrypted = decrypt(file, DeepSearchMissionEventLogCodec.MAX_PAYLOAD_BYTES)
+        val event = DeepSearchMissionEventLogCodec.decodeSegment(decrypted.plaintext)
         val fileRevision = segmentRevision(file)
         require(event.revision == fileRevision) {
             "DeepSearch event payload revision does not match segment path"
@@ -103,6 +98,9 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
         }
         require(missionDirectory.name == sha256(event.missionId.value)) {
             "DeepSearch event mission does not match segment path"
+        }
+        if (decrypted.migratedFromUnboundLegacy) {
+            writeEncrypted(file, decrypted.plaintext, DeepSearchMissionEventLogCodec.MAX_PAYLOAD_BYTES)
         }
         return event
     }
@@ -158,9 +156,11 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
         ) { "Invalid DeepSearch event segment name: ${file.name}" }
 
     private fun readHead(): Long {
-        val bytes = decrypt(headFile, 64)
-        require(bytes.size == Long.SIZE_BYTES)
-        return ByteBuffer.wrap(bytes).long.also { require(it >= 0L) }
+        val decrypted = decrypt(headFile, 64)
+        require(decrypted.plaintext.size == Long.SIZE_BYTES)
+        val revision = ByteBuffer.wrap(decrypted.plaintext).long.also { require(it >= 0L) }
+        if (decrypted.migratedFromUnboundLegacy) writeHead(revision)
+        return revision
     }
 
     private fun writeHead(revision: Long) {
@@ -171,14 +171,15 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
         )
     }
 
-    private fun decrypt(file: File, maxPlaintextBytes: Int): ByteArray =
-        EncryptedLedgerVaultSupport.decrypt(
+    private fun decrypt(file: File, maxPlaintextBytes: Int) =
+        EncryptedLedgerVaultSupport.decryptPathBoundOrLegacy(
             container = EncryptedLedgerVaultSupport.readAtomic(
                 target = file,
                 maxPlaintextBytes = maxPlaintextBytes,
             ),
             key = key,
             maxPlaintextBytes = maxPlaintextBytes,
+            associatedData = associatedData(file),
         )
 
     private fun writeEncrypted(file: File, plaintext: ByteArray, maxPlaintextBytes: Int) {
@@ -188,9 +189,13 @@ class EncryptedDeepSearchMissionRepository(context: Context) : DeepSearchMission
                 plaintext = plaintext,
                 key = key,
                 maxPlaintextBytes = maxPlaintextBytes,
+                associatedData = associatedData(file),
             ),
         )
     }
+
+    private fun associatedData(file: File): ByteArray =
+        VaultAssociatedData.forPath("deep-search-mission/v2", directory, file)
 
     private fun sha256(value: String): String =
         MessageDigest.getInstance("SHA-256")

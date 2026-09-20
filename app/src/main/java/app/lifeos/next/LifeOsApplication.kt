@@ -277,6 +277,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
     fun allRuntimePermissionsToRequest(): List<String> = permissionController.allRuntimePermissionsToRequest()
 
+    internal fun runtimePermissionRequestPlan(): RuntimePermissionRequestPlan =
+        permissionController.runtimePermissionRequestPlan()
+
     fun hasBroadFileAccess(): Boolean = permissionController.hasBroadFileAccess()
 
     fun shouldRequestBroadFileAccess(): Boolean = permissionController.shouldRequestBroadFileAccess()
