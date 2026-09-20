@@ -30,6 +30,10 @@ bash .github/scripts/ci-gradle-wrapper-contract.sh
 step "gate 00c2: dependency supply-chain contract"
 bash .github/scripts/ci-dependency-supply-chain-contract.sh
 
+step "gate 00c2b: Gradle dependency verification metadata contract"
+bash .github/scripts/ci-dependency-verification-contract.sh
+./gradlew --dependency-verification=strict help --stacktrace
+
 step "gate 00c3: native toolchain contract"
 bash .github/scripts/ci-native-toolchain-contract.sh
 
