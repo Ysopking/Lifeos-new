@@ -109,17 +109,33 @@ data class PersonalLanguageCandidate(
  * Conservative model-free miner. It can only add lexical aliases to an already-known concept and
  * never invents a new executable predicate or capability.
  */
+data class PersonalLanguageAliasProposal(
+    val surface: String,
+    val targetConceptId: String,
+) {
+    init {
+        require(surface.isNotBlank())
+        require(targetConceptId.isNotBlank())
+    }
+}
+
 class PersonalLanguageCandidateMiner {
-    fun observe(
+    fun propose(
         utterance: String,
         understanding: LanguageUnderstandingResult,
         lexicon: LinguisticLexiconSnapshot,
-        conversationId: String,
-        sourceRef: PhotonRevisionRef? = null,
-        accepted: Boolean,
-    ): List<PersonalLanguageObservation> {
+    ): List<PersonalLanguageAliasProposal> {
         val intent = understanding.goal.intent
         if (intent !in SAFE_PERSONALIZATION_INTENTS) return emptyList()
+        val quality = understanding.goal.interpretationQuality
+        if (
+            understanding.goal.confidence < MIN_INTERPRETATION_CONFIDENCE ||
+            quality.evidenceStrength < MIN_EVIDENCE_STRENGTH ||
+            quality.contradictionCount > 0 ||
+            quality.ambiguityCount > 0
+        ) {
+            return emptyList()
+        }
         val target = targetConcept(intent, lexicon) ?: return emptyList()
 
         val knownForms = lexicon.concepts
@@ -127,22 +143,31 @@ class PersonalLanguageCandidateMiner {
             .map(SemanticSearchTerms::normalizeToken)
             .toSet()
 
-        val unresolved = SemanticSearchTerms.tokens(utterance)
+        return SemanticSearchTerms.tokens(utterance)
             .filter { it.length >= MIN_ALIAS_LENGTH }
             .filterNot { it in knownForms }
             .filterNot { it in RESERVED_SURFACES }
             .take(MAX_OBSERVATIONS_PER_TURN)
+            .map { surface -> PersonalLanguageAliasProposal(surface, target.id) }
+    }
 
-        return unresolved.map { surface ->
+    fun observe(
+        utterance: String,
+        understanding: LanguageUnderstandingResult,
+        lexicon: LinguisticLexiconSnapshot,
+        conversationId: String,
+        sourceRef: PhotonRevisionRef? = null,
+        accepted: Boolean,
+    ): List<PersonalLanguageObservation> =
+        propose(utterance, understanding, lexicon).map { proposal ->
             PersonalLanguageObservation(
                 conversationId = conversationId,
-                surface = surface,
-                targetConceptId = target.id,
+                surface = proposal.surface,
+                targetConceptId = proposal.targetConceptId,
                 accepted = accepted,
                 sourceRef = sourceRef,
             )
         }
-    }
 
     private fun targetConcept(
         intent: IntentType,
@@ -157,6 +182,8 @@ class PersonalLanguageCandidateMiner {
     private companion object {
         const val MIN_ALIAS_LENGTH = 3
         const val MAX_OBSERVATIONS_PER_TURN = 3
+        const val MIN_INTERPRETATION_CONFIDENCE = 0.75
+        const val MIN_EVIDENCE_STRENGTH = 0.70
         val SAFE_PERSONALIZATION_INTENTS = setOf(
             IntentType.CONTINUE,
             IntentType.SEARCH,
@@ -274,10 +301,14 @@ class PersonalLanguageShadowEvaluator {
         val candidateEngine = VersionedLanguageRuntime(candidateSnapshot).current().understanding
 
         val candidateResult = candidateEngine.understand(candidate.surface)
+        val fieldContribution = candidateResult.linguisticField.intentField
+            .firstOrNull { it.intent == targetIntent }
+            ?.contributingConcepts
+            ?.contains(target.id) == true
         val candidateRecognized =
             candidateResult.goal.intent == targetIntent &&
-                candidateResult.goal.interpretationQuality.contradictionCount == 0 &&
-                candidateResult.goal.interpretationQuality.ambiguityCount == 0
+                fieldContribution &&
+                candidateResult.goal.interpretationQuality.contradictionCount == 0
 
         val protectedStable = PROTECTED_CASES.all { text ->
             val baseline = baselineEngine.understand(text)
