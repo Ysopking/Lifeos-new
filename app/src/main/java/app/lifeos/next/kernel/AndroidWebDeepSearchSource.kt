@@ -367,7 +367,7 @@ internal class AndroidWebDeepSearchSource(
                 document = document,
                 query = query,
                 depth = depth,
-                referenceStatement = null,
+                referenceStatement = referenceStatement,
             )
         }
     }
