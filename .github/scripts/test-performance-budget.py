@@ -88,6 +88,7 @@ rejects(lambda e, b: e["instrumentation"]["samples"][1].__setitem__("file", "oth
 rejects(lambda e, b: b.__setitem__("blocking", False), "budget-not-blocking")
 rejects(lambda e, b: b.__setitem__("schema_version", 2), "budget-schema")
 rejects(lambda e, b: b["baseline"].__setitem__("measurements", b["baseline"]["measurements"][:2]), "baseline-measurements-min-3")
+rejects(lambda e, b: b["baseline"]["measurements"][2].__setitem__("run_id", 1002), "baseline-run-id-mismatch")
 rejects(lambda e, b: b["cold_start"].__setitem__("total_ms_max", 999), "cold-total-budget-not-derived")
 rejects(lambda e, b: b["instrumentation"].__setitem__("median_ms_max", 999), "median-budget-not-derived")
 rejects(lambda e, b: e.__setitem__("schema_version", 2), "evidence-schema")
