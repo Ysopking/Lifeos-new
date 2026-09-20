@@ -28,6 +28,7 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:runtime"))
+    implementation(project(":core:runtime-personal"))
     implementation(project(":core:data"))
     implementation(project(":core:image"))
     implementation(project(":core:image-native"))
