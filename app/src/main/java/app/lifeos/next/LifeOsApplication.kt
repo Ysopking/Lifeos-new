@@ -29,14 +29,10 @@ import app.lifeos.next.kernel.PrivateSelfHealingRuntime
 import app.lifeos.next.kernel.SelfObservationRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 
@@ -127,8 +123,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private lateinit var initialDataSources: AndroidInitialDataSourceCatalog
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private val initialDataScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val storageIntelligenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var storageIntelligenceJob: Job? = null
+    private lateinit var storageIntelligenceController: StorageIntelligenceProcessController
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
     private val mutableSelfObservationAnalysis =
@@ -168,7 +163,13 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         val installed = ProcessRuntimeInstaller(
             context = this,
             onSelfObservationRequested = ::requestSelfObservation,
-            onStorageMaintenanceRequested = ::refreshStorageIntelligence,
+            canRunStorageIntelligence = { hasBroadFileAccess() },
+            onStorageSnapshot = { snapshot ->
+                latestStorageIntelligence = snapshot
+            },
+            onStorageFailure = { failure ->
+                storageIntelligenceFailure = failure
+            },
             onStageReady = { evidence ->
                 mutableStartupState.value = LifeOsProcessStartupState.starting(
                     stage =
@@ -184,6 +185,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         hardwareResourceIntelligence = installed.hardwareResourceIntelligence
         storageIntelligence = installed.storageIntelligence
         storageMaintenance = installed.storageMaintenance
+        storageIntelligenceController = installed.storageIntelligenceController
         ownerPolicy = installed.ownerPolicy
         resourceBudgets = installed.resourceBudgets
         decisionTraces = installed.decisionTraces
@@ -259,30 +261,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     fun refreshStorageIntelligence() {
-        if (!::storageIntelligence.isInitialized || !hasBroadFileAccess()) return
-        if (storageIntelligenceJob?.isActive == true) return
-        storageIntelligenceJob = storageIntelligenceScope.launch {
-            try {
-                while (currentCoroutineContext().isActive) {
-                    val snapshot = storageIntelligence.runNextSlice()
-                    latestStorageIntelligence = snapshot
-                    storageIntelligenceFailure = null
-                    if (snapshot.contentReadComplete) break
-
-                    val hardware = hardwareResourceIntelligence.currentHardwareSnapshot()
-                    val batteryFraction = hardware.batteryFraction
-                    val delayMillis = when {
-                        hardware.charging == true -> 1_000L
-                        batteryFraction != null && batteryFraction < 0.20 -> 60_000L
-                        else -> 15_000L
-                    }
-                    delay(delayMillis)
-                }
-            } catch (error: Exception) {
-                storageIntelligenceFailure =
-                    error.message ?: error::class.simpleName ?: "storage-intelligence-failed"
-            }
-        }
+        if (!::storageIntelligenceController.isInitialized) return
+        storageIntelligenceController.refresh()
     }
 
     fun refreshLiveSources() {
