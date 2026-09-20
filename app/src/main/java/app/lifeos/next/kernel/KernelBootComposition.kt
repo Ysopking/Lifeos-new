@@ -77,6 +77,9 @@ internal class KernelBootComposition(
                     foundation.learningAdaptations.rehydrate()
                 },
                 RuntimeStateRehydrationStep {
+                    foundation.languageRuntimeState.rehydrate()
+                },
+                RuntimeStateRehydrationStep {
                     foundation.thoughtGraph.rehydrate()
                 },
                 RuntimeStateRehydrationStep {

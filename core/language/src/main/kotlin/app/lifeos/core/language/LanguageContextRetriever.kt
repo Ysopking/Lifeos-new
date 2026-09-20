@@ -27,7 +27,7 @@ class LanguageContextRetriever(
     private val builder: PhotonLanguageContextBuilder = PhotonLanguageContextBuilder(),
     private val maxCandidates: Int = 160,
     private val maxSelected: Int = 96,
-    private val excludedTags: Set<String> = setOf("corpus:archive"),
+    private val excludedTags: Set<String> = setOf("corpus:archive", "language-runtime-state"),
 ) {
     init {
         require(maxCandidates >= 32)

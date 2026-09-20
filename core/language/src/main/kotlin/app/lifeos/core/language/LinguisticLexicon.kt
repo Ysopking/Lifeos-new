@@ -112,24 +112,35 @@ class VersionedLanguageRuntime(
 
     fun current(): LanguageRuntimeSnapshot = active.get()
 
-    @Synchronized
-    fun promote(
+    fun nextSnapshot(
         concepts: Collection<LinguisticConcept>,
         promotionEvidenceFingerprint: String,
-    ): LanguageRuntimeSnapshot {
+    ): LinguisticLexiconSnapshot {
         require(promotionEvidenceFingerprint.isNotBlank())
         val previous = active.get()
-        val nextLexicon = LinguisticLexiconSnapshot.create(
+        return LinguisticLexiconSnapshot.create(
             revision = previous.lexicon.revision + 1L,
             concepts = concepts,
             predecessorFingerprint = previous.lexicon.fingerprint,
             promotionEvidenceFingerprint = promotionEvidenceFingerprint,
         )
-        val next = build(nextLexicon)
-        history[nextLexicon.fingerprint] = next
+    }
+
+    @Synchronized
+    fun install(snapshot: LinguisticLexiconSnapshot): LanguageRuntimeSnapshot {
+        val next = build(snapshot)
+        history[snapshot.fingerprint] = next
         active.set(next)
         return next
     }
+
+    @Synchronized
+    fun promote(
+        concepts: Collection<LinguisticConcept>,
+        promotionEvidenceFingerprint: String,
+    ): LanguageRuntimeSnapshot = install(
+        nextSnapshot(concepts, promotionEvidenceFingerprint)
+    )
 
     @Synchronized
     fun rollback(targetFingerprint: String): LanguageRuntimeSnapshot {
