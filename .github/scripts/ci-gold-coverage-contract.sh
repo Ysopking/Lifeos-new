@@ -120,6 +120,10 @@ require_exact_head_workflow ".github/workflows/android.yml" "Android Debug CI"
 require_exact_head_workflow ".github/workflows/android-emulator-recovery.yml" "Android Emulator Recovery"
 require_exact_head_workflow ".github/workflows/product-gold.yml" "LIFEOS Product Gold"
 
+ruleset_contract=".github/scripts/ci-main-authority-contract.sh"
+test -s "$ruleset_contract" || { echo "missing-main-authority-contract" >&2; exit 1; }
+bash "$ruleset_contract"
+
 product_gold_workflow=".github/workflows/product-gold.yml"
 grep -Fq 'CANDIDATE_SHA: ${{ github.sha }}' "$product_gold_workflow" || {
   echo "product-gold-candidate-sha-not-bound-to-checkout-ref" >&2
