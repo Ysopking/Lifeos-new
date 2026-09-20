@@ -64,5 +64,54 @@ if "distributionSha256Sum=" not in wrapper:
 if not re.search(r"distributionUrl=https\\://services\.gradle\.org/distributions/gradle-[0-9.]+-bin\.zip", wrapper):
     raise SystemExit("gradle-wrapper-distribution-not-pinned")
 
+metadata = Path("gradle/verification-metadata.xml")
+try:
+    tree = ET.parse(metadata)
+except ET.ParseError as exc:
+    raise SystemExit(f"verification-metadata-invalid-xml:{exc}")
+
+ns = {"d": "https://schema.gradle.org/dependency-verification"}
+root = tree.getroot()
+verify_metadata = root.find("./d:configuration/d:verify-metadata", ns)
+verify_signatures = root.find("./d:configuration/d:verify-signatures", ns)
+if verify_metadata is None or (verify_metadata.text or "").strip().lower() != "true":
+    raise SystemExit("verification-metadata-verification-disabled")
+if verify_signatures is None or (verify_signatures.text or "").strip().lower() != "false":
+    raise SystemExit("verification-signature-mode-drift")
+
+trusted = root.findall("./d:configuration/d:trusted-artifacts/d:trust", ns)
+if trusted:
+    raise SystemExit(f"verification-trusted-artifacts-forbidden:{len(trusted)}")
+
+components = root.findall("./d:components/d:component", ns)
+artifacts = root.findall("./d:components/d:component/d:artifact", ns)
+if len(components) < 400:
+    raise SystemExit(f"verification-component-set-truncated:{len(components)}")
+if len(artifacts) < 700:
+    raise SystemExit(f"verification-artifact-set-truncated:{len(artifacts)}")
+
+for artifact in artifacts:
+    name = artifact.get("name", "<unnamed>")
+    checksums = artifact.findall("./d:sha256", ns)
+    if len(checksums) != 1:
+        raise SystemExit(f"verification-sha256-count:{name}:{len(checksums)}")
+    value = checksums[0].get("value", "")
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise SystemExit(f"verification-sha256-invalid:{name}:{value}")
+
+for weak in ("md5", "sha1"):
+    if root.findall(f".//d:{weak}", ns):
+        raise SystemExit(f"weak-verification-checksum-present:{weak}")
+
+scan_suffixes = {".sh", ".yml", ".yaml", ".gradle", ".kts"}
+for path in Path(".").rglob("*"):
+    if not path.is_file() or path.suffix not in scan_suffixes:
+        continue
+    if path.as_posix() == ".github/scripts/ci-dependency-supply-chain-contract.sh":
+        continue
+    source = path.read_text(encoding="utf-8", errors="ignore")
+    if re.search(r"--dependency-verification(?:=|\\s+)(?:off|lenient)\\b", source, re.I):
+        raise SystemExit(f"dependency-verification-bypass:{path}")
+
 print("DEPENDENCY_SUPPLY_CHAIN_OK")
 PY
