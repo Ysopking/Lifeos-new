@@ -98,7 +98,7 @@ class GermanMorphologyEngine {
  * convergence. The expensive field iterations therefore operate on a small bounded set only.
  */
 class LinguisticFieldIndexV2(
-    private val lexicon: DeterministicLinguisticFieldLexicon,
+    private val lexicon: LinguisticLexicon,
     private val morphology: GermanMorphologyEngine = GermanMorphologyEngine(),
     private val maxCandidates: Int = 12,
 ) {

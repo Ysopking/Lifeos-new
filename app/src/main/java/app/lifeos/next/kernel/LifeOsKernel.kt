@@ -8,6 +8,8 @@ import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingEngine
+import app.lifeos.core.language.LanguageRuntimeSnapshot
+import app.lifeos.core.language.VersionedLanguageRuntime
 import app.lifeos.core.language.LanguageContextRetriever
 import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.model.BinaryAssetStore
@@ -64,6 +66,7 @@ import app.lifeos.core.runtime.goal.LocalCommunicationGoalEngine
 import app.lifeos.core.runtime.goal.LocalCommunicationGoalResult
 import app.lifeos.core.runtime.goal.LocalDeepSearchGoalEngine
 import app.lifeos.core.runtime.goal.LocalDeepSearchGoalResult
+import app.lifeos.core.runtime.personal.ProductivePersonalLanguageLearningRuntime
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalEngine
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalResult
 import app.lifeos.core.runtime.goal.LocalSharePreparation
@@ -130,6 +133,8 @@ class LifeOsKernel internal constructor(
     private val pngEncoder: DeterministicPngEncoder = DeterministicPngEncoder(),
     private val imagePhotonFactory: ImagePhotonFactory = ImagePhotonFactory(),
     private val sceneGraphPhotonFactory: SceneGraphPhotonFactory = SceneGraphPhotonFactory(),
+    private val languageRuntime: VersionedLanguageRuntime? = null,
+    private val personalLanguageLearning: ProductivePersonalLanguageLearningRuntime? = null,
 ) {
     private val startLock = Any()
     private val conversationClassifier = ConversationSignalClassifier()
@@ -143,6 +148,9 @@ class LifeOsKernel internal constructor(
     )
     val productivePhotonQueries: ProductivePhotonQueryService =
         ProductivePhotonQueryService(revisionedPhotonStore)
+
+    fun currentLanguageSnapshot(): LanguageRuntimeSnapshot =
+        requireNotNull(languageRuntime) { "Versioned language runtime is unavailable" }.current()
     private var bootstrapJob: Job? = null
 
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
@@ -310,6 +318,7 @@ class LifeOsKernel internal constructor(
         return if (route.path == ConversationPath.FAST_CHAT) {
             val context = fastConversationContext(photon)
             val source = persistWithoutCognition(photon, PhotonIngressMode.ORIGIN)
+            observePersonalLanguageLearning(source.photon, understanding = null)
             val response = fastConversationReply(photon.content, context)
             val assistantPhoton = assistantPhotonFor(photon, response, fast = true)
             val assistant = persistWithoutCognition(assistantPhoton, PhotonIngressMode.DERIVED)
@@ -323,7 +332,12 @@ class LifeOsKernel internal constructor(
             )
         } else {
             val language = persistUserUtterance(photon)
-            val response = LifeOsResponseComposer.compose(language)
+            val responseGenerator = languageRuntime?.current()?.responseGeneration
+            val response = if (responseGenerator != null) {
+                LifeOsResponseComposer(responseGenerator).compose(language)
+            } else {
+                LifeOsResponseComposer.compose(language)
+            }
             val assistant = persistAndIngest(
                 assistantPhotonFor(photon, response, fast = false),
                 PhotonIngressMode.DERIVED,
@@ -451,7 +465,9 @@ class LifeOsKernel internal constructor(
         ).context
         val source = persistAndIngest(photon)
         return try {
-            val understanding = languageUnderstanding.understand(photon.content, context)
+            val understandingEngine = languageRuntime?.current()?.understanding ?: languageUnderstanding
+            val understanding = understandingEngine.understand(photon.content, context)
+            observePersonalLanguageLearning(source.photon, understanding)
             val routing = goalCapabilityRouter.route(understanding.goal)
             val goalPhoton = goalPhotonFactory.create(
                 result = understanding,
@@ -511,6 +527,21 @@ class LifeOsKernel internal constructor(
      * Explicit private-user action for one blocking gap. It persists a typed request and a separate
      * exact approval before bounded Genesis runs. The result can only become TRIAL or REJECTED here.
      */
+    private suspend fun observePersonalLanguageLearning(
+        source: Photon,
+        understanding: app.lifeos.core.language.LanguageUnderstandingResult?,
+    ) {
+        val learning = personalLanguageLearning ?: return
+        try {
+            learning.observePersistedTurn(source, understanding)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // Personalization is auxiliary. Learning failure must not fail a user turn or bypass
+            // the existing semantic/action authorities.
+        }
+    }
+
     suspend fun generateExplicitlyApprovedTool(gap: CapabilityGap): GeneratedToolUserActionResult {
         requireCompletedBoot("Generated-tool action")
         return generatedToolUserActions.generateExplicitlyApproved(gap)

@@ -5,7 +5,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 class LinguisticFieldEngine(
-    private val lexicon: DeterministicLinguisticFieldLexicon = DeterministicLinguisticFieldLexicon(),
+    private val lexicon: LinguisticLexicon = DeterministicLinguisticFieldLexicon(),
     private val weights: LinguisticFieldWeights = LinguisticFieldWeights(),
     private val graphemeFieldEngine: GraphemeFieldEngine = GraphemeFieldEngine(),
     private val morphologyEngine: GermanMorphologyEngine = GermanMorphologyEngine(),
@@ -40,6 +40,7 @@ class LinguisticFieldEngine(
                 iterations = 0,
                 totalEnergy = 0.0,
                 compoundBindings = compounds,
+                lexiconSnapshotFingerprint = lexicon.snapshotFingerprint,
             )
         }
 
@@ -165,6 +166,7 @@ class LinguisticFieldEngine(
             totalEnergy = candidates.values.flatten().sumOf { it.activation },
             graphemeTraces = graphemeTraces,
             compoundBindings = compounds,
+            lexiconSnapshotFingerprint = lexicon.snapshotFingerprint,
             topDownRevisions = revisions
                 .distinctBy { listOf(it.iteration.toString(), it.tokenIndex.toString(), it.conceptId) }
                 .sortedWith(compareBy<TopDownFieldRevision> { it.iteration }.thenBy { it.tokenIndex }.thenBy { it.conceptId }),

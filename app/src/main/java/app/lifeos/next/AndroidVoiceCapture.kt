@@ -11,6 +11,7 @@ import app.lifeos.core.language.AcousticLexemeCandidate
 import app.lifeos.core.language.BidirectionalSpeechFieldEngine
 import app.lifeos.core.language.DeterministicVoiceActivitySegmenter
 import app.lifeos.core.language.LanguageContext
+import app.lifeos.core.language.LanguageRuntimeSnapshot
 import app.lifeos.core.language.Pcm16MonoAudio
 import app.lifeos.core.language.PhraseFieldDecoder
 import app.lifeos.core.language.PhraseWordCandidate
@@ -49,6 +50,7 @@ class AndroidVoiceCaptureEngine(
     private val segmenter: DeterministicVoiceActivitySegmenter = DeterministicVoiceActivitySegmenter(),
     private val speechEngine: BidirectionalSpeechFieldEngine = BidirectionalSpeechFieldEngine(),
     private val phraseDecoder: PhraseFieldDecoder = PhraseFieldDecoder(),
+    private val languageSnapshotProvider: (() -> LanguageRuntimeSnapshot)? = null,
 ) {
     fun hasPermission(): Boolean =
         context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -63,6 +65,9 @@ class AndroidVoiceCaptureEngine(
         languageContext: LanguageContext,
     ): LocalVoiceCaptureResult {
         if (!hasPermission()) return LocalVoiceCaptureResult.PermissionMissing
+        val languageSnapshot = languageSnapshotProvider?.invoke()
+        val activeSpeechEngine = languageSnapshot?.speechEngine ?: speechEngine
+        val activePhraseDecoder = languageSnapshot?.phraseDecoder ?: phraseDecoder
 
         val minimumBuffer = AudioRecord.getMinBufferSize(
             SAMPLE_RATE_HZ,
@@ -107,7 +112,14 @@ class AndroidVoiceCaptureEngine(
                 }
             }
             stoppedByLimit = accumulator.size >= MAX_CAPTURE_SAMPLES
-            analyze(accumulator.toArray(), languageContext, stoppedByLimit, observedAt)
+            analyze(
+                samples = accumulator.toArray(),
+                languageContext = languageContext,
+                stoppedByLimit = stoppedByLimit,
+                observedAt = observedAt,
+                activeSpeechEngine = activeSpeechEngine,
+                activePhraseDecoder = activePhraseDecoder,
+            )
         } catch (_: SecurityException) {
             LocalVoiceCaptureResult.PermissionMissing
         } catch (_: Exception) {
@@ -124,6 +136,8 @@ class AndroidVoiceCaptureEngine(
         languageContext: LanguageContext,
         stoppedByLimit: Boolean,
         observedAt: Instant,
+        activeSpeechEngine: BidirectionalSpeechFieldEngine,
+        activePhraseDecoder: PhraseFieldDecoder,
     ): LocalVoiceCaptureResult {
         if (samples.size < SAMPLE_RATE_HZ / 5) return LocalVoiceCaptureResult.NoSpeech
         val audio = Pcm16MonoAudio(SAMPLE_RATE_HZ, samples)
@@ -131,8 +145,8 @@ class AndroidVoiceCaptureEngine(
         if (segments.isEmpty()) return LocalVoiceCaptureResult.NoSpeech
 
         val hypotheses = segments.flatMap { segment ->
-            val result = speechEngine.understand(segment.extract(audio), context = languageContext)
-            val phrase = phraseDecoder.decode(result.rawAcousticLattice, context = languageContext)
+            val result = activeSpeechEngine.understand(segment.extract(audio), context = languageContext)
+            val phrase = activePhraseDecoder.decode(result.rawAcousticLattice, context = languageContext)
             val phraseWinner = phrase.winner
             if (phraseWinner != null && phraseWinner.activation >= MIN_PHRASE_CONFIDENCE) {
                 phraseWinner.words

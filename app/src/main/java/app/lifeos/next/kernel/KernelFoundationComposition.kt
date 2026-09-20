@@ -9,11 +9,13 @@ import app.lifeos.core.data.cognition.EncryptedCognitiveModuleSnapshotRepository
 import app.lifeos.core.data.goal.EncryptedGoalPlanRepository
 import app.lifeos.core.data.health.EncryptedProtectionStateRepository
 import app.lifeos.core.data.learning.EncryptedLearningAdaptationRepository
+import app.lifeos.core.data.language.EncryptedLanguageRuntimeRepository
 import app.lifeos.core.data.thought.EncryptedThoughtGraphDeltaRepository
 import app.lifeos.core.data.thought.EncryptedThoughtMatrixStateRepository
 import app.lifeos.core.image.nativebackend.MmsiRuntimeBackendProbe
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.LanguageUnderstandingEngine
+import app.lifeos.core.language.VersionedLanguageRuntime
 import app.lifeos.core.language.PhotonLanguageContextBuilder
 import app.lifeos.core.runtime.InfluenceExecutor
 import app.lifeos.core.runtime.StaticFieldRegistry
@@ -38,6 +40,9 @@ import app.lifeos.core.runtime.health.QuarantineRegistry
 import app.lifeos.core.runtime.learning.DurableLearningAdaptationLedger
 import app.lifeos.core.runtime.learning.LearnedFieldCalibration
 import app.lifeos.core.runtime.learning.LearnedProviderReliabilityResolver
+import app.lifeos.core.runtime.personal.DurableLanguageRuntimeCoordinator
+import app.lifeos.core.runtime.personal.DurablePersonalLanguagePromotionCoordinator
+import app.lifeos.core.runtime.personal.ProductivePersonalLanguageLearningRuntime
 import app.lifeos.core.runtime.thought.DurableThoughtGraph
 import app.lifeos.core.scene.ProceduralSceneCompiler
 import app.lifeos.core.scene.ReferenceCpuSceneRasterizer
@@ -79,6 +84,9 @@ internal data class KernelFoundationGraph(
     val sceneRasterizer: SceneRasterizer,
     val proceduralImageGenerator: ProceduralImageGenerationEngine,
     val capabilityRegistry: CapabilityRegistry,
+    val languageRuntime: VersionedLanguageRuntime,
+    val languageRuntimeState: DurableLanguageRuntimeCoordinator,
+    val personalLanguageLearning: ProductivePersonalLanguageLearningRuntime,
 )
 
 /**
@@ -134,7 +142,17 @@ internal class KernelFoundationComposition(
             protectionAdmission = protectionCoordinator,
         )
         val mmsiRuntime = MmsiRuntimeBackendProbe(appContext)
-        val languageUnderstanding = LanguageUnderstandingEngine()
+        val languageRuntime = VersionedLanguageRuntime()
+        val languageRuntimeState = DurableLanguageRuntimeCoordinator(
+            languageRuntime,
+            EncryptedLanguageRuntimeRepository(appContext),
+        )
+        val languageUnderstanding = languageRuntime.current().understanding
+        val personalLanguageLearning = ProductivePersonalLanguageLearningRuntime(
+            photons = store,
+            promotion = DurablePersonalLanguagePromotionCoordinator(languageRuntimeState),
+            currentLexicon = { languageRuntime.current().lexicon },
+        )
         val goalPhotonFactory = GoalPhotonFactory()
         val languageContextBuilder = PhotonLanguageContextBuilder()
         val sceneCompiler = ProceduralSceneCompiler()
@@ -230,6 +248,9 @@ internal class KernelFoundationComposition(
             healthGate = healthGate,
             mmsiRuntime = mmsiRuntime,
             languageUnderstanding = languageUnderstanding,
+            languageRuntime = languageRuntime,
+            languageRuntimeState = languageRuntimeState,
+            personalLanguageLearning = personalLanguageLearning,
             goalPhotonFactory = goalPhotonFactory,
             languageContextBuilder = languageContextBuilder,
             sceneCompiler = sceneCompiler,

@@ -42,7 +42,7 @@ data class CompoundFieldBinding(
  * It does not invent missing concepts: every accepted segment must bind to a known field concept.
  */
 class CompoundFieldResolver(
-    private val lexicon: DeterministicLinguisticFieldLexicon = DeterministicLinguisticFieldLexicon(),
+    private val lexicon: LinguisticLexicon = DeterministicLinguisticFieldLexicon(),
     private val lexicalIndex: LinguisticFieldIndexV2 = LinguisticFieldIndexV2(lexicon),
 ) {
     fun resolve(utterance: NormalizedUtterance): List<CompoundFieldBinding> = utterance.tokens

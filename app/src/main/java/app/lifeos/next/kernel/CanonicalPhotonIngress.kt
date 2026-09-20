@@ -83,7 +83,9 @@ class CanonicalPhotonIngress(
         WebDeepSearchRuntime.installSource(
             loadPhoton = kernel.photonStore::load,
             persistPhoton = { photon ->
-                ingest(photon, PhotonIngressMode.ORIGIN)
+                // Web findings/cache entries are derived evidence produced by DeepSearch, never
+                // owner-origin input. Keep causal ingress classification exact.
+                ingest(photon, PhotonIngressMode.DERIVED)
                 photon
             },
         )

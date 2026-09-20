@@ -4,6 +4,8 @@ import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageCode
+import app.lifeos.core.language.SemanticSearchQueryPlanner
+import app.lifeos.core.language.SemanticSearchTerms
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.PhotonPhase
@@ -32,6 +34,8 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchSourceSnapshot
 import app.lifeos.core.runtime.deepsearch.DeepSearchStatus
 import app.lifeos.core.runtime.deepsearch.RuntimeAwareDeepSearchCapabilityGate
 import app.lifeos.core.runtime.deepsearch.RuntimeDeepSearchPermissionGate
+import app.lifeos.core.runtime.level7.EvidenceActionKind
+import app.lifeos.core.runtime.level7.LanguageActiveEvidenceBridge
 import app.lifeos.core.runtime.resource.ResourceBudgetDemand
 import app.lifeos.core.runtime.resource.ResourceBudgetDomain
 import app.lifeos.core.runtime.resource.ResourceBudgetQuota
@@ -67,6 +71,8 @@ class LocalDeepSearchGoalEngine(
     private val checkpointProjector: DeepSearchCheckpointResultProjector = DeepSearchCheckpointResultProjector(),
     private val sharedBudgets: SharedResourceBudgetGate? = SharedResourceBudgetRuntimeRegistry.current(),
     private val externalSourcesProvider: () -> List<DeepSearchSource> = DeepSearchExternalRuntimeRegistry::sources,
+    private val searchQueryPlanner: SemanticSearchQueryPlanner = SemanticSearchQueryPlanner(),
+    private val activeEvidence: LanguageActiveEvidenceBridge = LanguageActiveEvidenceBridge(),
 ) {
     fun supports(intent: IntentType): Boolean = intent == IntentType.SEARCH
 
@@ -81,6 +87,7 @@ class LocalDeepSearchGoalEngine(
         missionId: DeepSearchMissionId? = null,
     ): LocalDeepSearchGoalResult {
         if (!supports(goal.intent)) return LocalDeepSearchGoalResult.Unsupported(goal.intent)
+        val searchPlan = searchQueryPlanner.plan(goal)
 
         if (missionId == null && resume == null && checkpointSink == null) {
             val missionRuntime = DeepSearchMissionRuntimeRegistry.currentOrNull()
@@ -96,7 +103,7 @@ class LocalDeepSearchGoalEngine(
                     goalPhotonId = goalPhotonId,
                     sourcePhotonId = sourcePhoton.id,
                     sourceRevision = sourcePhoton.revision,
-                    query = goal.objective,
+                    query = searchPlan.primaryQuery,
                     searchPolicyVersion = SEARCH_POLICY_VERSION,
                     sourceScopeIds = missionSources.mapTo(sortedSetOf()) { it.descriptor.sourceId },
                     sourceSnapshotFingerprint = DeepSearchSourceSnapshot.fingerprint(missionEvidence),
@@ -135,7 +142,6 @@ class LocalDeepSearchGoalEngine(
             }
         }
 
-        val query = extractQuery(goal)
         val excluded = setOf(sourcePhoton.id, goalPhotonId)
         val candidates = photons
             .asSequence()
@@ -143,36 +149,69 @@ class LocalDeepSearchGoalEngine(
             .filter(::isPrimarySearchEvidence)
             .sortedWith(compareBy<Photon> { it.provenance.createdAt }.thenBy { it.id.value })
             .toList()
-        val sources = searchSources(candidates)
-        val wantsExternal = sources
+        val allSources = searchSources(candidates)
+        val externalAvailable = allSources
             .asSequence()
             .filter { it.descriptor.kind == DeepSearchSourceKind.EXTERNAL }
             .any { source ->
                 RuntimeDeepSearchPermissionGate.permissionFor(source.descriptor) == DeepSearchPermissionState.GRANTED
             }
-        val freshRequest = DeepSearchRequest(
-            query = query,
-            contextTerms = goal.entities.map { it.normalizedValue }.filter { it.isNotBlank() }.toSet(),
-            budget = effectiveBudget(goal, wantsExternal),
-        )
-        val request = if (resume == null) {
-            freshRequest
+        val terminalResume = resume != null && checkpointProjector.isTerminal(resume)
+        val provisionalBudget = if (terminalResume) {
+            null
         } else {
-            require(resume.request.query == freshRequest.query) {
-                "DeepSearch mission query changed during resume"
-            }
-            require(resume.request.contextTerms == freshRequest.contextTerms) {
-                "DeepSearch mission context changed during resume"
-            }
-            require(resume.request.minimumResolutionScore == freshRequest.minimumResolutionScore)
-            require(resume.request.minimumWinnerMargin == freshRequest.minimumWinnerMargin)
-            require(budgetFitsWithin(resume.request.budget, freshRequest.budget)) {
-                "deepsearch-resume-budget-tightened"
-            }
-            resume.request
+            effectiveBudget(goal, externalAvailable)
         }
-        val result = if (resume != null && checkpointProjector.isTerminal(resume)) {
-            checkpointProjector.project(resume)
+        val evidencePlan = provisionalBudget?.let { budget ->
+            activeEvidence.plan(
+                goal = goal,
+                sourceCycleId = missionId?.value ?: goalPhotonId.value,
+                budget = budget,
+                externalAvailable = externalAvailable,
+            )
+        }
+        val wantsExternal =
+            externalAvailable &&
+                (evidencePlan?.selected(EvidenceActionKind.DEEP_SEARCH) != false)
+        val sources = if (wantsExternal || terminalResume) {
+            allSources
+        } else {
+            allSources.filter { it.descriptor.kind == DeepSearchSourceKind.LOCAL }
+        }
+        val request = if (terminalResume) {
+            // A sealed terminal checkpoint is already authoritative. Re-rendering it must not
+            // depend on later query-planner refinements, source authorization or resource state.
+            requireNotNull(resume).request
+        } else {
+            val finalBudget = if (externalAvailable && !wantsExternal) {
+                effectiveBudget(goal, wantsExternal = false)
+            } else {
+                requireNotNull(provisionalBudget)
+            }
+            val freshRequest = DeepSearchRequest(
+                query = searchPlan.primaryQuery,
+                contextTerms = searchPlan.contextTerms,
+                budget = finalBudget,
+            )
+            if (resume == null) {
+                freshRequest
+            } else {
+                require(resume.request.query == freshRequest.query) {
+                    "DeepSearch mission query changed during resume"
+                }
+                require(resume.request.contextTerms == freshRequest.contextTerms) {
+                    "DeepSearch mission context changed during resume"
+                }
+                require(resume.request.minimumResolutionScore == freshRequest.minimumResolutionScore)
+                require(resume.request.minimumWinnerMargin == freshRequest.minimumWinnerMargin)
+                require(budgetFitsWithin(resume.request.budget, freshRequest.budget)) {
+                    "deepsearch-resume-budget-tightened"
+                }
+                resume.request
+            }
+        }
+        val result = if (terminalResume) {
+            checkpointProjector.project(requireNotNull(resume))
         } else {
             planner.search(
                 request = request,
@@ -376,16 +415,6 @@ class LocalDeepSearchGoalEngine(
         }.trimEnd()
     }
 
-    private fun extractQuery(goal: GoalFrame): String {
-        val raw = goal.objective.substringAfter(": ", goal.objective).trim()
-        val meaningful = TERM_REGEX.findAll(raw)
-            .map { it.value }
-            .filterNot { it.lowercase(Locale.ROOT) in SEARCH_DIRECTIVE_WORDS }
-            .joinToString(" ")
-            .trim()
-        return meaningful.ifBlank { raw.ifBlank { goal.objective } }
-    }
-
     private fun isPrimarySearchEvidence(photon: Photon): Boolean {
         if (photon.phase == PhotonPhase.ARCHIVED) return false
         if ("goal" in photon.tags || "scene-graph" in photon.tags) return false
@@ -416,22 +445,36 @@ class LocalDeepSearchGoalEngine(
             request: DeepSearchRequest,
             branch: app.lifeos.core.runtime.deepsearch.DeepSearchBranch,
         ): List<DeepSearchFindingDraft> {
-            if (branch.depth > 0) return emptyList()
-            val queryTerms = request.queryTerms + request.contextTerms.flatMap(::terms)
+            val rootTerms = SemanticSearchTerms.expandedTokens(request.query) +
+                request.contextTerms.flatMap(SemanticSearchTerms::expandedTokens)
+            val branchTerms = if (branch.depth == 0) {
+                emptySet()
+            } else {
+                SemanticSearchTerms.expandedTokens(branch.hypothesis.statement) +
+                    branch.hypothesis.semanticTerms.flatMap(SemanticSearchTerms::expandedTokens)
+            }
+            val queryTerms = (rootTerms + branchTerms).toSet()
             if (queryTerms.isEmpty()) return emptyList()
             return photons.mapNotNull { photon ->
+                val statement = excerptStatic(photon.content)
+                if (
+                    branch.depth > 0 &&
+                    statement.equals(branch.hypothesis.statement, ignoreCase = true)
+                ) {
+                    return@mapNotNull null
+                }
                 val candidateTerms = terms(photon.content).toSet()
                 val hits = queryTerms.intersect(candidateTerms)
                 if (hits.isEmpty()) return@mapNotNull null
                 val coverage = hits.size.toDouble() / queryTerms.size.toDouble()
                 val confidence = (photon.confidence * (0.65 + coverage * 0.35)).coerceIn(0.0, 1.0)
                 DeepSearchFindingDraft(
-                    statement = excerptStatic(photon.content),
+                    statement = statement,
                     semanticTerms = candidateTerms.intersect(queryTerms),
                     confidence = confidence,
                     evidence = listOf(
                         DeepSearchEvidenceDraft(
-                            statement = excerptStatic(photon.content),
+                            statement = statement,
                             confidence = photon.confidence,
                             sourcePhotonId = photon.id,
                         )
@@ -441,11 +484,7 @@ class LocalDeepSearchGoalEngine(
         }
 
         private companion object {
-            fun terms(value: String): Set<String> = TERM_REGEX.findAll(value)
-                .map { it.value.lowercase(Locale.ROOT) }
-                .filter { it.length >= 2 }
-                .filterNot { it in SEARCH_DIRECTIVE_WORDS }
-                .toSet()
+            fun terms(value: String): Set<String> = SemanticSearchTerms.expandedTokens(value)
 
             fun excerptStatic(value: String): String {
                 val normalized = value.replace(WHITESPACE_REGEX, " ").trim()
@@ -458,8 +497,8 @@ class LocalDeepSearchGoalEngine(
     companion object {
         const val RESULT_MIME = "application/vnd.lifeos.deepsearch+text"
         const val LOCAL_SOURCE_ID = "local-photon-evidence"
-        const val SEARCH_POLICY_VERSION = "deepsearch-v2-hybrid-2026-09"
-        const val WEB_NETWORK_BYTES = 256L * 1024L
+        const val SEARCH_POLICY_VERSION = "deepsearch-v3-semantic-web-2026-09"
+        const val WEB_NETWORK_BYTES = 640L * 1024L
         private const val MAX_RESULTS = 6
         private const val MAX_WORK_UNITS = 16
         private const val MAX_SECONDS = 4L

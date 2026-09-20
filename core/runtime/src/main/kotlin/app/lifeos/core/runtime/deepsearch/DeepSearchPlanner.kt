@@ -216,7 +216,7 @@ class DeepSearchPlanner(
             }
 
             for (source in authorized) {
-                val cost = source.descriptor.workUnitsPerExpansion
+                val cost = source.workUnits(request, current)
                 if (workUnits + cost > request.budget.maxWorkUnits) {
                     workExhausted = true
                     emit(

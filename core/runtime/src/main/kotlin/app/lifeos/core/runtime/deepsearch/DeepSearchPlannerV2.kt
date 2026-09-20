@@ -201,7 +201,7 @@ class DeepSearchPlannerV2(
 
                 val alreadyReserved = expansionReservationOutstanding(trace, current.id, sourceId)
                 if (!alreadyReserved) {
-                    val cost = source.descriptor.workUnitsPerExpansion
+                    val cost = source.workUnits(request, current)
                     if (workUnits + cost > request.budget.maxWorkUnits) {
                         workExhausted = true
                         emit(

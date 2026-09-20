@@ -46,6 +46,7 @@ data class PhotonIndexQuery(
     val order: PhotonIndexOrder = PhotonIndexOrder.IDENTITY,
     val after: PhotonIndexCursor? = null,
     val limit: Int = DEFAULT_PAGE_LIMIT,
+    val excludedTags: Set<String> = emptySet(),
 ) {
     init {
         require(limit in 1..HARD_PAGE_LIMIT) {
@@ -56,6 +57,7 @@ data class PhotonIndexQuery(
         }
         require(mimeTypes.none { it.isBlank() })
         require(allTags.none { it.isBlank() })
+        require(excludedTags.none { it.isBlank() })
     }
 
     companion object {
@@ -127,5 +129,6 @@ fun PhotonIndexEntry.matches(query: PhotonIndexQuery): Boolean {
     if (query.phases.isNotEmpty() && phase !in query.phases) return false
     if (query.mimeTypes.isNotEmpty() && mimeType !in query.mimeTypes) return false
     if (!tags.containsAll(query.allTags)) return false
+    if (tags.any { it in query.excludedTags }) return false
     return true
 }

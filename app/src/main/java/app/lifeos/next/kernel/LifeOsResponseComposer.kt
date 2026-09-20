@@ -9,8 +9,13 @@ import app.lifeos.core.language.LanguageResponseGenerationEngine
 import app.lifeos.core.language.LanguageResponseTarget
 import app.lifeos.core.runtime.goal.LocalKnowledgeGoalKind
 
-object LifeOsResponseComposer {
-    private val responseGeneration = LanguageResponseGenerationEngine()
+class LifeOsResponseComposer(
+    private val responseGeneration: LanguageResponseGenerationEngine = LanguageResponseGenerationEngine(),
+) {
+    companion object {
+        private val DEFAULT = LifeOsResponseComposer()
+        fun compose(result: LanguageSubmissionResult): String = DEFAULT.compose(result)
+    }
 
     fun compose(result: LanguageSubmissionResult): String {
         (result.localKnowledge as? LocalKnowledgeExecutionResult.Produced)?.let { produced ->

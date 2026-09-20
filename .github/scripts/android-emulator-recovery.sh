@@ -103,6 +103,10 @@ run_test \
   "$report_dir/seed-semantic-goal-v4.txt"
 
 run_test \
+  'app.lifeos.next.LanguageRuntimeRecoveryDeviceTest#seedPromotedPersonalLanguageSnapshot' \
+  "$report_dir/seed-language-runtime.txt"
+
+run_test \
   'app.lifeos.next.SemanticActionRecoveryDeviceTest#seedSemanticActionDataflow' \
   "$report_dir/seed-semantic-action-dataflow.txt"
 
@@ -153,6 +157,10 @@ run_test \
 run_test \
   'app.lifeos.next.ProductGoldenChatDeviceTest#recoverProductGoldChatRoundTrip' \
   "$report_dir/recovered-product-gold-chat.txt"
+
+run_test \
+  'app.lifeos.next.LanguageRuntimeRecoveryDeviceTest#recoverPromotedSnapshotThenRollbackDurablyAfterColdStart' \
+  "$report_dir/recovered-language-runtime.txt"
 
 run_test \
   'app.lifeos.next.SemanticActionRecoveryDeviceTest#recoverSemanticActionDataflowAfterColdStart' \
