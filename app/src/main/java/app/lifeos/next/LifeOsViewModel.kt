@@ -3,12 +3,8 @@ package app.lifeos.next
 import android.app.Application
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.util.LruCache
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import app.lifeos.core.image.ImageAssetDescriptor
-import app.lifeos.core.image.ImagePhotonFactory
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.LanguageContextItem
@@ -94,10 +90,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
     private val localShareIntentFactory = LocalShareIntentFactory(application.applicationContext, kernel)
     private val voiceStopRequested = AtomicBoolean(false)
     private val mutableState = MutableStateFlow(LifeOsState())
-    private val previewCache = object : LruCache<String, Bitmap>(IMAGE_PREVIEW_CACHE_KIB) {
-        override fun sizeOf(key: String, value: Bitmap): Int =
-            (value.allocationByteCount / 1024).coerceAtLeast(1)
-    }
+    private val imagePreviewLoader = ImagePreviewLoader(kernel::loadImageAsset)
 
     val state = mutableState.asStateFlow()
     val runtimeState = kernel.runtime.state
@@ -454,46 +447,8 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    suspend fun loadImagePreview(photon: Photon): ImagePreviewState {
-        if (photon.mimeType != ImagePhotonFactory.IMAGE_REFERENCE_MIME) {
-            return ImagePreviewState.Failed("Photon ist keine Bildreferenz.")
-        }
-        val descriptor = runCatching { ImageAssetDescriptor.decode(photon.content) }.getOrElse {
-            return ImagePreviewState.Failed("Bildreferenz ist beschädigt.")
-        }
-        val cacheKey = "${photon.id.value}:${photon.revision}:${descriptor.asset.sha256}"
-        previewCache.get(cacheKey)?.let { bitmap ->
-            return ImagePreviewState.Ready(
-                ImagePreview(bitmap, descriptor.width, descriptor.height, descriptor.rendererId),
-            )
-        }
-
-        return try {
-            val bytes = kernel.loadImageAsset(photon)
-                ?: return ImagePreviewState.Failed("Verschlüsseltes Bild-Asset fehlt oder ist nicht lesbar.")
-            val bitmap = withContext(Dispatchers.Default) {
-                BitmapFactory.decodeByteArray(
-                    bytes,
-                    0,
-                    bytes.size,
-                    BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 },
-                )
-            } ?: return ImagePreviewState.Failed("PNG konnte lokal nicht dekodiert werden.")
-
-            if (bitmap.width != descriptor.width || bitmap.height != descriptor.height) {
-                bitmap.recycle()
-                return ImagePreviewState.Failed("Bildabmessungen stimmen nicht mit der Photon-Referenz überein.")
-            }
-            previewCache.put(cacheKey, bitmap)
-            ImagePreviewState.Ready(
-                ImagePreview(bitmap, descriptor.width, descriptor.height, descriptor.rendererId),
-            )
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            ImagePreviewState.Failed("Bild konnte nicht aus dem lokalen Asset-Vault geladen werden.")
-        }
-    }
+    suspend fun loadImagePreview(photon: Photon): ImagePreviewState =
+        imagePreviewLoader.load(photon)
 
     private suspend fun loadGeneratedToolStatus() {
         mutableState.update { it.copy(generatedToolStatusLoading = true, generatedToolStatusError = null) }
@@ -663,7 +618,7 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         voiceStopRequested.set(true)
-        previewCache.evictAll()
+        imagePreviewLoader.clear()
         super.onCleared()
     }
 
@@ -677,7 +632,6 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
 
     private companion object {
         const val LOAD_ERROR_MESSAGE = "Speicher konnte nicht geladen werden. Bitte erneut versuchen."
-        const val IMAGE_PREVIEW_CACHE_KIB = 16 * 1024
         const val MAX_VOICE_CONTEXT_PHOTONS = 24
         const val ACTIVE_VOICE_CONTEXT_PHOTONS = 6
         const val MAX_TERMS_PER_PHOTON = 32
