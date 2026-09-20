@@ -20,7 +20,7 @@ import kotlinx.coroutines.CancellationException
 
 internal class GoalActionCoordinator(
     private val productivePhotonQueries: ProductivePhotonQueryService,
-    private val routeGoal: (GoalFrame) -> GoalCapabilityResolution,
+    private val routeGoal: suspend (GoalFrame) -> GoalCapabilityResolution,
     private val persistAndIngest: suspend (
         Photon,
         PhotonIngressMode,
