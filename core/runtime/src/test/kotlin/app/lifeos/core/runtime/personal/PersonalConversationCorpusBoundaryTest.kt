@@ -13,6 +13,7 @@ import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class PersonalConversationCorpusBoundaryTest {
@@ -62,6 +63,14 @@ class PersonalConversationCorpusBoundaryTest {
         )
 
         assertTrue(matches.isNotEmpty())
+        assertEquals(1, repository.queryCalls)
+        val query = requireNotNull(repository.lastQuery)
+        assertEquals(setOf("corpus:archive", "speaker:owner"), query.allTags)
+        assertEquals(
+            setOf("corpus-term:zieh", "corpus-term:komplett", "corpus-term:durch"),
+            query.anyTags,
+        )
+        assertEquals(96, query.limit)
         assertTrue(matches.all { "speaker:owner" in it.photon.tags })
         assertTrue(matches.none { "speaker:assistant" in it.photon.tags })
         assertTrue(matches.none { "speaker:other" in it.photon.tags })
@@ -69,6 +78,11 @@ class PersonalConversationCorpusBoundaryTest {
 
     private class InMemoryRevisionedPhotonRepository : RevisionedPhotonRepository {
         private val photons = linkedMapOf<PhotonId, Photon>()
+
+        var queryCalls: Int = 0
+            private set
+        var lastQuery: PhotonIndexQuery? = null
+            private set
 
         override suspend fun save(photon: Photon) {
             photons[photon.id] = photon
@@ -124,6 +138,8 @@ class PersonalConversationCorpusBoundaryTest {
         }
 
         override suspend fun query(query: PhotonIndexQuery): List<PhotonRevisionRef> {
+            queryCalls += 1
+            lastQuery = query
             val filtered = photons.values
                 .asSequence()
                 .filter { photon ->
@@ -132,6 +148,7 @@ class PersonalConversationCorpusBoundaryTest {
                         (query.phases.isEmpty() || photon.phase in query.phases) &&
                         (query.mimeTypes.isEmpty() || photon.mimeType in query.mimeTypes) &&
                         photon.tags.containsAll(query.allTags) &&
+                        (query.anyTags.isEmpty() || photon.tags.any { it in query.anyTags }) &&
                         photon.tags.none { it in query.excludedTags }
                 }
             val sorted = when (query.order) {
