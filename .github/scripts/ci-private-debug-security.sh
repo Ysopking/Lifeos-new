@@ -15,6 +15,19 @@ permission_nodes = {
 }
 permissions = set(permission_nodes)
 
+profile_sources = [
+    Path("app/src/main/java/app/lifeos/next/PrivatePermissionController.kt"),
+    Path("app/src/main/java/app/lifeos/next/AndroidInitialDataSources.kt"),
+]
+for source in profile_sources:
+    if not source.is_file():
+        raise SystemExit(f"permission-profile-source-missing:{source}")
+profile_text = "\n".join(source.read_text(encoding="utf-8") for source in profile_sources)
+for permission in sorted(permissions):
+    token = permission.removeprefix("android.permission.")
+    if f"Manifest.permission.{token}" not in profile_text:
+        raise SystemExit(f"manifest-permission-without-profile:{permission}")
+
 for forbidden in {
     "android.permission.WRITE_EXTERNAL_STORAGE",
     "android.permission.QUERY_ALL_PACKAGES",

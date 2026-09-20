@@ -13,41 +13,31 @@ internal class PrivatePermissionController(
     private val startupReady: () -> Boolean,
 ) {
     fun initialDataPermissionsToRequest(): List<String> =
-        initialDataSources().missingRuntimePermissions()
+        evaluate(initialDataProfile()).missingRuntimePermissions
 
-    fun allRuntimePermissionsToRequest(): List<String> {
-        if (!startupReady()) return emptyList()
-        return buildList {
-            addAll(initialDataSources().missingRuntimePermissions())
-            if (
-                application.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                add(Manifest.permission.RECORD_AUDIO)
-            }
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                application.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-            if (
-                Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU &&
-                application.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                add(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-        }.distinct().sorted()
+    fun runtimePermissionRequestPlan(): RuntimePermissionRequestPlan {
+        if (!startupReady()) {
+            return RuntimePermissionRequestPlan(emptySet(), emptyList())
+        }
+        val profiles = listOf(initialDataProfile(), interactionProfile())
+        val missing = profiles
+            .flatMap { evaluate(it).missingRuntimePermissions }
+            .distinct()
+            .sorted()
+        return RuntimePermissionRequestPlan(
+            profileIds = profiles.map { it.id }.toSet(),
+            permissions = missing,
+        )
     }
 
+    fun allRuntimePermissionsToRequest(): List<String> =
+        runtimePermissionRequestPlan().permissions
+
     fun hasBroadFileAccess(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
-            Environment.isExternalStorageManager()
+        broadFileEvaluation().state == PermissionProfileState.GRANTED
 
     fun shouldRequestBroadFileAccess(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || hasBroadFileAccess()) {
+        if (broadFileEvaluation().state != PermissionProfileState.OWNER_ACTION_REQUIRED) {
             return false
         }
         return !preferences().getBoolean(BROAD_FILE_ACCESS_REQUESTED, false)
@@ -61,14 +51,14 @@ internal class PrivatePermissionController(
     }
 
     fun shouldRequestInitialDataPermissions(): Boolean {
-        val sources = initialDataSources()
-        if (sources.missingRuntimePermissions().isEmpty()) return false
-        val schema = sources.permissionSchemaFingerprint()
+        val evaluation = evaluate(initialDataProfile())
+        if (evaluation.missingRuntimePermissions.isEmpty()) return false
+        val schema = initialDataSources().permissionSchemaFingerprint()
         return preferences().getString(INITIAL_DATA_PERMISSION_SCHEMA, null) != schema
     }
 
     fun shouldRequestAllRuntimePermissions(): Boolean {
-        if (allRuntimePermissionsToRequest().isEmpty()) return false
+        if (!runtimePermissionRequestPlan().required) return false
         return preferences().getString(ALL_RUNTIME_PERMISSION_SCHEMA, null) !=
             allRuntimePermissionSchema()
     }
@@ -92,6 +82,58 @@ internal class PrivatePermissionController(
             )
             .apply()
     }
+
+    fun declaredPermissionProfiles(): List<PermissionProfile> = listOf(
+        initialDataProfile(),
+        interactionProfile(),
+        broadFilesProfile(),
+        PrivatePermissionProfiles.infrastructure(
+            internetPermission = Manifest.permission.INTERNET,
+            receiveBootCompletedPermission = Manifest.permission.RECEIVE_BOOT_COMPLETED,
+        ),
+    )
+
+    private fun initialDataProfile(): PermissionProfile =
+        PrivatePermissionProfiles.initialData(
+            runtimePermissions = initialDataSources().requiredRuntimePermissions().toSet(),
+        )
+
+    private fun interactionProfile(): PermissionProfile =
+        PrivatePermissionProfiles.interaction(
+            recordAudioPermission = Manifest.permission.RECORD_AUDIO,
+            postNotificationsPermission =
+                Manifest.permission.POST_NOTIFICATIONS.takeIf {
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                },
+        )
+
+    private fun broadFilesProfile(): PermissionProfile =
+        PrivatePermissionProfiles.broadFiles(
+            manageExternalStoragePermission = Manifest.permission.MANAGE_EXTERNAL_STORAGE,
+        )
+
+    private fun broadFileEvaluation(): PermissionProfileEvaluation =
+        evaluate(broadFilesProfile())
+
+    private fun evaluate(profile: PermissionProfile): PermissionProfileEvaluation =
+        PermissionProfileEvaluator(
+            runtimePermissionGranted = { permission ->
+                application.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+            },
+            specialAccessSupported = { special ->
+                when (special) {
+                    PermissionSpecialAccess.BROAD_FILE_ACCESS ->
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                }
+            },
+            specialAccessGranted = { special ->
+                when (special) {
+                    PermissionSpecialAccess.BROAD_FILE_ACCESS ->
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+                            Environment.isExternalStorageManager()
+                }
+            },
+        ).evaluate(profile)
 
     private fun allRuntimePermissionSchema(): String = buildString {
         append(initialDataSources().permissionSchemaFingerprint())

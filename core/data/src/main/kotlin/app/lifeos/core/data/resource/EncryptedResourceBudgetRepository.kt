@@ -2,6 +2,7 @@ package app.lifeos.core.data.resource
 
 import android.content.Context
 import app.lifeos.core.data.security.EncryptedLedgerVaultSupport
+import app.lifeos.core.data.security.VaultAssociatedData
 import app.lifeos.core.runtime.resource.ResourceBudgetAccount
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountCodec
 import app.lifeos.core.runtime.resource.ResourceBudgetAccountId
@@ -80,14 +81,16 @@ class EncryptedResourceBudgetRepository(context: Context) : ResourceBudgetReposi
             target = file,
             maxPlaintextBytes = ResourceBudgetAccountCodec.MAX_PAYLOAD_BYTES,
         )
-        val plaintext = EncryptedLedgerVaultSupport.decrypt(
+        val decrypted = EncryptedLedgerVaultSupport.decryptPathBoundOrLegacy(
             container = container,
             key = key,
             maxPlaintextBytes = ResourceBudgetAccountCodec.MAX_PAYLOAD_BYTES,
+            associatedData = associatedData(file),
         )
-        return ResourceBudgetAccountCodec.decode(plaintext).also { account ->
-            require(account.id == expectedId) { "Resource budget file/content identity mismatch" }
-        }
+        val account = ResourceBudgetAccountCodec.decode(decrypted.plaintext)
+        require(account.id == expectedId) { "Resource budget file/content identity mismatch" }
+        if (decrypted.migratedFromUnboundLegacy) write(file, account)
+        return account
     }
 
     private fun write(file: File, account: ResourceBudgetAccount) {
@@ -96,9 +99,13 @@ class EncryptedResourceBudgetRepository(context: Context) : ResourceBudgetReposi
             plaintext = plaintext,
             key = key,
             maxPlaintextBytes = ResourceBudgetAccountCodec.MAX_PAYLOAD_BYTES,
+            associatedData = associatedData(file),
         )
         EncryptedLedgerVaultSupport.atomicWrite(file, container)
     }
+
+    private fun associatedData(file: File): ByteArray =
+        VaultAssociatedData.forPath("resource-budget/v2", directory, file)
 
     private fun accountFile(accountId: ResourceBudgetAccountId): File =
         directory.resolve("${sha256(accountId.value)}$ACCOUNT_SUFFIX")

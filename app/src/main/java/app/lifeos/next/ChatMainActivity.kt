@@ -137,12 +137,12 @@ class ChatMainActivity : ComponentActivity() {
         if (permissionSequenceStarted) return
         permissionSequenceStarted = true
 
-        val missingRuntime = owner.allRuntimePermissionsToRequest()
-        if (missingRuntime.isNotEmpty() && owner.shouldRequestAllRuntimePermissions()) {
+        val runtimeRequest = owner.runtimePermissionRequestPlan()
+        if (runtimeRequest.required && owner.shouldRequestAllRuntimePermissions()) {
             InitialCognitiveContextRuntimeRegistry.markWaitingForPermissions()
             lifecycleScope.launch {
                 awaitInitialBootstrap(owner)
-                runtimePermissions.launch(missingRuntime.toTypedArray())
+                runtimePermissions.launch(runtimeRequest.permissions.toTypedArray())
             }
             return
         }

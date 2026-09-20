@@ -2,6 +2,7 @@ package app.lifeos.core.data.policy
 
 import android.content.Context
 import app.lifeos.core.data.security.EncryptedLedgerVaultSupport
+import app.lifeos.core.data.security.VaultAssociatedData
 import app.lifeos.core.runtime.policy.OwnerPolicyEvent
 import app.lifeos.core.runtime.policy.OwnerPolicyEventLogCodec
 import app.lifeos.core.runtime.policy.OwnerPolicyRepository
@@ -133,13 +134,16 @@ class EncryptedOwnerPolicyRepository(context: Context) : OwnerPolicyRepository {
     }
 
     private fun readEvent(file: File): OwnerPolicyEvent {
-        val plaintext = decrypt(
+        val decrypted = decrypt(
             file = file,
             maxPlaintextBytes = OwnerPolicyEventLogCodec.MAX_PAYLOAD_BYTES,
         )
-        val event = OwnerPolicyEventLogCodec.decodeSegment(plaintext)
+        val event = OwnerPolicyEventLogCodec.decodeSegment(decrypted.plaintext)
         require(file == eventFile(event.revision)) {
             "Owner policy event segment/revision mismatch"
+        }
+        if (decrypted.migratedFromUnboundLegacy) {
+            writeEncrypted(file, decrypted.plaintext, OwnerPolicyEventLogCodec.MAX_PAYLOAD_BYTES)
         }
         return event
     }
@@ -154,13 +158,15 @@ class EncryptedOwnerPolicyRepository(context: Context) : OwnerPolicyRepository {
             decrypt(
                 file = legacyFile,
                 maxPlaintextBytes = OwnerPolicyEventLogCodec.MAX_PAYLOAD_BYTES,
-            )
+            ).plaintext
         )
 
     private fun readHead(): Long {
-        val bytes = decrypt(headFile, HEAD_PLAINTEXT_BYTES)
-        require(bytes.size == Long.SIZE_BYTES)
-        return ByteBuffer.wrap(bytes).long.also { require(it >= 0L) }
+        val decrypted = decrypt(headFile, HEAD_PLAINTEXT_BYTES)
+        require(decrypted.plaintext.size == Long.SIZE_BYTES)
+        val revision = ByteBuffer.wrap(decrypted.plaintext).long.also { require(it >= 0L) }
+        if (decrypted.migratedFromUnboundLegacy) writeHead(revision)
+        return revision
     }
 
     private fun writeHead(revision: Long) {
@@ -172,26 +178,29 @@ class EncryptedOwnerPolicyRepository(context: Context) : OwnerPolicyRepository {
         )
     }
 
-    private fun decrypt(file: File, maxPlaintextBytes: Int): ByteArray {
-        val container = EncryptedLedgerVaultSupport.readAtomic(
-            target = file,
-            maxPlaintextBytes = maxPlaintextBytes,
-        )
-        return EncryptedLedgerVaultSupport.decrypt(
-            container = container,
+    private fun decrypt(file: File, maxPlaintextBytes: Int) =
+        EncryptedLedgerVaultSupport.decryptPathBoundOrLegacy(
+            container = EncryptedLedgerVaultSupport.readAtomic(
+                target = file,
+                maxPlaintextBytes = maxPlaintextBytes,
+            ),
             key = key,
             maxPlaintextBytes = maxPlaintextBytes,
+            associatedData = associatedData(file),
         )
-    }
 
     private fun writeEncrypted(file: File, plaintext: ByteArray, maxPlaintextBytes: Int) {
         val container = EncryptedLedgerVaultSupport.encrypt(
             plaintext = plaintext,
             key = key,
             maxPlaintextBytes = maxPlaintextBytes,
+            associatedData = associatedData(file),
         )
         EncryptedLedgerVaultSupport.atomicWrite(file, container)
     }
+
+    private fun associatedData(file: File): ByteArray =
+        VaultAssociatedData.forPath("owner-policy/v2", directory, file)
 
     private fun eventFiles(): List<File> {
         ensureDirectory()
