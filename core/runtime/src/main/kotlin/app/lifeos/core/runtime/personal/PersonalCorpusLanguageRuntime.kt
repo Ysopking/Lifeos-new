@@ -291,7 +291,6 @@ class PersonalCorpusLanguageRuntime(
             if (intent !in SAFE_CORPUS_INTENTS) continue
             val quality = understood.goal.interpretationQuality
             if (
-                understood.goal.confidence < MIN_EXAMPLE_CONFIDENCE ||
                 quality.evidenceStrength < MIN_EXAMPLE_EVIDENCE ||
                 quality.contradictionCount > 0
             ) {
@@ -491,7 +490,6 @@ class PersonalCorpusLanguageRuntime(
         private const val MIN_ALIAS_LENGTH = 3
         private const val MAX_SURFACES_PER_TURN = 3
         private const val MIN_SHADOW_ALIAS_SEMANTIC_MASS = 1.25
-        private const val MIN_EXAMPLE_CONFIDENCE = 0.75
         private const val MIN_EXAMPLE_EVIDENCE = 0.65
         // A newly injected exact alias is field-backed rather than rule-backed, so its composite
         // GoalFrame confidence is intentionally lower than a built-in lexical rule. The separate
