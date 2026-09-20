@@ -25,6 +25,7 @@ internal fun LifeOsSystemOverview(
     model: LifeOsChatViewModel,
     ownerAttention: OwnerAttentionUiState,
     onOpenStorage: () -> Unit,
+    onOpenPersonalData: () -> Unit,
     onOpenAssets: () -> Unit,
     onOpenTools: () -> Unit,
     onOpenWhy: () -> Unit,
@@ -66,6 +67,11 @@ internal fun LifeOsSystemOverview(
             label = "Speicher",
             supporting = "Dateien, Bereinigung und LIFEOS-Papierkorb",
             onClick = onOpenStorage,
+        )
+        SystemNavigationRow(
+            label = "Persönliche Gespräche",
+            supporting = "WhatsApp- und Gemini-Exporte lokal prüfen und in den privaten Sprachkorpus importieren",
+            onClick = onOpenPersonalData,
         )
         SystemNavigationRow(
             label = "Freigaben",

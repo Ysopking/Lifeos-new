@@ -35,6 +35,7 @@ class ChatMainActivity : ComponentActivity() {
     private lateinit var decisionTraceModel: LifeOsDecisionTraceViewModel
     private lateinit var toolCenterModel: LifeOsToolCenterViewModel
     private lateinit var storageMaintenanceModel: StorageMaintenanceViewModel
+    private lateinit var personalConversationImportModel: PersonalConversationImportViewModel
 
     private var modelsReady by mutableStateOf(false)
 
@@ -98,6 +99,7 @@ class ChatMainActivity : ComponentActivity() {
                     decisionTraceModel = decisionTraceModel,
                     toolCenterModel = toolCenterModel,
                     storageMaintenanceModel = storageMaintenanceModel,
+                    personalConversationImportModel = personalConversationImportModel,
                     onRequestMicrophonePermission = {
                         microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
                     },
@@ -125,6 +127,7 @@ class ChatMainActivity : ComponentActivity() {
         decisionTraceModel = ViewModelProvider(this)[LifeOsDecisionTraceViewModel::class.java]
         toolCenterModel = ViewModelProvider(this)[LifeOsToolCenterViewModel::class.java]
         storageMaintenanceModel = ViewModelProvider(this)[StorageMaintenanceViewModel::class.java]
+        personalConversationImportModel = ViewModelProvider(this)[PersonalConversationImportViewModel::class.java]
         observeInitialCognitiveContext(owner)
         modelsReady = true
         startPermissionSequence(owner)
