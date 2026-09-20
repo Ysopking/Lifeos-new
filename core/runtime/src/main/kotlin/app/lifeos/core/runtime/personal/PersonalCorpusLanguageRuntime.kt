@@ -427,7 +427,6 @@ class PersonalCorpusLanguageRuntime(
     ): Boolean {
         if (candidate.goal.intent != hypothesis.targetIntent) return false
         if (candidate.goal.intent !in SAFE_CORPUS_INTENTS) return false
-        if (candidate.goal.confidence < MIN_SELECTED_CONFIDENCE) return false
         if (candidate.goal.interpretationQuality.contradictionCount > 0) return false
         if (
             !baseline.goal.semanticActionGraph.hasExecutableExternalSideEffect() &&
@@ -436,8 +435,16 @@ class PersonalCorpusLanguageRuntime(
             return false
         }
 
+        // UNKNOWN is a rule-layer fallback, not positive semantic authority. Its composite
+        // GoalFrame confidence includes default entity/reference/field support and therefore is
+        // not directly comparable to a field-backed exact alias. At this point the alias already
+        // passed corpus support/consistency, exact field contribution, protected-semantic holdout,
+        // safe-intent and no-new-side-effect gates, so an UNKNOWN baseline may be replaced without
+        // imposing the replacement confidence floor used for already-understood live turns.
+        if (baseline.goal.intent == IntentType.UNKNOWN) return true
+        if (candidate.goal.confidence < MIN_SELECTED_CONFIDENCE) return false
+
         return when {
-            baseline.goal.intent == IntentType.UNKNOWN -> true
             baseline.goal.intent == candidate.goal.intent ->
                 candidate.goal.confidence >= baseline.goal.confidence + MIN_CONFIDENCE_GAIN
             else ->
