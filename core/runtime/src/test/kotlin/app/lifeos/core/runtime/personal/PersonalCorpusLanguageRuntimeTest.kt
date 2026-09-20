@@ -42,8 +42,24 @@ class PersonalCorpusLanguageRuntimeTest {
 
         val versioned = VersionedLanguageRuntime()
         val before = versioned.current().lexicon.fingerprint
+        val corpus = PersonalCorpusRetriever(repository)
+        val matches = corpus.retrieveOwnerLanguageExamples("glorpax", now)
+        assertEquals(
+            4,
+            matches.size,
+            "owner corpus retrieval mismatch: " + matches.map { it.photon.tags },
+        )
+        val example = versioned.current().understanding.understand(matches.first().photon.content)
+        assertEquals(
+            IntentType.CONTINUE,
+            example.goal.intent,
+            "historical example not understood: intent=" + example.goal.intent +
+                " confidence=" + example.goal.confidence +
+                " quality=" + example.goal.interpretationQuality +
+                " field=" + example.linguisticField,
+        )
         val runtime = PersonalCorpusLanguageRuntime(
-            corpus = PersonalCorpusRetriever(repository),
+            corpus = corpus,
             runtime = versioned,
         )
 
@@ -53,7 +69,13 @@ class PersonalCorpusLanguageRuntimeTest {
             now = now,
         )
 
-        assertTrue(decision.usedCorpusShadow)
+        assertTrue(
+            decision.usedCorpusShadow,
+            "corpus shadow rejected: baseline=" + decision.baseline.goal.intent +
+                ":" + decision.baseline.goal.confidence +
+                " quality=" + decision.baseline.goal.interpretationQuality +
+                " hypothesis=" + decision.hypothesis,
+        )
         assertEquals(IntentType.CONTINUE, decision.understanding.goal.intent)
         assertNotEquals(IntentType.CONTINUE, decision.baseline.goal.intent)
         assertEquals(before, decision.baselineLexiconFingerprint)
