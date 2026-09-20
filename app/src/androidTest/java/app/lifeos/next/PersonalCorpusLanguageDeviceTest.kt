@@ -72,7 +72,8 @@ class PersonalCorpusLanguageDeviceTest {
                 submission.languageFailure ?: "Personal corpus language path did not understand turn",
                 submission.languageUnderstood,
             )
-            val understanding = assertNotNull(submission.understanding)
+            assertNotNull(submission.understanding)
+            val understanding = requireNotNull(submission.understanding)
             assertEquals(IntentType.CONTINUE, understanding.goal.intent)
             assertEquals(
                 beforeFingerprint,
