@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -178,10 +179,33 @@ void inverse_radiometry(
 #endif
 }
 
-bool require_capacity(JNIEnv* env, jobject buffer, jlong bytes, const char* message) {
-    if (buffer == nullptr || env->GetDirectBufferAddress(buffer) == nullptr || env->GetDirectBufferCapacity(buffer) < bytes) {
-        jclass exceptionClass = env->FindClass("java/lang/IllegalArgumentException");
+void throw_illegal_argument(JNIEnv* env, const char* message) {
+    if (env->ExceptionCheck()) return;
+    jclass exceptionClass = env->FindClass("java/lang/IllegalArgumentException");
+    if (exceptionClass != nullptr) {
         env->ThrowNew(exceptionClass, message);
+    }
+}
+
+bool checked_multiply(jlong left, jlong right, jlong* result) {
+    if (result == nullptr || left < 0 || right < 0) return false;
+    if (left != 0 && right > std::numeric_limits<jlong>::max() / left) return false;
+    *result = left * right;
+    return true;
+}
+
+bool require_capacity(JNIEnv* env, jobject buffer, jlong bytes, const char* message) {
+    if (env->ExceptionCheck()) return false;
+    if (bytes < 0 || buffer == nullptr) {
+        throw_illegal_argument(env, message);
+        return false;
+    }
+    void* address = env->GetDirectBufferAddress(buffer);
+    if (env->ExceptionCheck()) return false;
+    const jlong capacity = env->GetDirectBufferCapacity(buffer);
+    if (env->ExceptionCheck()) return false;
+    if (address == nullptr || capacity < 0 || capacity < bytes) {
+        throw_illegal_argument(env, message);
         return false;
     }
     return true;
@@ -204,14 +228,29 @@ Java_app_lifeos_core_image_nativebackend_NativeMmsiBridge_nativeInverseRadiometr
     jfloat ambientIntensity
 ) {
     if (pixelCount < 0) {
-        jclass exceptionClass = env->FindClass("java/lang/IllegalArgumentException");
-        env->ThrowNew(exceptionClass, "pixelCount must be non-negative");
+        throw_illegal_argument(env, "pixelCount must be non-negative");
         return;
     }
-    const jlong rgbBytes = static_cast<jlong>(pixelCount) * 3;
-    const jlong normalBytes = static_cast<jlong>(pixelCount) * 3 * sizeof(float);
-    const jlong roughnessBytes = static_cast<jlong>(pixelCount) * sizeof(float);
-    const jlong outputBytes = static_cast<jlong>(pixelCount) * 3 * sizeof(float);
+    if (!std::isfinite(sunX) || !std::isfinite(sunY) || !std::isfinite(sunZ) ||
+        !std::isfinite(sunIntensity) || !std::isfinite(ambientIntensity) ||
+        sunIntensity < 0.0f || ambientIntensity < 0.0f) {
+        throw_illegal_argument(env, "Native MMSI scalar inputs must be finite and intensities non-negative");
+        return;
+    }
+    if (pixelCount == 0) return;
+
+    jlong rgbBytes = 0;
+    jlong normalBytes = 0;
+    jlong roughnessBytes = 0;
+    jlong outputBytes = 0;
+    const jlong pixels = static_cast<jlong>(pixelCount);
+    if (!checked_multiply(pixels, 3, &rgbBytes) ||
+        !checked_multiply(pixels, static_cast<jlong>(3 * sizeof(float)), &normalBytes) ||
+        !checked_multiply(pixels, static_cast<jlong>(sizeof(float)), &roughnessBytes) ||
+        !checked_multiply(pixels, static_cast<jlong>(3 * sizeof(float)), &outputBytes)) {
+        throw_illegal_argument(env, "Native MMSI buffer byte count overflow");
+        return;
+    }
     if (!require_capacity(env, rgbBuffer, rgbBytes, "rgbBuffer must be direct and large enough") ||
         !require_capacity(env, normalBuffer, normalBytes, "normalBuffer must be direct and large enough") ||
         !require_capacity(env, roughnessBuffer, roughnessBytes, "roughnessBuffer must be direct and large enough") ||
@@ -223,6 +262,12 @@ Java_app_lifeos_core_image_nativebackend_NativeMmsiBridge_nativeInverseRadiometr
     auto* normals = static_cast<const float*>(env->GetDirectBufferAddress(normalBuffer));
     auto* roughness = static_cast<const float*>(env->GetDirectBufferAddress(roughnessBuffer));
     auto* output = static_cast<float*>(env->GetDirectBufferAddress(outputBuffer));
+    if (env->ExceptionCheck() || rgb == nullptr || normals == nullptr || roughness == nullptr || output == nullptr) {
+        if (!env->ExceptionCheck()) {
+            throw_illegal_argument(env, "Native MMSI direct buffer address unavailable");
+        }
+        return;
+    }
     const Context ctx{sunX, sunY, sunZ, sunIntensity, ambientIntensity};
     inverse_radiometry(rgb, normals, roughness, output, static_cast<std::size_t>(pixelCount), ctx);
 }

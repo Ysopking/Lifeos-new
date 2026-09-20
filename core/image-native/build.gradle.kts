@@ -23,4 +23,5 @@ android {
 
 dependencies {
     implementation(project(":core:image"))
+    testImplementation(kotlin("test-junit"))
 }
