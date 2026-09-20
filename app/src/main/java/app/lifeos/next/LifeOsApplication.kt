@@ -762,12 +762,6 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         }
     }
 
-    private fun allRuntimePermissionSchema(): String = buildString {
-        append(initialDataSources.permissionSchemaFingerprint())
-        append("|record-audio")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) append("|post-notifications")
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) append("|read-external-storage")
-    }
 
     private companion object {
         val LIVE_SOURCE_REFRESH_INTERVAL: Duration = Duration.ofMinutes(5)
