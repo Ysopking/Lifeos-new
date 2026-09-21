@@ -58,3 +58,7 @@ After implementation:
 1. `./gradlew :core:runtime-reasoning:test --tests 'app.lifeos.core.runtime.reasoning.OutcomeExpectationModelTest'`
 2. `./gradlew :core:runtime-reasoning:test`
 3. stacked CI only after B369/B370 promotion order.
+
+## Promotion run
+
+B371 is cleanly restacked on merged B370/main. This exact head is the promotion candidate for main-targeted CI.
