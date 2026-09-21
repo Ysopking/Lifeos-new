@@ -64,7 +64,8 @@ class ClarificationEngine {
             lattice.candidates.size > 1 &&
             !lattice.converged &&
             lattice.margin < 0.04 &&
-            graph.nodes.any { it.type == SemanticActionNodeType.ACTION }
+            graph.nodes.count { it.type == SemanticActionNodeType.ACTION } == 1 &&
+            graph.edges.isEmpty()
         ) {
             return ClarificationPlan(
                 required = true,
