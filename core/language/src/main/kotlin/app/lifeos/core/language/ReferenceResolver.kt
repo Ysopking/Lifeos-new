@@ -260,7 +260,6 @@ class ReferenceResolver {
                     expression = expression,
                     context = context,
                     indexScore = candidate.indexScore,
-                    discourse = discourse,
                 )
             }
             .filter { it.second > 0.0 }
@@ -298,6 +297,7 @@ class ReferenceResolver {
                     expression = expression,
                     context = context,
                     indexScore = candidate.indexScore,
+                    discourse = discourse,
                 )
             }
             .filter { it.second > 0.0 }
