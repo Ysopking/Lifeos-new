@@ -317,18 +317,44 @@ data class SemanticActionEdge(
     }
 }
 
+enum class SemanticActionGroupType {
+    SEQUENCE,
+    CONDITIONAL,
+    ALTERNATIVE,
+    PIPELINE,
+}
+
+data class SemanticActionGroup(
+    val id: String,
+    val type: SemanticActionGroupType,
+    val nodeIds: Set<SemanticNodeId>,
+    val entryNodeIds: Set<SemanticNodeId>,
+    val exitNodeIds: Set<SemanticNodeId>,
+) {
+    init {
+        require(id.isNotBlank())
+        require(nodeIds.isNotEmpty())
+        require(entryNodeIds.isNotEmpty())
+        require(exitNodeIds.isNotEmpty())
+        require(entryNodeIds.all { it in nodeIds })
+        require(exitNodeIds.all { it in nodeIds })
+    }
+}
+
 data class SemanticActionGraph(
     val nodes: List<SemanticActionNode>,
     val edges: List<SemanticActionEdge>,
     val scopes: List<SemanticScope>,
     val fingerprint: String,
     val operatorScopes: List<SemanticOperatorScope> = emptyList(),
+    val groups: List<SemanticActionGroup> = emptyList(),
 ) {
     init {
         require(nodes.map { it.id }.distinct().size == nodes.size)
         val ids = nodes.mapTo(linkedSetOf()) { it.id }
         require(edges.all { it.from in ids && it.to in ids })
         val edgeIds = edges.mapTo(linkedSetOf()) { it.id }
+        require(groups.all { group -> group.nodeIds.all { it in ids } })
         require(scopes.all { scope ->
             scope.targetNodeIds.all { it in ids } &&
                 scope.targets.all { target ->
