@@ -46,7 +46,7 @@ class ChatMainActivity : ComponentActivity() {
     private var awaitingPostPermissionRefresh: Boolean = false
 
     @Volatile
-    private var contextIngestionStarted: Boolean = false
+    private var lastConvergedAccess: DeviceAccessSnapshot? = null
 
     private val runtimePermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -78,6 +78,11 @@ class ChatMainActivity : ComponentActivity() {
     ) { granted ->
         if (::model.isInitialized) {
             model.onMicrophonePermissionResult(granted)
+        }
+        val owner = application as? LifeOsApplication
+            ?: return@registerForActivityResult
+        if (::accessConvergence.isInitialized) {
+            continueAccessConvergence(owner)
         }
     }
 
@@ -113,6 +118,14 @@ class ChatMainActivity : ComponentActivity() {
                     initializeRuntimeUi(owner)
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val owner = application as? LifeOsApplication ?: return
+        if (modelsReady && ::accessConvergence.isInitialized) {
+            continueAccessConvergence(owner)
         }
     }
 
@@ -173,8 +186,9 @@ class ChatMainActivity : ComponentActivity() {
     }
 
     private fun beginContextIngestion(owner: LifeOsApplication) {
-        if (contextIngestionStarted) return
-        contextIngestionStarted = true
+        val access = owner.deviceAccessSnapshot()
+        if (access == lastConvergedAccess) return
+        lastConvergedAccess = access
 
         permissionRefreshBaseline = owner.latestInitialDataBootstrap
         awaitingPostPermissionRefresh = true
