@@ -249,8 +249,6 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                 initialDataBootstrapFailure = failure
             },
         )
-        refreshInitialDataBootstrap()
-        refreshLiveSources()
     }
 
     fun refreshSelfObservation() {
@@ -273,26 +271,17 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         liveSourceController.refresh()
     }
 
-    fun initialDataPermissionsToRequest(): List<String> = permissionController.initialDataPermissionsToRequest()
-
-    fun allRuntimePermissionsToRequest(): List<String> = permissionController.allRuntimePermissionsToRequest()
-
     internal fun runtimePermissionRequestPlan(): RuntimePermissionRequestPlan =
         permissionController.runtimePermissionRequestPlan()
 
-    fun hasBroadFileAccess(): Boolean = permissionController.hasBroadFileAccess()
+    internal fun specialAccessRequestPlan(): SpecialAccessRequestPlan =
+        permissionController.specialAccessRequestPlan()
 
-    fun shouldRequestBroadFileAccess(): Boolean = permissionController.shouldRequestBroadFileAccess()
+    internal fun deviceAccessSnapshot(): DeviceAccessSnapshot =
+        permissionController.deviceAccessSnapshot()
 
-    fun markBroadFileAccessRequested() = permissionController.markBroadFileAccessRequested()
-
-    fun shouldRequestInitialDataPermissions(): Boolean = permissionController.shouldRequestInitialDataPermissions()
-
-    fun shouldRequestAllRuntimePermissions(): Boolean = permissionController.shouldRequestAllRuntimePermissions()
-
-    fun markInitialDataPermissionsRequested() = permissionController.markInitialDataPermissionsRequested()
-
-    fun markAllRuntimePermissionsRequested() = permissionController.markAllRuntimePermissionsRequested()
+    fun hasBroadFileAccess(): Boolean =
+        permissionController.hasBroadFileAccess()
 
     fun refreshInitialDataBootstrap() {
         if (!::initialDataController.isInitialized) return
