@@ -243,6 +243,7 @@ class LifeOsKernel internal constructor(
                 goal = context.goal,
                 sourcePhoton = context.sourcePhoton,
                 goalPhotonId = context.goalPhotonId,
+                boundResultPhoton = context.boundResultPhoton,
             )
         },
     )
