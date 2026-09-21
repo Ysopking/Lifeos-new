@@ -85,7 +85,7 @@ class WebCitationGraphBuilderTest {
     }
 
     @Test
-    fun `tampered source span fails closed`() = runTest {
+    fun `tampered claim candidate fails closed at immutable candidate boundary`() = runTest {
         val fixture = fixture("One exact source sentence.")
         val candidate = fixture.extraction.candidates.single()
 
