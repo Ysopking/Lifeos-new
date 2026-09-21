@@ -37,9 +37,9 @@ private fun UserMessage(
         horizontalArrangement = Arrangement.End,
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth(0.82f),
+            modifier = Modifier.fillMaxWidth(0.84f),
             shape = MaterialTheme.shapes.medium,
-            color = MaterialTheme.colorScheme.primaryContainer,
+            color = MaterialTheme.colorScheme.surfaceVariant,
         ) {
             event.text?.let { text ->
                 Text(
@@ -49,7 +49,7 @@ private fun UserMessage(
                         vertical = LifeOsTokens.Spacing.medium,
                     ),
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
@@ -67,11 +67,6 @@ private fun LifeOsMessage(
             .widthIn(max = LifeOsTokens.Layout.readingMaxWidth),
         verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.xSmall),
     ) {
-        Text(
-            text = "LIFEOS",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-        )
         event.text?.let { text ->
             Text(
                 text = text,

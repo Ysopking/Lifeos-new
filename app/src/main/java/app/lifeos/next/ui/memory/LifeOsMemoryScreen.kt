@@ -10,7 +10,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -19,6 +20,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lifeos.next.LifeOsMemoryViewModel
@@ -44,17 +46,23 @@ fun LifeOsMemoryScreen(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
         ) {
-            OutlinedTextField(
+            TextField(
                 value = state.query,
                 onValueChange = model::editQuery,
                 modifier = Modifier.weight(1f),
-                label = { Text("Gedächtnis durchsuchen") },
-                placeholder = { Text("Begriff, Quelle oder Thema") },
+                placeholder = { Text("Gedächtnis durchsuchen") },
                 singleLine = true,
+                shape = MaterialTheme.shapes.large,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                ),
             )
             Box {
                 TextButton(onClick = { viewMenuOpen = true }) {
-                    Text("Ansicht")
+                    Text(selected.menuLabel())
                 }
                 DropdownMenu(
                     expanded = viewMenuOpen,

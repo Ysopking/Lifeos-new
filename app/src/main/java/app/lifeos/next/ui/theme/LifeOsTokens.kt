@@ -14,37 +14,37 @@ object LifeOsTokens {
     }
 
     object Radius {
-        val small: Dp = 12.dp
-        val medium: Dp = 18.dp
-        val large: Dp = 24.dp
-        val composer: Dp = 26.dp
+        val small: Dp = 14.dp
+        val medium: Dp = 20.dp
+        val large: Dp = 28.dp
+        val composer: Dp = 28.dp
     }
 
     object Layout {
         val compactHorizontalPadding: Dp = 16.dp
-        val wideHorizontalPadding: Dp = 24.dp
-        val readingMaxWidth: Dp = 760.dp
+        val wideHorizontalPadding: Dp = 28.dp
+        val readingMaxWidth: Dp = 720.dp
         val workspaceMaxWidth: Dp = 1120.dp
         val inspectorWidth: Dp = 360.dp
-        val navigationRailWidth: Dp = 80.dp
+        val navigationRailWidth: Dp = 76.dp
     }
 
     object Size {
         val minimumTouchTarget: Dp = 48.dp
-        val navigationIcon: Dp = 24.dp
-        val actionIcon: Dp = 22.dp
+        val navigationIcon: Dp = 23.dp
+        val actionIcon: Dp = 21.dp
     }
 
     object Elevation {
-        val resting: Dp = 1.dp
-        val raised: Dp = 4.dp
-        val overlay: Dp = 8.dp
+        val resting: Dp = 0.dp
+        val raised: Dp = 1.dp
+        val overlay: Dp = 6.dp
     }
 
     object Alpha {
-        const val subtle: Float = 0.08f
-        const val muted: Float = 0.60f
-        const val strong: Float = 0.88f
+        const val subtle: Float = 0.06f
+        const val muted: Float = 0.62f
+        const val strong: Float = 0.90f
     }
 
     object Motion {

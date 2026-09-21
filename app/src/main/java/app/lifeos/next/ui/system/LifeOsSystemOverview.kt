@@ -41,44 +41,36 @@ internal fun LifeOsSystemOverview(
     )
 
     LifeOsContentFrame(modifier = modifier.fillMaxSize()) {
-        Column(
+        Text(
+            text = if (ownerAttention.hasAttention) {
+                "${ownerAttention.totalCount} Punkte brauchen dich."
+            } else {
+                "Alles Wichtige an einem Ort."
+            },
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = LifeOsTokens.Spacing.large),
-            verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.xSmall),
-        ) {
-            Text(
-                text = "LIFEOS",
-                style = MaterialTheme.typography.titleLarge,
-            )
-            Text(
-                text = if (ownerAttention.hasAttention) {
-                    "${ownerAttention.totalCount} Punkte brauchen deine Aufmerksamkeit"
-                } else {
-                    health.compactLabel
-                },
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        )
 
-        SystemSectionLabel("Daten & Zugriff")
+        SystemSectionLabel("Daten")
         SystemNavigationRow(
             label = "Speicher",
-            supporting = "Dateien, Bereinigung und LIFEOS-Papierkorb",
+            supporting = "Gerätespeicher, Dateien und Bereinigung",
             onClick = onOpenStorage,
         )
         SystemNavigationRow(
             label = "Persönliche Gespräche",
-            supporting = "WhatsApp- und Gemini-Exporte lokal prüfen und in den privaten Sprachkorpus importieren",
+            supporting = "Lokale Importe und persönliche Daten",
             onClick = onOpenPersonalData,
         )
         SystemNavigationRow(
             label = "Freigaben",
             supporting = if (ownerAttention.pendingAssetReviews > 0) {
-                "${ownerAttention.pendingAssetReviews} offene Freigaben warten auf deine Entscheidung"
+                "${ownerAttention.pendingAssetReviews} Entscheidungen warten auf dich"
             } else {
-                "Assets prüfen und Owner-Entscheidungen treffen"
+                "Offene Entscheidungen zu erzeugten Inhalten"
             },
             attentionCount = ownerAttention.pendingAssetReviews,
             onClick = onOpenAssets,
@@ -86,29 +78,29 @@ internal fun LifeOsSystemOverview(
 
         HorizontalDivider()
 
-        SystemSectionLabel("Kontrolle")
+        SystemSectionLabel("Verantwortung")
         SystemNavigationRow(
             label = "Tools",
             supporting = if (ownerAttention.toolActions > 0) {
-                "${ownerAttention.toolActions} Tool-Entscheidungen brauchen dich"
+                "${ownerAttention.toolActions} Entscheidungen warten auf dich"
             } else {
-                "Generierte Tools und ihr Lifecycle"
+                "Lokale Fähigkeiten verwalten"
             },
             attentionCount = ownerAttention.toolActions,
             onClick = onOpenTools,
         )
         SystemNavigationRow(
-            label = "Warum / Entscheidungen",
-            supporting = "Decision Trace und nachvollziehbare Gründe",
+            label = "Warum",
+            supporting = "Nachvollziehen, warum LIFEOS entschieden oder gehandelt hat",
             onClick = onOpenWhy,
         )
 
         HorizontalDivider()
 
-        SystemSectionLabel("Erweitert")
+        SystemSectionLabel("Details")
         SystemNavigationRow(
-            label = "Runtime-Diagnose",
-            supporting = health.summary,
+            label = "Systemzustand",
+            supporting = health.compactLabel,
             attentionCount = if (ownerAttention.runtimeNeedsAttention) 1 else 0,
             onClick = onOpenRuntime,
         )
@@ -140,6 +132,7 @@ private fun SystemNavigationRow(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         shape = MaterialTheme.shapes.small,
+        tonalElevation = LifeOsTokens.Elevation.resting,
     ) {
         Column(
             modifier = Modifier.padding(

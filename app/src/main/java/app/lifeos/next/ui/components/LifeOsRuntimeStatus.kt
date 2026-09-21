@@ -13,6 +13,8 @@ import androidx.compose.ui.unit.dp
 import app.lifeos.core.runtime.life.LifeOsReadinessSnapshot
 import app.lifeos.core.runtime.life.ReadinessState
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.ui.policy.LifeOsUxPolicy
+import app.lifeos.next.ui.policy.LifeOsUxPriority
 
 enum class RuntimeHealthLevel {
     STARTING,
@@ -198,50 +200,42 @@ fun LifeOsRuntimeAlert(
     onOpenDetails: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    when (model.level) {
-        RuntimeHealthLevel.READY,
-        RuntimeHealthLevel.STARTING -> Unit
+    val notice = LifeOsUxPolicy.runtimeNotice(model) ?: return
+    val isBlocking = notice.priority == LifeOsUxPriority.BLOCKING
 
-        RuntimeHealthLevel.VERIFYING -> TextButton(
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = if (isBlocking) {
+            MaterialTheme.colorScheme.errorContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        shape = MaterialTheme.shapes.medium,
+    ) {
+        TextButton(
             onClick = onOpenDetails,
-            modifier = modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(
-                text = model.compactLabel,
-                style = MaterialTheme.typography.labelLarge,
-            )
-        }
-
-        RuntimeHealthLevel.DEGRADED,
-        RuntimeHealthLevel.FAILED -> {
-            val containerColor = if (model.level == RuntimeHealthLevel.FAILED) {
-                MaterialTheme.colorScheme.errorContainer
-            } else {
-                MaterialTheme.colorScheme.secondaryContainer
-            }
-            Surface(
-                modifier = modifier.fillMaxWidth(),
-                color = containerColor,
-                shape = MaterialTheme.shapes.medium,
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp),
             ) {
-                TextButton(
-                    onClick = onOpenDetails,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = model.compactLabel,
-                            style = MaterialTheme.typography.labelLarge,
-                        )
-                        Text(
-                            text = model.summary,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
+                Text(
+                    text = notice.message,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (isBlocking) {
+                        MaterialTheme.colorScheme.onErrorContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                )
+                if (isBlocking) {
+                    Text(
+                        text = "Details öffnen",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
                 }
             }
         }

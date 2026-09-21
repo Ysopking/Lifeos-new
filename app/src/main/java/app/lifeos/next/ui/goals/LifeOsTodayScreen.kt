@@ -107,17 +107,17 @@ internal fun LifeOsTodayScreen(
                     verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
                 ) {
                     section(
-                        title = "JETZT",
+                        title = "Jetzt",
                         sectionItems = now,
                         onOpenPlan = onOpenPlan,
                     )
                     section(
-                        title = "SPÄTER",
+                        title = "Später",
                         sectionItems = later,
                         onOpenPlan = onOpenPlan,
                     )
                     section(
-                        title = "BRAUCHT DICH",
+                        title = "Braucht dich",
                         sectionItems = attention,
                         onOpenPlan = onOpenPlan,
                     )

@@ -4,9 +4,11 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -21,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import app.lifeos.next.LifeOsChatViewModel
 import app.lifeos.next.LifeOsDecisionTraceViewModel
 import app.lifeos.next.LifeOsToolCenterViewModel
@@ -156,7 +159,6 @@ private fun SystemDetailPage(
                     horizontal = LifeOsTokens.Spacing.small,
                     vertical = LifeOsTokens.Spacing.xSmall,
                 ),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(
@@ -173,8 +175,10 @@ private fun SystemDetailPage(
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(LifeOsTokens.Spacing.medium),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f),
             )
+            Spacer(Modifier.width(LifeOsTokens.Size.minimumTouchTarget))
         }
         content(Modifier.fillMaxSize())
     }
