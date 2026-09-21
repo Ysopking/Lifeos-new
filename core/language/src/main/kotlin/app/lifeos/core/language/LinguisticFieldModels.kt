@@ -43,6 +43,7 @@ data class LinguisticConcept(
     val id: String,
     val canonical: String,
     val variants: Set<String>,
+    val phraseVariants: Set<String> = emptySet(),
     val semanticTag: String,
     val entityType: EntityType? = null,
     val intentBias: Map<IntentType, Double> = emptyMap(),
@@ -59,6 +60,14 @@ data class LinguisticConcept(
     }
 
     val allForms: Set<String> = (variants + canonical).map(::normalizeFieldText).toSet()
+    val allPhraseForms: Set<String> = phraseVariants
+        .map { phrase ->
+            phrase.trim()
+                .lowercase()
+                .replace(Regex("\\s+"), " ")
+        }
+        .filter { it.isNotBlank() }
+        .toSet()
 }
 
 data class LinguisticFieldCandidate(
