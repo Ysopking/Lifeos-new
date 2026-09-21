@@ -15,6 +15,7 @@ include(
     ":core:runtime-deepsearch",
     ":core:runtime-buildstudio",
     ":core:runtime-personal",
+    ":core:runtime-reasoning",
     ":core:reasoning",
     ":core:data",
     ":core:image",

@@ -55,11 +55,11 @@ step "gate 01: core model tests"
 step "gate 02: core field tests"
 ./gradlew :core:field:test --stacktrace
 
-step "gate 02a: core reasoning tests"
-./gradlew :core:reasoning:test --stacktrace
-
 step "gate 03: core runtime tests"
 ./gradlew :core:runtime:test --stacktrace
+
+step "gate 03r: runtime-reasoning unit tests"
+./gradlew :core:runtime-reasoning:test --stacktrace
 
 step "gate 03a: runtime-contracts unit tests"
 ./gradlew :core:runtime-contracts:test --stacktrace

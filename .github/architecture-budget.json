@@ -73,6 +73,10 @@
       ":core:field",
       ":core:language",
       ":core:model"
+    ],
+    "core/runtime-reasoning/build.gradle.kts": [
+      ":core:reasoning",
+      ":core:runtime"
     ]
   },
   "forbidden_runtime_package_prefixes": [
