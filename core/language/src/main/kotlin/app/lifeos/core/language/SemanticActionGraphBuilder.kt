@@ -5,6 +5,7 @@ import app.lifeos.core.model.StableCognitiveIds
 class SemanticActionGraphBuilder(
     private val contracts: PredicateContractRegistry = PredicateContractRegistry(),
     private val scopeEngine: TargetBoundScopeEngine = TargetBoundScopeEngine(),
+    private val scopeCueDetector: ScopeCueDetectorV2 = ScopeCueDetectorV2(),
 ) {
     fun build(
         utterance: NormalizedUtterance,
@@ -166,6 +167,14 @@ class SemanticActionGraphBuilder(
             }
             .sortedWith(compareBy<SemanticScope> { it.span.start }.thenBy { it.type.name })
 
+        val operatorScopes = semanticGraph.clauses
+            .flatMap { clause -> scopeCueDetector.detect(utterance, clause) }
+            .sortedWith(
+                compareBy<SemanticOperatorScope> { it.span.start }
+                    .thenBy { it.type.name }
+                    .thenBy { it.cue }
+            )
+
         val fingerprint = StableCognitiveIds.fingerprint(
             "semantic-action-graph/v1",
             semanticGraph.fingerprint,
@@ -214,6 +223,14 @@ class SemanticActionGraphBuilder(
                             )
                         }
                 }
+                operatorScopes.forEach { operator ->
+                    add(
+                        "operator-scope:" + operator.type.name + ":" +
+                            operator.span.start + ":" +
+                            operator.span.endExclusive + ":" +
+                            operator.cue
+                    )
+                }
             }.toTypedArray(),
         )
         return SemanticActionGraph(
@@ -221,6 +238,7 @@ class SemanticActionGraphBuilder(
             edges = edges,
             scopes = scopes,
             fingerprint = fingerprint,
+            operatorScopes = operatorScopes,
         )
     }
 
