@@ -38,3 +38,7 @@ B369 remains stacked/draft behind B368.
 ## Module placement
 
 B369 starts `:core:runtime-reasoning`, depending on `:core:reasoning` and existing `:core:runtime`; this keeps simulation orchestration out of the 505-file runtime monolith while reusing the existing counterfactual World Formula runtime.
+
+## Promotion run
+
+B369 is cleanly restacked on merged B368/main. This exact head is the promotion candidate for main-targeted CI, including the runtime-reasoning module gate.
