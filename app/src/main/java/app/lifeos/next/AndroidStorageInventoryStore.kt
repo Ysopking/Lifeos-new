@@ -433,7 +433,7 @@ internal class AndroidStorageInventoryStore(
         return loadInternal(readableDatabase, volumeId, relativePath)
     }
 
-    fun pruneChangesThrough(revisionInclusive: Long): Int {
+    override fun pruneChangesThrough(revisionInclusive: Long): Int {
         require(revisionInclusive >= 0L)
         if (revisionInclusive == 0L) return 0
         return writableDatabase.delete(
@@ -443,7 +443,7 @@ internal class AndroidStorageInventoryStore(
         )
     }
 
-    fun currentChangeRevision(): Long =
+    override fun currentChangeRevision(): Long =
         readableDatabase.rawQuery(
             "SELECT COALESCE(MAX($CHANGE_COL_REVISION), 0) FROM $CHANGE_TABLE",
             null,
