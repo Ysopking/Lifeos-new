@@ -106,3 +106,8 @@ After implementation:
 2. `./gradlew :core:runtime-web:test`
 3. Core Fast.
 4. After B380/B391 promotion, clean restack on accepted main and rerun Debug / Recovery / Product Gold before merge.
+
+## Promotion run
+
+- Retargeted to `main` after B391 merge commit `8c336eeae6bbe28f1609e3b14bcbb05109d3bf2d`.
+- This documentation-only commit triggers exact-head promotion CI without changing B392 production/test semantics.
