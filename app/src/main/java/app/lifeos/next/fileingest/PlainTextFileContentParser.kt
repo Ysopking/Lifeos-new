@@ -27,14 +27,15 @@ internal class PlainTextFileContentParser : FileContentParser {
         return runCatching {
             file.inputStream().buffered().use { input ->
                 val bounded = input.readBounded(maxOutputBytes)
-                val text = bounded.bytes
+                val decoded = bounded.bytes
                     .toString(Charsets.UTF_8)
                     .replace("\u0000", "")
                     .trim()
+                val (text, outputTruncated) = truncateUtf8(decoded, maxOutputBytes)
                 FileContentExtraction(
                     parserId = parserId,
                     parserVersion = parserVersion,
-                    state = if (bounded.truncated) {
+                    state = if (bounded.truncated || outputTruncated) {
                         FileDecodeState.TRUNCATED
                     } else {
                         FileDecodeState.DECODED
@@ -44,6 +45,21 @@ internal class PlainTextFileContentParser : FileContentParser {
                 )
             }
         }.getOrElse { failed() }
+    }
+
+    private fun truncateUtf8(value: String, maxBytes: Int): Pair<String, Boolean> {
+        if (value.toByteArray(Charsets.UTF_8).size <= maxBytes) return value to false
+        var low = 0
+        var high = value.length
+        while (low < high) {
+            val mid = (low + high + 1) ushr 1
+            if (value.substring(0, mid).toByteArray(Charsets.UTF_8).size <= maxBytes) {
+                low = mid
+            } else {
+                high = mid - 1
+            }
+        }
+        return value.substring(0, low).trimEnd() to true
     }
 
     private fun failed(): FileContentExtraction =
