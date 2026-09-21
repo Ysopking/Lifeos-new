@@ -34,7 +34,13 @@ class PredicateFrameParser(
             val predicateTokenIndex = clause.tokenStart + occurrence.localTokenIndex
             val nextPredicateTokenIndex = occurrences
                 .getOrNull(occurrenceIndex + 1)
-                ?.let { clause.tokenStart + it.localTokenIndex }
+                ?.let { next ->
+                    maxOf(
+                        predicateTokenIndex + 1,
+                        clause.tokenStart + next.localTokenIndex,
+                    )
+                }
+                ?.coerceAtMost(clause.tokenEndExclusive)
                 ?: clause.tokenEndExclusive
             val nodeId = SemanticNodeId.create(
                 "predicate-frame/v2",
