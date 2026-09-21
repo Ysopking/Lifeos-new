@@ -165,6 +165,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             canRunStorageIntelligence = { hasBroadFileAccess() },
             onStorageSnapshot = { snapshot ->
                 latestStorageIntelligence = snapshot
+                if (::liveSourceController.isInitialized) {
+                    liveSourceController.refresh()
+                }
             },
             onStorageFailure = { failure ->
                 storageIntelligenceFailure = failure
@@ -243,7 +246,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         initialDataBootstrap = InitialDataBootstrapRuntime(
             photons = lifePhotonRepository,
             memory = lifeMemoryRuntime,
-            sources = initialDataSources.sources + AndroidSharedFilesInitialDataSource(this),
+            sources = initialDataSources.sources,
         )
         initialDataController = InitialDataProcessController(
             bootstrap = { initialDataBootstrap },
