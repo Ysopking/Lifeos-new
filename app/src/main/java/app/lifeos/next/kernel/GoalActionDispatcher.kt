@@ -98,9 +98,26 @@ class GoalActionDispatcher(
         val durablePermit = when (val admission = durableRuntime?.prepare(context)) {
             null -> null
             is DurableGoalPlanAdmission.Ready -> admission.permit
-            is DurableGoalPlanAdmission.Completed -> return GoalActionDispatchResult(
-                recoveredOutcome = admission.outcome,
-            )
+            is DurableGoalPlanAdmission.Completed -> {
+                val recovered = admission.outcome
+                    ?: return blocked(
+                        context.goal.intent,
+                        "durable-plan-completed-without-recoverable-outcome",
+                    )
+                if (
+                    context.goal.intent == IntentType.COMMUNICATE &&
+                    context.externalActionContract == null
+                ) {
+                    // Local communication preparation is pure selection: it opens no chooser and
+                    // performs no external effect. Rehydrate the typed preparation for the caller
+                    // while keeping the already persisted durable outcome authoritative.
+                    return GoalActionDispatchResult(
+                        localCommunication = prepareCommunication(context),
+                        recoveredOutcome = recovered,
+                    )
+                }
+                return GoalActionDispatchResult(recoveredOutcome = recovered)
+            }
             is DurableGoalPlanAdmission.Blocked -> return blocked(context.goal.intent, admission.reason)
         }
 
