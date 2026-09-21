@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -41,12 +42,19 @@ internal class LiveSourceProcessController(
         health = HealthGraphLiveSourceHealthReporter(healthGraph),
     )
 
+    private val refreshSignals = Channel<Unit>(Channel.CONFLATED)
+    private val refreshWorker = scope.launch {
+        for (signal in refreshSignals) {
+            syncOnce()
+        }
+    }
     private var refreshJob: Job? = null
 
     fun refresh() {
-        scope.launch {
-            syncOnce()
+        check(refreshWorker.isActive) {
+            "Live-source refresh worker is not active"
         }
+        refreshSignals.trySend(Unit)
     }
 
     fun startContinuousRefresh() {
@@ -54,7 +62,7 @@ internal class LiveSourceProcessController(
         refreshJob = scope.launch {
             while (currentCoroutineContext().isActive) {
                 delay(refreshInterval.toMillis())
-                syncOnce()
+                refreshSignals.send(Unit)
             }
         }
     }

@@ -433,7 +433,7 @@ internal class AndroidStorageInventoryStore(
         return loadInternal(readableDatabase, volumeId, relativePath)
     }
 
-    fun pruneChangesThrough(revisionInclusive: Long): Int {
+    override fun pruneChangesThrough(revisionInclusive: Long): Int {
         require(revisionInclusive >= 0L)
         if (revisionInclusive == 0L) return 0
         return writableDatabase.delete(
@@ -443,7 +443,7 @@ internal class AndroidStorageInventoryStore(
         )
     }
 
-    fun currentChangeRevision(): Long =
+    override fun currentChangeRevision(): Long =
         readableDatabase.rawQuery(
             "SELECT COALESCE(MAX($CHANGE_COL_REVISION), 0) FROM $CHANGE_TABLE",
             null,
@@ -469,27 +469,31 @@ internal class AndroidStorageInventoryStore(
             "$CHANGE_COL_REVISION ASC",
             limit.toString(),
         ).use { cursor ->
-            while (cursor.moveToNext()) {
-                out += StorageChangeEntry(
-                    revision = cursor.getLong(cursor.getColumnIndexOrThrow(CHANGE_COL_REVISION)),
-                    volumeId = cursor.getString(cursor.getColumnIndexOrThrow(CHANGE_COL_VOLUME)),
-                    relativePath = cursor.getString(cursor.getColumnIndexOrThrow(CHANGE_COL_PATH)),
-                    kind = SourceDeltaKind.valueOf(
-                        cursor.getString(cursor.getColumnIndexOrThrow(CHANGE_COL_KIND))
-                    ),
-                    previousFingerprint = cursor.getStringOrNull(
-                        cursor.getColumnIndexOrThrow(CHANGE_COL_PREVIOUS)
-                    ),
-                    newFingerprint = cursor.getStringOrNull(
-                        cursor.getColumnIndexOrThrow(CHANGE_COL_NEW)
-                    ),
-                    observedAtMillis = cursor.getLong(
-                        cursor.getColumnIndexOrThrow(CHANGE_COL_OBSERVED)
-                    ),
-                )
-            }
+            while (cursor.moveToNext()) out += cursor.toChangeEntry()
         }
         return out
+    }
+
+    override fun loadChange(
+        revision: Long,
+    ): StorageChangeEntry? {
+        require(revision > 0L)
+        readableDatabase.query(
+            CHANGE_TABLE,
+            CHANGE_COLUMNS,
+            "$CHANGE_COL_REVISION=?",
+            arrayOf(revision.toString()),
+            null,
+            null,
+            null,
+            "1",
+        ).use { cursor ->
+            return if (cursor.moveToFirst()) {
+                cursor.toChangeEntry()
+            } else {
+                null
+            }
+        }
     }
 
     fun summary(): StorageInventorySummary {
@@ -570,6 +574,25 @@ internal class AndroidStorageInventoryStore(
             return if (cursor.moveToFirst()) cursor.toEntry() else null
         }
     }
+
+    private fun android.database.Cursor.toChangeEntry(): StorageChangeEntry =
+        StorageChangeEntry(
+            revision = getLong(getColumnIndexOrThrow(CHANGE_COL_REVISION)),
+            volumeId = getString(getColumnIndexOrThrow(CHANGE_COL_VOLUME)),
+            relativePath = getString(getColumnIndexOrThrow(CHANGE_COL_PATH)),
+            kind = SourceDeltaKind.valueOf(
+                getString(getColumnIndexOrThrow(CHANGE_COL_KIND))
+            ),
+            previousFingerprint = getStringOrNull(
+                getColumnIndexOrThrow(CHANGE_COL_PREVIOUS)
+            ),
+            newFingerprint = getStringOrNull(
+                getColumnIndexOrThrow(CHANGE_COL_NEW)
+            ),
+            observedAtMillis = getLong(
+                getColumnIndexOrThrow(CHANGE_COL_OBSERVED)
+            ),
+        )
 
     private fun android.database.Cursor.toEntry(): StorageInventoryEntry = StorageInventoryEntry(
         volumeId = getString(getColumnIndexOrThrow(COL_VOLUME)),

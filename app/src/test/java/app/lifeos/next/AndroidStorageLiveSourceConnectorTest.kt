@@ -78,6 +78,24 @@ class AndroidStorageLiveSourceConnectorTest {
     }
 
     @Test
+    fun `storage external identity is bounded opaque and not the file path`() = runBlocking {
+        val path = "Documents/" + "very-private-name-".repeat(300) + ".txt"
+        val journal = FakeJournal(
+            changes = listOf(
+                change(3L, path, SourceDeltaKind.CREATED),
+            ),
+        )
+        val connector = connector(journal)
+
+        val delta = connector.changesAfter(SourceCursor("0")).deltas.single()
+
+        assertTrue(delta.externalKey.startsWith("storage-"))
+        assertTrue(delta.externalKey.length < 128)
+        assertTrue(!delta.externalKey.contains("very-private-name"))
+        assertEquals("storage-change:3", delta.deltaId)
+    }
+
+    @Test
     fun `deleted storage event publishes delete without payload`() = runBlocking {
         val journal = FakeJournal(
             changes = listOf(
@@ -179,6 +197,18 @@ class AndroidStorageLiveSourceConnectorTest {
                 .sortedBy { it.revision }
                 .take(limit)
         }
+
+        override fun loadChange(
+            revision: Long,
+        ): StorageChangeEntry? =
+            changes.firstOrNull { it.revision == revision }
+
+        override fun currentChangeRevision(): Long =
+            changes.maxOfOrNull { it.revision } ?: 0L
+
+        override fun pruneChangesThrough(
+            revisionInclusive: Long,
+        ): Int = 0
     }
 
     private class FakeStatusSource(
