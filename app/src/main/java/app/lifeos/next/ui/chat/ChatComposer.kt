@@ -30,10 +30,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import app.lifeos.next.R
-import app.lifeos.next.kernel.InitialCognitiveContextPhase
 import app.lifeos.next.kernel.InitialCognitiveContextReadiness
 import app.lifeos.next.kernel.InitialCognitiveContextRuntimeRegistry
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.ui.policy.LifeOsUxPolicy
+import app.lifeos.next.ui.policy.LifeOsUxPriority
 import app.lifeos.next.ui.theme.LifeOsTokens
 
 @Composable
@@ -63,20 +64,18 @@ fun ChatComposer(
         voice = voice,
     )
     val editorEnabled = cognitiveContext.contextReady && !processing.inFlight
+    val contextNotice = LifeOsUxPolicy.contextNotice(cognitiveContext)
+    val processingNotice = LifeOsUxPolicy.processingNotice(processing)
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
     ) {
-        if (
-            cognitiveContext.phase == InitialCognitiveContextPhase.WAITING_FOR_PERMISSIONS ||
-            cognitiveContext.phase == InitialCognitiveContextPhase.PARTIAL ||
-            cognitiveContext.phase == InitialCognitiveContextPhase.FAILED
-        ) {
+        contextNotice?.let { notice ->
             Text(
-                text = cognitiveContextStatus(cognitiveContext),
+                text = notice.message,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (cognitiveContext.phase == InitialCognitiveContextPhase.FAILED) {
+                color = if (notice.priority == LifeOsUxPriority.BLOCKING) {
                     MaterialTheme.colorScheme.error
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -105,7 +104,7 @@ fun ChatComposer(
                             text = if (cognitiveContext.contextReady) {
                                 "Frag LIFEOS …"
                             } else {
-                                "Gedächtnis wird vorbereitet …"
+                                "Wird vorbereitet …"
                             },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -245,34 +244,13 @@ fun ChatComposer(
                 )
             }
 
-        ChatComposerPolicy.statusLabel(processing)?.let { status ->
+        processingNotice?.let { notice ->
             Text(
-                text = status,
+                text = notice.message,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (processing.phase == ChatTurnPhase.FAILED) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                color = MaterialTheme.colorScheme.error,
             )
         }
     }
 }
 
-private fun cognitiveContextStatus(context: InitialCognitiveContextReadiness): String =
-    when (context.phase) {
-        InitialCognitiveContextPhase.PREPARING -> "Kognitiver Kontext wird vorbereitet …"
-        InitialCognitiveContextPhase.WAITING_FOR_PERMISSIONS ->
-            "Erststart: Datenfreigaben werden geprüft …"
-        InitialCognitiveContextPhase.BUILDING_MEMORY ->
-            "Daten werden eingelesen und das Gedächtnis wird aufgebaut …"
-        InitialCognitiveContextPhase.PARTIAL -> buildString {
-            append("Gedächtnis ist mit Teilkontext bereit")
-            val missing = context.unauthorizedSources + context.unavailableSources
-            if (missing > 0) append(" · $missing Quelle(n) fehlen")
-            append('.')
-        }
-        InitialCognitiveContextPhase.FAILED ->
-            "Gedächtnis konnte nicht aufgebaut werden: ${context.failure.orEmpty()}"
-        InitialCognitiveContextPhase.READY -> "Gedächtnis bereit."
-    }
