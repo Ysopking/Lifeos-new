@@ -42,6 +42,15 @@ internal data class StorageInventoryEntry(
         suspectedEncrypted = suspectedEncrypted,
         contentFingerprint = contentFingerprint,
     )
+
+    val metadataStateFingerprint: String
+        get() = StableCognitiveIds.fingerprint(
+            "android-storage-live-state/v1",
+            sizeBytes.toString(),
+            modifiedAtMillis.toString(),
+            category.name,
+            suspectedEncrypted.toString(),
+        )
 }
 
 internal data class StorageChangeEntry(
@@ -424,9 +433,6 @@ internal class AndroidStorageInventoryStore(
         return loadInternal(readableDatabase, volumeId, relativePath)
     }
 
-    fun metadataStateFingerprint(entry: StorageInventoryEntry): String =
-        metadataFingerprint(entry)
-
     fun pruneChangesThrough(revisionInclusive: Long): Int {
         require(revisionInclusive >= 0L)
         if (revisionInclusive == 0L) return 0
@@ -531,12 +537,7 @@ internal class AndroidStorageInventoryStore(
     }
 
     private fun metadataFingerprint(entry: StorageInventoryEntry): String =
-        metadataFingerprint(
-            sizeBytes = entry.sizeBytes,
-            modifiedAtMillis = entry.modifiedAtMillis,
-            category = entry.category,
-            suspectedEncrypted = entry.suspectedEncrypted,
-        )
+        entry.metadataStateFingerprint
 
     private fun metadataFingerprint(
         sizeBytes: Long,
