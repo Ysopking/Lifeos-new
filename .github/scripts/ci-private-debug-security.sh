@@ -106,8 +106,12 @@ if grep -Fq 'android.permission.MANAGE_EXTERNAL_STORAGE' app/src/main/AndroidMan
     echo "broad-storage-without-runtime-authorization-check" >&2
     exit 1
   }
-  grep -Fq 'AndroidSharedFilesInitialDataSource(this)' app/src/main/java/app/lifeos/next/LifeOsApplication.kt || {
-    echo "broad-storage-without-productive-initial-data-source" >&2
+  grep -Fq 'AndroidStorageLiveSourceConnector' app/src/main/java/app/lifeos/next/AndroidLiveSourceConnectors.kt || {
+    echo "broad-storage-without-productive-semantic-file-source" >&2
+    exit 1
+  }
+  grep -Fq 'refreshStorageIntelligence()' app/src/main/java/app/lifeos/next/LifeOsApplication.kt || {
+    echo "broad-storage-without-automatic-storage-refresh" >&2
     exit 1
   }
 fi
