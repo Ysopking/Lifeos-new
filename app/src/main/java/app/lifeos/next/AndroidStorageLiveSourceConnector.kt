@@ -157,7 +157,7 @@ internal class AndroidStorageLiveSourceConnector(
 
     override suspend fun project(
         delta: SourceDelta,
-    ): LiveDataDelta {
+    ): LiveDataDelta? {
         require(delta.sourceId == sourceId)
         val observedAt = now()
 
@@ -169,11 +169,21 @@ internal class AndroidStorageLiveSourceConnector(
             decodeExternalKey(delta.externalKey)
         val entry =
             inventory.load(volumeId, relativePath)
-                ?: return deleteDelta(delta, observedAt)
+                ?: return null
 
         val file = File(entry.absolutePath)
-        if (!file.isFile || !file.canRead()) {
-            return deleteDelta(delta, observedAt)
+        if (!file.isFile || !file.canRead()) return null
+        if (
+            file.length().coerceAtLeast(0L) != entry.sizeBytes ||
+            file.lastModified().coerceAtLeast(0L) != entry.modifiedAtMillis
+        ) {
+            return null
+        }
+        if (
+            delta.newFingerprint != null &&
+            delta.newFingerprint != entry.metadataStateFingerprint
+        ) {
+            return null
         }
 
         val classification =
@@ -182,6 +192,13 @@ internal class AndroidStorageLiveSourceConnector(
                 displayName = file.name,
                 mimeType = null,
             )
+
+        if (
+            classification.category != entry.category ||
+            classification.suspectedEncrypted != entry.suspectedEncrypted
+        ) {
+            return null
+        }
 
         val extraction = parsers.extract(
             file = file,
