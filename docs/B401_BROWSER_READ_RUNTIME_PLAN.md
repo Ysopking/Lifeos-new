@@ -2,6 +2,7 @@
 
 Base head: `67fe85c8ac1cf9f7bfb949766a894ca69a8e82d7`
 Branch: `b401-browser-read-runtime-v1`
+Promotion gate restack: exact main `67fe85c8ac1cf9f7bfb949766a894ca69a8e82d7`
 Module: `:core:runtime-web`
 
 ## Reuse / non-duplication contract
