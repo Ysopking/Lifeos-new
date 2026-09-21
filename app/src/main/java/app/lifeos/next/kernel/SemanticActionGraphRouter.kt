@@ -405,7 +405,17 @@ class SemanticActionGraphRouter(
         append(":transform=").append(result.localImageTransform?.let { it::class.simpleName } ?: "none")
         append(":schedule=").append(result.localSchedule?.let { it::class.simpleName } ?: "none")
         append(":communication=")
-            .append(result.localCommunication?.let { it::class.simpleName } ?: "none")
+            .append(
+                when (val communication = result.localCommunication) {
+                    is LocalCommunicationExecutionResult.Blocked ->
+                        "Blocked(" + communication.reason + ")"
+                    is LocalCommunicationExecutionResult.Failed ->
+                        "Failed(" + communication.message + ")"
+                    is LocalCommunicationExecutionResult.Prepared ->
+                        "Prepared(" + communication.share.target.id.value + ")"
+                    null -> "none"
+                }
+            )
         append(":external=").append(result.externalEffect?.state?.name ?: "none")
         append(":recovered=").append(result.recoveredOutcome?.id?.value ?: "none")
     }
