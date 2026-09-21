@@ -70,6 +70,9 @@ step "gate 03a2: runtime-web unit tests"
 step "gate 03b: runtime-deepsearch unit tests"
 ./gradlew :core:runtime-deepsearch:test --stacktrace
 
+step "gate 03b2: runtime-research unit tests"
+./gradlew :core:runtime-research:test --stacktrace
+
 step "gate 03c: runtime-buildstudio unit tests"
 ./gradlew :core:runtime-buildstudio:test --stacktrace
 
