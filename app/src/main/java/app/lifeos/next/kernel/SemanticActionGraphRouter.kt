@@ -314,12 +314,8 @@ class SemanticActionGraphRouter(
             ambiguities = base.ambiguities.filterNot { ambiguity ->
                 ambiguity.code in NODE_RESOLVED_AMBIGUITIES ||
                     (
-                        dependencyRawText != null &&
-                            ambiguity.code in RESULT_DEPENDENCY_RESOLVED_AMBIGUITIES &&
-                            ambiguity.message.contains(
-                                "'$dependencyRawText'",
-                                ignoreCase = true,
-                            )
+                        !updatedNode.unresolvedReference &&
+                            ambiguity.code in RESULT_DEPENDENCY_RESOLVED_AMBIGUITIES
                     )
             },
             semanticActionGraph = nodeGraph,
