@@ -59,3 +59,7 @@ After implementation:
 1. `./gradlew :core:runtime-reasoning:test --tests 'app.lifeos.core.runtime.reasoning.FailureLearningEngineTest'`
 2. `./gradlew :core:runtime-reasoning:test`
 3. Core Fast after B378/B377 promotion order.
+
+## Promotion run
+
+B379 is cleanly restacked on merged B378/main. This exact head is the promotion candidate for main-targeted CI.
