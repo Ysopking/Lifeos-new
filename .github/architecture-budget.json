@@ -61,7 +61,8 @@
       ":core:model",
       ":core:runtime",
       ":core:runtime-deepsearch",
-      ":core:runtime-personal"
+      ":core:runtime-personal",
+      ":core:runtime-reasoning"
     ],
     "core/image-native/build.gradle.kts": [
       ":core:image"
