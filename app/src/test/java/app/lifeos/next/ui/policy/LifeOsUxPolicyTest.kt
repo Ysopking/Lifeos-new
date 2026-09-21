@@ -49,6 +49,18 @@ class LifeOsUxPolicyTest {
     }
 
     @Test
+    fun primaryChatFailureDoesNotLeakBackendDetail() {
+        val notice = requireNotNull(
+            LifeOsUxPolicy.chatFailureNotice(
+                "Die Nachricht konnte nicht gespeichert werden: IllegalStateException: secret-path"
+            )
+        )
+        assertEquals(LifeOsUxPriority.ACTION_REQUIRED, notice.priority)
+        assertTrue("IllegalStateException" !in notice.message)
+        assertTrue("secret-path" !in notice.message)
+    }
+
+    @Test
     fun permissionWaitIsVisibleWithoutBackendJargon() {
         val notice = requireNotNull(
             LifeOsUxPolicy.contextNotice(
