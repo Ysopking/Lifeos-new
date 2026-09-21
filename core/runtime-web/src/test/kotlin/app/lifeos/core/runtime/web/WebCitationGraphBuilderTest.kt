@@ -88,13 +88,12 @@ class WebCitationGraphBuilderTest {
     fun `tampered source span fails closed`() = runTest {
         val fixture = fixture("One exact source sentence.")
         val candidate = fixture.extraction.candidates.single()
-        val tampered = candidate.copy(
-            text = "tampered",
-            fingerprint = candidate.fingerprint,
-        )
 
         assertFailsWith<IllegalArgumentException> {
-            fixture.extraction.copy(candidates = listOf(tampered))
+            candidate.copy(
+                text = "tampered",
+                fingerprint = candidate.fingerprint,
+            )
         }
     }
 
