@@ -142,16 +142,12 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             try {
                 initializeRuntime()
                 mutableStartupState.value = LifeOsProcessStartupState.ready()
-                // Start a bounded partial read immediately after the runtime is ready. The Activity
-                // still converges missing owner-facing access, then requests another refresh.
+                // Headless/runtime-only processes need a truthful baseline too. Fresh installs
+                // have no dangerous grants yet, so unavailable sources only record gaps; already
+                // authorized installs immediately resume bounded context and storage ingestion.
                 refreshInitialDataBootstrap()
                 refreshLiveSources()
                 refreshStorageIntelligence()
-                // Headless/runtime-only processes still need a truthful baseline. Fresh installs have
-                // no dangerous grants yet, so this pass records gaps without performing heavy reads;
-                // the Activity access convergence triggers the authorized follow-up pass.
-                refreshInitialDataBootstrap()
-                refreshLiveSources()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
