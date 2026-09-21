@@ -220,7 +220,10 @@ class SemanticActionGraphRouter(
                 routing = routing,
                 dispatch = dispatch,
                 outputRef = output,
-                reason = if (successful) null else "executor-did-not-produce-success",
+                reason = if (successful) null else dispatchFailureReason(
+                    intent = nodeGoal.intent,
+                    result = dispatch,
+                ),
             )
             if (!successful) break
         }
@@ -378,6 +381,23 @@ class SemanticActionGraphRouter(
             }
         }
         return ordered.takeIf { it.size == nodes.size }
+    }
+
+    private fun dispatchFailureReason(
+        intent: IntentType,
+        result: GoalActionDispatchResult,
+    ): String = buildString {
+        append("executor-did-not-produce-success")
+        append(":intent=").append(intent.name)
+        append(":knowledge=").append(result.localKnowledge?.let { it::class.simpleName } ?: "none")
+        append(":search=").append(result.localDeepSearch?.let { it::class.simpleName } ?: "none")
+        append(":image=").append(result.imageGeneration?.let { it::class.simpleName } ?: "none")
+        append(":transform=").append(result.localImageTransform?.let { it::class.simpleName } ?: "none")
+        append(":schedule=").append(result.localSchedule?.let { it::class.simpleName } ?: "none")
+        append(":communication=")
+            .append(result.localCommunication?.let { it::class.simpleName } ?: "none")
+        append(":external=").append(result.externalEffect?.state?.name ?: "none")
+        append(":recovered=").append(result.recoveredOutcome?.id?.value ?: "none")
     }
 
     private fun isSuccessful(
