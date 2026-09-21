@@ -2,19 +2,16 @@ package app.lifeos.next
 
 import android.Manifest
 import android.app.Application
-import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import androidx.core.app.NotificationManagerCompat
 
 internal class PrivatePermissionController(
     private val application: Application,
     private val initialDataSources: () -> AndroidInitialDataSourceCatalog,
     private val startupReady: () -> Boolean,
 ) {
-    fun initialDataPermissionsToRequest(): List<String> =
-        evaluate(initialDataProfile()).missingRuntimePermissions
-
     fun runtimePermissionRequestPlan(): RuntimePermissionRequestPlan {
         if (!startupReady()) {
             return RuntimePermissionRequestPlan(emptySet(), emptyList())
@@ -25,68 +22,52 @@ internal class PrivatePermissionController(
             .distinct()
             .sorted()
         return RuntimePermissionRequestPlan(
-            profileIds = profiles.map { it.id }.toSet(),
+            profileIds = profiles.mapTo(linkedSetOf()) { it.id },
             permissions = missing,
         )
     }
 
-    fun allRuntimePermissionsToRequest(): List<String> =
-        runtimePermissionRequestPlan().permissions
+    fun specialAccessRequestPlan(): SpecialAccessRequestPlan {
+        if (!startupReady()) {
+            return SpecialAccessRequestPlan(emptySet(), emptyList())
+        }
+        val profiles = listOf(broadFilesProfile(), assistantAccessProfile())
+        val evaluations = profiles.map(::evaluate)
+        val missing = evaluations
+            .filter { it.state == PermissionProfileState.OWNER_ACTION_REQUIRED }
+            .flatMap { it.missingSpecialAccess }
+            .distinct()
+            .sortedBy { it.ordinal }
+        return SpecialAccessRequestPlan(
+            profileIds = profiles.mapTo(linkedSetOf()) { it.id },
+            accesses = missing,
+        )
+    }
+
+    fun deviceAccessSnapshot(): DeviceAccessSnapshot {
+        val evaluations = declaredPermissionProfiles().map(::evaluate)
+        return DeviceAccessSnapshot(
+            runtimePermissionsMissing = evaluations
+                .flatMap { it.missingRuntimePermissions }
+                .distinct()
+                .sorted(),
+            specialAccessMissing = evaluations
+                .filter { it.state == PermissionProfileState.OWNER_ACTION_REQUIRED }
+                .flatMap { it.missingSpecialAccess }
+                .distinct()
+                .sortedBy { it.ordinal },
+            profileStates = evaluations.associate { it.profile.id to it.state },
+        )
+    }
 
     fun hasBroadFileAccess(): Boolean =
-        broadFileEvaluation().state == PermissionProfileState.GRANTED
-
-    fun shouldRequestBroadFileAccess(): Boolean {
-        if (broadFileEvaluation().state != PermissionProfileState.OWNER_ACTION_REQUIRED) {
-            return false
-        }
-        return !preferences().getBoolean(BROAD_FILE_ACCESS_REQUESTED, false)
-    }
-
-    fun markBroadFileAccessRequested() {
-        preferences()
-            .edit()
-            .putBoolean(BROAD_FILE_ACCESS_REQUESTED, true)
-            .apply()
-    }
-
-    fun shouldRequestInitialDataPermissions(): Boolean {
-        val evaluation = evaluate(initialDataProfile())
-        if (evaluation.missingRuntimePermissions.isEmpty()) return false
-        val schema = initialDataSources().permissionSchemaFingerprint()
-        return preferences().getString(INITIAL_DATA_PERMISSION_SCHEMA, null) != schema
-    }
-
-    fun shouldRequestAllRuntimePermissions(): Boolean {
-        if (!runtimePermissionRequestPlan().required) return false
-        return preferences().getString(ALL_RUNTIME_PERMISSION_SCHEMA, null) !=
-            allRuntimePermissionSchema()
-    }
-
-    fun markInitialDataPermissionsRequested() {
-        preferences()
-            .edit()
-            .putString(
-                INITIAL_DATA_PERMISSION_SCHEMA,
-                initialDataSources().permissionSchemaFingerprint(),
-            )
-            .apply()
-    }
-
-    fun markAllRuntimePermissionsRequested() {
-        preferences()
-            .edit()
-            .putString(
-                ALL_RUNTIME_PERMISSION_SCHEMA,
-                allRuntimePermissionSchema(),
-            )
-            .apply()
-    }
+        evaluate(broadFilesProfile()).state == PermissionProfileState.GRANTED
 
     fun declaredPermissionProfiles(): List<PermissionProfile> = listOf(
         initialDataProfile(),
         interactionProfile(),
         broadFilesProfile(),
+        assistantAccessProfile(),
         PrivatePermissionProfiles.infrastructure(
             internetPermission = Manifest.permission.INTERNET,
             receiveBootCompletedPermission = Manifest.permission.RECEIVE_BOOT_COMPLETED,
@@ -95,7 +76,8 @@ internal class PrivatePermissionController(
 
     private fun initialDataProfile(): PermissionProfile =
         PrivatePermissionProfiles.initialData(
-            runtimePermissions = initialDataSources().requiredRuntimePermissions().toSet(),
+            runtimePermissions = initialDataSources().runtimePermissionsToRequest().toSet(),
+            manifestPermissions = initialDataSources().requiredRuntimePermissions().toSet(),
         )
 
     private fun interactionProfile(): PermissionProfile =
@@ -112,8 +94,8 @@ internal class PrivatePermissionController(
             manageExternalStoragePermission = Manifest.permission.MANAGE_EXTERNAL_STORAGE,
         )
 
-    private fun broadFileEvaluation(): PermissionProfileEvaluation =
-        evaluate(broadFilesProfile())
+    private fun assistantAccessProfile(): PermissionProfile =
+        PrivatePermissionProfiles.assistantAccess()
 
     private fun evaluate(profile: PermissionProfile): PermissionProfileEvaluation =
         PermissionProfileEvaluator(
@@ -124,6 +106,7 @@ internal class PrivatePermissionController(
                 when (special) {
                     PermissionSpecialAccess.BROAD_FILE_ACCESS ->
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    PermissionSpecialAccess.NOTIFICATION_LISTENER -> true
                 }
             },
             specialAccessGranted = { special ->
@@ -131,31 +114,11 @@ internal class PrivatePermissionController(
                     PermissionSpecialAccess.BROAD_FILE_ACCESS ->
                         Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
                             Environment.isExternalStorageManager()
+                    PermissionSpecialAccess.NOTIFICATION_LISTENER ->
+                        NotificationManagerCompat
+                            .getEnabledListenerPackages(application)
+                            .contains(application.packageName)
                 }
             },
         ).evaluate(profile)
-
-    private fun allRuntimePermissionSchema(): String = buildString {
-        append(initialDataSources().permissionSchemaFingerprint())
-        append("|record-audio")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            append("|post-notifications")
-        }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            append("|read-external-storage")
-        }
-    }
-
-    private fun preferences() =
-        application.getSharedPreferences(
-            INITIAL_DATA_PREFS,
-            Context.MODE_PRIVATE,
-        )
-
-    private companion object {
-        const val INITIAL_DATA_PREFS = "lifeos-initial-data-bootstrap"
-        const val INITIAL_DATA_PERMISSION_SCHEMA = "permission-schema"
-        const val ALL_RUNTIME_PERMISSION_SCHEMA = "all-runtime-permission-schema"
-        const val BROAD_FILE_ACCESS_REQUESTED = "broad-file-access-requested"
-    }
 }
