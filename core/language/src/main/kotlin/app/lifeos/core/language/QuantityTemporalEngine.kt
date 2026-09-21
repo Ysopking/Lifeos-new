@@ -649,7 +649,7 @@ class QuantityTemporalEngine {
             """(?i)\bzwischen\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\s+und\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b"""
         )
         val DAY_PART_REGEX = Regex(
-            """(?i)\b(morgens?|mittag(?:s)?|nachmittags?|abends?|nachts?|morning|midday|noon|afternoon|evening|night)\b"""
+            """(?i)\b(morgens|mittag(?:s)?|nachmittags?|abends?|nachts?|morning|midday|noon|afternoon|evening|night)\b"""
         )
         val RECURRENCE_REGEX = Regex(
             """(?i)\b(?:jeden|jede|every)\s+(?:(zweiten|dritten|second|third)\s+)?(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"""
