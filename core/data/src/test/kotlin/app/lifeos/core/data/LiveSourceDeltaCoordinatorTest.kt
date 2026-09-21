@@ -143,6 +143,63 @@ class LiveSourceDeltaCoordinatorTest {
     }
 
     @Test
+    fun projectionFailureDoesNotAdvanceCursorOrAbortAsException() = runBlocking {
+        val adapter = FakeAdapter(
+            sourceId = sourceId,
+            inventoryResult =
+                SourceInventory(
+                    emptyList(),
+                    SourceCursor("cursor-1"),
+                ),
+            changeResult =
+                SourceChangeSet(
+                    deltas =
+                        listOf(
+                            delta(
+                                "d1",
+                                "event-a",
+                                1,
+                                "v1",
+                            )
+                        ),
+                    nextCursor = SourceCursor("cursor-2"),
+                ),
+        )
+        val repository = MemoryCursorRepository()
+        val coordinator = LiveSourceDeltaCoordinator(
+            listOf(
+                connector(
+                    adapter,
+                    projectionFailure =
+                        "projection-deferred",
+                )
+            ),
+            repository,
+            FakeAuthority(),
+            now = { at },
+        )
+
+        assertIs<LiveSourceSyncResult.Bootstrapped>(
+            coordinator.sync(sourceId)
+        )
+        val failed =
+            assertIs<LiveSourceSyncResult.SourceUnavailable>(
+                coordinator.sync(sourceId)
+            )
+
+        assertEquals("projection-deferred", failed.message)
+        val durable =
+            assertIs<LiveSourceCursorLoadResult.Loaded>(
+                repository.load(sourceId)
+            ).state
+        assertEquals(
+            SourceCursor("cursor-1"),
+            durable.cursor,
+        )
+        assertEquals(0L, durable.lastObservationRevision)
+    }
+
+    @Test
     fun cursorlessSnapshotDiffSurvivesCoordinatorReconstruction() = runBlocking {
         val adapter = FakeAdapter(
             sourceId = sourceId,
@@ -283,6 +340,7 @@ class LiveSourceDeltaCoordinatorTest {
         adapter: FakeAdapter,
         permissionState: LiveDataPermissionState = LiveDataPermissionState.GRANTED,
         account: LiveDataAccountKey = accountKey,
+        projectionFailure: String? = null,
     ): LiveSourceConnector = object : LiveSourceConnector {
         override val adapter: LiveSourceAdapter = adapter
         override val streamKind: LiveDataStreamKind = LiveDataStreamKind.CALENDAR
@@ -301,8 +359,9 @@ class LiveSourceDeltaCoordinatorTest {
                 observedAt = at,
             )
 
-        override suspend fun project(delta: SourceDelta): LiveDataDelta =
-            LiveDataDelta(
+        override suspend fun project(delta: SourceDelta): LiveDataDelta {
+            projectionFailure?.let(::error)
+            return LiveDataDelta(
                 connectorId = connectorId,
                 accountKey = account,
                 kind = LiveDataStreamKind.CALENDAR,
@@ -317,6 +376,7 @@ class LiveSourceDeltaCoordinatorTest {
                 observedAt = at.plusSeconds(1),
                 payload = if (delta.kind == SourceDeltaKind.DELETED) null else "delta=" + delta.deltaId,
             )
+        }
     }
 
     private fun delta(
