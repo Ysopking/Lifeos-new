@@ -64,3 +64,7 @@ After implementation:
 1. `./gradlew :core:runtime-reasoning:test --tests 'app.lifeos.core.runtime.reasoning.ProceduralSkillInductionEngineTest'`
 2. `./gradlew :core:runtime-reasoning:test`
 3. Core Fast after B375/B374 promotion order.
+
+## Promotion run
+
+B376 is cleanly restacked on merged B375/main. This exact head is the promotion candidate for main-targeted CI.
