@@ -382,11 +382,12 @@ class LiveSourceDeltaCoordinator(
         }
 
         var cursor = state.cursor
+        val adapter = connector.adapter
         if (
             cursor == null &&
-            connector.adapter is SnapshotToCursorLiveSourceAdapter
+            adapter is SnapshotToCursorLiveSourceAdapter
         ) {
-            val migrationCursor = connector.adapter.migrationCursor()
+            val migrationCursor = adapter.migrationCursor()
             val migrated = state.promoteSnapshotToCursor(
                 nextCursor = migrationCursor,
                 at = now(),
