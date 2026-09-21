@@ -87,6 +87,7 @@ data class LinguisticLexiconSnapshot private constructor(
             add(concept.entityType?.name.orEmpty())
             add(java.lang.Double.toHexString(concept.semanticMass))
             addAll(concept.variants.sorted().map { "variant:$it" })
+            addAll(concept.phraseVariants.sorted().map { "phrase:$it" })
             addAll(concept.attractsTags.sorted().map { "attract:$it" })
             addAll(concept.repelsTags.sorted().map { "repel:$it" })
             addAll(concept.intentBias.entries.sortedBy { it.key.name }.map {
@@ -153,7 +154,12 @@ class VersionedLanguageRuntime(
 
     private fun build(lexicon: LinguisticLexiconSnapshot): LanguageRuntimeSnapshot {
         val field = LinguisticFieldEngine(lexicon = lexicon)
-        val understanding = LanguageUnderstandingEngine(linguisticFieldEngine = field)
+        val paraphrases = PredicateParaphraseResolver(lexicon = lexicon)
+        val predicates = PredicateFrameParser(paraphraseResolver = paraphrases)
+        val understanding = LanguageUnderstandingEngine(
+            linguisticFieldEngine = field,
+            predicateFrameParser = predicates,
+        )
         return LanguageRuntimeSnapshot(
             lexicon = lexicon,
             understanding = understanding,
