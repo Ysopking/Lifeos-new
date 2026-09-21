@@ -349,8 +349,10 @@ class ReferenceResolver {
             score += 0.08
         }
 
+        val contentAnchoredReference = expressionTerms.any { it !in DEICTIC_CONTEXT_TERMS }
         val uniqueActivePreferredDeictic =
             expression.kind in setOf(ReferenceKind.THIS, ReferenceKind.THAT) &&
+                !contentAnchoredReference &&
                 expression.preferredKinds.isNotEmpty() &&
                 item.active &&
                 semanticKindMatch &&
@@ -402,9 +404,10 @@ class ReferenceResolver {
             score += 0.08
         }
 
+        val discourseWeight = if (contentAnchoredReference) 0.08 else 0.22
         val discourseBonus = item.revisionRef
             ?.let(discourse::score)
-            ?.times(0.22)
+            ?.times(discourseWeight)
             ?: 0.0
         score += discourseBonus
 
@@ -436,6 +439,12 @@ class ReferenceResolver {
             "das", "die", "der", "den", "dem", "dies", "diese", "dieses", "diesen",
             "andere", "anderen", "bitte", "mit", "und", "oder", "mach", "mache",
             "it", "this", "that", "the", "other", "with", "and", "or", "please", "make",
+        )
+        val DEICTIC_CONTEXT_TERMS = setOf(
+            "es", "ihn", "sie", "ihm", "ihr", "it", "him", "her", "them",
+            "heller", "dunkler", "wärmer", "waermer", "schärfer", "schaerfer",
+            "größer", "groesser", "kleiner",
+            "brighter", "darker", "warmer", "sharper", "larger", "smaller",
         )
         val MATTER_TERMS = setOf(
             "bescheid", "jobcenter", "behorde", "behoerde", "schuld", "forderung",
