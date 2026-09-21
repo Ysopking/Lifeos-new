@@ -4,6 +4,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import app.lifeos.core.data.SourceDeltaKind
+import app.lifeos.core.model.StableCognitiveIds
 import java.io.File
 
 internal data class StorageInventoryEntry(
@@ -40,6 +42,25 @@ internal data class StorageInventoryEntry(
         suspectedEncrypted = suspectedEncrypted,
         contentFingerprint = contentFingerprint,
     )
+}
+
+internal data class StorageChangeEntry(
+    val revision: Long,
+    val volumeId: String,
+    val relativePath: String,
+    val kind: SourceDeltaKind,
+    val previousFingerprint: String?,
+    val newFingerprint: String?,
+    val observedAtMillis: Long,
+) {
+    init {
+        require(revision > 0L)
+        require(volumeId.isNotBlank())
+        require(relativePath.isNotBlank())
+        require(previousFingerprint == null || previousFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(newFingerprint == null || newFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(observedAtMillis >= 0L)
+    }
 }
 
 /**
@@ -85,9 +106,35 @@ internal class AndroidStorageInventoryStore(
         db.execSQL(
             "CREATE INDEX storage_files_scan_idx ON storage_files(last_seen_scan_id)"
         )
+        createChangeLog(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion == 1 && newVersion >= 2) {
+            createChangeLog(db)
+            db.execSQL(
+                """
+                INSERT INTO $CHANGE_TABLE(
+                    $CHANGE_COL_VOLUME,
+                    $CHANGE_COL_PATH,
+                    $CHANGE_COL_KIND,
+                    $CHANGE_COL_PREVIOUS,
+                    $CHANGE_COL_NEW,
+                    $CHANGE_COL_OBSERVED
+                )
+                SELECT
+                    $COL_VOLUME,
+                    $COL_PATH,
+                    'CREATED',
+                    NULL,
+                    NULL,
+                    $COL_MODIFIED
+                FROM $TABLE
+                ORDER BY $COL_VOLUME, $COL_PATH
+                """.trimIndent()
+            )
+            return
+        }
         error("Storage inventory schema has no migration from $oldVersion to $newVersion")
     }
 
@@ -113,7 +160,16 @@ internal class AndroidStorageInventoryStore(
                 val previous = loadInternal(db, volumeId, entry.relativePath)
                 val unchanged = previous != null &&
                     previous.sizeBytes == size &&
-                    previous.modifiedAtMillis == modified
+                    previous.modifiedAtMillis == modified &&
+                    previous.category == classification.category &&
+                    previous.suspectedEncrypted == classification.suspectedEncrypted
+                val previousFingerprint = previous?.let(::metadataFingerprint)
+                val nextFingerprint = metadataFingerprint(
+                    sizeBytes = size,
+                    modifiedAtMillis = modified,
+                    category = classification.category,
+                    suspectedEncrypted = classification.suspectedEncrypted,
+                )
 
                 val values = ContentValues().apply {
                     put(COL_VOLUME, volumeId)
@@ -136,12 +192,29 @@ internal class AndroidStorageInventoryStore(
                         putNull(COL_FINGERPRINT)
                     }
                 }
-                db.insertWithOnConflict(
+                val rowId = db.insertWithOnConflict(
                     TABLE,
                     null,
                     values,
                     SQLiteDatabase.CONFLICT_REPLACE,
                 )
+                check(rowId != -1L) { "Storage inventory metadata upsert failed" }
+
+                if (!unchanged) {
+                    appendChange(
+                        db = db,
+                        volumeId = volumeId,
+                        relativePath = entry.relativePath,
+                        kind = if (previous == null) {
+                            SourceDeltaKind.CREATED
+                        } else {
+                            SourceDeltaKind.UPDATED
+                        },
+                        previousFingerprint = previousFingerprint,
+                        newFingerprint = nextFingerprint,
+                        observedAtMillis = modified,
+                    )
+                }
             }
             db.setTransactionSuccessful()
         } finally {
@@ -211,7 +284,40 @@ internal class AndroidStorageInventoryStore(
 
     fun purgeNotSeen(scanId: String): Int {
         require(scanId.isNotBlank())
-        return writableDatabase.delete(TABLE, "$COL_SCAN<>?", arrayOf(scanId))
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val stale = mutableListOf<StorageInventoryEntry>()
+            db.query(
+                TABLE,
+                COLUMNS,
+                "$COL_SCAN<>?",
+                arrayOf(scanId),
+                null,
+                null,
+                "$COL_VOLUME ASC, $COL_PATH ASC",
+            ).use { cursor ->
+                while (cursor.moveToNext()) stale += cursor.toEntry()
+            }
+
+            stale.forEach { entry ->
+                appendChange(
+                    db = db,
+                    volumeId = entry.volumeId,
+                    relativePath = entry.relativePath,
+                    kind = SourceDeltaKind.DELETED,
+                    previousFingerprint = metadataFingerprint(entry),
+                    newFingerprint = null,
+                    observedAtMillis = System.currentTimeMillis(),
+                )
+            }
+
+            val deleted = db.delete(TABLE, "$COL_SCAN<>?", arrayOf(scanId))
+            db.setTransactionSuccessful()
+            return deleted
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun loadPage(
@@ -309,6 +415,64 @@ internal class AndroidStorageInventoryStore(
         return out
     }
 
+    fun load(
+        volumeId: String,
+        relativePath: String,
+    ): StorageInventoryEntry? {
+        require(volumeId.isNotBlank())
+        require(relativePath.isNotBlank())
+        return loadInternal(readableDatabase, volumeId, relativePath)
+    }
+
+    fun currentChangeRevision(): Long =
+        readableDatabase.rawQuery(
+            "SELECT COALESCE(MAX($CHANGE_COL_REVISION), 0) FROM $CHANGE_TABLE",
+            null,
+        ).use { cursor ->
+            check(cursor.moveToFirst())
+            cursor.getLong(0)
+        }
+
+    fun loadChangesAfter(
+        revisionExclusive: Long,
+        limit: Int,
+    ): List<StorageChangeEntry> {
+        require(revisionExclusive >= 0L)
+        require(limit in 1..MAX_CHANGE_PAGE)
+        val out = mutableListOf<StorageChangeEntry>()
+        readableDatabase.query(
+            CHANGE_TABLE,
+            CHANGE_COLUMNS,
+            "$CHANGE_COL_REVISION>?",
+            arrayOf(revisionExclusive.toString()),
+            null,
+            null,
+            "$CHANGE_COL_REVISION ASC",
+            limit.toString(),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                out += StorageChangeEntry(
+                    revision = cursor.getLong(cursor.getColumnIndexOrThrow(CHANGE_COL_REVISION)),
+                    volumeId = cursor.getString(cursor.getColumnIndexOrThrow(CHANGE_COL_VOLUME)),
+                    relativePath = cursor.getString(cursor.getColumnIndexOrThrow(CHANGE_COL_PATH)),
+                    kind = SourceDeltaKind.valueOf(
+                        cursor.getString(cursor.getColumnIndexOrThrow(CHANGE_COL_KIND))
+                    ),
+                    previousFingerprint = cursor.getStringOrNull(
+                        cursor.getColumnIndexOrThrow(CHANGE_COL_PREVIOUS)
+                    ),
+                    newFingerprint = cursor.getStringOrNull(
+                        cursor.getColumnIndexOrThrow(CHANGE_COL_NEW)
+                    ),
+                    observedAtMillis = cursor.getLong(
+                        cursor.getColumnIndexOrThrow(CHANGE_COL_OBSERVED)
+                    ),
+                )
+            }
+        }
+        return out
+    }
+
     fun summary(): StorageInventorySummary {
         readableDatabase.rawQuery(
             """
@@ -328,6 +492,51 @@ internal class AndroidStorageInventoryStore(
             )
         }
     }
+
+    private fun appendChange(
+        db: SQLiteDatabase,
+        volumeId: String,
+        relativePath: String,
+        kind: SourceDeltaKind,
+        previousFingerprint: String?,
+        newFingerprint: String?,
+        observedAtMillis: Long,
+    ) {
+        val values = ContentValues().apply {
+            put(CHANGE_COL_VOLUME, volumeId)
+            put(CHANGE_COL_PATH, relativePath)
+            put(CHANGE_COL_KIND, kind.name)
+            if (previousFingerprint == null) putNull(CHANGE_COL_PREVIOUS)
+            else put(CHANGE_COL_PREVIOUS, previousFingerprint)
+            if (newFingerprint == null) putNull(CHANGE_COL_NEW)
+            else put(CHANGE_COL_NEW, newFingerprint)
+            put(CHANGE_COL_OBSERVED, observedAtMillis.coerceAtLeast(0L))
+        }
+        check(db.insert(CHANGE_TABLE, null, values) != -1L) {
+            "Storage change-log append failed"
+        }
+    }
+
+    private fun metadataFingerprint(entry: StorageInventoryEntry): String =
+        metadataFingerprint(
+            sizeBytes = entry.sizeBytes,
+            modifiedAtMillis = entry.modifiedAtMillis,
+            category = entry.category,
+            suspectedEncrypted = entry.suspectedEncrypted,
+        )
+
+    private fun metadataFingerprint(
+        sizeBytes: Long,
+        modifiedAtMillis: Long,
+        category: AndroidFileCategory,
+        suspectedEncrypted: Boolean,
+    ): String = StableCognitiveIds.fingerprint(
+        "android-storage-live-state/v1",
+        sizeBytes.toString(),
+        modifiedAtMillis.toString(),
+        category.name,
+        suspectedEncrypted.toString(),
+    )
 
     private fun loadInternal(
         db: SQLiteDatabase,
@@ -382,7 +591,8 @@ internal class AndroidStorageInventoryStore(
     companion object {
         const val LARGE_REVIEW_BYTES = 2L * 1024L * 1024L * 1024L
         private const val DATABASE_NAME = "lifeos-storage-inventory.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
+        private const val MAX_CHANGE_PAGE = 16_384
         private const val TABLE = "storage_files"
         private const val COL_VOLUME = "volume_id"
         private const val COL_PATH = "relative_path"
@@ -408,6 +618,43 @@ internal class AndroidStorageInventoryStore(
             COL_FINGERPRINT,
             COL_SCAN,
         )
+
+        private const val CHANGE_TABLE = "storage_changes"
+        private const val CHANGE_COL_REVISION = "revision"
+        private const val CHANGE_COL_VOLUME = "volume_id"
+        private const val CHANGE_COL_PATH = "relative_path"
+        private const val CHANGE_COL_KIND = "delta_kind"
+        private const val CHANGE_COL_PREVIOUS = "previous_fingerprint"
+        private const val CHANGE_COL_NEW = "new_fingerprint"
+        private const val CHANGE_COL_OBSERVED = "observed_ms"
+        private val CHANGE_COLUMNS = arrayOf(
+            CHANGE_COL_REVISION,
+            CHANGE_COL_VOLUME,
+            CHANGE_COL_PATH,
+            CHANGE_COL_KIND,
+            CHANGE_COL_PREVIOUS,
+            CHANGE_COL_NEW,
+            CHANGE_COL_OBSERVED,
+        )
+
+        private fun createChangeLog(db: SQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE $CHANGE_TABLE (
+                    $CHANGE_COL_REVISION INTEGER PRIMARY KEY AUTOINCREMENT,
+                    $CHANGE_COL_VOLUME TEXT NOT NULL,
+                    $CHANGE_COL_PATH TEXT NOT NULL,
+                    $CHANGE_COL_KIND TEXT NOT NULL,
+                    $CHANGE_COL_PREVIOUS TEXT,
+                    $CHANGE_COL_NEW TEXT,
+                    $CHANGE_COL_OBSERVED INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX storage_changes_revision_idx ON $CHANGE_TABLE($CHANGE_COL_REVISION)"
+            )
+        }
     }
 }
 
