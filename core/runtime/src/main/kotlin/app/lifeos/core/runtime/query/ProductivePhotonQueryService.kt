@@ -22,11 +22,21 @@ fun interface GoalOutcomeLookup {
         goalPhotonId: PhotonId,
         limit: Int,
     ): List<Photon>
+
+    /**
+     * Optional exact-id recovery path for already committed durable outcomes. Implementations
+     * backed by the productive revisioned Photon store should override this so a completed plan
+     * does not depend on bounded parent scans or index timing to rehydrate its exact outcome.
+     */
+    suspend fun exactOutcome(id: PhotonId): Photon? = null
 }
 
 class ProductivePhotonQueryService(
     private val photons: RevisionedPhotonRepository,
 ) : GoalOutcomeLookup {
+    override suspend fun exactOutcome(id: PhotonId): Photon? =
+        photons.latestRef(id)?.let { ref -> photons.load(ref) }
+
     suspend fun exact(
         ids: Set<PhotonId>,
         limit: Int = PhotonIndexQuery.DEFAULT_PAGE_LIMIT,
