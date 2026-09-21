@@ -322,6 +322,7 @@ data class SemanticActionGraph(
     val edges: List<SemanticActionEdge>,
     val scopes: List<SemanticScope>,
     val fingerprint: String,
+    val operatorScopes: List<SemanticOperatorScope> = emptyList(),
 ) {
     init {
         require(nodes.map { it.id }.distinct().size == nodes.size)
