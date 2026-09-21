@@ -195,13 +195,18 @@ class PredicateFrameParser(
             clauseTokenStart = clauseTokenStart,
             clauseTokenEndExclusive = clauseTokenStart + tokens.size,
         ).forEach { match ->
-            result += PredicateOccurrence(
-                predicate = match.predicate,
-                localTokenIndex = match.localTokenIndex,
-                confidence = match.confidence,
-                source = match.source,
-                detail = match.detail,
-            )
+            // Field-derived predicates are fallback semantic evidence. They must never duplicate
+            // a stronger lexical/syntactic/paraphrase predicate at another token in the same
+            // clause, otherwise one user action can become two executable semantic nodes.
+            if (result.none { it.predicate == match.predicate }) {
+                result += PredicateOccurrence(
+                    predicate = match.predicate,
+                    localTokenIndex = match.localTokenIndex,
+                    confidence = match.confidence,
+                    source = match.source,
+                    detail = match.detail,
+                )
+            }
         }
 
         return result
