@@ -10,18 +10,25 @@ class PredicateFrameParser(
     private val morphology: GermanMorphologyEngine = GermanMorphologyEngine(),
     private val roleBinder: SemanticRoleBinder = SemanticRoleBinder(),
     private val contracts: PredicateContractRegistry = PredicateContractRegistry(),
+    private val paraphraseResolver: PredicateParaphraseResolver = PredicateParaphraseResolver(),
 ) {
     fun parse(
         utterance: NormalizedUtterance,
         graph: LanguageSemanticGraph,
         speechActs: Map<Int, SpeechAct>,
         references: List<ResolvedReference>,
+        linguisticField: LinguisticFieldResult? = null,
     ): List<PredicateFrame> = graph.clauses.flatMap { clause ->
         val tokens = utterance.tokens.subList(clause.tokenStart, clause.tokenEndExclusive)
         val speechAct = requireNotNull(speechActs[clause.id]) {
             "Every semantic clause requires a speech act"
         }
-        val occurrences = predicateOccurrences(tokens, speechAct)
+        val occurrences = predicateOccurrences(
+            tokens = tokens,
+            speechAct = speechAct,
+            clauseTokenStart = clause.tokenStart,
+            linguisticField = linguisticField,
+        )
         occurrences.mapIndexed { occurrenceIndex, occurrence ->
             val predicate = occurrence.predicate
             val predicateTokenIndex = clause.tokenStart + occurrence.localTokenIndex
@@ -54,11 +61,12 @@ class PredicateFrameParser(
             val evidence = buildList {
                 add(
                     SemanticEvidence(
-                        source = "predicate-syntax-v2",
+                        source = occurrence.source,
                         detail = "predicate=" + predicate.name +
                             ";token=" + utterance.tokens[predicateTokenIndex].original +
-                            ";index=" + predicateTokenIndex,
-                        strength = if (predicate == PredicateConcept.CONDITION_CHECK) 0.82 else 0.96,
+                            ";index=" + predicateTokenIndex +
+                            ";" + occurrence.detail,
+                        strength = occurrence.confidence,
                         span = tokenSpan(utterance.tokens[predicateTokenIndex]),
                     )
                 )
@@ -73,7 +81,7 @@ class PredicateFrameParser(
                 speechAct = speechAct,
                 confidence = minOf(
                     speechAct.confidence,
-                    if (predicate == PredicateConcept.CONDITION_CHECK) 0.82 else 0.96,
+                    occurrence.confidence,
                 ),
                 evidence = evidence,
             )
@@ -83,6 +91,8 @@ class PredicateFrameParser(
     private fun predicateOccurrences(
         tokens: List<LanguageToken>,
         speechAct: SpeechAct,
+        clauseTokenStart: Int,
+        linguisticField: LinguisticFieldResult?,
     ): List<PredicateOccurrence> {
         val result = mutableListOf<PredicateOccurrence>()
         val words = tokens.withIndex().filter { it.value.kind == TokenKind.WORD }
@@ -94,7 +104,13 @@ class PredicateFrameParser(
             } else {
                 PredicateConcept.CREATE_IMAGE
             }
-            result += PredicateOccurrence(concept, make.index)
+            result += PredicateOccurrence(
+                predicate = concept,
+                localTokenIndex = make.index,
+                confidence = 0.96,
+                source = "predicate-syntax-v2",
+                detail = "exact-make-image",
+            )
         }
 
         val wordSet = words.mapTo(linkedSetOf()) { it.value.normalized }
@@ -107,29 +123,71 @@ class PredicateFrameParser(
                     matchesPredicate(normalized, candidate)
                 }
             } ?: return@forEach
-            result += PredicateOccurrence(concept, indexed.index)
+            result += PredicateOccurrence(
+                predicate = concept,
+                localTokenIndex = indexed.index,
+                confidence = 0.96,
+                source = "predicate-syntax-v2",
+                detail = "exact-or-morphological-form",
+            )
         }
 
         val firstWord = words.firstOrNull()
         if (firstWord?.value?.normalized in CONDITION_MARKERS) {
-            result += PredicateOccurrence(PredicateConcept.CONDITION_CHECK, firstWord!!.index)
+            result += PredicateOccurrence(
+                predicate = PredicateConcept.CONDITION_CHECK,
+                localTokenIndex = firstWord!!.index,
+                confidence = 0.82,
+                source = "predicate-syntax-v2",
+                detail = "condition-marker",
+            )
         }
 
         if (result.isEmpty() && speechAct.type == SpeechActType.QUESTION) {
             result += PredicateOccurrence(
-                PredicateConcept.QUERY,
-                firstWord?.index ?: 0,
+                predicate = PredicateConcept.QUERY,
+                localTokenIndex = firstWord?.index ?: 0,
+                confidence = 0.78,
+                source = "predicate-syntax-v2",
+                detail = "question-fallback",
+            )
+        }
+
+        paraphraseResolver.resolve(tokens).forEach { match ->
+            result += PredicateOccurrence(
+                predicate = match.predicate,
+                localTokenIndex = match.localTokenIndex,
+                confidence = match.confidence,
+                source = match.source,
+                detail = match.detail,
+            )
+        }
+        paraphraseResolver.fromField(
+            field = linguisticField,
+            clauseTokenStart = clauseTokenStart,
+            clauseTokenEndExclusive = clauseTokenStart + tokens.size,
+        ).forEach { match ->
+            result += PredicateOccurrence(
+                predicate = match.predicate,
+                localTokenIndex = match.localTokenIndex,
+                confidence = match.confidence,
+                source = match.source,
+                detail = match.detail,
             )
         }
 
         return result
-            .distinctBy { it.predicate to it.localTokenIndex }
+            .groupBy { it.predicate to it.localTokenIndex }
+            .map { (_, occurrences) -> occurrences.maxBy { it.confidence } }
             .sortedWith(compareBy<PredicateOccurrence> { it.localTokenIndex }.thenBy { it.predicate.name })
     }
 
     private data class PredicateOccurrence(
         val predicate: PredicateConcept,
         val localTokenIndex: Int,
+        val confidence: Double,
+        val source: String,
+        val detail: String,
     )
 
     private fun matchesPredicate(
