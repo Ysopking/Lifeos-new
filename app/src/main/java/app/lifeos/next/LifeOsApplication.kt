@@ -117,6 +117,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private lateinit var initialDataController: InitialDataProcessController
     private lateinit var storageIntelligenceController: StorageIntelligenceProcessController
+    private lateinit var sharedFileEvidenceMigration: SharedFileEvidenceMigrationCoordinator
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
     private val mutableSelfObservationAnalysis =
@@ -136,15 +137,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
     override fun onCreate() {
         super.onCreate()
-        // Android must be allowed to render the launcher Activity immediately. The complete LIFEOS
-        // stage DAG is still deterministic, but it no longer blocks the UI/main thread at process start.
         startupScope.launch {
             try {
                 initializeRuntime()
                 mutableStartupState.value = LifeOsProcessStartupState.ready()
-                // Headless/runtime-only processes need a truthful baseline too. Fresh installs
-                // have no dangerous grants yet, so unavailable sources only record gaps; already
-                // authorized installs immediately resume bounded context and storage ingestion.
                 refreshInitialDataBootstrap()
                 refreshLiveSources()
                 refreshStorageIntelligence()
@@ -165,9 +161,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             canRunStorageIntelligence = { hasBroadFileAccess() },
             onStorageSnapshot = { snapshot ->
                 latestStorageIntelligence = snapshot
-                if (::liveSourceController.isInitialized) {
-                    liveSourceController.refresh()
-                }
+                if (::sharedFileEvidenceMigration.isInitialized) sharedFileEvidenceMigration.onStorageSnapshot(snapshot)
+                if (::liveSourceController.isInitialized) liveSourceController.refresh()
             },
             onStorageFailure = { failure ->
                 storageIntelligenceFailure = failure
@@ -196,6 +191,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         goalDecisionTraceRecorder = installed.goalDecisionTraceRecorder
         lifePhotonRepository = installed.lifePhotonRepository
         lifeMemoryRuntime = installed.lifeMemoryRuntime
+        sharedFileEvidenceMigration = SharedFileEvidenceMigrationCoordinator(this, lifeMemoryRuntime)
         multimodalPerception = installed.multimodalPerception
         selfHealingRuntime = installed.selfHealingRuntime
         escalationRuntime = installed.escalationRuntime
@@ -209,6 +205,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             healthGraph = selfObservationHealthGraph,
             onSnapshot = { snapshot ->
                 latestLiveSourceSync = snapshot
+                sharedFileEvidenceMigration.onLiveSnapshot(snapshot)
             },
             onFailure = { failure ->
                 liveSourceSyncFailure = failure
@@ -296,5 +293,4 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         if (!::initialDataController.isInitialized) return
         initialDataController.refresh()
     }
-
 }
