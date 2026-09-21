@@ -125,6 +125,7 @@ class SemanticActionGraphRouter(
 
         val executions = mutableListOf<SemanticNodeExecution>()
         val outputs = linkedMapOf<app.lifeos.core.language.SemanticNodeId, PhotonRevisionRef>()
+        val outputPhotons = linkedMapOf<app.lifeos.core.language.SemanticNodeId, Photon>()
 
         for (node in ordered) {
             val dependencies = graph.edges.filter { edge ->
@@ -151,7 +152,11 @@ class SemanticActionGraphRouter(
             val resultEdge = graph.edges
                 .firstOrNull { it.to == node.id && it.type == SemanticActionEdgeType.USES_RESULT_OF }
             val resultDependency = resultEdge?.from?.let(outputs::get)
-            if (resultEdge != null && resultDependency == null) {
+            val resultDependencyPhoton = resultEdge?.from?.let(outputPhotons::get)
+            if (
+                resultEdge != null &&
+                (resultDependency == null || resultDependencyPhoton == null)
+            ) {
                 executions += SemanticNodeExecution(
                     nodeId = node.id,
                     intent = intentFor(node) ?: IntentType.UNKNOWN,
@@ -207,11 +212,16 @@ class SemanticActionGraphRouter(
                     goalPhotonId = goalPhotonId,
                     goalPhotonRevision = goalPhotonRevision,
                     externalActionContract = externalContract,
+                    boundResultPhoton = resultDependencyPhoton,
                 )
             )
             val successful = isSuccessful(dispatch, nodeGoal.intent)
-            val output = outputPhoton(dispatch)?.let { PhotonRevisionRef(it.id, it.revision) }
-            if (successful && output != null) outputs[node.id] = output
+            val producedPhoton = outputPhoton(dispatch)
+            val output = producedPhoton?.let { PhotonRevisionRef(it.id, it.revision) }
+            if (successful && output != null && producedPhoton != null) {
+                outputs[node.id] = output
+                outputPhotons[node.id] = producedPhoton
+            }
 
             executions += SemanticNodeExecution(
                 nodeId = node.id,
