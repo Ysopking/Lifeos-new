@@ -237,6 +237,12 @@ data class OwnerPolicySnapshot(
     }
 }
 
+enum class OwnerGrantHistoryState {
+    NEVER_SEEN,
+    ACTIVE,
+    REVOKED,
+}
+
 data class OwnerEffectRequest(
     val actorId: OwnerActorId,
     val effect: OwnerEffectType,
@@ -356,6 +362,32 @@ class OwnerPolicyLedger(
     }
 
     suspend fun snapshot(): OwnerPolicySnapshot = loadSnapshot()
+
+    suspend fun historyState(
+        grantId: OwnerPolicyGrantId,
+    ): OwnerGrantHistoryState {
+        val report = repository.loadReport()
+        check(report.unreadableEntries.isEmpty()) {
+            "Owner policy history is unreadable: " +
+                report.unreadableEntries.joinToString(",")
+        }
+        val latest = report.events
+            .asSequence()
+            .filter { event ->
+                event.grant?.id == grantId ||
+                    event.revokedGrantId == grantId
+            }
+            .maxByOrNull { it.revision }
+            ?: return OwnerGrantHistoryState.NEVER_SEEN
+
+        return when (latest.type) {
+            OwnerPolicyEventType.GRANT ->
+                OwnerGrantHistoryState.ACTIVE
+
+            OwnerPolicyEventType.REVOKE ->
+                OwnerGrantHistoryState.REVOKED
+        }
+    }
 
     private suspend fun loadSnapshot(): OwnerPolicySnapshot {
         val durableHead = repository.headRevision()
