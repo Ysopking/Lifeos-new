@@ -18,6 +18,7 @@ class PredicateFrameParser(
         speechActs: Map<Int, SpeechAct>,
         references: List<ResolvedReference>,
         linguisticField: LinguisticFieldResult? = null,
+        syntaxGraph: DependencySyntaxGraph = DependencySyntaxGraph.empty(),
     ): List<PredicateFrame> = graph.clauses.flatMap { clause ->
         val tokens = utterance.tokens.subList(clause.tokenStart, clause.tokenEndExclusive)
         val speechAct = requireNotNull(speechActs[clause.id]) {
@@ -76,6 +77,24 @@ class PredicateFrameParser(
                         span = tokenSpan(utterance.tokens[predicateTokenIndex]),
                     )
                 )
+                syntaxGraph.arcs
+                    .filter { it.headTokenIndex == predicateTokenIndex }
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { arcs ->
+                        add(
+                            SemanticEvidence(
+                                source = "dependency-syntax/v1",
+                                detail = "root=" + predicateTokenIndex +
+                                    ";relations=" + arcs
+                                        .map { it.relation.name }
+                                        .distinct()
+                                        .sorted()
+                                        .joinToString(","),
+                                strength = arcs.maxOf { it.confidence },
+                                span = tokenSpan(utterance.tokens[predicateTokenIndex]),
+                            )
+                        )
+                    }
                 addAll(speechAct.evidence)
             }
             PredicateFrame(
