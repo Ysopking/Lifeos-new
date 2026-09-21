@@ -93,8 +93,8 @@ class ReferenceExpressionExtractor {
             }
         }
         if (result.isEmpty()) {
-            conversationalDeicticKind(words, topIntent)?.let { kind ->
-                result += ReferenceExpression(kind, utterance.original, emptySet(), 0.80)
+            contextualDeictic(words, topIntent)?.let { (kind, preferredKinds) ->
+                result += ReferenceExpression(kind, utterance.original, preferredKinds, 0.80)
             }
         }
         if (topIntent == IntentType.CONTINUE && result.isEmpty()) {
@@ -109,14 +109,24 @@ class ReferenceExpressionExtractor {
      * and CONVERSATION and requires a follow-up cue (or a terminal deictic) so ordinary articles
      * such as "das Wetter" / "the weather" never become references merely because context exists.
      */
-    private fun conversationalDeicticKind(words: List<String>, topIntent: IntentType): ReferenceKind? {
-        if (topIntent !in setOf(IntentType.QUERY, IntentType.CONVERSATION) || words.isEmpty()) return null
+    private fun contextualDeictic(
+        words: List<String>,
+        topIntent: IntentType,
+    ): Pair<ReferenceKind, Set<String>>? {
+        if (words.isEmpty()) return null
+        val allowed = topIntent in setOf(
+            IntentType.QUERY,
+            IntentType.CONVERSATION,
+            IntentType.TRANSFORM_IMAGE,
+        )
+        if (!allowed) return null
 
         val thisMarkers = setOf("dies", "dieses", "diese", "diesen", "dieser", "this", "these")
         val thatMarkers = setOf(
             "das", "jene", "jener", "jenes", "that", "those",
             "es", "it", "dazu", "damit", "davon", "darüber",
         )
+        val preferredKinds = if (topIntent == IntentType.TRANSFORM_IMAGE) setOf("image") else emptySet()
         val followUpCues = setOf(
             "erkläre", "erklären", "erklärst", "erklärt", "erklärung",
             "genauer", "näher", "ausführen", "ausführlicher", "meinen", "meinst",
@@ -132,14 +142,24 @@ class ReferenceExpressionExtractor {
                 else -> null
             } ?: return@forEachIndexed
 
-            if (index == words.lastIndex) return kind
+            if (topIntent == IntentType.TRANSFORM_IMAGE) {
+                val nearbyTransformCue = words.any {
+                    it in setOf(
+                        "heller", "dunkler", "wärmer", "waermer", "schaerfer", "schärfer",
+                        "größer", "groesser", "kleiner", "brighter", "darker", "warmer",
+                        "sharper", "larger", "smaller",
+                    )
+                }
+                if (nearbyTransformCue) return kind to preferredKinds
+            }
+            if (index == words.lastIndex) return kind to preferredKinds
             val start = maxOf(0, index - 3)
             val end = minOf(words.lastIndex, index + 3)
             val nearbyFollowUpCue = (start..end).any { cueIndex ->
                 cueIndex != index && words[cueIndex] in followUpCues
             }
             val compactStateFollowUp = words.getOrNull(index + 1) in setOf("so", "true", "correct", "wahr", "richtig")
-            if (nearbyFollowUpCue || compactStateFollowUp) return kind
+            if (nearbyFollowUpCue || compactStateFollowUp) return kind to preferredKinds
         }
         return null
     }
