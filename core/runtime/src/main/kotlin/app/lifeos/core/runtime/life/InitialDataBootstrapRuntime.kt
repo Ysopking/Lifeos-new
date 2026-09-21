@@ -65,6 +65,7 @@ data class InitialDataBootstrapSnapshot(
     val sources: List<InitialDataSourceResult>,
     val reportPhotonId: PhotonId,
     val fingerprint: String,
+    val continuationRequired: Boolean,
 )
 
 /**
@@ -88,7 +89,6 @@ class InitialDataBootstrapRuntime(
             .thenBy { it.descriptor.adapterVersion }
     )
     private val checkpoints = PhotonBackedLifeSourceCheckpointStore(photons)
-    private val ingestor = DurableLifeSourceIngestor(photons, checkpoints)
 
     init {
         require(pageSize in 1..MAX_PAGE_SIZE) { "Initial-data page size is outside the bounded range" }
@@ -122,14 +122,17 @@ class InitialDataBootstrapRuntime(
             }.toTypedArray(),
         )
         val preexistingReportId = reportId(sourceSetFingerprint, stateFingerprint)
+        val currentSnapshot = snapshot(
+            sourceSetFingerprint = sourceSetFingerprint,
+            sourceStateFingerprint = stateFingerprint,
+            states = states,
+            reportPhotonId = preexistingReportId,
+        )
         photons.load(preexistingReportId)?.let { existing ->
             validateReport(existing, sourceSetFingerprint, stateFingerprint)
-            return@withLock snapshot(
-                sourceSetFingerprint = sourceSetFingerprint,
-                sourceStateFingerprint = stateFingerprint,
-                states = states,
-                reportPhotonId = preexistingReportId,
-            )
+            if (!currentSnapshot.continuationRequired) {
+                return@withLock currentSnapshot
+            }
         }
 
         val gapIds = linkedSetOf<PhotonId>()
@@ -138,7 +141,7 @@ class InitialDataBootstrapRuntime(
             when (states.getValue(source)) {
                 InitialDataSourceStatus.UNAUTHORIZED -> {
                     val before = checkpoints.load(descriptor)
-                    val commit = ingestor.ingest(
+                    val (commit, _) = memory.ingest(
                         descriptor = descriptor,
                         records = emptyList(),
                         nextPosition = before.position,
@@ -149,14 +152,17 @@ class InitialDataBootstrapRuntime(
                 }
 
                 InitialDataSourceStatus.UNAVAILABLE -> {
-                    gapIds += ingestor.recordUnavailable(descriptor, now()).id
+                    val (gap, _) = memory.recordUnavailable(
+                        descriptor = descriptor,
+                        observedAt = now(),
+                    )
+                    gapIds += gap.id
                 }
 
-                InitialDataSourceStatus.AVAILABLE -> ingestAvailable(source)
+                InitialDataSourceStatus.AVAILABLE -> ingestAvailableSlice(source)
             }
         }
 
-        memory.rebuild(now())
 
         val finalStateFingerprint = StableCognitiveIds.fingerprint(
             "initial-data-source-state/v1",
@@ -179,19 +185,23 @@ class InitialDataBootstrapRuntime(
             states = states,
             reportPhotonId = finalReportId,
         )
-        val report = reportPhoton(provisional, gapIds, now())
-        saveIdempotent(report)
+        if (!provisional.continuationRequired) {
+            val report = reportPhoton(provisional, gapIds, now())
+            saveIdempotent(report)
+        }
         provisional
     }
 
-    private suspend fun ingestAvailable(source: InitialDataSourceAdapter) {
+    private suspend fun ingestAvailableSlice(source: InitialDataSourceAdapter) {
         val descriptor = source.descriptor
         var checkpoint = checkpoints.load(descriptor)
         if (checkpoint.isComplete()) return
+
         var position = checkpoint.position
         var pages = 0
-        while (true) {
-            check(++pages <= MAX_PAGES_PER_RUN) { "Initial-data source exceeded bounded page count" }
+
+        while (pages < MAX_PAGES_PER_SLICE) {
+            pages += 1
             val page = source.readPage(position, pageSize)
             require(page.records.all { it.sourceId == descriptor.sourceId }) {
                 "Initial-data adapter emitted a record for another source"
@@ -201,7 +211,8 @@ class InitialDataBootstrapRuntime(
                     "Initial-data adapter did not advance its cursor"
                 }
             }
-            val commit = ingestor.ingest(
+
+            val (commit, _) = memory.ingest(
                 descriptor = descriptor,
                 records = page.records,
                 nextPosition = page.nextPosition,
@@ -210,7 +221,8 @@ class InitialDataBootstrapRuntime(
             )
             checkpoint = commit.checkpoint
             position = checkpoint.position
-            if (page.complete) break
+
+            if (page.complete) return
         }
     }
 
@@ -237,14 +249,18 @@ class InitialDataBootstrapRuntime(
                 checkpointPosition = checkpoint.position,
             )
         }
+        val continuationRequired = results.any {
+            it.status == InitialDataSourceStatus.AVAILABLE && !it.completed
+        }
         val overall = if (results.all { it.status == InitialDataSourceStatus.AVAILABLE && it.completed }) {
             InitialDataBootstrapStatus.COMPLETE
         } else {
             InitialDataBootstrapStatus.PARTIAL
         }
         val fingerprint = StableCognitiveIds.fingerprint(
-            "initial-data-bootstrap-snapshot/v1",
+            "initial-data-bootstrap-snapshot/v2",
             overall.name,
+            continuationRequired.toString(),
             sourceSetFingerprint,
             sourceStateFingerprint,
             *results.flatMap { result ->
@@ -265,6 +281,7 @@ class InitialDataBootstrapRuntime(
             sources = results,
             reportPhotonId = reportPhotonId,
             fingerprint = fingerprint,
+            continuationRequired = continuationRequired,
         )
     }
 
@@ -283,6 +300,7 @@ class InitialDataBootstrapRuntime(
             appendLine("available=${snapshot.sources.count { it.status == InitialDataSourceStatus.AVAILABLE }}")
             appendLine("unauthorized=${snapshot.sources.count { it.status == InitialDataSourceStatus.UNAUTHORIZED }}")
             appendLine("unavailable=${snapshot.sources.count { it.status == InitialDataSourceStatus.UNAVAILABLE }}")
+            appendLine("continuation=${snapshot.continuationRequired}")
             append("records=${snapshot.sources.sumOf { it.durableRecordCount }}")
         },
         mimeType = MIME_TYPE,
@@ -337,6 +355,6 @@ class InitialDataBootstrapRuntime(
         const val MIME_TYPE = "application/vnd.lifeos.initial-data-bootstrap+text"
         const val DEFAULT_PAGE_SIZE = 200
         const val MAX_PAGE_SIZE = 2_000
-        const val MAX_PAGES_PER_RUN = 100_000
+        const val MAX_PAGES_PER_SLICE = 8
     }
 }

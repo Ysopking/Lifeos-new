@@ -131,6 +131,46 @@ class OwnerPolicyLedgerTest {
     }
 
     @Test
+    fun grantHistoryDistinguishesNeverSeenActiveAndRevoked() = runTest {
+        val repository = TestOwnerPolicyRepository()
+        val now = Instant.parse("2026-09-11T12:00:00Z")
+        val ledger = OwnerPolicyLedger(repository) { now }
+        val grant = OwnerPolicyGrant.create(
+            actorId = OwnerActorId("private-owner"),
+            effect = OwnerEffectType.FILE_WRITE,
+            resource = OwnerResourceSelector(
+                OwnerResourceSelectorType.EXACT,
+                "file://local/default",
+            ),
+            scope = "private-default",
+            validFrom = Instant.EPOCH,
+        )
+
+        assertEquals(
+            OwnerGrantHistoryState.NEVER_SEEN,
+            ledger.historyState(grant.id),
+        )
+
+        ledger.grant(grant)
+        assertEquals(
+            OwnerGrantHistoryState.ACTIVE,
+            ledger.historyState(grant.id),
+        )
+
+        ledger.revoke(grant.id)
+        assertEquals(
+            OwnerGrantHistoryState.REVOKED,
+            ledger.historyState(grant.id),
+        )
+
+        ledger.grant(grant)
+        assertEquals(
+            OwnerGrantHistoryState.ACTIVE,
+            ledger.historyState(grant.id),
+        )
+    }
+
+    @Test
     fun unreadableOrNonContiguousLedgerFailsClosed() = runTest {
         val now = Instant.parse("2026-09-11T12:00:00Z")
         val grant = OwnerPolicyGrant.create(

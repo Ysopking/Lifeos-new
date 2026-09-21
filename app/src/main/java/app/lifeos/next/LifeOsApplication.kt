@@ -117,6 +117,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
     private lateinit var initialDataController: InitialDataProcessController
     private lateinit var storageIntelligenceController: StorageIntelligenceProcessController
+    private lateinit var sharedFileEvidenceMigration: SharedFileEvidenceMigrationCoordinator
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
     private val mutableSelfObservationAnalysis =
@@ -136,12 +137,13 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
     override fun onCreate() {
         super.onCreate()
-        // Android must be allowed to render the launcher Activity immediately. The complete LIFEOS
-        // stage DAG is still deterministic, but it no longer blocks the UI/main thread at process start.
         startupScope.launch {
             try {
                 initializeRuntime()
                 mutableStartupState.value = LifeOsProcessStartupState.ready()
+                refreshInitialDataBootstrap()
+                refreshLiveSources()
+                refreshStorageIntelligence()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -159,6 +161,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             canRunStorageIntelligence = { hasBroadFileAccess() },
             onStorageSnapshot = { snapshot ->
                 latestStorageIntelligence = snapshot
+                if (::sharedFileEvidenceMigration.isInitialized) sharedFileEvidenceMigration.onStorageSnapshot(snapshot)
+                if (::liveSourceController.isInitialized) liveSourceController.refresh()
             },
             onStorageFailure = { failure ->
                 storageIntelligenceFailure = failure
@@ -187,6 +191,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         goalDecisionTraceRecorder = installed.goalDecisionTraceRecorder
         lifePhotonRepository = installed.lifePhotonRepository
         lifeMemoryRuntime = installed.lifeMemoryRuntime
+        sharedFileEvidenceMigration = SharedFileEvidenceMigrationCoordinator(this, lifeMemoryRuntime)
         multimodalPerception = installed.multimodalPerception
         selfHealingRuntime = installed.selfHealingRuntime
         escalationRuntime = installed.escalationRuntime
@@ -200,6 +205,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             healthGraph = selfObservationHealthGraph,
             onSnapshot = { snapshot ->
                 latestLiveSourceSync = snapshot
+                sharedFileEvidenceMigration.onLiveSnapshot(snapshot)
             },
             onFailure = { failure ->
                 liveSourceSyncFailure = failure
@@ -237,7 +243,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         initialDataBootstrap = InitialDataBootstrapRuntime(
             photons = lifePhotonRepository,
             memory = lifeMemoryRuntime,
-            sources = initialDataSources.sources + AndroidSharedFilesInitialDataSource(this),
+            sources = initialDataSources.sources,
         )
         initialDataController = InitialDataProcessController(
             bootstrap = { initialDataBootstrap },
@@ -249,8 +255,6 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                 initialDataBootstrapFailure = failure
             },
         )
-        refreshInitialDataBootstrap()
-        refreshLiveSources()
     }
 
     fun refreshSelfObservation() {
@@ -273,30 +277,20 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         liveSourceController.refresh()
     }
 
-    fun initialDataPermissionsToRequest(): List<String> = permissionController.initialDataPermissionsToRequest()
-
-    fun allRuntimePermissionsToRequest(): List<String> = permissionController.allRuntimePermissionsToRequest()
-
     internal fun runtimePermissionRequestPlan(): RuntimePermissionRequestPlan =
         permissionController.runtimePermissionRequestPlan()
 
-    fun hasBroadFileAccess(): Boolean = permissionController.hasBroadFileAccess()
+    internal fun specialAccessRequestPlan(): SpecialAccessRequestPlan =
+        permissionController.specialAccessRequestPlan()
 
-    fun shouldRequestBroadFileAccess(): Boolean = permissionController.shouldRequestBroadFileAccess()
+    internal fun deviceAccessSnapshot(): DeviceAccessSnapshot =
+        permissionController.deviceAccessSnapshot()
 
-    fun markBroadFileAccessRequested() = permissionController.markBroadFileAccessRequested()
-
-    fun shouldRequestInitialDataPermissions(): Boolean = permissionController.shouldRequestInitialDataPermissions()
-
-    fun shouldRequestAllRuntimePermissions(): Boolean = permissionController.shouldRequestAllRuntimePermissions()
-
-    fun markInitialDataPermissionsRequested() = permissionController.markInitialDataPermissionsRequested()
-
-    fun markAllRuntimePermissionsRequested() = permissionController.markAllRuntimePermissionsRequested()
+    fun hasBroadFileAccess(): Boolean =
+        permissionController.hasBroadFileAccess()
 
     fun refreshInitialDataBootstrap() {
         if (!::initialDataController.isInitialized) return
         initialDataController.refresh()
     }
-
 }

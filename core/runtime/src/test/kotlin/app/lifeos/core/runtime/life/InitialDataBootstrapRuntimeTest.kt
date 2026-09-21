@@ -109,6 +109,36 @@ class InitialDataBootstrapRuntimeTest {
     }
 
     @Test
+    fun largeSourceStopsAtSliceBoundaryAndResumesExactCheckpoint() = runTest {
+        val repository = MemoryPhotonRepository()
+        val source = MutableSource(
+            descriptor = LifeSourceDescriptor("media-sliced", "media-sliced-v1"),
+            records = records("media-sliced", 900),
+        )
+        val runtime = runtime(repository, listOf(source), pageSize = 100)
+
+        val first = runtime.run()
+        val firstCheckpoint =
+            PhotonBackedLifeSourceCheckpointStore(repository).load(source.descriptor)
+
+        assertEquals(InitialDataBootstrapStatus.PARTIAL, first.status)
+        assertTrue(first.continuationRequired)
+        assertEquals(8, source.readCount)
+        assertEquals("800", firstCheckpoint.position)
+        assertEquals(800, first.sources.single().durableRecordCount)
+
+        val second = runtime.run()
+        val secondCheckpoint =
+            PhotonBackedLifeSourceCheckpointStore(repository).load(source.descriptor)
+
+        assertEquals(InitialDataBootstrapStatus.COMPLETE, second.status)
+        assertTrue(!second.continuationRequired)
+        assertEquals(9, source.readCount)
+        assertEquals(null, secondCheckpoint.position)
+        assertEquals(900, second.sources.single().durableRecordCount)
+    }
+
+    @Test
     fun largeSourceIsBoundedlyPagedAndCompleted() = runTest {
         val repository = MemoryPhotonRepository()
         val source = MutableSource(
@@ -121,6 +151,34 @@ class InitialDataBootstrapRuntimeTest {
         assertEquals(InitialDataBootstrapStatus.COMPLETE, result.status)
         assertEquals(625, result.sources.single().durableRecordCount)
         assertEquals(7, source.readCount)
+    }
+
+    @Test
+    fun largeSourceYieldsAfterSliceBudgetAndResumesExactCheckpoint() = runTest {
+        val repository = MemoryPhotonRepository()
+        val source = MutableSource(
+            descriptor = LifeSourceDescriptor("media", "media-v1"),
+            records = records("media", 925),
+        )
+        val runtime = runtime(repository, listOf(source), pageSize = 100)
+
+        val first = runtime.run()
+
+        assertEquals(InitialDataBootstrapStatus.PARTIAL, first.status)
+        assertTrue(first.continuationRequired)
+        assertEquals(800, first.sources.single().durableRecordCount)
+        assertEquals("800", first.sources.single().checkpointPosition)
+        assertEquals(8, source.readCount)
+        assertEquals(0, repository.loadAll().count { "initial-data-bootstrap" in it.tags })
+
+        val second = runtime.run()
+
+        assertEquals(InitialDataBootstrapStatus.COMPLETE, second.status)
+        assertTrue(!second.continuationRequired)
+        assertEquals(925, second.sources.single().durableRecordCount)
+        assertEquals(null, second.sources.single().checkpointPosition)
+        assertEquals(10, source.readCount)
+        assertEquals(1, repository.loadAll().count { "initial-data-bootstrap" in it.tags })
     }
 
     private fun runtime(

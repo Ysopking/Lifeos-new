@@ -63,6 +63,132 @@ class ActiveLifeSourceProjectionTest {
     }
 
     @Test
+    fun `retired legacy source evidence stays durable but leaves graph and memory`() = runTest {
+        val repository = MemoryPhotonRepository()
+        val descriptor =
+            LifeSourceDescriptor(
+                "android-shared-files",
+                "android-shared-files/v2",
+            )
+        val ingestor = DurableLifeSourceIngestor(repository)
+        val runtime = DurableLifeMemoryRuntime(repository)
+
+        ingestor.ingest(
+            descriptor = descriptor,
+            records = listOf(
+                record(
+                    descriptor.sourceId,
+                    "metadata-file",
+                    "Legacy metadata",
+                    "LegacyMetadataPerson",
+                )
+            ),
+            nextPosition = null,
+            authorized = true,
+            committedAt = now,
+        )
+
+        val before = runtime.rebuild(now)
+        assertTrue(
+            before.graph.entities.any {
+                it.label == "LegacyMetadataPerson"
+            }
+        )
+
+        val retired = runtime.retireSourceEvidence(
+            sourceId = descriptor.sourceId,
+            replacementAuthority =
+                "live-data:android-files",
+            at = now.plusSeconds(1),
+        )
+
+        assertFalse(
+            retired.graph.entities.any {
+                it.label == "LegacyMetadataPerson"
+            }
+        )
+        assertTrue(
+            repository.loadAll().any {
+                "life-source-evidence" in it.tags &&
+                    "source:android-shared-files" in it.tags
+            }
+        )
+        assertEquals(
+            setOf("android-shared-files"),
+            DurableLifeSourceRetirement.retiredSources(
+                repository.loadAll()
+            ),
+        )
+
+        val markerCount = repository.loadAll().count {
+            "life-source-retirement" in it.tags
+        }
+        val replay = runtime.retireSourceEvidence(
+            sourceId = descriptor.sourceId,
+            replacementAuthority =
+                "live-data:android-files",
+            at = now.plusSeconds(2),
+        )
+
+        assertEquals(1, markerCount)
+        assertEquals(
+            markerCount,
+            repository.loadAll().count {
+                "life-source-retirement" in it.tags
+            },
+        )
+        assertEquals(retired.fingerprint, replay.fingerprint)
+    }
+
+    @Test
+    fun `malformed retirement marker cannot hide source evidence`() = runTest {
+        val repository = MemoryPhotonRepository()
+        val evidence = Photon(
+            id = PhotonId("legacy-evidence-with-bad-retirement"),
+            content = "Still authoritative",
+            provenance =
+                Provenance("test", "legacy", now),
+            tags = setOf(
+                "life-source-evidence",
+                "source:android-shared-files",
+                "source-adapter:android-shared-files/v2",
+                "person:StillAuthoritative",
+            ),
+        )
+        repository.save(evidence)
+        repository.save(
+            Photon(
+                id = PhotonId("malformed-retirement"),
+                content = "schema=999\nsource=broken",
+                provenance =
+                    Provenance(
+                        "life-source-retirement",
+                        "broken",
+                        now.plusSeconds(1),
+                    ),
+                tags = setOf(
+                    "life-memory-management",
+                    "life-source-retirement",
+                    "source:android-shared-files",
+                ),
+            )
+        )
+
+        val filtered = ActiveLifeSourceProjection.filter(
+            authoritative = listOf(evidence),
+            allPhotons = repository.loadAll(),
+        )
+
+        assertEquals(listOf(evidence), filtered)
+        assertTrue(
+            DurableLifeMemoryRuntime(repository)
+                .rebuild(now.plusSeconds(1))
+                .graph.entities
+                .any { it.label == "StillAuthoritative" }
+        )
+    }
+
+    @Test
     fun `source evidence without a valid checkpoint stays visible`() = runTest {
         val repository = MemoryPhotonRepository()
         repository.save(

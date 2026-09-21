@@ -83,6 +83,21 @@ data class LiveSourceCursorState(
         )
     }
 
+    fun promoteSnapshotToCursor(
+        nextCursor: SourceCursor,
+        at: Instant,
+    ): LiveSourceCursorState {
+        require(bootstrapped)
+        require(cursor == null) { "Snapshot-to-cursor promotion requires a cursorless source" }
+        return copy(
+            revision = Math.addExact(revision, 1L),
+            cursor = nextCursor,
+            baselineFingerprint = null,
+            lastObservationRevision = 0L,
+            updatedAt = at,
+        )
+    }
+
     companion object {
         fun initial(
             sourceId: LiveSourceId,
@@ -366,7 +381,25 @@ class LiveSourceDeltaCoordinator(
             return bootstrap(connector, rawObservation, state)
         }
 
-        val cursor = state.cursor
+        var cursor = state.cursor
+        val adapter = connector.adapter
+        if (
+            cursor == null &&
+            adapter is SnapshotToCursorLiveSourceAdapter
+        ) {
+            val migrationCursor = adapter.migrationCursor()
+            val migrated = state.promoteSnapshotToCursor(
+                nextCursor = migrationCursor,
+                at = now(),
+            )
+            state = persistState(state, migrated)
+                ?: return currentConflict(sourceId)
+            cursor = migrationCursor
+            hub.observeAccount(
+                rawObservation.copy(sourceCursor = migrationCursor.value)
+            )
+        }
+
         if (cursor == null) {
             return if (snapshots == null) {
                 LiveSourceSyncResult.IdleWithoutIncrementalCursor(sourceId, state)

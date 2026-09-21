@@ -2,9 +2,14 @@ package app.lifeos.next
 
 import app.lifeos.core.runtime.life.InitialDataBootstrapRuntime
 import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 internal class InitialDataProcessController(
@@ -15,15 +20,27 @@ internal class InitialDataProcessController(
     private val scope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
+    private var refreshJob: Job? = null
+
     fun refresh() {
-        if (!startupReady()) {
-            val available = runCatching { bootstrap() }.isSuccess
-            if (!available) return
-        }
-        scope.launch {
+        if (!startupReady()) return
+        if (refreshJob?.isActive == true) return
+
+        refreshJob = scope.launch {
             try {
-                onSnapshot(bootstrap().run())
-                onFailure(null)
+                while (currentCoroutineContext().isActive) {
+                    val snapshot = bootstrap().run()
+                    onSnapshot(snapshot)
+                    onFailure(null)
+
+                    if (!snapshot.continuationRequired) {
+                        break
+                    }
+
+                    delay(SLICE_DELAY_MILLIS)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 onFailure(
                     error.message ?: error::class.simpleName
@@ -31,5 +48,9 @@ internal class InitialDataProcessController(
                 )
             }
         }
+    }
+
+    private companion object {
+        const val SLICE_DELAY_MILLIS = 100L
     }
 }

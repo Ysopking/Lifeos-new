@@ -4,6 +4,7 @@ import app.lifeos.core.data.EncryptedBinaryAssetStore
 import app.lifeos.core.runtime.capability.GeneratedProviderRestoreAuthority
 import app.lifeos.core.runtime.policy.OwnerActorId
 import app.lifeos.core.runtime.policy.OwnerEffectType
+import app.lifeos.core.runtime.policy.OwnerGrantHistoryState
 import app.lifeos.core.runtime.policy.OwnerPolicyGrant
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.policy.OwnerResourceSelector
@@ -13,10 +14,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Seeds the complete private-APK owner baseline exactly once, and only while the durable policy
- * ledger is pristine. Once any policy history exists, especially a revoke, this helper never
- * recreates authority. Keeping all initial grants together also prevents one subsystem from making
- * another subsystem's pristine-only defaults unreachable.
+ * Converges versioned private-APK default grants without recreating revoked authority. A grant that
+ * never existed may be added by a later build even when the ledger is non-pristine, while an owner
+ * revoke remains a permanent tombstone for that exact grant identity.
  */
 object PrivateOwnerPolicyBaseline {
     val ownerActorId = OwnerActorId("private-owner")
@@ -31,8 +31,16 @@ object PrivateOwnerPolicyBaseline {
     suspend fun ensure(policy: OwnerPolicyLedger) = mutex.withLock {
         // Install only the dynamic authority view. Web network authority itself is never seeded.
         WebDeepSearchRuntime.installPolicy(policy)
-        if (policy.snapshot().revision != 0L) return@withLock
-        DEFAULT_GRANTS.forEach { policy.grant(it) }
+        DEFAULT_GRANTS.forEach { grant ->
+            when (policy.historyState(grant.id)) {
+                OwnerGrantHistoryState.NEVER_SEEN ->
+                    policy.grant(grant)
+
+                OwnerGrantHistoryState.ACTIVE,
+                OwnerGrantHistoryState.REVOKED,
+                -> Unit
+            }
+        }
     }
 
     fun storageMaintenanceGrant(

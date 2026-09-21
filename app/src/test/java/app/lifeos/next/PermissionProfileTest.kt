@@ -54,4 +54,53 @@ class PermissionProfileTest {
         assertEquals(2, plan.profileIds.size)
         assertFalse(RuntimePermissionRequestPlan(emptySet(), emptyList()).required)
     }
+
+    @Test
+    fun `notification listener is a first class special access profile`() {
+        val profile = PrivatePermissionProfiles.assistantAccess()
+        val evaluator = PermissionProfileEvaluator(
+            runtimePermissionGranted = { true },
+            specialAccessSupported = { true },
+            specialAccessGranted = { false },
+        )
+
+        val result = evaluator.evaluate(profile)
+
+        assertEquals(PermissionProfileId.ASSISTANT_ACCESS, profile.id)
+        assertEquals(PermissionProfileState.OWNER_ACTION_REQUIRED, result.state)
+        assertEquals(
+            setOf(PermissionSpecialAccess.NOTIFICATION_LISTENER),
+            result.missingSpecialAccess,
+        )
+    }
+
+    @Test
+    fun `special access request plan is deterministic`() {
+        val plan = SpecialAccessRequestPlan(
+            profileIds = setOf(
+                PermissionProfileId.BROAD_FILES,
+                PermissionProfileId.ASSISTANT_ACCESS,
+            ),
+            accesses = listOf(
+                PermissionSpecialAccess.BROAD_FILE_ACCESS,
+                PermissionSpecialAccess.NOTIFICATION_LISTENER,
+            ),
+        )
+
+        assertTrue(plan.required)
+        assertFalse(SpecialAccessRequestPlan(emptySet(), emptyList()).required)
+    }
+
+    @Test
+    fun `device access convergence ignores unsupported special access as missing`() {
+        val snapshot = DeviceAccessSnapshot(
+            runtimePermissionsMissing = emptyList(),
+            specialAccessMissing = emptyList(),
+            profileStates = mapOf(
+                PermissionProfileId.BROAD_FILES to PermissionProfileState.UNSUPPORTED,
+            ),
+        )
+
+        assertTrue(snapshot.converged)
+    }
 }

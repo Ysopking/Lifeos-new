@@ -1,7 +1,12 @@
 package app.lifeos.core.runtime.life
 
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRepository
+import app.lifeos.core.model.Provenance
+import app.lifeos.core.model.StableCognitiveIds
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 import java.util.Base64
 
 /**
@@ -25,10 +30,16 @@ internal object ActiveLifeSourceProjection {
         allPhotons: List<Photon>,
     ): List<Photon> {
         val activeAdapters = activeAdapters(allPhotons)
-        if (activeAdapters.isEmpty()) return authoritative
+        val retiredSources = DurableLifeSourceRetirement.retiredSources(allPhotons)
+        if (activeAdapters.isEmpty() && retiredSources.isEmpty()) return authoritative
         return authoritative.filter { photon ->
-            if ("life-source-evidence" !in photon.tags) return@filter true
+            val sourceRecord =
+                "life-source-evidence" in photon.tags ||
+                    "life-source-gap" in photon.tags
+            if (!sourceRecord) return@filter true
             val sourceId = photon.singleTagValue(SOURCE_PREFIX) ?: return@filter true
+            if (sourceId in retiredSources) return@filter false
+            if ("life-source-evidence" !in photon.tags) return@filter true
             val adapterVersion = photon.singleTagValue(ADAPTER_PREFIX) ?: return@filter true
             activeAdapters[sourceId]?.let { active -> adapterVersion == active } ?: true
         }
@@ -114,4 +125,145 @@ internal object ActiveLifeSourceProjection {
     private const val MAX_CONTENT_CHARS = 64 * 1024
     private const val MAX_FIELDS = 32
     private const val MAX_FIELD_CHARS = 16 * 1024
+}
+
+/**
+ * Durable management marker for moving one source out of the legacy LifeSource pipeline.
+ *
+ * Evidence remains immutable in the Photon store for provenance/recovery, but Graph/Memory stop
+ * projecting it once the replacement authority has durably taken ownership.
+ */
+internal object DurableLifeSourceRetirement {
+    data class PersistResult(
+        val marker: Photon,
+        val created: Boolean,
+    )
+
+    suspend fun persist(
+        photons: PhotonRepository,
+        sourceId: String,
+        replacementAuthority: String,
+        retiredAt: Instant,
+    ): PersistResult {
+        require(sourceId.isNotBlank())
+        require(replacementAuthority.isNotBlank())
+        val id = markerId(sourceId, replacementAuthority)
+        val existing = photons.load(id)
+        if (existing != null) {
+            validate(existing, sourceId, replacementAuthority)
+            return PersistResult(existing, created = false)
+        }
+
+        val marker = Photon(
+            id = id,
+            content = buildString {
+                appendLine("schema=" + RETIREMENT_SCHEMA)
+                appendLine("source=" + encodeRetirement(sourceId))
+                append("replacement=" + encodeRetirement(replacementAuthority))
+            },
+            mimeType = RETIREMENT_MIME,
+            semanticMass = 0.0,
+            energy = 0.0,
+            confidence = 1.0,
+            provenance = Provenance(
+                source = "life-source-retirement",
+                actor = replacementAuthority,
+                createdAt = retiredAt,
+            ),
+            tags = setOf(
+                "life-memory-management",
+                "life-source-retirement",
+                "source:$sourceId",
+                "replacement-authority:$replacementAuthority",
+            ),
+        )
+        photons.save(marker)
+        check(photons.load(id) == marker) {
+            "Life-source retirement marker was not durable after save"
+        }
+        return PersistResult(marker, created = true)
+    }
+
+    fun retiredSources(allPhotons: List<Photon>): Set<String> =
+        allPhotons.mapNotNull(::retiredSource).toSortedSet()
+
+    private fun retiredSource(photon: Photon): String? = runCatching {
+        if ("life-source-retirement" !in photon.tags) return@runCatching null
+        require(photon.mimeType == RETIREMENT_MIME)
+        val sourceTag = photon.tags
+            .filter { it.startsWith(SOURCE_PREFIX) }
+            .single()
+            .removePrefix(SOURCE_PREFIX)
+        require(sourceTag.isNotBlank())
+        val fields = retirementFields(photon.content)
+        require(fields["schema"] == RETIREMENT_SCHEMA)
+        require(decodeRetirement(requireNotNull(fields["source"])) == sourceTag)
+        require(decodeRetirement(requireNotNull(fields["replacement"])).isNotBlank())
+        sourceTag
+    }.getOrNull()
+
+    private fun validate(
+        photon: Photon,
+        sourceId: String,
+        replacementAuthority: String,
+    ) {
+        require(retiredSource(photon) == sourceId) {
+            "Life-source retirement marker identity mismatch"
+        }
+        val fields = retirementFields(photon.content)
+        require(
+            decodeRetirement(requireNotNull(fields["replacement"])) ==
+                replacementAuthority
+        ) {
+            "Life-source retirement replacement authority mismatch"
+        }
+    }
+
+    private fun markerId(
+        sourceId: String,
+        replacementAuthority: String,
+    ): PhotonId = PhotonId(
+        "life-source-retirement-" +
+            StableCognitiveIds.fingerprint(
+                "life-source-retirement-id/v1",
+                sourceId,
+                replacementAuthority,
+            )
+    )
+
+    private fun retirementFields(content: String): Map<String, String> {
+        require(content.length <= 16 * 1024)
+        val fields = linkedMapOf<String, String>()
+        content.lineSequence()
+            .filter { it.isNotBlank() }
+            .forEach { line ->
+                val separator = line.indexOf('=')
+                require(separator > 0)
+                require(
+                    fields.put(
+                        line.substring(0, separator),
+                        line.substring(separator + 1),
+                    ) == null
+                )
+            }
+        return fields
+    }
+
+    private fun encodeRetirement(value: String): String =
+        Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(
+                value.toByteArray(StandardCharsets.UTF_8)
+            )
+
+    private fun decodeRetirement(value: String): String =
+        String(
+            Base64.getUrlDecoder().decode(value),
+            StandardCharsets.UTF_8,
+        )
+
+    private const val SOURCE_PREFIX = "source:"
+    private const val RETIREMENT_SCHEMA = "1"
+    private const val RETIREMENT_MIME =
+        "application/vnd.lifeos.life-source-retirement+text"
 }

@@ -456,6 +456,25 @@ class DurableLifeMemoryRuntime(
 
     fun current(): DurableLifeMemorySnapshot? = latest
 
+    suspend fun retireSourceEvidence(
+        sourceId: String,
+        replacementAuthority: String,
+        at: Instant,
+    ): DurableLifeMemorySnapshot {
+        val result = DurableLifeSourceRetirement.persist(
+            photons = photons,
+            sourceId = sourceId,
+            replacementAuthority = replacementAuthority,
+            retiredAt = at,
+        )
+        val current = latest
+        return if (!result.created && current != null) {
+            current
+        } else {
+            rebuild(at)
+        }
+    }
+
     suspend fun rebuild(now: Instant): DurableLifeMemorySnapshot {
         val all = photons.loadAll()
         val storedAuthoritative = all.filterNot(::isLifeMemoryManagementPhoton)
