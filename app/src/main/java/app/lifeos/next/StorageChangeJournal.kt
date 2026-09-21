@@ -11,6 +11,10 @@ internal interface StorageChangeJournal {
         limit: Int,
     ): List<StorageChangeEntry>
 
+    fun loadChange(
+        revision: Long,
+    ): StorageChangeEntry?
+
     fun currentChangeRevision(): Long
 
     fun pruneChangesThrough(
