@@ -40,3 +40,7 @@ Seal:
 ## Gate
 
 B370 remains stacked/draft behind B369.
+
+## Promotion run
+
+B370 is cleanly restacked on merged B369/main. This exact head is the promotion candidate for main-targeted CI.
