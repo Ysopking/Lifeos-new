@@ -42,21 +42,25 @@ fun LifeOsTopBar(
         modifier = modifier
             .fillMaxWidth()
             .statusBarsPadding(),
+        color = MaterialTheme.colorScheme.background,
         tonalElevation = LifeOsTokens.Elevation.resting,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
-                    horizontal = LifeOsTokens.Layout.compactHorizontalPadding,
-                    vertical = LifeOsTokens.Spacing.small,
+                    start = LifeOsTokens.Layout.compactHorizontalPadding,
+                    end = LifeOsTokens.Spacing.small,
+                    top = LifeOsTokens.Spacing.xSmall,
+                    bottom = LifeOsTokens.Spacing.xSmall,
                 ),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = state.title,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
             )
             BadgedBox(
                 badge = {
@@ -79,6 +83,11 @@ fun LifeOsTopBar(
                         painter = painterResource(R.drawable.ic_system),
                         contentDescription = null,
                         modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
+                        tint = if (state.attentionCount > 0) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
                 }
             }
@@ -87,7 +96,7 @@ fun LifeOsTopBar(
 }
 
 internal fun attentionBadgeLabel(attentionCount: Int): String =
-    if (attentionCount > MAX_BADGE_COUNT) "$MAX_BADGE_COUNT+" else attentionCount.toString()
+    if (attentionCount > MAX_BADGE_COUNT) "${MAX_BADGE_COUNT}+" else attentionCount.toString()
 
 internal fun systemActionDescription(attentionCount: Int): String =
     if (attentionCount > 0) {
