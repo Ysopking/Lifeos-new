@@ -209,10 +209,47 @@ class PredicateFrameParser(
             }
         }
 
-        return result
+        val positioned = result
             .groupBy { it.predicate to it.localTokenIndex }
             .map { (_, occurrences) -> occurrences.maxBy { it.confidence } }
             .sortedWith(compareBy<PredicateOccurrence> { it.localTokenIndex }.thenBy { it.predicate.name })
+
+        val collapsed = mutableListOf<PredicateOccurrence>()
+        positioned.forEach { occurrence ->
+            val previousIndex = collapsed.indexOfLast { it.predicate == occurrence.predicate }
+            if (previousIndex < 0) {
+                collapsed += occurrence
+                return@forEach
+            }
+            val previous = collapsed[previousIndex]
+            if (hasIndependentActionBoundary(tokens, previous.localTokenIndex, occurrence.localTokenIndex)) {
+                collapsed += occurrence
+            } else {
+                val preferred = when {
+                    occurrence.confidence > previous.confidence -> occurrence
+                    occurrence.confidence < previous.confidence -> previous
+                    occurrence.localTokenIndex < previous.localTokenIndex -> occurrence
+                    else -> previous
+                }
+                collapsed[previousIndex] = preferred
+            }
+        }
+        return collapsed.sortedWith(
+            compareBy<PredicateOccurrence> { it.localTokenIndex }.thenBy { it.predicate.name }
+        )
+    }
+
+    private fun hasIndependentActionBoundary(
+        tokens: List<LanguageToken>,
+        leftIndex: Int,
+        rightIndex: Int,
+    ): Boolean {
+        if (rightIndex <= leftIndex + 1) return false
+        return (leftIndex + 1 until rightIndex).any { index ->
+            val token = tokens[index]
+            token.normalized in ACTION_BOUNDARY_MARKERS ||
+                token.kind == TokenKind.PUNCTUATION && token.original in ACTION_BOUNDARY_PUNCTUATION
+        }
     }
 
     private data class PredicateOccurrence(
@@ -576,6 +613,12 @@ class PredicateFrameParser(
             "it", "this", "that", "him", "her", "them", "other",
         )
         private val QUOTE_MARKERS = setOf("\"", "„", "“", "”", "«", "»")
+        private val ACTION_BOUNDARY_MARKERS = setOf(
+            "und", "oder", "dann", "danach", "anschließend", "anschliessend",
+            "and", "or", "then", "afterwards",
+        )
+        private val ACTION_BOUNDARY_PUNCTUATION = setOf(";", ":")
+
         private val OBJECT_STOP_WORDS = setOf(
             "bitte", "please", "mir", "mich", "me", "an", "to", "nicht", "not",
             "um", "ein", "nach", "durch", "heraus",
