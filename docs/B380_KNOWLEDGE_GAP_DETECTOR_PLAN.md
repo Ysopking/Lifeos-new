@@ -68,3 +68,8 @@ After implementation:
 1. `./gradlew :core:runtime-reasoning:test --tests 'app.lifeos.core.runtime.reasoning.KnowledgeGapDetectorTest'`
 2. `./gradlew :core:runtime-reasoning:test`
 3. Core Fast after B379/B378 promotion order.
+
+## Promotion run
+
+- Retargeted to `main` after B379 merge commit `bf0db2c8b74b2b823e0cfc28021f58a3784d0174`.
+- This documentation-only commit exists to trigger exact-head promotion CI for B380 without changing production/test semantics.
