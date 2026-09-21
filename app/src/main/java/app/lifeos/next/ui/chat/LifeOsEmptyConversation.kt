@@ -27,25 +27,21 @@ fun LifeOsEmptyConversation(
         modifier = modifier
             .fillMaxWidth()
             .padding(top = LifeOsTokens.Spacing.xxLarge),
-        verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.medium),
+        verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.large),
     ) {
         Text(
-            text = "LIFEOS",
+            text = if (contextReady) {
+                "Was kann ich für dich tun?"
+            } else {
+                "Einen Moment."
+            },
             style = MaterialTheme.typography.headlineMedium,
         )
         Text(
             text = if (contextReady) {
-                "Was möchtest du tun?"
+                "Frag, plane oder arbeite direkt mit deinem Gedächtnis."
             } else {
-                "Dein persönlicher Gedächtniskontext wird vorbereitet."
-            },
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(
-            text = if (contextReady) {
-                "Frag mich etwas, plane einen nächsten Schritt oder arbeite mit deinem Gedächtnis."
-            } else {
-                "Sobald der Kontext bereit ist, kannst du mit LIFEOS arbeiten."
+                "LIFEOS richtet deinen persönlichen Kontext ein."
             },
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
