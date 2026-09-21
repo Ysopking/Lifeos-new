@@ -60,13 +60,13 @@ private val LifeOsTypography = Typography(
         fontSize = 32.sp,
         lineHeight = 38.sp,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.4).sp,
+        letterSpacing = (-0.4f).sp,
     ),
     headlineMedium = TextStyle(
         fontSize = 28.sp,
         lineHeight = 34.sp,
         fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.25).sp,
+        letterSpacing = (-0.25f).sp,
     ),
     titleLarge = TextStyle(
         fontSize = 20.sp,
