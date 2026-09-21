@@ -348,6 +348,27 @@ class ReferenceResolver {
         } else if (item.active) {
             score += 0.08
         }
+
+        val uniqueActivePreferredDeictic =
+            expression.kind in setOf(ReferenceKind.THIS, ReferenceKind.THAT) &&
+                expression.preferredKinds.isNotEmpty() &&
+                item.active &&
+                semanticKindMatch &&
+                context.items.count { candidate ->
+                    candidate.active &&
+                        (
+                            candidate.kind in expression.preferredKinds ||
+                                candidate.tags.any { it in expression.preferredKinds } ||
+                                candidate.semanticTypes.any { semantic ->
+                                    expression.preferredKinds.any { preferred ->
+                                        semantic == preferred || semantic.endsWith(":" + preferred)
+                                    }
+                                }
+                        )
+                } == 1
+        if (uniqueActivePreferredDeictic) {
+            score += 0.16
+        }
         if (
             item.photonId == context.activeGoalId &&
             expression.kind in setOf(
