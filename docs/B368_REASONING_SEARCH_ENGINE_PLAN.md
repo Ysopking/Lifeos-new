@@ -50,3 +50,7 @@ B368 stays stacked/draft until B365 → B366 → B367 promotion order is satisfi
 ## Module placement
 
 B368 stays in `:core:reasoning`; it consumes B367 domain models without growing `core/runtime`.
+
+## Promotion run
+
+B368 is cleanly restacked on merged B367/main. This exact head is the promotion candidate for main-targeted CI.
