@@ -44,15 +44,8 @@ internal object AndroidLiveSourceConnectors {
             privacyZone = SourcePrivacyZone.SENSITIVE,
             now = now,
         ),
-        AndroidInitialSourceLiveConnector(
-            source = AndroidSharedFilesInitialDataSource(context),
-            sourceId = LiveSourceId(AndroidSharedFilesInitialDataSource.SOURCE_ID),
-            connectorId = LiveDataConnectorId("android-files"),
-            accountKey = LiveDataAccountKey("device-shared-files"),
-            streamKind = LiveDataStreamKind.FILE,
-            connectorVersion = "android-shared-files-live/v1",
-            priority = LiveSourcePriority.NORMAL,
-            privacyZone = SourcePrivacyZone.PRIVATE,
+        AndroidStorageLiveSourceConnector(
+            context = context,
             now = now,
         ),
     )
@@ -144,7 +137,7 @@ internal class AndroidInitialSourceLiveConnector(
     }
 
     override suspend fun changesAfter(cursor: SourceCursor): SourceChangeSet {
-        error("Android Calendar/Files live sources are snapshot-diff providers and own no incremental cursor")
+        error("Android snapshot live source owns no incremental cursor")
     }
 
     override suspend fun project(delta: SourceDelta): LiveDataDelta {
