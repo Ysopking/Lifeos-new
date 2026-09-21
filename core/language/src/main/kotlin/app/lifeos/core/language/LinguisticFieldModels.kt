@@ -49,6 +49,7 @@ data class LinguisticConcept(
     val attractsTags: Set<String> = emptySet(),
     val repelsTags: Set<String> = emptySet(),
     val semanticMass: Double = 1.0,
+    val phraseVariants: Set<String> = emptySet(),
 ) {
     init {
         require(id.isNotBlank())
@@ -59,6 +60,14 @@ data class LinguisticConcept(
     }
 
     val allForms: Set<String> = (variants + canonical).map(::normalizeFieldText).toSet()
+    val allPhraseForms: Set<String> = phraseVariants
+        .map { phrase ->
+            phrase.trim()
+                .lowercase()
+                .replace(Regex("\\s+"), " ")
+        }
+        .filter { it.isNotBlank() }
+        .toSet()
 }
 
 data class LinguisticFieldCandidate(

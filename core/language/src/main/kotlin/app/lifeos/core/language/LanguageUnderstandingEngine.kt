@@ -23,6 +23,16 @@ class LanguageUnderstandingEngine(
     private val referenceResolver: ReferenceResolver = ReferenceResolver(),
     private val linguisticFieldEngine: LinguisticFieldEngine = LinguisticFieldEngine(),
     private val fieldAdapter: FieldLanguageAdapter = FieldLanguageAdapter(),
+    private val discourseIntentResolver: DiscourseIntentResolver = DiscourseIntentResolver(),
+    private val discourseStateProjector: DiscourseStateProjector = DiscourseStateProjector(),
+    private val coreferenceResolver: CoreferenceResolverV4 = CoreferenceResolverV4(),
+    private val dependencySyntaxParser: DeterministicDependencySyntaxParser =
+        DeterministicDependencySyntaxParser(),
+    private val interpretationLatticeEngine: SemanticInterpretationLatticeEngine =
+        SemanticInterpretationLatticeEngine(),
+    private val clarificationEngine: ClarificationEngine = ClarificationEngine(),
+    private val semanticCorrectionEngine: SemanticCorrectionEngine = SemanticCorrectionEngine(),
+    private val pragmaticActResolver: PragmaticActResolver = PragmaticActResolver(),
     private val semanticGraphExtractor: LanguageSemanticGraphExtractor = LanguageSemanticGraphExtractor(),
     private val speechActParser: SpeechActParser = SpeechActParser(),
     private val predicateFrameParser: PredicateFrameParser = PredicateFrameParser(),
@@ -44,9 +54,20 @@ class LanguageUnderstandingEngine(
         retainContext: Boolean,
     ): LanguageUnderstandingResult {
         val utterance = normalizer.normalize(text)
+        val pragmaticAct = pragmaticActResolver.resolve(utterance)
         val linguisticField = linguisticFieldEngine.converge(utterance, context)
         val ruleEvidence = intentClassifier.classify(utterance)
-        val evidence = fieldAdapter.mergeIntentEvidence(ruleEvidence, fieldAdapter.intentEvidence(linguisticField))
+        val fieldEvidence = fieldAdapter.intentEvidence(linguisticField)
+        val discourseEvidence = discourseIntentResolver.evidence(
+            utterance = utterance,
+            context = context,
+            existingEvidence = ruleEvidence + fieldEvidence,
+        )
+        val evidence = fieldAdapter.mergeIntentEvidence(
+            ruleEvidence,
+            fieldEvidence,
+            discourseEvidence,
+        )
         val topIntent = evidence.first().intent
         val entityV3 = entityEngineV3.extract(utterance)
         val entities = fieldAdapter.mergeEntities(
@@ -54,18 +75,30 @@ class LanguageUnderstandingEngine(
             fieldAdapter.entities(utterance, linguisticField),
         )
         val semanticGraph = semanticGraphExtractor.extract(utterance, entities)
+        val dependencySyntax = dependencySyntaxParser.parse(
+            utterance = utterance,
+            semanticGraph = semanticGraph,
+        )
         val quantityTemporal = quantityTemporalEngine.parse(
             utterance = utterance,
             referenceInstant = context.now,
             zoneId = ZoneId.of(context.zoneId),
         )
-        val references = referenceExtractor.extract(utterance, topIntent).map { referenceResolver.resolve(it, context) }
+        val discourseState = discourseStateProjector.project(context)
+        val references = coreferenceResolver.resolve(
+            utterance = utterance,
+            topIntent = topIntent,
+            context = context,
+            discourse = discourseState,
+        )
         val speechActs = speechActParser.parse(utterance, semanticGraph)
         val predicateFrames = predicateFrameParser.parse(
             utterance = utterance,
             graph = semanticGraph,
             speechActs = speechActs,
             references = references,
+            linguisticField = linguisticField,
+            syntaxGraph = dependencySyntax,
         )
         val semanticActionGraph = semanticActionGraphBuilder.build(
             utterance = utterance,
@@ -73,13 +106,32 @@ class LanguageUnderstandingEngine(
             frames = predicateFrames,
             references = references,
         )
-        val operationalIntent = deriveOperationalIntent(topIntent, semanticActionGraph)
+        val interpretationLattice = interpretationLatticeEngine.converge(
+            intents = evidence,
+            references = references,
+            actionGraph = semanticActionGraph,
+            linguisticField = linguisticField,
+        )
+        val semanticIntent = interpretationLattice.winner
+            ?.takeIf { interpretationLattice.converged }
+            ?.intent
+            ?: topIntent
+        val operationalIntent = deriveOperationalIntent(semanticIntent, semanticActionGraph)
         val ambiguities = buildAmbiguities(
             evidence = evidence,
             references = references,
             topIntent = topIntent,
             linguisticField = linguisticField,
             actionGraph = semanticActionGraph,
+        )
+        val clarification = clarificationEngine.build(
+            ambiguities = ambiguities,
+            graph = semanticActionGraph,
+            lattice = interpretationLattice,
+        )
+        val semanticCorrections = semanticCorrectionEngine.project(
+            utterance = utterance,
+            field = linguisticField,
         )
         val domainSemanticGraph = domainSemanticInterpreter.interpret(
             utterance = utterance,
@@ -115,6 +167,11 @@ class LanguageUnderstandingEngine(
             semanticEntitiesV2 = entityV3.entities,
             quantityTemporal = quantityTemporal,
             domainSemanticGraph = domainSemanticGraph,
+            discourseState = discourseState,
+            dependencySyntax = dependencySyntax,
+            interpretationLattice = interpretationLattice,
+            clarification = clarification,
+            pragmaticAct = pragmaticAct,
             interpretationQuality = quality,
         )
         return LanguageUnderstandingResult(
@@ -122,6 +179,7 @@ class LanguageUnderstandingEngine(
             intentEvidence = evidence,
             goal = goal,
             linguisticField = linguisticField,
+            semanticCorrections = semanticCorrections,
             context = context.takeIf { retainContext },
         )
     }
@@ -147,7 +205,17 @@ class LanguageUnderstandingEngine(
             .distinct()
         if (executableIntents.size == 1) return executableIntents.single()
 
-        return topicIntent.takeUnless { it == IntentType.UNKNOWN } ?: IntentType.UNKNOWN
+        if (topicIntent != IntentType.UNKNOWN) return topicIntent
+
+        // Descriptive semantic recognition is allowed to be stronger than execution authority.
+        // A single non-executable predicate may identify what the user is talking about while the
+        // SemanticExecutionGate still blocks any side effect until readiness is independently met.
+        val describedIntents = actionGraph.nodes
+            .mapNotNull { it.frame.predicate.toIntentTypeOrNull() }
+            .distinct()
+        if (describedIntents.size == 1) return describedIntents.single()
+
+        return IntentType.UNKNOWN
     }
 
     private fun canonicalObjective(utterance: NormalizedUtterance, intent: IntentType): String =
@@ -359,8 +427,20 @@ class GoalPhotonFactory {
         val relations = sourcePhotonId?.let {
             setOf(PhotonRelation(it, RelationType.DERIVED_FROM, frame.confidence))
         }.orEmpty()
+        val semanticTags = result.linguisticField
+            ?.resolutions
+            ?.mapTo(linkedSetOf()) { "semantic:" + it.semanticTag.lowercase() }
+            .orEmpty()
+        val conceptTags = result.linguisticField
+            ?.intentField
+            ?.flatMap { it.contributingConcepts }
+            ?.distinct()
+            ?.sorted()
+            ?.take(MAX_GOAL_CONCEPT_TAGS)
+            ?.mapTo(linkedSetOf()) { "concept:" + it }
+            .orEmpty()
         val photon = Photon(
-            content = serialize(frame, result.linguisticField),
+            content = serialize(frame, result.linguisticField, result.semanticCorrections),
             mimeType = "application/vnd.lifeos.goal+text",
             phase = PhotonPhase.CREATED,
             semanticMass = 1.0 + frame.constraints.size * 0.08 + frame.references.size * 0.12,
@@ -373,18 +453,64 @@ class GoalPhotonFactory {
                 parentIds = parentIds,
             ),
             relations = relations,
-            tags = setOf("goal", "language-understood", "intent:${frame.intent.name.lowercase()}", "lang:${frame.language.name.lowercase()}"),
+            tags = setOf(
+                "goal",
+                "language-understood",
+                "intent:${frame.intent.name.lowercase()}",
+                "lang:${frame.language.name.lowercase()}",
+            ) + semanticTags + conceptTags,
         )
         return GoalPhoton(photon, frame)
     }
 
-    private fun serialize(frame: GoalFrame, field: LinguisticFieldResult?): String = buildString {
+    private fun serialize(
+        frame: GoalFrame,
+        field: LinguisticFieldResult?,
+        corrections: List<SemanticCorrection>,
+    ): String = buildString {
         append("goal/v4\n")
         append("intent=").append(frame.intent.name).append('\n')
         append("language=").append(frame.language.name).append('\n')
         append("confidence=").append(frame.confidence).append('\n')
         append("objective=").append(escape(frame.objective)).append('\n')
         append("semantic.fingerprint=").append(frame.semanticGraph.fingerprint).append('\n')
+        append("discourse.fingerprint=").append(frame.discourseState.fingerprint).append('\n')
+        frame.discourseState.focus.forEachIndexed { index, focus ->
+            append("discourse.focus.").append(index).append('=')
+                .append(escape(focus.ref.stableKey)).append('|')
+                .append(escape(focus.kind)).append('|')
+                .append(focus.active).append('|')
+                .append(focus.score).append('|')
+                .append(escape(focus.semanticTypes.sorted().joinToString(","))).append('|')
+                .append(escape(focus.conceptIds.sorted().joinToString(","))).append('\n')
+        }
+        append("syntax.fingerprint=").append(frame.dependencySyntax.fingerprint).append('\n')
+        frame.dependencySyntax.arcs.forEachIndexed { index, arc ->
+            append("syntax.arc.").append(index).append('=')
+                .append(arc.headTokenIndex).append('|')
+                .append(arc.dependentTokenIndex).append('|')
+                .append(arc.relation.name).append('|')
+                .append(arc.confidence).append('\n')
+        }
+        append("interpretation.margin=").append(frame.interpretationLattice.margin).append('\n')
+        append("interpretation.converged=").append(frame.interpretationLattice.converged).append('\n')
+        append("interpretation.winner=")
+            .append(frame.interpretationLattice.winner?.fingerprint.orEmpty()).append('\n')
+        frame.interpretationLattice.candidates.forEachIndexed { index, candidate ->
+            append("interpretation.candidate.").append(index).append('=')
+                .append(candidate.intent.name).append('|')
+                .append(escape(candidate.reference?.stableKey.orEmpty())).append('|')
+                .append(candidate.score).append('|')
+                .append(escape(candidate.blockers.sorted().joinToString(","))).append('|')
+                .append(candidate.fingerprint).append('\n')
+        }
+        append("pragmatic.act=").append(frame.pragmaticAct.type.name).append('|')
+            .append(frame.pragmaticAct.confidence).append('|')
+            .append(frame.pragmaticAct.descriptiveOnly).append('\n')
+        append("clarification.required=").append(frame.clarification.required).append('\n')
+        frame.clarification.reason?.let {
+            append("clarification.reason=").append(it.name).append('\n')
+        }
         frame.semanticGraph.clauses.sortedBy { it.id }.forEach { clause ->
             append("semantic.clause.").append(clause.id).append('=')
                 .append(clause.polarity.name).append('|')
@@ -489,6 +615,22 @@ class GoalPhotonFactory {
                 .append(escape(scope.cue)).append('|')
                 .append(scope.confidence).append('\n')
         }
+        frame.semanticActionGraph.operatorScopes.forEachIndexed { index, scope ->
+            append("action.operator.").append(index).append('=')
+                .append(scope.type.name).append('|')
+                .append(escape(scope.cue)).append('|')
+                .append(scope.span.start).append('|')
+                .append(scope.span.endExclusive).append('|')
+                .append(scope.confidence).append('\n')
+        }
+        frame.semanticActionGraph.groups.forEachIndexed { index, group ->
+            append("action.group.").append(index).append('=')
+                .append(escape(group.id)).append('|')
+                .append(group.type.name).append('|')
+                .append(escape(group.nodeIds.map { it.value }.sorted().joinToString(","))).append('|')
+                .append(escape(group.entryNodeIds.map { it.value }.sorted().joinToString(","))).append('|')
+                .append(escape(group.exitNodeIds.map { it.value }.sorted().joinToString(","))).append('\n')
+        }
         field?.let {
             append("field.converged=").append(it.converged).append('\n')
             append("field.iterations=").append(it.iterations).append('\n')
@@ -554,7 +696,8 @@ class GoalPhotonFactory {
                 .append(escape(quantity.currency?.currencyCode.orEmpty())).append('|')
                 .append(quantity.span.start).append('|')
                 .append(quantity.span.endExclusive).append('|')
-                .append(quantity.confidence).append('\n')
+                .append(quantity.confidence).append('|')
+                .append(quantity.approximate).append('\n')
         }
         frame.quantityTemporal.temporals.sortedWith(
             compareBy<SemanticTemporalValue> { it.span.start }
@@ -586,6 +729,32 @@ class GoalPhotonFactory {
                 .append(dateTime.timeSpan.start).append('|')
                 .append(dateTime.timeSpan.endExclusive).append('|')
                 .append(dateTime.confidence).append('\n')
+        }
+        frame.quantityTemporal.dayParts.forEachIndexed { index, dayPart ->
+            append("canonical.daypart.").append(index).append('=')
+                .append(dayPart.dayPart.name).append('|')
+                .append(dayPart.startInclusive).append('|')
+                .append(dayPart.endInclusive).append('|')
+                .append(dayPart.span.start).append('|')
+                .append(dayPart.span.endExclusive).append('|')
+                .append(dayPart.confidence).append('\n')
+        }
+        frame.quantityTemporal.recurrences.forEachIndexed { index, recurrence ->
+            append("canonical.recurrence.").append(index).append('=')
+                .append(recurrence.frequency.name).append('|')
+                .append(recurrence.interval).append('|')
+                .append(recurrence.weekday?.name.orEmpty()).append('|')
+                .append(recurrence.span.start).append('|')
+                .append(recurrence.span.endExclusive).append('|')
+                .append(recurrence.confidence).append('\n')
+        }
+        corrections.sortedBy { it.tokenIndex }.forEachIndexed { index, correction ->
+            append("semantic.correction.").append(index).append('=')
+                .append(correction.tokenIndex).append('|')
+                .append(escape(correction.original)).append('|')
+                .append(escape(correction.canonical)).append('|')
+                .append(escape(correction.semanticTag)).append('|')
+                .append(correction.confidence).append('\n')
         }
         append("domain.fingerprint=").append(frame.domainSemanticGraph.fingerprint).append('\n')
         frame.domainSemanticGraph.nodes.sortedBy { it.id.value }.forEachIndexed { index, node ->
@@ -647,5 +816,6 @@ class GoalPhotonFactory {
 
     companion object {
         private const val MAX_SERIALIZED_FIELD_TRACES = 32
+        private const val MAX_GOAL_CONCEPT_TAGS = 24
     }
 }

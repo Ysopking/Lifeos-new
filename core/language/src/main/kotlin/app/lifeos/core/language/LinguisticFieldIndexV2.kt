@@ -7,11 +7,14 @@ data class IndexedLinguisticForm(
     val conceptId: String,
 )
 
-class GermanMorphologyEngine {
+class GermanMorphologyEngine(
+    private val fst: GermanMorphologyFst = GermanMorphologyFst(),
+) {
     fun candidates(raw: String): Set<String> {
         val value = normalizeFieldText(raw)
         if (value.isBlank()) return emptySet()
         val result = linkedSetOf(value)
+        fst.analyze(value).forEach { analysis -> result += analysis.lemma }
 
         // Productive German inflection endings.
         INFLECTION_SUFFIXES.forEach { suffix ->

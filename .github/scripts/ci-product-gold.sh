@@ -62,6 +62,10 @@ grep -q 'Level7TruthClosureGoldDeviceTest#recoverExactAuthorityChainRollbackAndS
 grep -q 'SelfObservationGoldDeviceTest#seedAuthoritativeSelfStateBeforeProcessDeath' .github/scripts/android-emulator-recovery.sh
 grep -q 'SelfObservationGoldDeviceTest#recoverAuthorityFingerprintAndObserveLiveState' .github/scripts/android-emulator-recovery.sh
 grep -q 'ChatMainActivity' app/src/main/AndroidManifest.xml
+test -f core/language/src/test/kotlin/app/lifeos/core/language/LanguageUnderstandingV2AdversarialGoldTest.kt
+grep -Fq 'LANGUAGE_UNDERSTANDING_V2_CONTRACT_OK' .github/scripts/ci-language-semantic-contract.sh
+grep -Fq 'semantic-clarification-required:' core/language/src/main/kotlin/app/lifeos/core/language/SemanticExecutionGate.kt
+
 
 step "Product Gold 05: immutable candidate evidence"
 checkout_sha="$(git rev-parse HEAD)"

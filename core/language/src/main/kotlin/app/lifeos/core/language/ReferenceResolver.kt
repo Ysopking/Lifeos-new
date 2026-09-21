@@ -93,8 +93,8 @@ class ReferenceExpressionExtractor {
             }
         }
         if (result.isEmpty()) {
-            conversationalDeicticKind(words, topIntent)?.let { kind ->
-                result += ReferenceExpression(kind, utterance.original, emptySet(), 0.80)
+            contextualDeictic(words, topIntent)?.let { (kind, preferredKinds) ->
+                result += ReferenceExpression(kind, utterance.original, preferredKinds, 0.80)
             }
         }
         if (topIntent == IntentType.CONTINUE && result.isEmpty()) {
@@ -109,14 +109,24 @@ class ReferenceExpressionExtractor {
      * and CONVERSATION and requires a follow-up cue (or a terminal deictic) so ordinary articles
      * such as "das Wetter" / "the weather" never become references merely because context exists.
      */
-    private fun conversationalDeicticKind(words: List<String>, topIntent: IntentType): ReferenceKind? {
-        if (topIntent !in setOf(IntentType.QUERY, IntentType.CONVERSATION) || words.isEmpty()) return null
+    private fun contextualDeictic(
+        words: List<String>,
+        topIntent: IntentType,
+    ): Pair<ReferenceKind, Set<String>>? {
+        if (words.isEmpty()) return null
+        val allowed = topIntent in setOf(
+            IntentType.QUERY,
+            IntentType.CONVERSATION,
+            IntentType.TRANSFORM_IMAGE,
+        )
+        if (!allowed) return null
 
         val thisMarkers = setOf("dies", "dieses", "diese", "diesen", "dieser", "this", "these")
         val thatMarkers = setOf(
             "das", "jene", "jener", "jenes", "that", "those",
             "es", "it", "dazu", "damit", "davon", "darüber",
         )
+        val preferredKinds = if (topIntent == IntentType.TRANSFORM_IMAGE) setOf("image") else emptySet()
         val followUpCues = setOf(
             "erkläre", "erklären", "erklärst", "erklärt", "erklärung",
             "genauer", "näher", "ausführen", "ausführlicher", "meinen", "meinst",
@@ -132,14 +142,24 @@ class ReferenceExpressionExtractor {
                 else -> null
             } ?: return@forEachIndexed
 
-            if (index == words.lastIndex) return kind
+            if (topIntent == IntentType.TRANSFORM_IMAGE) {
+                val nearbyTransformCue = words.any {
+                    it in setOf(
+                        "heller", "dunkler", "wärmer", "waermer", "schaerfer", "schärfer",
+                        "größer", "groesser", "kleiner", "brighter", "darker", "warmer",
+                        "sharper", "larger", "smaller",
+                    )
+                }
+                if (nearbyTransformCue) return kind to preferredKinds
+            }
+            if (index == words.lastIndex) return kind to preferredKinds
             val start = maxOf(0, index - 3)
             val end = minOf(words.lastIndex, index + 3)
             val nearbyFollowUpCue = (start..end).any { cueIndex ->
                 cueIndex != index && words[cueIndex] in followUpCues
             }
             val compactStateFollowUp = words.getOrNull(index + 1) in setOf("so", "true", "correct", "wahr", "richtig")
-            if (nearbyFollowUpCue || compactStateFollowUp) return kind
+            if (nearbyFollowUpCue || compactStateFollowUp) return kind to preferredKinds
         }
         return null
     }
@@ -167,8 +187,12 @@ class ReferenceExpressionExtractor {
  * provide process-local or durable context candidates, then reuse the same deterministic ranking.
  */
 class ReferenceResolver {
-    fun resolve(expression: ReferenceExpression, context: LanguageContext): ResolvedReference {
-        val revisionCandidates = rankRevisionRefs(expression, context)
+    fun resolve(
+        expression: ReferenceExpression,
+        context: LanguageContext,
+        discourse: DiscourseStateGraph = DiscourseStateGraph.empty(),
+    ): ResolvedReference {
+        val revisionCandidates = rankRevisionRefs(expression, context, discourse)
         if (revisionCandidates.isNotEmpty()) {
             val best = revisionCandidates.first()
             val compatibility = revisionCandidates
@@ -201,8 +225,12 @@ class ReferenceResolver {
         )
     }
 
-    fun rank(expression: ReferenceExpression, context: LanguageContext): List<Pair<PhotonId, Double>> {
-        val revisionRank = rankRevisionRefs(expression, context)
+    fun rank(
+        expression: ReferenceExpression,
+        context: LanguageContext,
+        discourse: DiscourseStateGraph = DiscourseStateGraph.empty(),
+    ): List<Pair<PhotonId, Double>> {
+        val revisionRank = rankRevisionRefs(expression, context, discourse)
         if (revisionRank.isNotEmpty()) {
             return revisionRank
                 .groupBy { it.first.photonId }
@@ -247,6 +275,7 @@ class ReferenceResolver {
     fun rankRevisionRefs(
         expression: ReferenceExpression,
         context: LanguageContext,
+        discourse: DiscourseStateGraph = DiscourseStateGraph.empty(),
     ): List<Pair<PhotonRevisionRef, Double>> {
         if (context.items.isEmpty()) return emptyList()
 
@@ -268,6 +297,7 @@ class ReferenceResolver {
                     expression = expression,
                     context = context,
                     indexScore = candidate.indexScore,
+                    discourse = discourse,
                 )
             }
             .filter { it.second > 0.0 }
@@ -286,6 +316,7 @@ class ReferenceResolver {
         expression: ReferenceExpression,
         context: LanguageContext,
         indexScore: Double,
+        discourse: DiscourseStateGraph = DiscourseStateGraph.empty(),
     ): Double {
         var score = 0.05 + indexScore * 0.10
         val expressionTerms = referenceTerms(expression.rawText)
@@ -316,6 +347,29 @@ class ReferenceResolver {
             score += if (item.active) -0.18 else 0.20
         } else if (item.active) {
             score += 0.08
+        }
+
+        val contentAnchoredReference = expressionTerms.any { it !in DEICTIC_CONTEXT_TERMS }
+        val uniqueActivePreferredDeictic =
+            expression.kind in setOf(ReferenceKind.THIS, ReferenceKind.THAT) &&
+                !contentAnchoredReference &&
+                expression.preferredKinds.isNotEmpty() &&
+                item.active &&
+                semanticKindMatch &&
+                context.items.count { candidate ->
+                    candidate.active &&
+                        (
+                            candidate.kind in expression.preferredKinds ||
+                                candidate.tags.any { it in expression.preferredKinds } ||
+                                candidate.semanticTypes.any { semantic ->
+                                    expression.preferredKinds.any { preferred ->
+                                        semantic == preferred || semantic.endsWith(":" + preferred)
+                                    }
+                                }
+                        )
+                } == 1
+        if (uniqueActivePreferredDeictic) {
+            score += 0.16
         }
         if (
             item.photonId == context.activeGoalId &&
@@ -350,6 +404,13 @@ class ReferenceResolver {
             score += 0.08
         }
 
+        val discourseWeight = if (contentAnchoredReference) 0.08 else 0.22
+        val discourseBonus = item.revisionRef
+            ?.let(discourse::score)
+            ?.times(discourseWeight)
+            ?: 0.0
+        score += discourseBonus
+
         val confidenceWeighted = score * item.confidence
         val activeGoalAnchor =
             item.photonId == context.activeGoalId &&
@@ -378,6 +439,12 @@ class ReferenceResolver {
             "das", "die", "der", "den", "dem", "dies", "diese", "dieses", "diesen",
             "andere", "anderen", "bitte", "mit", "und", "oder", "mach", "mache",
             "it", "this", "that", "the", "other", "with", "and", "or", "please", "make",
+        )
+        val DEICTIC_CONTEXT_TERMS = setOf(
+            "es", "ihn", "sie", "ihm", "ihr", "it", "him", "her", "them",
+            "heller", "dunkler", "wärmer", "waermer", "schärfer", "schaerfer",
+            "größer", "groesser", "kleiner",
+            "brighter", "darker", "warmer", "sharper", "larger", "smaller",
         )
         val MATTER_TERMS = setOf(
             "bescheid", "jobcenter", "behorde", "behoerde", "schuld", "forderung",

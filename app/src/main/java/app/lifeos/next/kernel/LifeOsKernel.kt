@@ -242,7 +242,7 @@ class LifeOsKernel internal constructor(
             goalActions.executeLocalCommunication(
                 goal = context.goal,
                 sourcePhoton = context.sourcePhoton,
-                goalPhotonId = context.goalPhotonId,
+                goalPhotonId = context.goalPhotonId, boundResultPhoton = context.boundResultPhoton,
             )
         },
     )

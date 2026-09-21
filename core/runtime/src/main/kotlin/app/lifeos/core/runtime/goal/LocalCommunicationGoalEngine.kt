@@ -41,8 +41,16 @@ class LocalCommunicationGoalEngine {
         sourcePhoton: Photon,
         goalPhotonId: PhotonId,
         photons: List<Photon>,
+        boundResultPhoton: Photon? = null,
     ): LocalCommunicationGoalResult {
         if (!supports(goal.intent)) return LocalCommunicationGoalResult.Unsupported(goal.intent)
+
+        val exactBoundResult = boundResultPhoton?.let { candidate ->
+            if (!isShareable(candidate, sourcePhoton.id, goalPhotonId)) {
+                return LocalCommunicationGoalResult.Blocked("bound-share-source-unshareable")
+            }
+            candidate
+        }
 
         val byId = photons.associateBy { it.id }
         val referenced = goal.references
@@ -52,7 +60,7 @@ class LocalCommunicationGoalEngine {
             .mapNotNull(byId::get)
             .firstOrNull { candidate -> isShareable(candidate, sourcePhoton.id, goalPhotonId) }
 
-        val target = referenced ?: photons
+        val target = exactBoundResult ?: referenced ?: photons
             .asSequence()
             .filter { candidate -> isShareable(candidate, sourcePhoton.id, goalPhotonId) }
             .filter(::isResultLike)

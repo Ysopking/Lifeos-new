@@ -11,6 +11,7 @@ import app.lifeos.core.model.StableCognitiveIds
 
 enum class PersonalLanguageCandidateKind {
     LEXICAL_ALIAS,
+    PHRASE_PATTERN,
 }
 
 enum class PersonalLanguageFeedbackKind {
@@ -72,17 +73,18 @@ data class PersonalLanguageCandidate(
             surface: String,
             targetConceptId: String,
             observations: Collection<PersonalLanguageObservation>,
+            kind: PersonalLanguageCandidateKind = PersonalLanguageCandidateKind.LEXICAL_ALIAS,
         ): PersonalLanguageCandidate {
             val canonical = observations
                 .distinctBy { it.id }
                 .sortedBy { it.id }
             return PersonalLanguageCandidate(
-                kind = PersonalLanguageCandidateKind.LEXICAL_ALIAS,
+                kind = kind,
                 surface = surface,
                 targetConceptId = targetConceptId,
                 observations = canonical,
                 fingerprint = expectedFingerprint(
-                    PersonalLanguageCandidateKind.LEXICAL_ALIAS,
+                    kind,
                     surface,
                     targetConceptId,
                     canonical,
@@ -112,6 +114,7 @@ data class PersonalLanguageCandidate(
 data class PersonalLanguageAliasProposal(
     val surface: String,
     val targetConceptId: String,
+    val kind: PersonalLanguageCandidateKind = PersonalLanguageCandidateKind.LEXICAL_ALIAS,
 ) {
     init {
         require(surface.isNotBlank())
@@ -119,7 +122,9 @@ data class PersonalLanguageAliasProposal(
     }
 }
 
-class PersonalLanguageCandidateMiner {
+class PersonalLanguageCandidateMiner(
+    private val grammarMiner: PersonalGrammarPatternMiner = PersonalGrammarPatternMiner(),
+) {
     fun propose(
         utterance: String,
         understanding: LanguageUnderstandingResult,
@@ -143,12 +148,34 @@ class PersonalLanguageCandidateMiner {
             .map(SemanticSearchTerms::normalizeToken)
             .toSet()
 
-        return SemanticSearchTerms.tokens(utterance)
+        val lexical = SemanticSearchTerms.tokens(utterance)
             .filter { it.length >= MIN_ALIAS_LENGTH }
             .filterNot { it in knownForms }
             .filterNot { it in RESERVED_SURFACES }
             .take(MAX_OBSERVATIONS_PER_TURN)
-            .map { surface -> PersonalLanguageAliasProposal(surface, target.id) }
+            .map { surface ->
+                PersonalLanguageAliasProposal(
+                    surface = surface,
+                    targetConceptId = target.id,
+                    kind = PersonalLanguageCandidateKind.LEXICAL_ALIAS,
+                )
+            }
+
+        val grammar = grammarMiner.propose(
+            utterance = utterance,
+            intent = intent,
+            knownForms = knownForms,
+        ).map { proposal ->
+            PersonalLanguageAliasProposal(
+                surface = proposal.surface,
+                targetConceptId = target.id,
+                kind = PersonalLanguageCandidateKind.PHRASE_PATTERN,
+            )
+        }
+
+        return (lexical + grammar)
+            .distinctBy { Triple(it.kind, it.surface, it.targetConceptId) }
+            .take(MAX_OBSERVATIONS_PER_TURN + 1)
     }
 
     fun observe(
@@ -190,6 +217,7 @@ class PersonalLanguageCandidateMiner {
             IntentType.QUERY,
             IntentType.CONVERSATION,
             IntentType.STORE_OR_REMEMBER,
+            IntentType.BUILD_OR_IMPLEMENT,
         )
         val RESERVED_SURFACES = setOf(
             "ja", "nein", "yes", "no", "nicht", "kein", "keine", "stop", "stopp",
@@ -227,12 +255,21 @@ class PersonalLanguagePromotionCoordinator(
         val current = runtime.current().lexicon
         val normalizedAlias = SemanticSearchTerms.normalizeToken(candidate.surface)
         val target = current.byId(candidate.targetConceptId) ?: return null
-        if (target.allForms.map(SemanticSearchTerms::normalizeToken).contains(normalizedAlias)) {
-            return current
+        val alreadyActive = when (candidate.kind) {
+            PersonalLanguageCandidateKind.LEXICAL_ALIAS ->
+                target.allForms.map(SemanticSearchTerms::normalizeToken).contains(normalizedAlias)
+            PersonalLanguageCandidateKind.PHRASE_PATTERN ->
+                target.phraseVariants.map(SemanticSearchTerms::normalizeToken).contains(normalizedAlias)
         }
+        if (alreadyActive) return current
         val updated = current.concepts.map { concept ->
-            if (concept.id == target.id) concept.copy(variants = concept.variants + candidate.surface)
-            else concept
+            if (concept.id != target.id) concept
+            else when (candidate.kind) {
+                PersonalLanguageCandidateKind.LEXICAL_ALIAS ->
+                    concept.copy(variants = concept.variants + candidate.surface)
+                PersonalLanguageCandidateKind.PHRASE_PATTERN ->
+                    concept.copy(phraseVariants = concept.phraseVariants + candidate.surface)
+            }
         }
         return runtime.promote(
             concepts = updated,
@@ -288,8 +325,13 @@ class PersonalLanguageShadowEvaluator {
         }
 
         val updated = current.concepts.map { concept ->
-            if (concept.id == target.id) concept.copy(variants = concept.variants + candidate.surface)
-            else concept
+            if (concept.id != target.id) concept
+            else when (candidate.kind) {
+                PersonalLanguageCandidateKind.LEXICAL_ALIAS ->
+                    concept.copy(variants = concept.variants + candidate.surface)
+                PersonalLanguageCandidateKind.PHRASE_PATTERN ->
+                    concept.copy(phraseVariants = concept.phraseVariants + candidate.surface)
+            }
         }
         val candidateSnapshot = LinguisticLexiconSnapshot.create(
             revision = current.revision + 1L,
@@ -306,9 +348,12 @@ class PersonalLanguageShadowEvaluator {
             ?.firstOrNull { it.intent == targetIntent }
             ?.contributingConcepts
             ?.contains(target.id) == true
+        val personalGrammarContribution = candidateResult.goal.semanticActionGraph.nodes.any { node ->
+            node.frame.evidence.any { evidence -> evidence.source == "personal-grammar/v1" }
+        }
         val candidateRecognized =
             candidateResult.goal.intent == targetIntent &&
-                fieldContribution &&
+                (fieldContribution || personalGrammarContribution) &&
                 candidateResult.goal.interpretationQuality.contradictionCount == 0
 
         val protectedStable = PROTECTED_CASES.all { text ->
@@ -377,7 +422,13 @@ class DurablePersonalLanguagePromotionCoordinator(
         val target = current.byId(candidate.targetConceptId)
             ?: return DurablePersonalLanguagePromotionResult.Rejected("target-concept-missing")
         val normalizedAlias = SemanticSearchTerms.normalizeToken(candidate.surface)
-        if (target.allForms.map(SemanticSearchTerms::normalizeToken).contains(normalizedAlias)) {
+        val alreadyActive = when (candidate.kind) {
+            PersonalLanguageCandidateKind.LEXICAL_ALIAS ->
+                target.allForms.map(SemanticSearchTerms::normalizeToken).contains(normalizedAlias)
+            PersonalLanguageCandidateKind.PHRASE_PATTERN ->
+                target.phraseVariants.map(SemanticSearchTerms::normalizeToken).contains(normalizedAlias)
+        }
+        if (alreadyActive) {
             return DurablePersonalLanguagePromotionResult.Rejected("alias-already-active")
         }
 
@@ -390,8 +441,13 @@ class DurablePersonalLanguagePromotionCoordinator(
         }
 
         val updated = current.concepts.map { concept ->
-            if (concept.id == target.id) concept.copy(variants = concept.variants + candidate.surface)
-            else concept
+            if (concept.id != target.id) concept
+            else when (candidate.kind) {
+                PersonalLanguageCandidateKind.LEXICAL_ALIAS ->
+                    concept.copy(variants = concept.variants + candidate.surface)
+                PersonalLanguageCandidateKind.PHRASE_PATTERN ->
+                    concept.copy(phraseVariants = concept.phraseVariants + candidate.surface)
+            }
         }
         val promoted = runtime.promote(
             concepts = updated,
@@ -427,4 +483,64 @@ object PersonalLanguageFeedbackProjector {
     private val REJECTIONS = setOf(
         "nein", "falsch", "so nicht", "no", "wrong",
     )
+}
+
+data class PersonalGrammarPattern(
+    val tokens: List<String>,
+    val intent: IntentType,
+    val support: Int,
+    val conversations: Int,
+) {
+    init {
+        require(tokens.size in 2..6)
+        require(support > 0)
+        require(conversations > 0)
+        require(intent in SAFE_GRAMMAR_INTENTS)
+    }
+
+    val normalized: String = tokens.joinToString(" ") {
+        SemanticSearchTerms.normalizeToken(it)
+    }
+
+    companion object {
+        val SAFE_GRAMMAR_INTENTS = setOf(
+            IntentType.SEARCH,
+            IntentType.CONTINUE,
+            IntentType.QUERY,
+            IntentType.BUILD_OR_IMPLEMENT,
+        )
+    }
+}
+
+data class PersonalGrammarProposal(
+    val surface: String,
+    val intent: IntentType,
+) {
+    init {
+        require(surface.isNotBlank())
+        require(intent in PersonalGrammarPattern.SAFE_GRAMMAR_INTENTS)
+        require(SemanticSearchTerms.tokens(surface).size in 2..6)
+    }
+}
+
+class PersonalGrammarPatternMiner {
+    fun propose(
+        utterance: String,
+        intent: IntentType,
+        knownForms: Set<String>,
+    ): List<PersonalGrammarProposal> {
+        if (intent !in PersonalGrammarPattern.SAFE_GRAMMAR_INTENTS) return emptyList()
+        val tokens = TOKEN_REGEX.findAll(utterance)
+            .map { SemanticSearchTerms.normalizeToken(it.value) }
+            .filter { it.isNotBlank() }
+            .toList()
+        if (tokens.size !in 2..6) return emptyList()
+        if (tokens.all { it in knownForms }) return emptyList()
+        val surface = tokens.joinToString(" ")
+        return listOf(PersonalGrammarProposal(surface, intent))
+    }
+
+    private companion object {
+        val TOKEN_REGEX = Regex("[\\p{L}\\p{N}._-]+")
+    }
 }

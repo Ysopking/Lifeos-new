@@ -112,7 +112,11 @@ class DurableGoalPlanRuntime(
             return normalizePreparation(blueprint, recovered)
         }
         if (actionState == GoalStepState.COMPLETED) {
-            val persistedOutcome = recoverPersistedOutcome(context)
+            val durableOutcomeId = state.outcomePhotonIds[actionStep.stepId]
+            val persistedOutcome = recoverPersistedOutcome(
+                context = context,
+                durableOutcomeId = durableOutcomeId,
+            )
             if (persistedOutcome != null) {
                 ensureOutcomeLearning(
                     blueprint = blueprint,
@@ -125,7 +129,13 @@ class DurableGoalPlanRuntime(
                     persistedOutcome,
                 )
             }
-            return normalizePreparation(blueprint, coordinator.prepareNext(blueprint, emptyMap(), now()))
+            return DurableGoalPlanAdmission.Blocked(
+                if (durableOutcomeId == null) {
+                    "v7-completed-action-outcome-id-missing"
+                } else {
+                    "v7-completed-action-outcome-unavailable:${durableOutcomeId.value}"
+                }
+            )
         }
 
         val convergenceResult = try {
@@ -240,12 +250,12 @@ class DurableGoalPlanRuntime(
         is GoalPlanExecutionPreparation.VerificationCompleted -> {
             when (val next = coordinator.prepareNext(blueprint, emptyMap(), now())) {
                 GoalPlanExecutionPreparation.PlanCompleted ->
-                    DurableGoalPlanAdmission.Completed(blueprint.definition.id.value)
+                    DurableGoalPlanAdmission.Blocked("v7-completed-plan-requires-bound-outcome")
                 else -> DurableGoalPlanAdmission.Blocked("v7-post-verification:${next::class.simpleName}")
             }
         }
         GoalPlanExecutionPreparation.PlanCompleted ->
-            DurableGoalPlanAdmission.Completed(blueprint.definition.id.value)
+            DurableGoalPlanAdmission.Blocked("v7-completed-plan-requires-bound-outcome")
         is GoalPlanExecutionPreparation.ReplanRequired ->
             DurableGoalPlanAdmission.Blocked("v7-replan-required:${preparation.reason}")
         is GoalPlanExecutionPreparation.Waiting ->
@@ -342,12 +352,34 @@ class DurableGoalPlanRuntime(
      * action. Only intent-specific final-result shapes are accepted; scene/intermediate photons and
      * archived failed reminders cannot satisfy recovery.
      */
-    private suspend fun recoverPersistedOutcome(context: GoalActionContext): Photon? =
-        outcomeLookup.candidates(
+    private suspend fun recoverPersistedOutcome(
+        context: GoalActionContext,
+        durableOutcomeId: PhotonId? = null,
+    ): Photon? {
+        if (durableOutcomeId != null) {
+            outcomeLookup.exactOutcome(durableOutcomeId)?.let { exact ->
+                require(exact.id == durableOutcomeId) {
+                    "Exact goal outcome lookup returned another Photon id"
+                }
+                require(exact.phase != PhotonPhase.ARCHIVED) {
+                    "Durable goal outcome is archived"
+                }
+                require(context.goalPhotonId in exact.provenance.parentIds) {
+                    "Durable goal outcome lost Goal Photon provenance"
+                }
+                require(isFinalOutcomeFor(context.goal.intent, exact)) {
+                    "Durable goal outcome shape no longer matches the action intent"
+                }
+                return exact
+            }
+        }
+
+        return outcomeLookup.candidates(
             goalPhotonId = context.goalPhotonId,
             limit = MAX_OUTCOME_RECOVERY_CANDIDATES,
         )
             .asSequence()
+            .filter { candidate -> durableOutcomeId == null || candidate.id == durableOutcomeId }
             .filter { it.phase != PhotonPhase.ARCHIVED }
             .filter { context.goalPhotonId in it.provenance.parentIds }
             .filter { candidate -> isFinalOutcomeFor(context.goal.intent, candidate) }
@@ -357,6 +389,7 @@ class DurableGoalPlanRuntime(
                     .thenBy { it.revision }
             )
             .lastOrNull()
+    }
 
     private fun isFinalOutcomeFor(intent: IntentType, photon: Photon): Boolean = when (intent) {
         IntentType.QUERY -> "local-query-answer" in photon.tags

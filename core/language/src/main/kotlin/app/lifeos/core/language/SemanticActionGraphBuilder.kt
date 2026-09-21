@@ -5,6 +5,7 @@ import app.lifeos.core.model.StableCognitiveIds
 class SemanticActionGraphBuilder(
     private val contracts: PredicateContractRegistry = PredicateContractRegistry(),
     private val scopeEngine: TargetBoundScopeEngine = TargetBoundScopeEngine(),
+    private val scopeCueDetector: ScopeCueDetectorV2 = ScopeCueDetectorV2(),
 ) {
     fun build(
         utterance: NormalizedUtterance,
@@ -88,7 +89,11 @@ class SemanticActionGraphBuilder(
         val ordered = preliminary.sortedBy { it.frame.clauseId }
         val resultResolvedNodeIds = linkedSetOf<SemanticNodeId>()
         ordered.forEachIndexed { index, node ->
-            if (!node.unresolvedReference || index == 0) return@forEachIndexed
+            if (index == 0) return@forEachIndexed
+            val contract = contracts.contract(node.frame.predicate)
+            val consumesPreviousResult =
+                node.unresolvedReference || hasCompositionalResultReference(node.frame, contract)
+            if (!consumesPreviousResult) return@forEachIndexed
             val previous = ordered.subList(0, index)
                 .lastOrNull { it.type == SemanticActionNodeType.ACTION }
                 ?: return@forEachIndexed
@@ -166,6 +171,16 @@ class SemanticActionGraphBuilder(
             }
             .sortedWith(compareBy<SemanticScope> { it.span.start }.thenBy { it.type.name })
 
+        val operatorScopes = semanticGraph.clauses
+            .flatMap { clause -> scopeCueDetector.detect(utterance, clause) }
+            .sortedWith(
+                compareBy<SemanticOperatorScope> { it.span.start }
+                    .thenBy { it.type.name }
+                    .thenBy { it.cue }
+            )
+
+        val groups = buildGroups(nodes, edges)
+
         val fingerprint = StableCognitiveIds.fingerprint(
             "semantic-action-graph/v1",
             semanticGraph.fingerprint,
@@ -214,6 +229,22 @@ class SemanticActionGraphBuilder(
                             )
                         }
                 }
+                operatorScopes.forEach { operator ->
+                    add(
+                        "operator-scope:" + operator.type.name + ":" +
+                            operator.span.start + ":" +
+                            operator.span.endExclusive + ":" +
+                            operator.cue
+                    )
+                }
+                groups.forEach { group ->
+                    add(
+                        "group:" + group.id + ":" + group.type.name + ":" +
+                            group.nodeIds.map { it.value }.sorted().joinToString(",") + ":" +
+                            group.entryNodeIds.map { it.value }.sorted().joinToString(",") + ":" +
+                            group.exitNodeIds.map { it.value }.sorted().joinToString(",")
+                    )
+                }
             }.toTypedArray(),
         )
         return SemanticActionGraph(
@@ -221,7 +252,72 @@ class SemanticActionGraphBuilder(
             edges = edges,
             scopes = scopes,
             fingerprint = fingerprint,
+            operatorScopes = operatorScopes,
+            groups = groups,
         )
+    }
+
+    private fun buildGroups(
+        nodes: List<SemanticActionNode>,
+        edges: List<SemanticActionEdge>,
+    ): List<SemanticActionGroup> {
+        val groups = mutableListOf<SemanticActionGroup>()
+
+        edges.filter { it.type == SemanticActionEdgeType.IF }.forEach { edge ->
+            groups += SemanticActionGroup(
+                id = "conditional:" + edge.id.value,
+                type = SemanticActionGroupType.CONDITIONAL,
+                nodeIds = linkedSetOf(edge.from, edge.to),
+                entryNodeIds = setOf(edge.from),
+                exitNodeIds = setOf(edge.to),
+            )
+        }
+
+        val sequenceEdges = edges.filter {
+            it.type in setOf(
+                SemanticActionEdgeType.THEN,
+                SemanticActionEdgeType.USES_RESULT_OF,
+                SemanticActionEdgeType.AND,
+            )
+        }
+        if (sequenceEdges.isNotEmpty()) {
+            val ids = sequenceEdges
+                .flatMap { listOf(it.from, it.to) }
+                .toCollection(linkedSetOf())
+            val incoming = sequenceEdges.mapTo(linkedSetOf()) { it.to }
+            val outgoing = sequenceEdges.mapTo(linkedSetOf()) { it.from }
+            val entries = ids.filterTo(linkedSetOf()) { it !in incoming }.ifEmpty {
+                linkedSetOf(sequenceEdges.first().from)
+            }
+            val exits = ids.filterTo(linkedSetOf()) { it !in outgoing }.ifEmpty {
+                linkedSetOf(sequenceEdges.last().to)
+            }
+            groups += SemanticActionGroup(
+                id = "pipeline:" + StableCognitiveIds.fingerprint(
+                    "semantic-action-group/v1",
+                    *ids.map { it.value }.sorted().toTypedArray(),
+                ),
+                type = SemanticActionGroupType.PIPELINE,
+                nodeIds = ids,
+                entryNodeIds = entries,
+                exitNodeIds = exits,
+            )
+        }
+
+        edges.filter { it.type in setOf(SemanticActionEdgeType.OR, SemanticActionEdgeType.ELSE) }
+            .forEach { edge ->
+                groups += SemanticActionGroup(
+                    id = "alternative:" + edge.id.value,
+                    type = SemanticActionGroupType.ALTERNATIVE,
+                    nodeIds = linkedSetOf(edge.from, edge.to),
+                    entryNodeIds = setOf(edge.from),
+                    exitNodeIds = setOf(edge.to),
+                )
+            }
+
+        return groups
+            .distinctBy { it.id }
+            .sortedWith(compareBy<SemanticActionGroup> { it.type.name }.thenBy { it.id })
     }
 
     private fun nodeType(frame: PredicateFrame): SemanticActionNodeType = when {
@@ -240,6 +336,19 @@ class SemanticActionGraphBuilder(
         if (frame.predicate == PredicateConcept.TRANSFORM_IMAGE) return true
         val value = frame.roles[role] ?: return false
         return !value.resolved || value.normalized in REFERENCE_WORDS
+    }
+
+    private fun hasCompositionalResultReference(
+        frame: PredicateFrame,
+        contract: PredicateActionContract,
+    ): Boolean {
+        val role = contract.referenceRole ?: return false
+        val value = frame.roles[role] ?: return false
+        return sequenceOf(value.rawText, value.normalized)
+            .flatMap { raw ->
+                REFERENCE_TOKEN_REGEX.findAll(raw.lowercase()).map { match -> match.value }
+            }
+            .any { it in REFERENCE_WORDS }
     }
 
     private fun hasBoundReference(
@@ -331,6 +440,7 @@ class SemanticActionGraphBuilder(
 
     private companion object {
         const val RESULT_DEPENDENCY_READINESS = 0.94
+        val REFERENCE_TOKEN_REGEX = Regex("[\\p{L}\\p{N}]+")
         val REFERENCE_WORDS = setOf(
             "das", "dies", "diese", "diesen", "dieses", "jenes", "andere", "anderen",
             "ihn", "sie", "es", "ihm", "ihr",

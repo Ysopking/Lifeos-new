@@ -72,20 +72,19 @@ class FieldLanguageAdapter {
     }
 
     fun mergeIntentEvidence(
-        ruleEvidence: List<IntentEvidence>,
-        fieldEvidence: List<IntentEvidence>,
+        vararg evidenceGroups: List<IntentEvidence>,
     ): List<IntentEvidence> {
-        val intents = (ruleEvidence.map { it.intent } + fieldEvidence.map { it.intent }).distinct()
+        val all = evidenceGroups.flatMap { it }
+        val intents = all.map { it.intent }.distinct()
         return intents.map { intent ->
-            val rule = ruleEvidence.firstOrNull { it.intent == intent }
-            val field = fieldEvidence.firstOrNull { it.intent == intent }
-            val ruleScore = rule?.score ?: 0.0
-            val fieldScore = field?.score ?: 0.0
-            val combined = (1.0 - (1.0 - ruleScore) * (1.0 - fieldScore)).coerceIn(0.0, 1.0)
+            val matching = all.filter { it.intent == intent }
+            val combined = matching.fold(0.0) { accumulated, item ->
+                1.0 - (1.0 - accumulated) * (1.0 - item.score)
+            }.coerceIn(0.0, 1.0)
             IntentEvidence(
                 intent = intent,
                 score = combined,
-                reasons = (rule?.reasons.orEmpty() + field?.reasons.orEmpty()).distinct(),
+                reasons = matching.flatMap { it.reasons }.distinct(),
             )
         }.sortedWith(compareByDescending<IntentEvidence> { it.score }.thenBy { it.intent.name })
     }

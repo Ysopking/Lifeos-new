@@ -1,5 +1,8 @@
 package app.lifeos.core.language
 
+import app.lifeos.core.model.PhotonId
+import app.lifeos.core.model.PhotonRevisionRef
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -95,6 +98,45 @@ class SemanticActionSafetyTest {
         val admission = SemanticExecutionGate.evaluate(result.goal)
         assertFalse(admission.allowed)
         assertEquals("semantic-multi-action-requires-action-graph-router", admission.reason)
+    }
+
+    @Test
+    fun `context resolved pronoun still binds the immediately previous action result`() {
+        val now = Instant.parse("2026-09-21T17:00:00Z")
+        val ambientRef = PhotonRevisionRef(PhotonId("ambient-result"), 7L)
+        val result = engine.understand(
+            "Merke dir die Semantic-Recovery-Notiz und sende sie mir anschließend.",
+            LanguageContext(
+                now = now,
+                items = listOf(
+                    LanguageContextItem(
+                        photonId = ambientRef.photonId,
+                        kind = "result",
+                        tags = setOf("result", "answer"),
+                        createdAt = now.minusSeconds(1),
+                        active = true,
+                        contentTerms = setOf("semantic", "recovery", "notiz"),
+                        revisionRef = ambientRef,
+                    )
+                ),
+            ),
+        )
+        val graph = result.goal.semanticActionGraph
+        val memory = graph.nodes.single { it.frame.predicate == PredicateConcept.STORE_MEMORY }
+        val send = graph.nodes.single { it.frame.predicate == PredicateConcept.COMMUNICATE }
+
+        assertTrue(
+            result.goal.references.any { it.targetPhotonRef == ambientRef },
+            "Fixture must prove ambient context resolved the pronoun before action-graph binding",
+        )
+        assertTrue(
+            graph.edges.any {
+                it.from == memory.id &&
+                    it.to == send.id &&
+                    it.type == SemanticActionEdgeType.USES_RESULT_OF
+            },
+            "Immediate compositional result must outrank ambient context for the downstream action",
+        )
     }
 
     @Test

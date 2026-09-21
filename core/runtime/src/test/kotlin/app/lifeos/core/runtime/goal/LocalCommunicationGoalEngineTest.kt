@@ -44,6 +44,47 @@ class LocalCommunicationGoalEngineTest {
     }
 
     @Test
+    fun `exact bound semantic result wins without context lookup`() {
+        val bound = photon(
+            "memory-bound",
+            "Semantic-Recovery-Notiz",
+            mime = LocalKnowledgeGoalEngine.MEMORY_MIME,
+            tags = setOf("memory", "local-memory"),
+        )
+
+        val prepared = assertIs<LocalCommunicationGoalResult.Prepared>(
+            LocalCommunicationGoalEngine().prepare(
+                goal = goal(),
+                sourcePhoton = source(),
+                goalPhotonId = PhotonId("goal-share"),
+                photons = emptyList(),
+                boundResultPhoton = bound,
+            )
+        ).share
+
+        assertEquals(bound, prepared.target)
+    }
+
+    @Test
+    fun `unshareable exact bound result never falls back to another photon`() {
+        val invalidBound = photon("bound-goal", "goal/v4", tags = setOf("goal"))
+        val fallback = photon("fallback", "Other result", tags = setOf("answer", "result"))
+
+        val result = LocalCommunicationGoalEngine().prepare(
+            goal = goal(),
+            sourcePhoton = source(),
+            goalPhotonId = PhotonId("goal-share"),
+            photons = listOf(fallback),
+            boundResultPhoton = invalidBound,
+        )
+
+        assertEquals(
+            "bound-share-source-unshareable",
+            assertIs<LocalCommunicationGoalResult.Blocked>(result).reason,
+        )
+    }
+
+    @Test
     fun `missing reference falls back to newest real result`() {
         val old = photon("old", "Alt", tags = setOf("answer"), secondsAgo = 90)
         val latest = photon("latest", "Neu", tags = setOf("deepsearch-answer"), secondsAgo = 10)

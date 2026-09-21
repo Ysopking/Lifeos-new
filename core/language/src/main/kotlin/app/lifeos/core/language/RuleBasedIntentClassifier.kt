@@ -17,11 +17,11 @@ class RuleBasedIntentClassifier {
     private val taskWords = setOf(
         "erzeuge", "erstelle", "generiere", "zeichne", "render", "rendere", "create", "generate", "draw",
         "ändere", "aendere", "bearbeite", "edit", "change",
-        "suche", "finde", "recherchiere", "deepsearch", "search", "find", "research", "lookup",
+        "suche", "finde", "recherchiere", "deepsearch", "nachsehen", "nachschauen", "schau", "sieh", "guck", "prüf", "pruef", "check", "search", "find", "research", "lookup",
         "weiter", "los", "fortsetzen", "continue", "proceed", "go",
-        "implementiere", "implementieren", "baue", "bauen", "entwickle", "entwickeln", "programmiere", "build", "implement", "develop", "code",
+        "implementiere", "implementieren", "baue", "bauen", "entwickle", "entwickeln", "programmiere", "umsetzen", "umsetze", "umsetz", "build", "implement", "develop", "code",
         "termin", "plane", "planen", "schedule", "remind", "appointment", "calendar", "erinnere",
-        "schreibe", "sende", "antworte", "mail", "email", "nachricht", "teile", "teilen", "share", "send", "reply", "message",
+        "schreibe", "schreib", "sende", "schicke", "schick", "antworte", "mail", "maile", "email", "nachricht", "teile", "teilen", "share", "send", "reply", "message",
         "merke", "speichere", "remember", "store", "save",
     )
     private val temporalCueRegex = Regex(
@@ -41,14 +41,37 @@ class RuleBasedIntentClassifier {
             w.any { it in imageNouns } &&
                 w.any { it in setOf("ändere", "aendere", "bearbeite", "wärmer", "waermer", "heller", "dunkler", "schaerfer", "schärfer", "edit", "change", "warmer", "brighter", "darker", "sharper") }
         },
+        Rule(IntentType.TRANSFORM_IMAGE, 0.68, "deictic image transformation command") { w, _, _ ->
+            w.any { it in setOf("mach", "mache", "make", "ändere", "aendere", "change", "edit") } &&
+                w.any { it in setOf("es", "das", "dies", "it", "this", "that") } &&
+                w.any {
+                    it in setOf(
+                        "wärmer", "waermer", "heller", "dunkler", "schaerfer", "schärfer",
+                        "größer", "groesser", "kleiner", "warmer", "brighter", "darker", "sharper",
+                        "larger", "smaller",
+                    )
+                }
+        },
         Rule(IntentType.SEARCH, 0.75, "explicit search verb") { w, _, _ ->
-            w.any { it in setOf("suche", "finde", "recherchiere", "deepsearch", "search", "find", "research", "lookup") }
+            w.any {
+                it in setOf(
+                    "suche", "finde", "recherchiere", "deepsearch", "nachsehen", "nachschauen",
+                    "schau", "sieh", "guck", "prüf", "pruef", "prüfe", "pruefe", "check", "checke",
+                    "search", "find", "research", "lookup",
+                )
+            }
         },
         Rule(IntentType.CONTINUE, 0.90, "short continuation command") { w, _, count ->
             count <= 3 && w.any { it in setOf("weiter", "los", "fortsetzen", "continue", "proceed", "go") }
         },
         Rule(IntentType.BUILD_OR_IMPLEMENT, 0.72, "implementation/build verb") { w, _, _ ->
-            w.any { it in setOf("implementiere", "implementieren", "baue", "bauen", "entwickle", "entwickeln", "programmiere", "build", "implement", "develop", "code") }
+            w.any {
+                it in setOf(
+                    "implementiere", "implementieren", "baue", "bauen", "entwickle", "entwickeln",
+                    "programmiere", "umsetzen", "umsetze", "umsetz", "fertigstellen",
+                    "build", "implement", "develop", "code",
+                )
+            }
         },
         Rule(IntentType.SCHEDULE, 0.88, "reminder target or temporal scheduling cue") { w, text, _ ->
             w.any { it in scheduleWords } ||
@@ -57,7 +80,7 @@ class RuleBasedIntentClassifier {
         Rule(IntentType.COMMUNICATE, 0.82, "explicit communication or share verb") { w, _, _ ->
             w.any {
                 it in setOf(
-                    "schreibe", "sende", "antworte", "mail", "email", "nachricht",
+                    "schreibe", "schreib", "sende", "schicke", "schick", "antworte", "mail", "maile", "email", "nachricht",
                     "teile", "teilen", "share", "send", "reply", "message",
                 )
             }

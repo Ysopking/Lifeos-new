@@ -17,6 +17,13 @@ data class SemanticExecutionDecision(
 object SemanticExecutionGate {
     fun evaluate(goal: GoalFrame): SemanticExecutionDecision {
         val graph = goal.semanticActionGraph
+        if (goal.clarification.required) {
+            return SemanticExecutionDecision(
+                allowed = false,
+                reason = "semantic-clarification-required:" +
+                    goal.clarification.reason?.name?.lowercase().orEmpty(),
+            )
+        }
         if (goal.intent != IntentType.QUERY && graph.executableNodes.size > 1) {
             return SemanticExecutionDecision(
                 allowed = false,

@@ -29,6 +29,7 @@ data class SemanticQuantityV2(
     val upperBound: BigDecimal?,
     val span: TextSpan,
     val confidence: Double,
+    val approximate: Boolean = false,
 ) {
     init {
         require(value != null || lowerBound != null || upperBound != null)
@@ -85,10 +86,52 @@ data class SemanticDateTimeValue(
     }
 }
 
+enum class DayPart {
+    MORNING,
+    MIDDAY,
+    AFTERNOON,
+    EVENING,
+    NIGHT,
+}
+
+data class SemanticDayPart(
+    val dayPart: DayPart,
+    val startInclusive: Instant,
+    val endInclusive: Instant,
+    val span: TextSpan,
+    val confidence: Double,
+) {
+    init {
+        require(!endInclusive.isBefore(startInclusive))
+        require(confidence.isFinite() && confidence in 0.0..1.0)
+    }
+}
+
+enum class RecurrenceFrequency {
+    DAILY,
+    WEEKLY,
+    MONTHLY,
+}
+
+data class SemanticRecurrence(
+    val frequency: RecurrenceFrequency,
+    val interval: Int,
+    val weekday: DayOfWeek?,
+    val span: TextSpan,
+    val confidence: Double,
+) {
+    init {
+        require(interval >= 1)
+        require(confidence.isFinite() && confidence in 0.0..1.0)
+    }
+}
+
 data class QuantityTemporalResult(
     val quantities: List<SemanticQuantityV2>,
     val temporals: List<SemanticTemporalValue>,
     val dateTimes: List<SemanticDateTimeValue> = emptyList(),
+    val dayParts: List<SemanticDayPart> = emptyList(),
+    val recurrences: List<SemanticRecurrence> = emptyList(),
 )
 
 class QuantityTemporalEngine {
@@ -111,6 +154,7 @@ class QuantityTemporalEngine {
                 it.upperBound?.toPlainString().orEmpty(),
                 it.unit.orEmpty(),
                 it.currency?.currencyCode.orEmpty(),
+                it.approximate.toString(),
             )
         }.sortedBy { it.span.start }
 
@@ -123,7 +167,20 @@ class QuantityTemporalEngine {
             referenceInstant = referenceInstant,
             zoneId = zoneId,
         )
-        return QuantityTemporalResult(quantities, temporals, dateTimes)
+        val dayParts = parseDayParts(
+            utterance = utterance,
+            temporals = temporals,
+            referenceInstant = referenceInstant,
+            zoneId = zoneId,
+        )
+        val recurrences = parseRecurrences(utterance)
+        return QuantityTemporalResult(
+            quantities = quantities,
+            temporals = temporals,
+            dateTimes = dateTimes,
+            dayParts = dayParts,
+            recurrences = recurrences,
+        )
     }
 
     private fun parseRanges(utterance: NormalizedUtterance): List<SemanticQuantityV2> =
@@ -158,6 +215,7 @@ class QuantityTemporalEngine {
             val amount = decimal(match.groupValues[2]) ?: return@mapNotNull null
             val rawUnit = match.groupValues.getOrNull(3).orEmpty().ifBlank { null }
             val (unit, currency) = normalizeUnit(rawUnit)
+            val approximate = cue in APPROXIMATE_CUES
             SemanticQuantityV2(
                 value = amount,
                 unit = unit,
@@ -166,7 +224,12 @@ class QuantityTemporalEngine {
                 lowerBound = null,
                 upperBound = null,
                 span = TextSpan(match.range.first, match.range.last + 1),
-                confidence = if (cue.isBlank()) 0.96 else 0.99,
+                confidence = when {
+                    approximate -> 0.90
+                    cue.isBlank() -> 0.96
+                    else -> 0.99
+                },
+                approximate = approximate,
             )
         }.toList()
 
@@ -390,6 +453,76 @@ class QuantityTemporalEngine {
         return result
     }
 
+    private fun parseDayParts(
+        utterance: NormalizedUtterance,
+        temporals: List<SemanticTemporalValue>,
+        referenceInstant: Instant,
+        zoneId: ZoneId,
+    ): List<SemanticDayPart> {
+        val baseDate = referenceInstant.atZone(zoneId).toLocalDate()
+        return DAY_PART_REGEX.findAll(utterance.original).mapNotNull { match ->
+            val normalized = match.value.lowercase(Locale.ROOT)
+            val part = when (normalized) {
+                "morgen", "morgens", "morning" -> DayPart.MORNING
+                "mittag", "mittags", "midday", "noon" -> DayPart.MIDDAY
+                "nachmittag", "nachmittags", "afternoon" -> DayPart.AFTERNOON
+                "abend", "abends", "evening" -> DayPart.EVENING
+                "nacht", "nachts", "night" -> DayPart.NIGHT
+                else -> return@mapNotNull null
+            }
+            val span = TextSpan(match.range.first, match.range.last + 1)
+            val nearestDate = temporals
+                .asSequence()
+                .filter { it.relation == TemporalRelation.AT && it.startInclusive != null }
+                .map { temporal ->
+                    val distance = when {
+                        temporal.span.endExclusive < span.start -> span.start - temporal.span.endExclusive
+                        span.endExclusive < temporal.span.start -> temporal.span.start - span.endExclusive
+                        else -> 0
+                    }
+                    temporal to distance
+                }
+                .filter { it.second <= MAX_DATE_TIME_BINDING_DISTANCE }
+                .minByOrNull { it.second }
+                ?.first
+                ?.startInclusive
+                ?.atZone(zoneId)
+                ?.toLocalDate()
+                ?: baseDate
+            val (start, end) = when (part) {
+                DayPart.MORNING -> LocalTime.of(6, 0) to LocalTime.of(11, 59, 59)
+                DayPart.MIDDAY -> LocalTime.of(12, 0) to LocalTime.of(13, 59, 59)
+                DayPart.AFTERNOON -> LocalTime.of(14, 0) to LocalTime.of(17, 59, 59)
+                DayPart.EVENING -> LocalTime.of(18, 0) to LocalTime.of(22, 0)
+                DayPart.NIGHT -> LocalTime.of(22, 0) to LocalTime.of(23, 59, 59)
+            }
+            SemanticDayPart(
+                dayPart = part,
+                startInclusive = LocalDateTime.of(nearestDate, start).atZone(zoneId).toInstant(),
+                endInclusive = LocalDateTime.of(nearestDate, end).atZone(zoneId).toInstant(),
+                span = span,
+                confidence = 0.94,
+            )
+        }.distinctBy { it.dayPart to it.span.start }.toList()
+    }
+
+    private fun parseRecurrences(utterance: NormalizedUtterance): List<SemanticRecurrence> =
+        RECURRENCE_REGEX.findAll(utterance.original).mapNotNull { match ->
+            val interval = when (match.groupValues[1].lowercase(Locale.ROOT)) {
+                "zweiten", "second" -> 2
+                "dritten", "third" -> 3
+                else -> 1
+            }
+            val day = weekday(match.groupValues[2]) ?: return@mapNotNull null
+            SemanticRecurrence(
+                frequency = RecurrenceFrequency.WEEKLY,
+                interval = interval,
+                weekday = day,
+                span = TextSpan(match.range.first, match.range.last + 1),
+                confidence = 0.97,
+            )
+        }.distinctBy { Triple(it.interval, it.weekday, it.span.start) }.toList()
+
     private fun dayValue(
         relation: TemporalRelation,
         date: LocalDate,
@@ -492,7 +625,7 @@ class QuantityTemporalEngine {
             """(?i)\bzwischen\s+(\d+(?:[.,]\d+)?)\s+(?:und|bis)\s+(\d+(?:[.,]\d+)?)\s*([\p{L}%€$£]+)?"""
         )
         val SCALAR_REGEX = Regex(
-            """(?i)(?:(nicht\s+mehr\s+als|not\s+more\s+than|mindestens|mehr\s+als|über|ueber|höchstens|hoechstens|weniger\s+als|unter|at\s+least|more\s+than|at\s+most|less\s+than)\s+)?(\d+(?:[.,]\d+)?)\s*([\p{L}%€$£]+)?"""
+            """(?i)(?:(nicht\s+mehr\s+als|not\s+more\s+than|mindestens|mehr\s+als|über|ueber|höchstens|hoechstens|weniger\s+als|unter|knapp|ungefähr|ungefahr|ca\.?|circa|about|approximately|at\s+least|more\s+than|at\s+most|less\s+than)\s+)?(\d+(?:[.,]\d+)?)\s*([\p{L}%€$£]+)?"""
         )
         val CLOCK_REGEX = Regex(
             """(?i)\b(?:um|at)\s+(\d{1,2})(?::(\d{2}))?\s*(?:uhr\b|(am|pm)\b)?"""
@@ -514,6 +647,15 @@ class QuantityTemporalEngine {
         )
         val WEEKDAY_RANGE_REGEX = Regex(
             """(?i)\bzwischen\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\s+und\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b"""
+        )
+        val DAY_PART_REGEX = Regex(
+            """(?i)\b(morgens|mittag(?:s)?|nachmittags?|abends?|nachts?|morning|midday|noon|afternoon|evening|night)\b"""
+        )
+        val RECURRENCE_REGEX = Regex(
+            """(?i)\b(?:jeden|jede|every)\s+(?:(zweiten|dritten|second|third)\s+)?(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b"""
+        )
+        val APPROXIMATE_CUES = setOf(
+            "knapp", "ungefähr", "ungefahr", "ca.", "ca", "circa", "about", "approximately",
         )
 
         val MONTHS = mapOf(

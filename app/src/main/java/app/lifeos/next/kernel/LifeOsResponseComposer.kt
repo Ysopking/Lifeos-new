@@ -18,6 +18,19 @@ class LifeOsResponseComposer(
     }
 
     fun compose(result: LanguageSubmissionResult): String {
+        result.understanding
+            ?.goal
+            ?.clarification
+            ?.takeIf { it.required }
+            ?.let { clarification ->
+                return when (language(result)) {
+                    LanguageCode.EN ->
+                        clarification.questionEn ?: "Could you clarify that?"
+                    else ->
+                        clarification.questionDe ?: "Kannst du das genauer angeben?"
+                }
+            }
+
         (result.localKnowledge as? LocalKnowledgeExecutionResult.Produced)?.let { produced ->
             return when (produced.kind) {
                 LocalKnowledgeGoalKind.QUERY_ANSWER -> generated(

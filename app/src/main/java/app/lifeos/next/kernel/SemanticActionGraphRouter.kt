@@ -1,5 +1,7 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.language.ClarificationPlan
+import app.lifeos.core.language.ClarificationReason
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.ReferenceExpression
@@ -7,6 +9,7 @@ import app.lifeos.core.language.ReferenceKind
 import app.lifeos.core.language.ResolvedReference
 import app.lifeos.core.language.SemanticActionEdgeType
 import app.lifeos.core.language.SemanticActionGraph
+import app.lifeos.core.language.SemanticActionGroupType
 import app.lifeos.core.language.SemanticActionNode
 import app.lifeos.core.language.SemanticActionNodeType
 import app.lifeos.core.language.SemanticExecutionGate
@@ -73,6 +76,20 @@ class SemanticActionGraphRouter(
         goalPhotonRevision: Long = 1L,
     ): SemanticActionGraphExecutionResult {
         val graph = goal.semanticActionGraph
+        val unresolvedNestedGroup = graph.groups.firstOrNull { group ->
+            group.type == SemanticActionGroupType.CONDITIONAL &&
+                group.nodeIds.any { id ->
+                    graph.nodes.singleOrNull { it.id == id }?.unresolvedCondition == true
+                }
+        }
+        if (unresolvedNestedGroup != null) {
+            return SemanticActionGraphExecutionResult(
+                graphFingerprint = graph.fingerprint,
+                executions = emptyList(),
+                blockedReason = "nested-condition-unresolved:" + unresolvedNestedGroup.id,
+            )
+        }
+
         val runnable = graph.nodes.filter(::isRunnable)
         if (runnable.isEmpty()) {
             return SemanticActionGraphExecutionResult(
@@ -108,6 +125,7 @@ class SemanticActionGraphRouter(
 
         val executions = mutableListOf<SemanticNodeExecution>()
         val outputs = linkedMapOf<app.lifeos.core.language.SemanticNodeId, PhotonRevisionRef>()
+        val outputPhotons = linkedMapOf<app.lifeos.core.language.SemanticNodeId, Photon>()
 
         for (node in ordered) {
             val dependencies = graph.edges.filter { edge ->
@@ -134,7 +152,11 @@ class SemanticActionGraphRouter(
             val resultEdge = graph.edges
                 .firstOrNull { it.to == node.id && it.type == SemanticActionEdgeType.USES_RESULT_OF }
             val resultDependency = resultEdge?.from?.let(outputs::get)
-            if (resultEdge != null && resultDependency == null) {
+            val resultDependencyPhoton = resultEdge?.from?.let(outputPhotons::get)
+            if (
+                resultEdge != null &&
+                (resultDependency == null || resultDependencyPhoton == null)
+            ) {
                 executions += SemanticNodeExecution(
                     nodeId = node.id,
                     intent = intentFor(node) ?: IntentType.UNKNOWN,
@@ -190,11 +212,16 @@ class SemanticActionGraphRouter(
                     goalPhotonId = goalPhotonId,
                     goalPhotonRevision = goalPhotonRevision,
                     externalActionContract = externalContract,
+                    boundResultPhoton = resultDependencyPhoton,
                 )
             )
             val successful = isSuccessful(dispatch, nodeGoal.intent)
-            val output = outputPhoton(dispatch)?.let { PhotonRevisionRef(it.id, it.revision) }
-            if (successful && output != null) outputs[node.id] = output
+            val producedPhoton = outputPhoton(dispatch)
+            val output = producedPhoton?.let { PhotonRevisionRef(it.id, it.revision) }
+            if (successful && output != null && producedPhoton != null) {
+                outputs[node.id] = output
+                outputPhotons[node.id] = producedPhoton
+            }
 
             executions += SemanticNodeExecution(
                 nodeId = node.id,
@@ -203,7 +230,10 @@ class SemanticActionGraphRouter(
                 routing = routing,
                 dispatch = dispatch,
                 outputRef = output,
-                reason = if (successful) null else "executor-did-not-produce-success",
+                reason = if (successful) null else dispatchFailureReason(
+                    intent = nodeGoal.intent,
+                    result = dispatch,
+                ),
             )
             if (!successful) break
         }
@@ -280,6 +310,22 @@ class SemanticActionGraphRouter(
             SemanticActionNodeType.QUERY -> updatedNode.frame.confidence
             else -> base.confidence
         }
+        val scopedAmbiguities = base.ambiguities.filterNot { ambiguity ->
+            ambiguity.code in NODE_RESOLVED_AMBIGUITIES ||
+                (
+                    !updatedNode.unresolvedReference &&
+                        ambiguity.code in RESULT_DEPENDENCY_RESOLVED_AMBIGUITIES
+                )
+        }
+        val scopedClarification = when (base.clarification.reason) {
+            ClarificationReason.REFERENCE ->
+                if (updatedNode.unresolvedReference) base.clarification else ClarificationPlan.none()
+            ClarificationReason.ROLE ->
+                if (updatedNode.unresolvedRoles.isNotEmpty()) base.clarification else ClarificationPlan.none()
+            ClarificationReason.CONDITION ->
+                if (updatedNode.unresolvedCondition) base.clarification else ClarificationPlan.none()
+            else -> base.clarification
+        }
         return base.copy(
             intent = intent,
             confidence = nodeConfidence,
@@ -296,17 +342,8 @@ class SemanticActionGraphRouter(
                         )
                 })
             },
-            ambiguities = base.ambiguities.filterNot { ambiguity ->
-                ambiguity.code in NODE_RESOLVED_AMBIGUITIES ||
-                    (
-                        dependencyRawText != null &&
-                            ambiguity.code in RESULT_DEPENDENCY_RESOLVED_AMBIGUITIES &&
-                            ambiguity.message.contains(
-                                "'$dependencyRawText'",
-                                ignoreCase = true,
-                            )
-                    )
-            },
+            ambiguities = scopedAmbiguities,
+            clarification = scopedClarification,
             semanticActionGraph = nodeGraph,
         )
     }
@@ -354,6 +391,33 @@ class SemanticActionGraphRouter(
             }
         }
         return ordered.takeIf { it.size == nodes.size }
+    }
+
+    private fun dispatchFailureReason(
+        intent: IntentType,
+        result: GoalActionDispatchResult,
+    ): String = buildString {
+        append("executor-did-not-produce-success")
+        append(":intent=").append(intent.name)
+        append(":knowledge=").append(result.localKnowledge?.let { it::class.simpleName } ?: "none")
+        append(":search=").append(result.localDeepSearch?.let { it::class.simpleName } ?: "none")
+        append(":image=").append(result.imageGeneration?.let { it::class.simpleName } ?: "none")
+        append(":transform=").append(result.localImageTransform?.let { it::class.simpleName } ?: "none")
+        append(":schedule=").append(result.localSchedule?.let { it::class.simpleName } ?: "none")
+        append(":communication=")
+            .append(
+                when (val communication = result.localCommunication) {
+                    is LocalCommunicationExecutionResult.Blocked ->
+                        "Blocked(" + communication.reason + ")"
+                    is LocalCommunicationExecutionResult.Failed ->
+                        "Failed(" + communication.message + ")"
+                    is LocalCommunicationExecutionResult.Prepared ->
+                        "Prepared(" + communication.share.target.id.value + ")"
+                    null -> "none"
+                }
+            )
+        append(":external=").append(result.externalEffect?.state?.name ?: "none")
+        append(":recovered=").append(result.recoveredOutcome?.id?.value ?: "none")
     }
 
     private fun isSuccessful(

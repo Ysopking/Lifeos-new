@@ -10,24 +10,38 @@ class PredicateFrameParser(
     private val morphology: GermanMorphologyEngine = GermanMorphologyEngine(),
     private val roleBinder: SemanticRoleBinder = SemanticRoleBinder(),
     private val contracts: PredicateContractRegistry = PredicateContractRegistry(),
+    private val paraphraseResolver: PredicateParaphraseResolver = PredicateParaphraseResolver(),
 ) {
     fun parse(
         utterance: NormalizedUtterance,
         graph: LanguageSemanticGraph,
         speechActs: Map<Int, SpeechAct>,
         references: List<ResolvedReference>,
+        linguisticField: LinguisticFieldResult? = null,
+        syntaxGraph: DependencySyntaxGraph = DependencySyntaxGraph.empty(),
     ): List<PredicateFrame> = graph.clauses.flatMap { clause ->
         val tokens = utterance.tokens.subList(clause.tokenStart, clause.tokenEndExclusive)
         val speechAct = requireNotNull(speechActs[clause.id]) {
             "Every semantic clause requires a speech act"
         }
-        val occurrences = predicateOccurrences(tokens, speechAct)
+        val occurrences = predicateOccurrences(
+            tokens = tokens,
+            speechAct = speechAct,
+            clauseTokenStart = clause.tokenStart,
+            linguisticField = linguisticField,
+        )
         occurrences.mapIndexed { occurrenceIndex, occurrence ->
             val predicate = occurrence.predicate
             val predicateTokenIndex = clause.tokenStart + occurrence.localTokenIndex
             val nextPredicateTokenIndex = occurrences
                 .getOrNull(occurrenceIndex + 1)
-                ?.let { clause.tokenStart + it.localTokenIndex }
+                ?.let { next ->
+                    maxOf(
+                        predicateTokenIndex + 1,
+                        clause.tokenStart + next.localTokenIndex,
+                    )
+                }
+                ?.coerceAtMost(clause.tokenEndExclusive)
                 ?: clause.tokenEndExclusive
             val nodeId = SemanticNodeId.create(
                 "predicate-frame/v2",
@@ -54,14 +68,33 @@ class PredicateFrameParser(
             val evidence = buildList {
                 add(
                     SemanticEvidence(
-                        source = "predicate-syntax-v2",
+                        source = occurrence.source,
                         detail = "predicate=" + predicate.name +
                             ";token=" + utterance.tokens[predicateTokenIndex].original +
-                            ";index=" + predicateTokenIndex,
-                        strength = if (predicate == PredicateConcept.CONDITION_CHECK) 0.82 else 0.96,
+                            ";index=" + predicateTokenIndex +
+                            ";" + occurrence.detail,
+                        strength = occurrence.confidence,
                         span = tokenSpan(utterance.tokens[predicateTokenIndex]),
                     )
                 )
+                syntaxGraph.arcs
+                    .filter { it.headTokenIndex == predicateTokenIndex }
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { arcs ->
+                        add(
+                            SemanticEvidence(
+                                source = "dependency-syntax/v1",
+                                detail = "root=" + predicateTokenIndex +
+                                    ";relations=" + arcs
+                                        .map { it.relation.name }
+                                        .distinct()
+                                        .sorted()
+                                        .joinToString(","),
+                                strength = arcs.maxOf { it.confidence },
+                                span = tokenSpan(utterance.tokens[predicateTokenIndex]),
+                            )
+                        )
+                    }
                 addAll(speechAct.evidence)
             }
             PredicateFrame(
@@ -73,7 +106,7 @@ class PredicateFrameParser(
                 speechAct = speechAct,
                 confidence = minOf(
                     speechAct.confidence,
-                    if (predicate == PredicateConcept.CONDITION_CHECK) 0.82 else 0.96,
+                    occurrence.confidence,
                 ),
                 evidence = evidence,
             )
@@ -83,18 +116,29 @@ class PredicateFrameParser(
     private fun predicateOccurrences(
         tokens: List<LanguageToken>,
         speechAct: SpeechAct,
+        clauseTokenStart: Int,
+        linguisticField: LinguisticFieldResult?,
     ): List<PredicateOccurrence> {
         val result = mutableListOf<PredicateOccurrence>()
         val words = tokens.withIndex().filter { it.value.kind == TokenKind.WORD }
 
         val make = words.firstOrNull { it.value.normalized in MAKE_FORMS }
-        if (make != null && words.any { it.value.normalized in IMAGE_WORDS }) {
-            val concept = if (words.any { it.value.normalized in IMAGE_TRANSFORM_MODIFIERS }) {
+        val hasImageNoun = words.any { it.value.normalized in IMAGE_WORDS }
+        val hasTransformModifier = words.any { it.value.normalized in IMAGE_TRANSFORM_MODIFIERS }
+        val hasDeicticObject = words.any { it.value.normalized in REFERENCE_PRONOUNS }
+        if (make != null && (hasImageNoun || hasTransformModifier && hasDeicticObject)) {
+            val concept = if (hasTransformModifier) {
                 PredicateConcept.TRANSFORM_IMAGE
             } else {
                 PredicateConcept.CREATE_IMAGE
             }
-            result += PredicateOccurrence(concept, make.index)
+            result += PredicateOccurrence(
+                predicate = concept,
+                localTokenIndex = make.index,
+                confidence = if (hasImageNoun) 0.96 else 0.90,
+                source = "predicate-syntax-v2",
+                detail = if (hasImageNoun) "exact-make-image" else "deictic-make-transform",
+            )
         }
 
         val wordSet = words.mapTo(linkedSetOf()) { it.value.normalized }
@@ -107,29 +151,113 @@ class PredicateFrameParser(
                     matchesPredicate(normalized, candidate)
                 }
             } ?: return@forEach
-            result += PredicateOccurrence(concept, indexed.index)
+            result += PredicateOccurrence(
+                predicate = concept,
+                localTokenIndex = indexed.index,
+                confidence = 0.96,
+                source = "predicate-syntax-v2",
+                detail = "exact-or-morphological-form",
+            )
         }
 
         val firstWord = words.firstOrNull()
         if (firstWord?.value?.normalized in CONDITION_MARKERS) {
-            result += PredicateOccurrence(PredicateConcept.CONDITION_CHECK, firstWord!!.index)
+            result += PredicateOccurrence(
+                predicate = PredicateConcept.CONDITION_CHECK,
+                localTokenIndex = firstWord!!.index,
+                confidence = 0.82,
+                source = "predicate-syntax-v2",
+                detail = "condition-marker",
+            )
         }
 
         if (result.isEmpty() && speechAct.type == SpeechActType.QUESTION) {
             result += PredicateOccurrence(
-                PredicateConcept.QUERY,
-                firstWord?.index ?: 0,
+                predicate = PredicateConcept.QUERY,
+                localTokenIndex = firstWord?.index ?: 0,
+                confidence = 0.78,
+                source = "predicate-syntax-v2",
+                detail = "question-fallback",
             )
         }
 
-        return result
-            .distinctBy { it.predicate to it.localTokenIndex }
+        paraphraseResolver.resolve(tokens).forEach { match ->
+            result += PredicateOccurrence(
+                predicate = match.predicate,
+                localTokenIndex = match.localTokenIndex,
+                confidence = match.confidence,
+                source = match.source,
+                detail = match.detail,
+            )
+        }
+        paraphraseResolver.fromField(
+            field = linguisticField,
+            clauseTokenStart = clauseTokenStart,
+            clauseTokenEndExclusive = clauseTokenStart + tokens.size,
+        ).forEach { match ->
+            // Field-derived predicates are fallback semantic evidence. They must never duplicate
+            // a stronger lexical/syntactic/paraphrase predicate at another token in the same
+            // clause, otherwise one user action can become two executable semantic nodes.
+            if (result.none { it.predicate == match.predicate }) {
+                result += PredicateOccurrence(
+                    predicate = match.predicate,
+                    localTokenIndex = match.localTokenIndex,
+                    confidence = match.confidence,
+                    source = match.source,
+                    detail = match.detail,
+                )
+            }
+        }
+
+        val positioned = result
+            .groupBy { it.predicate to it.localTokenIndex }
+            .map { (_, occurrences) -> occurrences.maxBy { it.confidence } }
             .sortedWith(compareBy<PredicateOccurrence> { it.localTokenIndex }.thenBy { it.predicate.name })
+
+        val collapsed = mutableListOf<PredicateOccurrence>()
+        positioned.forEach { occurrence ->
+            val previousIndex = collapsed.indexOfLast { it.predicate == occurrence.predicate }
+            if (previousIndex < 0) {
+                collapsed += occurrence
+                return@forEach
+            }
+            val previous = collapsed[previousIndex]
+            if (hasIndependentActionBoundary(tokens, previous.localTokenIndex, occurrence.localTokenIndex)) {
+                collapsed += occurrence
+            } else {
+                val preferred = when {
+                    occurrence.confidence > previous.confidence -> occurrence
+                    occurrence.confidence < previous.confidence -> previous
+                    occurrence.localTokenIndex < previous.localTokenIndex -> occurrence
+                    else -> previous
+                }
+                collapsed[previousIndex] = preferred
+            }
+        }
+        return collapsed.sortedWith(
+            compareBy<PredicateOccurrence> { it.localTokenIndex }.thenBy { it.predicate.name }
+        )
+    }
+
+    private fun hasIndependentActionBoundary(
+        tokens: List<LanguageToken>,
+        leftIndex: Int,
+        rightIndex: Int,
+    ): Boolean {
+        if (rightIndex <= leftIndex + 1) return false
+        return (leftIndex + 1 until rightIndex).any { index ->
+            val token = tokens[index]
+            token.normalized in ACTION_BOUNDARY_MARKERS ||
+                token.kind == TokenKind.PUNCTUATION && token.original in ACTION_BOUNDARY_PUNCTUATION
+        }
     }
 
     private data class PredicateOccurrence(
         val predicate: PredicateConcept,
         val localTokenIndex: Int,
+        val confidence: Double,
+        val source: String,
+        val detail: String,
     )
 
     private fun matchesPredicate(
@@ -397,13 +525,23 @@ class PredicateFrameParser(
         val PREDICATE_FORMS: Map<PredicateConcept, Set<String>> = mapOf(
             PredicateConcept.CREATE_IMAGE to setOf("erstelle", "erzeuge", "generiere", "zeichne", "rendere", "create", "generate", "draw", "render"),
             PredicateConcept.TRANSFORM_IMAGE to setOf("ändere", "aendere", "bearbeite", "edit", "change", "transformiere", "transform"),
-            PredicateConcept.SEARCH to setOf("suche", "finde", "recherchiere", "search", "find", "research", "lookup"),
+            PredicateConcept.SEARCH to setOf(
+                "suche", "finde", "recherchiere", "nachsehen", "nachschauen",
+                "schau", "sieh", "guck", "prüf", "pruef", "prüfe", "pruefe", "check", "checke",
+                "search", "find", "research", "lookup",
+            ),
             PredicateConcept.CONTINUE to setOf("weiter", "fortsetzen", "continue", "proceed"),
-            PredicateConcept.BUILD to setOf("baue", "implementiere", "entwickle", "programmiere", "build", "implement", "develop", "code"),
+            PredicateConcept.BUILD to setOf(
+                "baue", "implementiere", "entwickle", "programmiere", "umsetzen", "umsetze", "umsetz",
+                "fertigstellen", "build", "implement", "develop", "code",
+            ),
             PredicateConcept.QUERY to setOf("zeige", "sag", "erkläre", "erklaere", "show", "tell", "explain"),
             PredicateConcept.SCHEDULE to setOf("erinnere", "plane", "schedule", "remind"),
-            PredicateConcept.COMMUNICATE to setOf("sende", "schicke", "schick", "teile", "antworte", "send", "share", "reply", "message"),
-            PredicateConcept.STORE_MEMORY to setOf("merke", "speichere", "remember", "store", "save"),
+            PredicateConcept.COMMUNICATE to setOf(
+                "sende", "schicke", "schick", "schreibe", "schreib", "maile", "mail",
+                "teile", "antworte", "send", "share", "reply", "message",
+            ),
+            PredicateConcept.STORE_MEMORY to setOf("merke", "merk", "speichere", "remember", "store", "save"),
             PredicateConcept.OWE to setOf("schuldet", "schulde", "schulden", "owes", "owe"),
             PredicateConcept.PAY to setOf("überweise", "ueberweise", "zahle", "bezahle", "pay", "transfer"),
             PredicateConcept.DELETE to setOf("lösche", "loesche", "entferne", "delete", "remove"),
@@ -467,15 +605,23 @@ class PredicateFrameParser(
         private val IMAGE_WORDS = setOf("bild", "foto", "grafik", "image", "photo", "picture")
         private val IMAGE_TRANSFORM_MODIFIERS = setOf(
             "heller", "dunkler", "wärmer", "waermer", "schaerfer", "schärfer",
-            "brighter", "darker", "warmer", "sharper",
+            "größer", "groesser", "kleiner",
+            "brighter", "darker", "warmer", "sharper", "larger", "smaller",
         )
         private val REFERENCE_PRONOUNS = setOf(
             "das", "dies", "diese", "diesen", "dieses", "ihn", "sie", "es", "andere", "anderen",
             "it", "this", "that", "him", "her", "them", "other",
         )
         private val QUOTE_MARKERS = setOf("\"", "„", "“", "”", "«", "»")
+        private val ACTION_BOUNDARY_MARKERS = setOf(
+            "und", "oder", "dann", "danach", "anschließend", "anschliessend",
+            "and", "or", "then", "afterwards",
+        )
+        private val ACTION_BOUNDARY_PUNCTUATION = setOf(";", ":")
+
         private val OBJECT_STOP_WORDS = setOf(
             "bitte", "please", "mir", "mich", "me", "an", "to", "nicht", "not",
+            "um", "ein", "nach", "durch", "heraus",
             "anschließend", "anschliessend", "danach", "then", "und", "and", "oder", "or",
         )
         private val SENTENCE_INITIAL_NON_NAMES = setOf(
