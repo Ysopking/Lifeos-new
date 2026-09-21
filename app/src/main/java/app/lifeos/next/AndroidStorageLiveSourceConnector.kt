@@ -35,16 +35,23 @@ import java.time.Instant
  * for the bounded delta batch being published.
  */
 internal class AndroidStorageLiveSourceConnector(
-    context: Context,
-    private val inventory: AndroidStorageInventoryStore =
-        AndroidStorageInventoryStore(context),
-    private val statusSource: InitialDataSourceAdapter =
-        AndroidSharedFilesInitialDataSource(context),
+    private val inventory: StorageChangeJournal,
+    private val statusSource: InitialDataSourceAdapter,
     private val parsers: FileContentParserRegistry =
         FileContentParserRegistry(),
     private val now: () -> Instant = Instant::now,
 ) : LiveSourceConnector,
     SnapshotToCursorLiveSourceAdapter {
+
+    constructor(
+        context: Context,
+        now: () -> Instant = Instant::now,
+    ) : this(
+        inventory = AndroidStorageInventoryStore(context),
+        statusSource = AndroidSharedFilesInitialDataSource(context),
+        parsers = FileContentParserRegistry(),
+        now = now,
+    )
 
     override val sourceId: LiveSourceId =
         LiveSourceId(AndroidSharedFilesInitialDataSource.SOURCE_ID)
