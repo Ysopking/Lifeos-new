@@ -20,6 +20,7 @@ class PredicateParaphraseResolver {
         val terms: List<String>,
         val predicate: PredicateConcept,
         val confidence: Double,
+        val maxGapWords: Int = 0,
     )
 
     fun resolve(tokens: List<LanguageToken>): List<PredicateParaphraseMatch> {
@@ -28,16 +29,16 @@ class PredicateParaphraseResolver {
         val normalized = words.map { it.value.normalized }
         val out = mutableListOf<PredicateParaphraseMatch>()
         PATTERNS.forEach { pattern ->
-            if (pattern.terms.size > normalized.size) return@forEach
-            for (start in 0..normalized.size - pattern.terms.size) {
-                val window = normalized.subList(start, start + pattern.terms.size)
-                if (window != pattern.terms) continue
+            for (start in normalized.indices) {
+                val matched = matchPattern(normalized, start, pattern)
+                    ?: continue
                 out += PredicateParaphraseMatch(
                     predicate = pattern.predicate,
                     localTokenIndex = words[start].index,
                     confidence = safeConfidence(pattern.predicate, pattern.confidence),
                     source = "predicate-paraphrase/v1",
-                    detail = "phrase=" + pattern.terms.joinToString(" "),
+                    detail = "phrase=" + pattern.terms.joinToString(" ") +
+                        ";spanWords=" + (matched - start + 1),
                 )
             }
         }
@@ -70,6 +71,27 @@ class PredicateParaphraseResolver {
                     ";confidence=" + resolution.confidence,
             )
         }
+    }
+
+    private fun matchPattern(
+        normalized: List<String>,
+        start: Int,
+        pattern: Pattern,
+    ): Int? {
+        if (pattern.terms.isEmpty() || normalized.getOrNull(start) != pattern.terms.first()) return null
+        var cursor = start
+        pattern.terms.drop(1).forEach { term ->
+            val firstCandidate = cursor + 1
+            val lastCandidate = minOf(
+                normalized.lastIndex,
+                cursor + pattern.maxGapWords + 1,
+            )
+            if (firstCandidate > lastCandidate) return null
+            val next = (firstCandidate..lastCandidate).firstOrNull { normalized[it] == term }
+                ?: return null
+            cursor = next
+        }
+        return cursor
     }
 
     private fun safeConfidence(predicate: PredicateConcept, raw: Double): Double {
@@ -108,28 +130,28 @@ class PredicateParaphraseResolver {
         )
 
         val PATTERNS = listOf(
-            Pattern(listOf("schau", "nach"), PredicateConcept.SEARCH, 0.88),
-            Pattern(listOf("sieh", "nach"), PredicateConcept.SEARCH, 0.88),
-            Pattern(listOf("guck", "nach"), PredicateConcept.SEARCH, 0.84),
-            Pattern(listOf("find", "heraus"), PredicateConcept.SEARCH, 0.88),
-            Pattern(listOf("finde", "heraus"), PredicateConcept.SEARCH, 0.90),
+            Pattern(listOf("schau", "nach"), PredicateConcept.SEARCH, 0.88, maxGapWords = 5),
+            Pattern(listOf("sieh", "nach"), PredicateConcept.SEARCH, 0.88, maxGapWords = 5),
+            Pattern(listOf("guck", "nach"), PredicateConcept.SEARCH, 0.84, maxGapWords = 5),
+            Pattern(listOf("find", "heraus"), PredicateConcept.SEARCH, 0.88, maxGapWords = 6),
+            Pattern(listOf("finde", "heraus"), PredicateConcept.SEARCH, 0.90, maxGapWords = 6),
             Pattern(listOf("look", "up"), PredicateConcept.SEARCH, 0.90),
             Pattern(listOf("find", "out"), PredicateConcept.SEARCH, 0.88),
-            Pattern(listOf("gib", "bescheid"), PredicateConcept.COMMUNICATE, 0.90),
-            Pattern(listOf("sag", "bescheid"), PredicateConcept.COMMUNICATE, 0.88),
-            Pattern(listOf("lass", "wissen"), PredicateConcept.COMMUNICATE, 0.88),
+            Pattern(listOf("gib", "bescheid"), PredicateConcept.COMMUNICATE, 0.90, maxGapWords = 5),
+            Pattern(listOf("sag", "bescheid"), PredicateConcept.COMMUNICATE, 0.88, maxGapWords = 5),
+            Pattern(listOf("lass", "wissen"), PredicateConcept.COMMUNICATE, 0.88, maxGapWords = 6),
             Pattern(listOf("let", "know"), PredicateConcept.COMMUNICATE, 0.88),
-            Pattern(listOf("trag", "ein"), PredicateConcept.SCHEDULE, 0.88),
-            Pattern(listOf("trage", "ein"), PredicateConcept.SCHEDULE, 0.90),
-            Pattern(listOf("merk", "dir"), PredicateConcept.STORE_MEMORY, 0.90),
-            Pattern(listOf("merke", "dir"), PredicateConcept.STORE_MEMORY, 0.92),
+            Pattern(listOf("trag", "ein"), PredicateConcept.SCHEDULE, 0.88, maxGapWords = 6),
+            Pattern(listOf("trage", "ein"), PredicateConcept.SCHEDULE, 0.90, maxGapWords = 6),
+            Pattern(listOf("merk", "dir"), PredicateConcept.STORE_MEMORY, 0.90, maxGapWords = 2),
+            Pattern(listOf("merke", "dir"), PredicateConcept.STORE_MEMORY, 0.92, maxGapWords = 2),
             Pattern(listOf("behalt", "im", "kopf"), PredicateConcept.STORE_MEMORY, 0.86),
             Pattern(listOf("behalte", "im", "kopf"), PredicateConcept.STORE_MEMORY, 0.88),
             Pattern(listOf("mach", "weiter"), PredicateConcept.CONTINUE, 0.94),
             Pattern(listOf("mache", "weiter"), PredicateConcept.CONTINUE, 0.94),
-            Pattern(listOf("zieh", "durch"), PredicateConcept.CONTINUE, 0.88),
-            Pattern(listOf("setze", "um"), PredicateConcept.BUILD, 0.90),
-            Pattern(listOf("setz", "um"), PredicateConcept.BUILD, 0.88),
+            Pattern(listOf("zieh", "durch"), PredicateConcept.CONTINUE, 0.88, maxGapWords = 5),
+            Pattern(listOf("setze", "um"), PredicateConcept.BUILD, 0.90, maxGapWords = 6),
+            Pattern(listOf("setz", "um"), PredicateConcept.BUILD, 0.88, maxGapWords = 6),
             Pattern(listOf("mach", "fertig"), PredicateConcept.BUILD, 0.84),
             Pattern(listOf("get", "working"), PredicateConcept.BUILD, 0.82),
         )
