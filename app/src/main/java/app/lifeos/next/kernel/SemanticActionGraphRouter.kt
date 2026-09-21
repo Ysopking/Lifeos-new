@@ -1,5 +1,7 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.language.ClarificationPlan
+import app.lifeos.core.language.ClarificationReason
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.ReferenceExpression
@@ -295,6 +297,22 @@ class SemanticActionGraphRouter(
             SemanticActionNodeType.QUERY -> updatedNode.frame.confidence
             else -> base.confidence
         }
+        val scopedAmbiguities = base.ambiguities.filterNot { ambiguity ->
+            ambiguity.code in NODE_RESOLVED_AMBIGUITIES ||
+                (
+                    !updatedNode.unresolvedReference &&
+                        ambiguity.code in RESULT_DEPENDENCY_RESOLVED_AMBIGUITIES
+                )
+        }
+        val scopedClarification = when (base.clarification.reason) {
+            ClarificationReason.REFERENCE ->
+                if (updatedNode.unresolvedReference) base.clarification else ClarificationPlan.none()
+            ClarificationReason.ROLE ->
+                if (updatedNode.unresolvedRoles.isNotEmpty()) base.clarification else ClarificationPlan.none()
+            ClarificationReason.CONDITION ->
+                if (updatedNode.unresolvedCondition) base.clarification else ClarificationPlan.none()
+            else -> base.clarification
+        }
         return base.copy(
             intent = intent,
             confidence = nodeConfidence,
@@ -311,13 +329,8 @@ class SemanticActionGraphRouter(
                         )
                 })
             },
-            ambiguities = base.ambiguities.filterNot { ambiguity ->
-                ambiguity.code in NODE_RESOLVED_AMBIGUITIES ||
-                    (
-                        !updatedNode.unresolvedReference &&
-                            ambiguity.code in RESULT_DEPENDENCY_RESOLVED_AMBIGUITIES
-                    )
-            },
+            ambiguities = scopedAmbiguities,
+            clarification = scopedClarification,
             semanticActionGraph = nodeGraph,
         )
     }
