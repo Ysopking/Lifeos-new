@@ -189,6 +189,11 @@ data class GoalFrame(
     val semanticEntitiesV2: List<SemanticEntityV2> = emptyList(),
     val quantityTemporal: QuantityTemporalResult = QuantityTemporalResult(emptyList(), emptyList()),
     val domainSemanticGraph: DomainSemanticGraph = DomainSemanticGraph.empty(),
+    val discourseState: DiscourseStateGraph = DiscourseStateGraph.empty(),
+    val dependencySyntax: DependencySyntaxGraph = DependencySyntaxGraph.empty(),
+    val interpretationLattice: SemanticInterpretationLattice = SemanticInterpretationLattice.empty(),
+    val clarification: ClarificationPlan = ClarificationPlan.none(),
+    val pragmaticAct: PragmaticAct = PragmaticAct.none(),
     val interpretationQuality: SemanticInterpretationQuality = SemanticInterpretationQuality.unknown(),
 ) {
     init {
@@ -202,6 +207,7 @@ data class LanguageUnderstandingResult(
     val intentEvidence: List<IntentEvidence>,
     val goal: GoalFrame,
     val linguisticField: LinguisticFieldResult? = null,
+    val semanticCorrections: List<SemanticCorrection> = emptyList(),
     /** Exact caller-supplied context that participated in this interpretation; null for context-free calls. */
     val context: LanguageContext? = null,
 )
