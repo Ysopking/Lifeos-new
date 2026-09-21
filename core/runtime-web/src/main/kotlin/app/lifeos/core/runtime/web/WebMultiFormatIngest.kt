@@ -350,8 +350,7 @@ private fun ByteArray.hasPrefix(prefix: ByteArray): Boolean =
 private fun htmlVisibleText(html: String): String {
     val withoutComments = HTML_COMMENT.replace(html, " ")
     val withoutScriptStyle = HTML_SCRIPT_STYLE.replace(withoutComments, " ")
-    val withBreaks = HTML_BLOCK_BREAK.replace(withoutScriptStyle, "
-")
+    val withBreaks = HTML_BLOCK_BREAK.replace(withoutScriptStyle, "\n")
     val withoutTags = HTML_TAG.replace(withBreaks, " ")
     return normalizeVisibleText(decodeEntities(withoutTags))
 }
@@ -381,7 +380,7 @@ private fun decodeEntities(value: String): String {
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
-        .replace("&quot;", """)
+        .replace("&quot;", "\"")
         .replace("&apos;", "'")
         .replace("&nbsp;", " ")
     decoded = NUMERIC_ENTITY.replace(decoded) { match ->
