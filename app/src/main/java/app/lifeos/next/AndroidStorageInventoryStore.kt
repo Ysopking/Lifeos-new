@@ -424,6 +424,19 @@ internal class AndroidStorageInventoryStore(
         return loadInternal(readableDatabase, volumeId, relativePath)
     }
 
+    fun metadataStateFingerprint(entry: StorageInventoryEntry): String =
+        metadataFingerprint(entry)
+
+    fun pruneChangesThrough(revisionInclusive: Long): Int {
+        require(revisionInclusive >= 0L)
+        if (revisionInclusive == 0L) return 0
+        return writableDatabase.delete(
+            CHANGE_TABLE,
+            "$CHANGE_COL_REVISION<=?",
+            arrayOf(revisionInclusive.toString()),
+        )
+    }
+
     fun currentChangeRevision(): Long =
         readableDatabase.rawQuery(
             "SELECT COALESCE(MAX($CHANGE_COL_REVISION), 0) FROM $CHANGE_TABLE",
