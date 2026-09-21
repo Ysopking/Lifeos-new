@@ -27,17 +27,31 @@ internal class StorageIntelligenceProcessController(
         job = scope.launch {
             try {
                 while (currentCoroutineContext().isActive) {
+                    if (!canRun()) break
+
                     val snapshot = storage.runNextSlice()
                     onSnapshot(snapshot)
                     onFailure(null)
-                    if (snapshot.contentReadComplete) break
 
                     val currentHardware = hardware.currentHardwareSnapshot()
                     val batteryFraction = currentHardware.batteryFraction
                     val delayMillis = when {
-                        currentHardware.charging == true -> 1_000L
-                        batteryFraction != null && batteryFraction < 0.20 -> 60_000L
-                        else -> 15_000L
+                        snapshot.contentReadComplete &&
+                            currentHardware.charging == true ->
+                            COMPLETE_RESCAN_CHARGING_MILLIS
+
+                        snapshot.contentReadComplete ->
+                            COMPLETE_RESCAN_IDLE_MILLIS
+
+                        currentHardware.charging == true ->
+                            1_000L
+
+                        batteryFraction != null &&
+                            batteryFraction < 0.20 ->
+                            60_000L
+
+                        else ->
+                            15_000L
                     }
                     delay(delayMillis)
                 }
@@ -48,5 +62,12 @@ internal class StorageIntelligenceProcessController(
                 )
             }
         }
+    }
+
+    private companion object {
+        const val COMPLETE_RESCAN_CHARGING_MILLIS =
+            5L * 60L * 1_000L
+        const val COMPLETE_RESCAN_IDLE_MILLIS =
+            15L * 60L * 1_000L
     }
 }
