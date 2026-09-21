@@ -250,6 +250,7 @@ class DurableGoalPlanRuntimeTest {
                 persisted += photon
                 PhotonSubmissionResult(photon, processingQueued = true)
             },
+            loadPersistedPhotons = { persisted.toList() },
         )
         val goal = goal(IntentType.COMMUNICATE, "Prepare this result for sharing")
         val source = photon("source-share", tags = setOf("chat"))
@@ -296,6 +297,25 @@ class DurableGoalPlanRuntimeTest {
             it == GoalStepState.COMPLETED
         })
         assertTrue(ledger.states.value.values.single().outcomePhotonIds.values.contains(preparation.id))
+
+        val replay = dispatcher.execute(
+            GoalActionContext(
+                goal = goal,
+                routing = routing(goal),
+                sourcePhoton = source,
+                goalPhotonId = goalId,
+            )
+        )
+
+        assertEquals(preparation, replay.recoveredOutcome)
+        assertNotNull(
+            replay.localCommunication as? LocalCommunicationExecutionResult.Prepared
+        )
+        assertEquals(
+            "Rehydrating a completed local communication must not persist a second preparation",
+            1,
+            persisted.size,
+        )
     }
 
     private fun runtime(
@@ -307,10 +327,16 @@ class DurableGoalPlanRuntimeTest {
         ledger = ledger,
         convergence = testGoalConvergenceDecisionSource(checkpoints),
         persistDerivedOutcome = persistDerivedOutcome,
-        outcomeLookup = GoalOutcomeLookup { goalPhotonId, limit ->
-            loadPersistedPhotons()
+        outcomeLookup = object : GoalOutcomeLookup {
+            override suspend fun candidates(
+                goalPhotonId: PhotonId,
+                limit: Int,
+            ): List<Photon> = loadPersistedPhotons()
                 .filter { goalPhotonId in it.provenance.parentIds }
                 .take(limit)
+
+            override suspend fun exactOutcome(id: PhotonId): Photon? =
+                loadPersistedPhotons().lastOrNull { it.id == id }
         },
         now = { at },
     )
