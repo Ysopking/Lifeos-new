@@ -262,8 +262,7 @@ private fun structuredSpans(source: String): List<IntRange> {
     val spans = mutableListOf<IntRange>()
     var lineStart = 0
     for (index in source.indices) {
-        if (source[index] == '
-') {
+        if (source[index] == '\n') {
             if (index > lineStart) spans += lineStart until index
             lineStart = index + 1
         }
@@ -279,8 +278,7 @@ private fun sentenceSpans(source: String): List<IntRange> {
     var index = 0
     while (index < source.length) {
         val char = source[index]
-        val newline = char == '
-'
+        val newline = char == '\n'
         val punctuationBoundary =
             char in SENTENCE_TERMINATORS &&
                 (index + 1 == source.length || source[index + 1].isWhitespace())
