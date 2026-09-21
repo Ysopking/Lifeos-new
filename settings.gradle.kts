@@ -17,6 +17,7 @@ include(
     ":core:runtime-buildstudio",
     ":core:runtime-personal",
     ":core:runtime-reasoning",
+    ":core:runtime-research",
     ":core:reasoning",
     ":core:data",
     ":core:image",
