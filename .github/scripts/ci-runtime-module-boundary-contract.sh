@@ -101,10 +101,10 @@ buildstudio_test_count="$(find core/runtime-buildstudio/src/test/kotlin -type f 
 personal_main_count="$(find core/runtime-personal/src/main/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 personal_test_count="$(find core/runtime-personal/src/test/kotlin -type f -name '*.kt' | wc -l | tr -d ' ')"
 
-test "$contracts_main_count" -eq 4 ||
+test "$contracts_main_count" -eq 5 ||
   fail "runtime-contracts-main-source-count:$contracts_main_count"
 
-test "$contracts_test_count" -eq 2 ||
+test "$contracts_test_count" -eq 3 ||
   fail "runtime-contracts-test-source-count:$contracts_test_count"
 
 test "$deepsearch_main_count" -eq 17 ||
