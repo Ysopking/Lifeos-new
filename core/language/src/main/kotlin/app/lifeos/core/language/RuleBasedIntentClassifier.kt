@@ -41,6 +41,17 @@ class RuleBasedIntentClassifier {
             w.any { it in imageNouns } &&
                 w.any { it in setOf("ändere", "aendere", "bearbeite", "wärmer", "waermer", "heller", "dunkler", "schaerfer", "schärfer", "edit", "change", "warmer", "brighter", "darker", "sharper") }
         },
+        Rule(IntentType.TRANSFORM_IMAGE, 0.68, "deictic image transformation command") { w, _, _ ->
+            w.any { it in setOf("mach", "mache", "make", "ändere", "aendere", "change", "edit") } &&
+                w.any { it in setOf("es", "das", "dies", "it", "this", "that") } &&
+                w.any {
+                    it in setOf(
+                        "wärmer", "waermer", "heller", "dunkler", "schaerfer", "schärfer",
+                        "größer", "groesser", "kleiner", "warmer", "brighter", "darker", "sharper",
+                        "larger", "smaller",
+                    )
+                }
+        },
         Rule(IntentType.SEARCH, 0.75, "explicit search verb") { w, _, _ ->
             w.any {
                 it in setOf(
