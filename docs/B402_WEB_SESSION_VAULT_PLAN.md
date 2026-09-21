@@ -2,6 +2,7 @@
 
 Base head: 5988eba178e592442c093f4dc503009c395dc044
 Branch: b402-web-session-vault-v1
+Promotion gate restack: exact main 5988eba178e592442c093f4dc503009c395dc044
 Modules: :core:runtime-web + :core:data
 
 ## Pre-implementation audit
