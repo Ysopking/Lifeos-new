@@ -23,6 +23,7 @@ class LanguageUnderstandingEngine(
     private val referenceResolver: ReferenceResolver = ReferenceResolver(),
     private val linguisticFieldEngine: LinguisticFieldEngine = LinguisticFieldEngine(),
     private val fieldAdapter: FieldLanguageAdapter = FieldLanguageAdapter(),
+    private val discourseIntentResolver: DiscourseIntentResolver = DiscourseIntentResolver(),
     private val semanticGraphExtractor: LanguageSemanticGraphExtractor = LanguageSemanticGraphExtractor(),
     private val speechActParser: SpeechActParser = SpeechActParser(),
     private val predicateFrameParser: PredicateFrameParser = PredicateFrameParser(),
@@ -46,7 +47,17 @@ class LanguageUnderstandingEngine(
         val utterance = normalizer.normalize(text)
         val linguisticField = linguisticFieldEngine.converge(utterance, context)
         val ruleEvidence = intentClassifier.classify(utterance)
-        val evidence = fieldAdapter.mergeIntentEvidence(ruleEvidence, fieldAdapter.intentEvidence(linguisticField))
+        val fieldEvidence = fieldAdapter.intentEvidence(linguisticField)
+        val discourseEvidence = discourseIntentResolver.evidence(
+            utterance = utterance,
+            context = context,
+            existingEvidence = ruleEvidence + fieldEvidence,
+        )
+        val evidence = fieldAdapter.mergeIntentEvidence(
+            ruleEvidence,
+            fieldEvidence,
+            discourseEvidence,
+        )
         val topIntent = evidence.first().intent
         val entityV3 = entityEngineV3.extract(utterance)
         val entities = fieldAdapter.mergeEntities(
@@ -66,6 +77,7 @@ class LanguageUnderstandingEngine(
             graph = semanticGraph,
             speechActs = speechActs,
             references = references,
+            linguisticField = linguisticField,
         )
         val semanticActionGraph = semanticActionGraphBuilder.build(
             utterance = utterance,
@@ -147,7 +159,17 @@ class LanguageUnderstandingEngine(
             .distinct()
         if (executableIntents.size == 1) return executableIntents.single()
 
-        return topicIntent.takeUnless { it == IntentType.UNKNOWN } ?: IntentType.UNKNOWN
+        if (topicIntent != IntentType.UNKNOWN) return topicIntent
+
+        // Descriptive semantic recognition is allowed to be stronger than execution authority.
+        // A single non-executable predicate may identify what the user is talking about while the
+        // SemanticExecutionGate still blocks any side effect until readiness is independently met.
+        val describedIntents = actionGraph.nodes
+            .mapNotNull { it.frame.predicate.toIntentTypeOrNull() }
+            .distinct()
+        if (describedIntents.size == 1) return describedIntents.single()
+
+        return IntentType.UNKNOWN
     }
 
     private fun canonicalObjective(utterance: NormalizedUtterance, intent: IntentType): String =
