@@ -22,6 +22,8 @@ data class GoalActionContext(
     val goalPhotonId: PhotonId,
     val goalPhotonRevision: Long = 1L,
     val externalActionContract: ExternalActionContract? = null,
+    /** Exact upstream semantic-node output when this action consumes USES_RESULT_OF. */
+    val boundResultPhoton: Photon? = null,
 ) {
     init { require(goalPhotonRevision > 0L) }
 }
