@@ -84,3 +84,8 @@ After implementation:
 
 - Retargeted to `main` after B399 merge commit `49d7e06510a9067475dba098d32a2976585f05c9`.
 - Documentation-only trigger for exact-head Core Fast / Debug / Recovery / Product Gold promotion gates.
+
+## Performance remeasurement
+
+- Previous exact-head functional gates were green, but Product Gold rejected a cold-start sample of 873 ms against the 795 ms blocking budget; the immediately preceding B399 Gold sample was 710 ms.
+- This documentation-only commit requests a fresh exact-head Recovery/Gold measurement without changing B400 production code or the performance budget.
