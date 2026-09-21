@@ -800,7 +800,7 @@ class LiveSourceDeltaCoordinator(
         )
     }
 
-    private fun projectionFailure(
+    private suspend fun projectionFailure(
         connector: LiveSourceConnector,
         state: LiveSourceCursorState,
         error: Exception,
