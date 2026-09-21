@@ -6,6 +6,9 @@ retriever="core/language/src/main/kotlin/app/lifeos/core/language/LanguageContex
 lexical="core/language/src/main/kotlin/app/lifeos/core/language/LinguisticFieldIndexV2.kt"
 dispatcher="app/src/main/java/app/lifeos/next/kernel/GoalActionDispatcher.kt"
 external="core/runtime/src/main/kotlin/app/lifeos/core/runtime/agency/ExternalEffectExecutor.kt"
+paraphrase="core/language/src/main/kotlin/app/lifeos/core/language/PredicateParaphraseResolver.kt"
+discourse="core/language/src/main/kotlin/app/lifeos/core/language/DiscourseIntentResolver.kt"
+understanding="core/language/src/main/kotlin/app/lifeos/core/language/LanguageUnderstandingEngine.kt"
 
 grep -Fq 'maxCandidates: Int = 160' "$retriever" || {
   echo "language-context-candidate-bound-missing" >&2
@@ -33,6 +36,23 @@ grep -Fq 'NO_EXTERNAL_SIDE_EFFECT_WITHOUT_EXECUTABLE_SEMANTIC_ACTION' "$dispatch
 }
 grep -Fq 'allowedTransition(previous.state, state)' "$external" || {
   echo "external-effect-transition-gate-missing" >&2
+  exit 1
+}
+
+grep -Fq 'SIDE_EFFECT_UNDERSTANDING_CAP = 0.74' "$paraphrase" || {
+  echo "language-paraphrase-side-effect-cap-missing" >&2
+  exit 1
+}
+grep -Fq 'No predicate frame, role, reference or execution' "$discourse" || {
+  echo "language-discourse-non-authority-contract-missing" >&2
+  exit 1
+}
+grep -Fq 'linguisticField = linguisticField' "$understanding" || {
+  echo "language-field-predicate-bridge-not-wired" >&2
+  exit 1
+}
+grep -Fq 'discourseIntentResolver.evidence' "$understanding" || {
+  echo "language-discourse-evidence-not-wired" >&2
   exit 1
 }
 
