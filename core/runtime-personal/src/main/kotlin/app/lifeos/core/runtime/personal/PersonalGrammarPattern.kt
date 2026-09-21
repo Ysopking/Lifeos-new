@@ -48,10 +48,17 @@ class PersonalGrammarPatternMiner {
         knownForms: Set<String>,
     ): List<PersonalGrammarProposal> {
         if (intent !in PersonalGrammarPattern.SAFE_GRAMMAR_INTENTS) return emptyList()
-        val tokens = SemanticSearchTerms.tokens(utterance)
+        val tokens = TOKEN_REGEX.findAll(utterance)
+            .map { SemanticSearchTerms.normalizeToken(it.value) }
+            .filter { it.isNotBlank() }
+            .toList()
         if (tokens.size !in 2..6) return emptyList()
         if (tokens.all { it in knownForms }) return emptyList()
         val surface = tokens.joinToString(" ")
         return listOf(PersonalGrammarProposal(surface, intent))
+    }
+
+    private companion object {
+        val TOKEN_REGEX = Regex("[\\p{L}\\p{N}._-]+")
     }
 }
