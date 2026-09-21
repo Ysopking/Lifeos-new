@@ -455,13 +455,23 @@ class PredicateFrameParser(
         val PREDICATE_FORMS: Map<PredicateConcept, Set<String>> = mapOf(
             PredicateConcept.CREATE_IMAGE to setOf("erstelle", "erzeuge", "generiere", "zeichne", "rendere", "create", "generate", "draw", "render"),
             PredicateConcept.TRANSFORM_IMAGE to setOf("ändere", "aendere", "bearbeite", "edit", "change", "transformiere", "transform"),
-            PredicateConcept.SEARCH to setOf("suche", "finde", "recherchiere", "search", "find", "research", "lookup"),
+            PredicateConcept.SEARCH to setOf(
+                "suche", "finde", "recherchiere", "nachsehen", "nachschauen",
+                "schau", "sieh", "guck", "prüf", "pruef", "prüfe", "pruefe", "check", "checke",
+                "search", "find", "research", "lookup",
+            ),
             PredicateConcept.CONTINUE to setOf("weiter", "fortsetzen", "continue", "proceed"),
-            PredicateConcept.BUILD to setOf("baue", "implementiere", "entwickle", "programmiere", "build", "implement", "develop", "code"),
+            PredicateConcept.BUILD to setOf(
+                "baue", "implementiere", "entwickle", "programmiere", "umsetzen", "umsetze", "umsetz",
+                "fertigstellen", "build", "implement", "develop", "code",
+            ),
             PredicateConcept.QUERY to setOf("zeige", "sag", "erkläre", "erklaere", "show", "tell", "explain"),
             PredicateConcept.SCHEDULE to setOf("erinnere", "plane", "schedule", "remind"),
-            PredicateConcept.COMMUNICATE to setOf("sende", "schicke", "schick", "teile", "antworte", "send", "share", "reply", "message"),
-            PredicateConcept.STORE_MEMORY to setOf("merke", "speichere", "remember", "store", "save"),
+            PredicateConcept.COMMUNICATE to setOf(
+                "sende", "schicke", "schick", "schreibe", "schreib", "maile", "mail",
+                "teile", "antworte", "send", "share", "reply", "message",
+            ),
+            PredicateConcept.STORE_MEMORY to setOf("merke", "merk", "speichere", "remember", "store", "save"),
             PredicateConcept.OWE to setOf("schuldet", "schulde", "schulden", "owes", "owe"),
             PredicateConcept.PAY to setOf("überweise", "ueberweise", "zahle", "bezahle", "pay", "transfer"),
             PredicateConcept.DELETE to setOf("lösche", "loesche", "entferne", "delete", "remove"),
