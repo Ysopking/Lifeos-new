@@ -49,7 +49,12 @@ class AndroidStorageLiveSourceConnectorTest {
             val journal = FakeJournal(
                 entries = mapOf(("primary" to entry.relativePath) to entry),
                 changes = listOf(
-                    change(1L, entry.relativePath, SourceDeltaKind.CREATED)
+                    change(
+                        1L,
+                        entry.relativePath,
+                        SourceDeltaKind.CREATED,
+                        newFingerprint = entry.metadataStateFingerprint,
+                    )
                 ),
             )
             val connector = connector(journal)
@@ -119,6 +124,8 @@ class AndroidStorageLiveSourceConnectorTest {
         revision: Long,
         path: String,
         kind: SourceDeltaKind,
+        newFingerprint: String? =
+            if (kind == SourceDeltaKind.DELETED) null else "b".repeat(64),
     ): StorageChangeEntry =
         StorageChangeEntry(
             revision = revision,
@@ -127,8 +134,7 @@ class AndroidStorageLiveSourceConnectorTest {
             kind = kind,
             previousFingerprint =
                 if (kind == SourceDeltaKind.CREATED) null else "a".repeat(64),
-            newFingerprint =
-                if (kind == SourceDeltaKind.DELETED) null else "b".repeat(64),
+            newFingerprint = newFingerprint,
             observedAtMillis = at.toEpochMilli(),
         )
 
