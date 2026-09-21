@@ -24,6 +24,8 @@ import app.lifeos.core.language.PredicateFrame
 import app.lifeos.core.language.ScopeType
 import app.lifeos.core.language.SemanticActionEdge
 import app.lifeos.core.language.SemanticActionEdgeType
+import app.lifeos.core.language.SemanticActionGroup
+import app.lifeos.core.language.SemanticActionGroupType
 import app.lifeos.core.language.SemanticActionGraph
 import app.lifeos.core.language.SemanticActionNode
 import app.lifeos.core.language.SemanticActionNodeType
@@ -31,6 +33,8 @@ import app.lifeos.core.language.SemanticEvidence
 import app.lifeos.core.language.SemanticNodeId
 import app.lifeos.core.language.SemanticRole
 import app.lifeos.core.language.SemanticScope
+import app.lifeos.core.language.SemanticOperatorScope
+import app.lifeos.core.language.SemanticOperatorType
 import app.lifeos.core.language.SemanticValue
 import app.lifeos.core.language.SpeechAct
 import app.lifeos.core.language.SpeechActType
@@ -319,7 +323,7 @@ private object PersistedGoalFrameDecoder {
                 val assignment = requireNotNull(splitUnescaped(line.removePrefix("canonical.quantity."), '='))
                 assignment.first.toInt().also { require(it >= 0) }
                 val fields = splitAllUnescaped(assignment.second, '|')
-                require(fields.size == 9) { "Malformed canonical quantity" }
+                require(fields.size == 9 || fields.size == 10) { "Malformed canonical quantity" }
                 SemanticQuantityV2(
                     comparator = QuantityComparator.valueOf(fields[0]),
                     value = unescape(fields[1]).takeIf { it.isNotBlank() }?.toBigDecimal(),
@@ -329,6 +333,7 @@ private object PersistedGoalFrameDecoder {
                     currency = unescape(fields[5]).takeIf { it.isNotBlank() }?.let(Currency::getInstance),
                     span = TextSpan(fields[6].toInt(), fields[7].toInt()),
                     confidence = fields[8].toDouble().also { require(it in 0.0..1.0) },
+                    approximate = fields.getOrNull(9)?.toBooleanStrict() ?: false,
                 )
             }
             val temporals = lines.filter { it.startsWith("canonical.temporal.") }.map { line ->
@@ -647,11 +652,54 @@ private object PersistedGoalFrameDecoder {
                 )
             }
 
+        val operatorScopes = lines
+            .filter { it.startsWith("action.operator.") }
+            .map { line ->
+                val assignment = requireNotNull(
+                    splitUnescaped(line.removePrefix("action.operator."), '=')
+                )
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 5) { "Malformed semantic operator scope" }
+                SemanticOperatorScope(
+                    type = SemanticOperatorType.valueOf(fields[0]),
+                    cue = unescape(fields[1]),
+                    span = TextSpan(fields[2].toInt(), fields[3].toInt()),
+                    confidence = fields[4].toDouble().also { require(it in 0.0..1.0) },
+                )
+            }
+
+        fun nodeSet(encoded: String): Set<SemanticNodeId> =
+            unescape(encoded)
+                .split(',')
+                .filter { it.isNotBlank() }
+                .mapTo(linkedSetOf(), ::SemanticNodeId)
+
+        val groups = lines
+            .filter { it.startsWith("action.group.") }
+            .map { line ->
+                val assignment = requireNotNull(
+                    splitUnescaped(line.removePrefix("action.group."), '=')
+                )
+                assignment.first.toInt().also { require(it >= 0) }
+                val fields = splitAllUnescaped(assignment.second, '|')
+                require(fields.size == 5) { "Malformed semantic action group" }
+                SemanticActionGroup(
+                    id = unescape(fields[0]),
+                    type = SemanticActionGroupType.valueOf(fields[1]),
+                    nodeIds = nodeSet(fields[2]),
+                    entryNodeIds = nodeSet(fields[3]),
+                    exitNodeIds = nodeSet(fields[4]),
+                )
+            }
+
         return SemanticActionGraph(
             nodes = nodes,
             edges = edges,
             scopes = scopes,
             fingerprint = fingerprint,
+            operatorScopes = operatorScopes,
+            groups = groups,
         )
     }
 
