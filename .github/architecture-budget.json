@@ -68,6 +68,11 @@
     ],
     "host/buildstudio/build.gradle.kts": [
       ":core:runtime-buildstudio"
+    ],
+    "core/reasoning/build.gradle.kts": [
+      ":core:field",
+      ":core:language",
+      ":core:model"
     ]
   },
   "forbidden_runtime_package_prefixes": [
