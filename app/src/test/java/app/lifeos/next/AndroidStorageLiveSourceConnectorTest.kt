@@ -179,6 +179,13 @@ class AndroidStorageLiveSourceConnectorTest {
                 .sortedBy { it.revision }
                 .take(limit)
         }
+
+        override fun currentChangeRevision(): Long =
+            changes.maxOfOrNull { it.revision } ?: 0L
+
+        override fun pruneChangesThrough(
+            revisionInclusive: Long,
+        ): Int = 0
     }
 
     private class FakeStatusSource(
