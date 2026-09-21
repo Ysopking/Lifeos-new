@@ -13,6 +13,7 @@ class LinguisticFieldEngine(
         LinguisticFieldIndexV2(lexicon, morphologyEngine),
     private val compoundResolver: CompoundFieldResolver =
         CompoundFieldResolver(lexicon, lexicalIndex),
+    private val conceptGraph: SemanticConceptGraph = SemanticConceptGraph(),
     private val maxIterations: Int = 6,
     private val convergenceDelta: Double = 1e-4,
     private val resolutionThreshold: Double = 0.55,
@@ -226,9 +227,11 @@ class LinguisticFieldEngine(
                 val otherConcept = lexicon.byId(other.conceptId) ?: return@candidateLoop
                 val compatible = otherConcept.semanticTag in concept.attractsTags || concept.semanticTag in otherConcept.attractsTags
                 val contradictory = otherConcept.semanticTag in concept.repelsTags || concept.semanticTag in otherConcept.repelsTags
+                val graphForce = conceptGraph.force(concept, otherConcept)
                 val force = when {
                     compatible -> other.activation * distanceWeight
                     contradictory -> -other.activation * distanceWeight
+                    graphForce != 0.0 -> graphForce * other.activation * distanceWeight
                     else -> 0.0
                 }
                 if (force != 0.0) {
@@ -236,7 +239,12 @@ class LinguisticFieldEngine(
                         sourceConceptId = concept.id,
                         targetConceptId = otherConcept.id,
                         force = force,
-                        reason = if (force > 0.0) "sentence-attraction" else "sentence-repulsion",
+                        reason = when {
+                            graphForce > 0.0 && !compatible -> "concept-graph-attraction"
+                            graphForce < 0.0 && !contradictory -> "concept-graph-repulsion"
+                            force > 0.0 -> "sentence-attraction"
+                            else -> "sentence-repulsion"
+                        },
                     )
                     forceSum += force
                     weightSum += distanceWeight
