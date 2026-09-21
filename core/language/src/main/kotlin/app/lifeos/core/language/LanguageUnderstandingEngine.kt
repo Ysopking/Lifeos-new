@@ -24,6 +24,15 @@ class LanguageUnderstandingEngine(
     private val linguisticFieldEngine: LinguisticFieldEngine = LinguisticFieldEngine(),
     private val fieldAdapter: FieldLanguageAdapter = FieldLanguageAdapter(),
     private val discourseIntentResolver: DiscourseIntentResolver = DiscourseIntentResolver(),
+    private val discourseStateProjector: DiscourseStateProjector = DiscourseStateProjector(),
+    private val coreferenceResolver: CoreferenceResolverV4 = CoreferenceResolverV4(),
+    private val dependencySyntaxParser: DeterministicDependencySyntaxParser =
+        DeterministicDependencySyntaxParser(),
+    private val interpretationLatticeEngine: SemanticInterpretationLatticeEngine =
+        SemanticInterpretationLatticeEngine(),
+    private val clarificationEngine: ClarificationEngine = ClarificationEngine(),
+    private val semanticCorrectionEngine: SemanticCorrectionEngine = SemanticCorrectionEngine(),
+    private val pragmaticActResolver: PragmaticActResolver = PragmaticActResolver(),
     private val semanticGraphExtractor: LanguageSemanticGraphExtractor = LanguageSemanticGraphExtractor(),
     private val speechActParser: SpeechActParser = SpeechActParser(),
     private val predicateFrameParser: PredicateFrameParser = PredicateFrameParser(),
@@ -45,6 +54,7 @@ class LanguageUnderstandingEngine(
         retainContext: Boolean,
     ): LanguageUnderstandingResult {
         val utterance = normalizer.normalize(text)
+        val pragmaticAct = pragmaticActResolver.resolve(utterance)
         val linguisticField = linguisticFieldEngine.converge(utterance, context)
         val ruleEvidence = intentClassifier.classify(utterance)
         val fieldEvidence = fieldAdapter.intentEvidence(linguisticField)
@@ -65,12 +75,22 @@ class LanguageUnderstandingEngine(
             fieldAdapter.entities(utterance, linguisticField),
         )
         val semanticGraph = semanticGraphExtractor.extract(utterance, entities)
+        val dependencySyntax = dependencySyntaxParser.parse(
+            utterance = utterance,
+            semanticGraph = semanticGraph,
+        )
         val quantityTemporal = quantityTemporalEngine.parse(
             utterance = utterance,
             referenceInstant = context.now,
             zoneId = ZoneId.of(context.zoneId),
         )
-        val references = referenceExtractor.extract(utterance, topIntent).map { referenceResolver.resolve(it, context) }
+        val discourseState = discourseStateProjector.project(context)
+        val references = coreferenceResolver.resolve(
+            utterance = utterance,
+            topIntent = topIntent,
+            context = context,
+            discourse = discourseState,
+        )
         val speechActs = speechActParser.parse(utterance, semanticGraph)
         val predicateFrames = predicateFrameParser.parse(
             utterance = utterance,
@@ -78,6 +98,7 @@ class LanguageUnderstandingEngine(
             speechActs = speechActs,
             references = references,
             linguisticField = linguisticField,
+            syntaxGraph = dependencySyntax,
         )
         val semanticActionGraph = semanticActionGraphBuilder.build(
             utterance = utterance,
@@ -85,13 +106,32 @@ class LanguageUnderstandingEngine(
             frames = predicateFrames,
             references = references,
         )
-        val operationalIntent = deriveOperationalIntent(topIntent, semanticActionGraph)
+        val interpretationLattice = interpretationLatticeEngine.converge(
+            intents = evidence,
+            references = references,
+            actionGraph = semanticActionGraph,
+            linguisticField = linguisticField,
+        )
+        val semanticIntent = interpretationLattice.winner
+            ?.takeIf { interpretationLattice.converged }
+            ?.intent
+            ?: topIntent
+        val operationalIntent = deriveOperationalIntent(semanticIntent, semanticActionGraph)
         val ambiguities = buildAmbiguities(
             evidence = evidence,
             references = references,
             topIntent = topIntent,
             linguisticField = linguisticField,
             actionGraph = semanticActionGraph,
+        )
+        val clarification = clarificationEngine.build(
+            ambiguities = ambiguities,
+            graph = semanticActionGraph,
+            lattice = interpretationLattice,
+        )
+        val semanticCorrections = semanticCorrectionEngine.project(
+            utterance = utterance,
+            field = linguisticField,
         )
         val domainSemanticGraph = domainSemanticInterpreter.interpret(
             utterance = utterance,
@@ -127,6 +167,11 @@ class LanguageUnderstandingEngine(
             semanticEntitiesV2 = entityV3.entities,
             quantityTemporal = quantityTemporal,
             domainSemanticGraph = domainSemanticGraph,
+            discourseState = discourseState,
+            dependencySyntax = dependencySyntax,
+            interpretationLattice = interpretationLattice,
+            clarification = clarification,
+            pragmaticAct = pragmaticAct,
             interpretationQuality = quality,
         )
         return LanguageUnderstandingResult(
@@ -134,6 +179,7 @@ class LanguageUnderstandingEngine(
             intentEvidence = evidence,
             goal = goal,
             linguisticField = linguisticField,
+            semanticCorrections = semanticCorrections,
             context = context.takeIf { retainContext },
         )
     }
