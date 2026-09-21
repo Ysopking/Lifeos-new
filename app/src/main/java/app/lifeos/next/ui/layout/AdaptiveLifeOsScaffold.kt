@@ -9,14 +9,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -37,6 +40,7 @@ fun AdaptiveLifeOsScaffold(
         when (LifeOsWindowClass.fromWidthDp(maxWidth.value)) {
             LifeOsWindowClass.COMPACT -> Scaffold(
                 modifier = Modifier.fillMaxSize(),
+                containerColor = MaterialTheme.colorScheme.background,
                 topBar = {
                     LifeOsTopBar(
                         state = LifeOsTopBarState(
@@ -47,7 +51,10 @@ fun AdaptiveLifeOsScaffold(
                     )
                 },
                 bottomBar = {
-                    NavigationBar {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.background,
+                        tonalElevation = LifeOsTokens.Elevation.resting,
+                    ) {
                         LifeOsDestination.ordered.forEach { destination ->
                             NavigationBarItem(
                                 modifier = Modifier.semantics {
@@ -63,7 +70,14 @@ fun AdaptiveLifeOsScaffold(
                                     )
                                 },
                                 label = { Text(destination.label) },
-                                alwaysShowLabel = true,
+                                alwaysShowLabel = false,
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = Color.Transparent,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
                             )
                         }
                     }
@@ -72,25 +86,7 @@ fun AdaptiveLifeOsScaffold(
                 content(Modifier.fillMaxSize().padding(innerPadding))
             }
 
-            LifeOsWindowClass.MEDIUM -> Row(modifier = Modifier.fillMaxSize()) {
-                PrimaryNavigationRail(
-                    selected = selected,
-                    onSelect = onSelect,
-                )
-                Column(modifier = Modifier.fillMaxSize()) {
-                    LifeOsTopBar(
-                        state = LifeOsTopBarState(
-                            title = selected.label,
-                            attentionCount = attentionCount,
-                        ),
-                        onOpenSystem = onOpenSystem,
-                    )
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        content(Modifier.fillMaxSize())
-                    }
-                }
-            }
-
+            LifeOsWindowClass.MEDIUM,
             LifeOsWindowClass.EXPANDED -> Row(modifier = Modifier.fillMaxSize()) {
                 PrimaryNavigationRail(
                     selected = selected,
@@ -121,7 +117,8 @@ private fun PrimaryNavigationRail(
     NavigationRail(
         modifier = Modifier
             .fillMaxHeight()
-            .width(LifeOsTokens.Layout.navigationRailWidth)
+            .width(LifeOsTokens.Layout.navigationRailWidth),
+        containerColor = MaterialTheme.colorScheme.background,
     ) {
         LifeOsDestination.ordered.forEach { destination ->
             NavigationRailItem(
