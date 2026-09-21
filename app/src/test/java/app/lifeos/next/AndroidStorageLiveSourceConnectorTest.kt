@@ -13,6 +13,7 @@ import java.nio.file.Files
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
@@ -60,7 +61,7 @@ class AndroidStorageLiveSourceConnectorTest {
             )
 
             val sourceDelta = connector.changesAfter(SourceCursor("0")).deltas.single()
-            val projected = connector.project(sourceDelta)
+            val projected = assertNotNull(connector.project(sourceDelta))
 
             assertEquals(LiveDataDeltaOperation.UPSERT, projected.operation)
             assertTrue(projected.payload.orEmpty().contains("decode_state=DECODED"))
@@ -81,7 +82,7 @@ class AndroidStorageLiveSourceConnectorTest {
         val connector = connector(journal)
         val sourceDelta = connector.changesAfter(SourceCursor("0")).deltas.single()
 
-        val projected = connector.project(sourceDelta)
+        val projected = assertNotNull(connector.project(sourceDelta))
 
         assertEquals(LiveDataDeltaOperation.DELETE, projected.operation)
         assertNull(projected.payload)
