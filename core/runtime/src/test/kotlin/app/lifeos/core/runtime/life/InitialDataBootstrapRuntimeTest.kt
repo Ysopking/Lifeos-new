@@ -109,6 +109,36 @@ class InitialDataBootstrapRuntimeTest {
     }
 
     @Test
+    fun largeSourceStopsAtSliceBoundaryAndResumesExactCheckpoint() = runTest {
+        val repository = MemoryPhotonRepository()
+        val source = MutableSource(
+            descriptor = LifeSourceDescriptor("media-sliced", "media-sliced-v1"),
+            records = records("media-sliced", 900),
+        )
+        val runtime = runtime(repository, listOf(source), pageSize = 100)
+
+        val first = runtime.run()
+        val firstCheckpoint =
+            PhotonBackedLifeSourceCheckpointStore(repository).load(source.descriptor)
+
+        assertEquals(InitialDataBootstrapStatus.PARTIAL, first.status)
+        assertTrue(first.continuationRequired)
+        assertEquals(8, source.readCount)
+        assertEquals("800", firstCheckpoint.position)
+        assertEquals(800, first.sources.single().durableRecordCount)
+
+        val second = runtime.run()
+        val secondCheckpoint =
+            PhotonBackedLifeSourceCheckpointStore(repository).load(source.descriptor)
+
+        assertEquals(InitialDataBootstrapStatus.COMPLETE, second.status)
+        assertTrue(!second.continuationRequired)
+        assertEquals(9, source.readCount)
+        assertEquals(null, secondCheckpoint.position)
+        assertEquals(900, second.sources.single().durableRecordCount)
+    }
+
+    @Test
     fun largeSourceIsBoundedlyPagedAndCompleted() = runTest {
         val repository = MemoryPhotonRepository()
         val source = MutableSource(
