@@ -77,7 +77,7 @@ internal class AndroidStorageInventoryStore(
     DATABASE_NAME,
     null,
     DATABASE_VERSION,
-) {
+), StorageChangeJournal {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -415,7 +415,7 @@ internal class AndroidStorageInventoryStore(
         return out
     }
 
-    fun load(
+    override fun load(
         volumeId: String,
         relativePath: String,
     ): StorageInventoryEntry? {
@@ -446,7 +446,7 @@ internal class AndroidStorageInventoryStore(
             cursor.getLong(0)
         }
 
-    fun loadChangesAfter(
+    override fun loadChangesAfter(
         revisionExclusive: Long,
         limit: Int,
     ): List<StorageChangeEntry> {
