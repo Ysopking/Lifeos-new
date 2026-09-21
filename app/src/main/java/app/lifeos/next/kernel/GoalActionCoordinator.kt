@@ -150,12 +150,15 @@ internal class GoalActionCoordinator(
         boundResultPhoton: Photon? = null,
     ): LocalCommunicationExecutionResult {
         return try {
-            val referencedPhotons = goal.references
+            val referencedRefs = goal.references
                 .asSequence()
                 .mapNotNull { it.targetPhotonRef }
                 .distinct()
-                .mapNotNull { ref -> productivePhotonQueries.exactRevision(ref) }
                 .toList()
+            val referencedPhotons = mutableListOf<Photon>()
+            for (ref in referencedRefs) {
+                productivePhotonQueries.exactRevision(ref)?.let(referencedPhotons::add)
+            }
             val photons = (
                 listOfNotNull(boundResultPhoton) +
                     referencedPhotons +
