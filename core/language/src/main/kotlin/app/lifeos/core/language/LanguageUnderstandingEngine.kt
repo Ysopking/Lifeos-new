@@ -427,8 +427,20 @@ class GoalPhotonFactory {
         val relations = sourcePhotonId?.let {
             setOf(PhotonRelation(it, RelationType.DERIVED_FROM, frame.confidence))
         }.orEmpty()
+        val semanticTags = result.linguisticField
+            ?.resolutions
+            ?.mapTo(linkedSetOf()) { "semantic:" + it.semanticTag.lowercase() }
+            .orEmpty()
+        val conceptTags = result.linguisticField
+            ?.intentField
+            ?.flatMap { it.contributingConcepts }
+            ?.distinct()
+            ?.sorted()
+            ?.take(MAX_GOAL_CONCEPT_TAGS)
+            ?.mapTo(linkedSetOf()) { "concept:" + it }
+            .orEmpty()
         val photon = Photon(
-            content = serialize(frame, result.linguisticField),
+            content = serialize(frame, result.linguisticField, result.semanticCorrections),
             mimeType = "application/vnd.lifeos.goal+text",
             phase = PhotonPhase.CREATED,
             semanticMass = 1.0 + frame.constraints.size * 0.08 + frame.references.size * 0.12,
@@ -441,18 +453,64 @@ class GoalPhotonFactory {
                 parentIds = parentIds,
             ),
             relations = relations,
-            tags = setOf("goal", "language-understood", "intent:${frame.intent.name.lowercase()}", "lang:${frame.language.name.lowercase()}"),
+            tags = setOf(
+                "goal",
+                "language-understood",
+                "intent:${frame.intent.name.lowercase()}",
+                "lang:${frame.language.name.lowercase()}",
+            ) + semanticTags + conceptTags,
         )
         return GoalPhoton(photon, frame)
     }
 
-    private fun serialize(frame: GoalFrame, field: LinguisticFieldResult?): String = buildString {
+    private fun serialize(
+        frame: GoalFrame,
+        field: LinguisticFieldResult?,
+        corrections: List<SemanticCorrection>,
+    ): String = buildString {
         append("goal/v4\n")
         append("intent=").append(frame.intent.name).append('\n')
         append("language=").append(frame.language.name).append('\n')
         append("confidence=").append(frame.confidence).append('\n')
         append("objective=").append(escape(frame.objective)).append('\n')
         append("semantic.fingerprint=").append(frame.semanticGraph.fingerprint).append('\n')
+        append("discourse.fingerprint=").append(frame.discourseState.fingerprint).append('\n')
+        frame.discourseState.focus.forEachIndexed { index, focus ->
+            append("discourse.focus.").append(index).append('=')
+                .append(escape(focus.ref.stableKey)).append('|')
+                .append(escape(focus.kind)).append('|')
+                .append(focus.active).append('|')
+                .append(focus.score).append('|')
+                .append(escape(focus.semanticTypes.sorted().joinToString(","))).append('|')
+                .append(escape(focus.conceptIds.sorted().joinToString(","))).append('\n')
+        }
+        append("syntax.fingerprint=").append(frame.dependencySyntax.fingerprint).append('\n')
+        frame.dependencySyntax.arcs.forEachIndexed { index, arc ->
+            append("syntax.arc.").append(index).append('=')
+                .append(arc.headTokenIndex).append('|')
+                .append(arc.dependentTokenIndex).append('|')
+                .append(arc.relation.name).append('|')
+                .append(arc.confidence).append('\n')
+        }
+        append("interpretation.margin=").append(frame.interpretationLattice.margin).append('\n')
+        append("interpretation.converged=").append(frame.interpretationLattice.converged).append('\n')
+        append("interpretation.winner=")
+            .append(frame.interpretationLattice.winner?.fingerprint.orEmpty()).append('\n')
+        frame.interpretationLattice.candidates.forEachIndexed { index, candidate ->
+            append("interpretation.candidate.").append(index).append('=')
+                .append(candidate.intent.name).append('|')
+                .append(escape(candidate.reference?.stableKey.orEmpty())).append('|')
+                .append(candidate.score).append('|')
+                .append(escape(candidate.blockers.sorted().joinToString(","))).append('|')
+                .append(candidate.fingerprint).append('\n')
+        }
+        append("pragmatic.act=").append(frame.pragmaticAct.type.name).append('|')
+            .append(frame.pragmaticAct.confidence).append('|')
+            .append(frame.pragmaticAct.descriptiveOnly).append('\n')
+        append("clarification.required=").append(frame.clarification.required).append('\n')
+        frame.clarification.reason?.let {
+            append("clarification.reason=").append(it.name).append('\n')
+        }
         frame.semanticGraph.clauses.sortedBy { it.id }.forEach { clause ->
             append("semantic.clause.").append(clause.id).append('=')
                 .append(clause.polarity.name).append('|')
@@ -557,6 +615,22 @@ class GoalPhotonFactory {
                 .append(escape(scope.cue)).append('|')
                 .append(scope.confidence).append('\n')
         }
+        frame.semanticActionGraph.operatorScopes.forEachIndexed { index, scope ->
+            append("action.operator.").append(index).append('=')
+                .append(scope.type.name).append('|')
+                .append(escape(scope.cue)).append('|')
+                .append(scope.span.start).append('|')
+                .append(scope.span.endExclusive).append('|')
+                .append(scope.confidence).append('\n')
+        }
+        frame.semanticActionGraph.groups.forEachIndexed { index, group ->
+            append("action.group.").append(index).append('=')
+                .append(escape(group.id)).append('|')
+                .append(group.type.name).append('|')
+                .append(escape(group.nodeIds.map { it.value }.sorted().joinToString(","))).append('|')
+                .append(escape(group.entryNodeIds.map { it.value }.sorted().joinToString(","))).append('|')
+                .append(escape(group.exitNodeIds.map { it.value }.sorted().joinToString(","))).append('\n')
+        }
         field?.let {
             append("field.converged=").append(it.converged).append('\n')
             append("field.iterations=").append(it.iterations).append('\n')
@@ -622,7 +696,8 @@ class GoalPhotonFactory {
                 .append(escape(quantity.currency?.currencyCode.orEmpty())).append('|')
                 .append(quantity.span.start).append('|')
                 .append(quantity.span.endExclusive).append('|')
-                .append(quantity.confidence).append('\n')
+                .append(quantity.confidence).append('|')
+                .append(quantity.approximate).append('\n')
         }
         frame.quantityTemporal.temporals.sortedWith(
             compareBy<SemanticTemporalValue> { it.span.start }
@@ -654,6 +729,32 @@ class GoalPhotonFactory {
                 .append(dateTime.timeSpan.start).append('|')
                 .append(dateTime.timeSpan.endExclusive).append('|')
                 .append(dateTime.confidence).append('\n')
+        }
+        frame.quantityTemporal.dayParts.forEachIndexed { index, dayPart ->
+            append("canonical.daypart.").append(index).append('=')
+                .append(dayPart.dayPart.name).append('|')
+                .append(dayPart.startInclusive).append('|')
+                .append(dayPart.endInclusive).append('|')
+                .append(dayPart.span.start).append('|')
+                .append(dayPart.span.endExclusive).append('|')
+                .append(dayPart.confidence).append('\n')
+        }
+        frame.quantityTemporal.recurrences.forEachIndexed { index, recurrence ->
+            append("canonical.recurrence.").append(index).append('=')
+                .append(recurrence.frequency.name).append('|')
+                .append(recurrence.interval).append('|')
+                .append(recurrence.weekday?.name.orEmpty()).append('|')
+                .append(recurrence.span.start).append('|')
+                .append(recurrence.span.endExclusive).append('|')
+                .append(recurrence.confidence).append('\n')
+        }
+        corrections.sortedBy { it.tokenIndex }.forEachIndexed { index, correction ->
+            append("semantic.correction.").append(index).append('=')
+                .append(correction.tokenIndex).append('|')
+                .append(escape(correction.original)).append('|')
+                .append(escape(correction.canonical)).append('|')
+                .append(escape(correction.semanticTag)).append('|')
+                .append(correction.confidence).append('\n')
         }
         append("domain.fingerprint=").append(frame.domainSemanticGraph.fingerprint).append('\n')
         frame.domainSemanticGraph.nodes.sortedBy { it.id.value }.forEachIndexed { index, node ->
@@ -715,5 +816,6 @@ class GoalPhotonFactory {
 
     companion object {
         private const val MAX_SERIALIZED_FIELD_TRACES = 32
+        private const val MAX_GOAL_CONCEPT_TAGS = 24
     }
 }
