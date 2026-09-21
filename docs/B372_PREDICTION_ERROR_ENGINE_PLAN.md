@@ -62,3 +62,7 @@ After implementation:
 1. `./gradlew :core:runtime-reasoning:test --tests 'app.lifeos.core.runtime.reasoning.PredictionErrorEngineTest'`
 2. `./gradlew :core:runtime-reasoning:test`
 3. stacked CI only after B371 promotion order.
+
+## Promotion run
+
+B372 is cleanly restacked on merged B371/main. This exact head is the promotion candidate for main-targeted CI.
