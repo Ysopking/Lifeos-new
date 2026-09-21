@@ -187,8 +187,12 @@ class ReferenceExpressionExtractor {
  * provide process-local or durable context candidates, then reuse the same deterministic ranking.
  */
 class ReferenceResolver {
-    fun resolve(expression: ReferenceExpression, context: LanguageContext): ResolvedReference {
-        val revisionCandidates = rankRevisionRefs(expression, context)
+    fun resolve(
+        expression: ReferenceExpression,
+        context: LanguageContext,
+        discourse: DiscourseStateGraph = DiscourseStateGraph.empty(),
+    ): ResolvedReference {
+        val revisionCandidates = rankRevisionRefs(expression, context, discourse)
         if (revisionCandidates.isNotEmpty()) {
             val best = revisionCandidates.first()
             val compatibility = revisionCandidates
@@ -221,8 +225,12 @@ class ReferenceResolver {
         )
     }
 
-    fun rank(expression: ReferenceExpression, context: LanguageContext): List<Pair<PhotonId, Double>> {
-        val revisionRank = rankRevisionRefs(expression, context)
+    fun rank(
+        expression: ReferenceExpression,
+        context: LanguageContext,
+        discourse: DiscourseStateGraph = DiscourseStateGraph.empty(),
+    ): List<Pair<PhotonId, Double>> {
+        val revisionRank = rankRevisionRefs(expression, context, discourse)
         if (revisionRank.isNotEmpty()) {
             return revisionRank
                 .groupBy { it.first.photonId }
@@ -252,6 +260,7 @@ class ReferenceResolver {
                     expression = expression,
                     context = context,
                     indexScore = candidate.indexScore,
+                    discourse = discourse,
                 )
             }
             .filter { it.second > 0.0 }
@@ -267,6 +276,7 @@ class ReferenceResolver {
     fun rankRevisionRefs(
         expression: ReferenceExpression,
         context: LanguageContext,
+        discourse: DiscourseStateGraph = DiscourseStateGraph.empty(),
     ): List<Pair<PhotonRevisionRef, Double>> {
         if (context.items.isEmpty()) return emptyList()
 
@@ -306,6 +316,7 @@ class ReferenceResolver {
         expression: ReferenceExpression,
         context: LanguageContext,
         indexScore: Double,
+        discourse: DiscourseStateGraph = DiscourseStateGraph.empty(),
     ): Double {
         var score = 0.05 + indexScore * 0.10
         val expressionTerms = referenceTerms(expression.rawText)
@@ -369,6 +380,12 @@ class ReferenceResolver {
         if (item.matterId != null && expressionTerms.any { it in MATTER_TERMS }) {
             score += 0.08
         }
+
+        val discourseBonus = item.revisionRef
+            ?.let(discourse::score)
+            ?.times(0.22)
+            ?: 0.0
+        score += discourseBonus
 
         val confidenceWeighted = score * item.confidence
         val activeGoalAnchor =
