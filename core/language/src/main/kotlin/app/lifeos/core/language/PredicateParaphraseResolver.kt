@@ -15,20 +15,23 @@ data class PredicateParaphraseMatch(
     }
 }
 
-class PredicateParaphraseResolver {
+class PredicateParaphraseResolver(
+    private val lexicon: LinguisticLexicon = DeterministicLinguisticFieldLexicon(),
+) {
     private data class Pattern(
         val terms: List<String>,
         val predicate: PredicateConcept,
         val confidence: Double,
         val maxGapWords: Int = 0,
+        val source: String = "predicate-paraphrase/v1",
     )
 
     fun resolve(tokens: List<LanguageToken>): List<PredicateParaphraseMatch> {
         val words = tokens.withIndex().filter { it.value.kind == TokenKind.WORD }
         if (words.isEmpty()) return emptyList()
-        val normalized = words.map { it.value.normalized }
+        val normalized = words.map { normalizeFieldText(it.value.normalized) }
         val out = mutableListOf<PredicateParaphraseMatch>()
-        PATTERNS.forEach { pattern ->
+        (PATTERNS + personalPatterns()).forEach { pattern ->
             for (start in normalized.indices) {
                 val matched = matchPattern(normalized, start, pattern)
                     ?: continue
@@ -36,7 +39,7 @@ class PredicateParaphraseResolver {
                     predicate = pattern.predicate,
                     localTokenIndex = words[start].index,
                     confidence = safeConfidence(pattern.predicate, pattern.confidence),
-                    source = "predicate-paraphrase/v1",
+                    source = pattern.source,
                     detail = "phrase=" + pattern.terms.joinToString(" ") +
                         ";spanWords=" + (matched - start + 1),
                 )
@@ -72,6 +75,33 @@ class PredicateParaphraseResolver {
             )
         }
     }
+
+    private fun personalPatterns(): List<Pattern> = lexicon.concepts
+        .flatMap { concept ->
+            val intent = concept.intentBias.entries
+                .maxWithOrNull(
+                    compareBy<Map.Entry<IntentType, Double>> { it.value }
+                        .thenBy { it.key.name }
+                )
+                ?.key
+                ?: return@flatMap emptyList()
+            val predicate = intent.toPredicateConcept()
+            if (predicate == PredicateConcept.UNKNOWN) return@flatMap emptyList()
+            concept.allPhraseForms.mapNotNull { phrase ->
+                val terms = PHRASE_TOKEN_REGEX.findAll(phrase)
+                    .map { normalizeFieldText(it.value) }
+                    .filter { it.isNotBlank() }
+                    .toList()
+                if (terms.size !in 2..6) return@mapNotNull null
+                Pattern(
+                    terms = terms,
+                    predicate = predicate,
+                    confidence = 0.86,
+                    maxGapWords = 1,
+                    source = "personal-grammar/v1",
+                )
+            }
+        }
 
     private fun matchPattern(
         normalized: List<String>,
@@ -129,6 +159,7 @@ class PredicateParaphraseResolver {
             "STORE_MEMORY" to PredicateConcept.STORE_MEMORY,
         )
 
+        val PHRASE_TOKEN_REGEX = Regex("[\\p{L}\\p{N}]+")
         val PATTERNS = listOf(
             Pattern(listOf("schau", "nach"), PredicateConcept.SEARCH, 0.88, maxGapWords = 5),
             Pattern(listOf("sieh", "nach"), PredicateConcept.SEARCH, 0.88, maxGapWords = 5),
