@@ -18,7 +18,7 @@ Repository-tree check at the base head found no existing `ProblemStateGraph`, `P
 
 ## Prepared production code
 
-NEW `core/runtime/src/main/kotlin/app/lifeos/core/runtime/reasoning/ProblemStateGraph.kt`
+NEW `core/reasoning/src/main/kotlin/app/lifeos/core/reasoning/ProblemStateGraph.kt`
 
 - L1-9: package/imports; depend only on existing language/model/field contracts.
 - L11-35: deterministic graph/node/edge ID wrappers.
@@ -38,7 +38,7 @@ No existing file needs modification for B366. This keeps the block additive, ind
 
 ## Prepared tests
 
-NEW `core/runtime/src/test/kotlin/app/lifeos/core/runtime/reasoning/ProblemStateGraphTest.kt`
+NEW `core/reasoning/src/test/kotlin/app/lifeos/core/reasoning/ProblemStateGraphTest.kt`
 
 - L1-23: imports/fixture.
 - L29-87: full decomposition test: goal + constraint + fact + unknown + assumption; exact evidence revision asserted.
@@ -65,3 +65,7 @@ After implementation:
 3. Core Fast Gate
 4. Android Debug CI
 5. B366 remains unmerged until B365/PR #444 exact-head recovery + Product Gold are green.
+
+## Architecture-budget response
+
+B366 is isolated in the new `:core:reasoning` JVM module so the established `core/runtime` monolith budget remains at 505 Kotlin files. The module depends only on `:core:model`, `:core:language`, and `:core:field`.
