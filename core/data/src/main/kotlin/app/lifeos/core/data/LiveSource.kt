@@ -41,6 +41,15 @@ interface LiveSourceAdapter {
     suspend fun changesAfter(cursor: SourceCursor): SourceChangeSet
 }
 
+/**
+ * Explicit migration hook for a source that previously used durable snapshot diffing and now owns
+ * an incremental cursor. The coordinator may promote an already-bootstrapped cursorless state only
+ * through this contract; ordinary snapshot providers remain cursorless.
+ */
+interface SnapshotToCursorLiveSourceAdapter : LiveSourceAdapter {
+    suspend fun migrationCursor(): SourceCursor
+}
+
 /** Coalescing boundary: repeated changes for one external object collapse to its newest observed delta. */
 class SourceDeltaCapacityExceededException(
     val distinctObjectCount: Int,
