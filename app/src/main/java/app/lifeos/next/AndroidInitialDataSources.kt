@@ -40,26 +40,67 @@ internal class AndroidInitialDataSourceCatalog(
             add(Manifest.permission.READ_MEDIA_IMAGES)
             add(Manifest.permission.READ_MEDIA_VIDEO)
             add(Manifest.permission.READ_MEDIA_AUDIO)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+            }
         } else {
             add(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
     }.distinct().sorted()
 
-    fun missingRuntimePermissions(): List<String> = requiredRuntimePermissions().filter { permission ->
-        context.checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED
-    }
+    fun runtimePermissionsToRequest(): List<String> = buildList {
+        if (!granted(Manifest.permission.READ_CONTACTS)) {
+            add(Manifest.permission.READ_CONTACTS)
+        }
+        if (!granted(Manifest.permission.READ_CALENDAR)) {
+            add(Manifest.permission.READ_CALENDAR)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val imageGranted = granted(Manifest.permission.READ_MEDIA_IMAGES)
+            val videoGranted = granted(Manifest.permission.READ_MEDIA_VIDEO)
+            val audioGranted = granted(Manifest.permission.READ_MEDIA_AUDIO)
+            val selectedVisualGranted =
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                    granted(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+
+            if (!imageGranted && !selectedVisualGranted) {
+                add(Manifest.permission.READ_MEDIA_IMAGES)
+            }
+            if (!videoGranted && !selectedVisualGranted) {
+                add(Manifest.permission.READ_MEDIA_VIDEO)
+            }
+            if (!audioGranted) {
+                add(Manifest.permission.READ_MEDIA_AUDIO)
+            }
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                !selectedVisualGranted &&
+                (!imageGranted || !videoGranted)
+            ) {
+                add(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+            }
+        } else if (!granted(Manifest.permission.READ_EXTERNAL_STORAGE)) {
+            add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }.distinct().sorted()
+
+    fun missingRuntimePermissions(): List<String> = runtimePermissionsToRequest()
 
     fun permissionSchemaFingerprint(): String = StableCognitiveIds.fingerprint(
-        "android-initial-data-permissions/v1",
+        "android-initial-data-permissions/v2",
         *requiredRuntimePermissions().toTypedArray(),
     )
+
+    private fun granted(permission: String): Boolean =
+        context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 }
 
 private abstract class AndroidPagedInitialDataSource(
     protected val context: Context,
     final override val descriptor: LifeSourceDescriptor,
-    private val requiredPermission: String?,
     private val providerAuthority: String,
+    private val authorized: () -> Boolean,
 ) : InitialDataSourceAdapter {
     protected val resolver: ContentResolver
         get() = context.contentResolver
@@ -67,9 +108,7 @@ private abstract class AndroidPagedInitialDataSource(
     final override suspend fun status(): InitialDataSourceStatus = when {
         context.packageManager.resolveContentProvider(providerAuthority, 0) == null ->
             InitialDataSourceStatus.UNAVAILABLE
-        requiredPermission == null -> InitialDataSourceStatus.UNAVAILABLE
-        context.checkSelfPermission(requiredPermission) != PackageManager.PERMISSION_GRANTED ->
-            InitialDataSourceStatus.UNAUTHORIZED
+        !authorized() -> InitialDataSourceStatus.UNAUTHORIZED
         else -> InitialDataSourceStatus.AVAILABLE
     }
 
@@ -106,8 +145,11 @@ private class AndroidContactsInitialDataSource(
 ) : AndroidPagedInitialDataSource(
     context = context,
     descriptor = LifeSourceDescriptor(SOURCE_ID, ADAPTER_VERSION),
-    requiredPermission = Manifest.permission.READ_CONTACTS,
     providerAuthority = ContactsContract.AUTHORITY,
+    authorized = {
+        context.checkSelfPermission(Manifest.permission.READ_CONTACTS) ==
+            PackageManager.PERMISSION_GRANTED
+    },
 ) {
     override suspend fun readPage(afterPosition: String?, limit: Int): InitialDataSourcePage {
         check(status() == InitialDataSourceStatus.AVAILABLE) { "Contacts source is not currently authorized" }
@@ -176,8 +218,11 @@ private class AndroidCalendarInitialDataSource(
 ) : AndroidPagedInitialDataSource(
     context = context,
     descriptor = LifeSourceDescriptor(SOURCE_ID, ADAPTER_VERSION),
-    requiredPermission = Manifest.permission.READ_CALENDAR,
     providerAuthority = CalendarContract.AUTHORITY,
+    authorized = {
+        context.checkSelfPermission(Manifest.permission.READ_CALENDAR) ==
+            PackageManager.PERMISSION_GRANTED
+    },
 ) {
     override suspend fun readPage(afterPosition: String?, limit: Int): InitialDataSourcePage {
         check(status() == InitialDataSourceStatus.AVAILABLE) { "Calendar source is not currently authorized" }
@@ -267,8 +312,10 @@ private class AndroidMediaInitialDataSource(
 ) : AndroidPagedInitialDataSource(
     context = context,
     descriptor = LifeSourceDescriptor(kind.sourceId, kind.adapterVersion),
-    requiredPermission = mediaPermission(kind),
     providerAuthority = MediaStore.AUTHORITY,
+    authorized = {
+        mediaAuthorized(context, kind)
+    },
 ) {
     override suspend fun readPage(afterPosition: String?, limit: Int): InitialDataSourcePage {
         check(status() == InitialDataSourceStatus.AVAILABLE) { "Media source is not currently authorized" }
@@ -351,6 +398,28 @@ private fun mediaPermission(kind: AndroidMediaKind): String =
     } else {
         Manifest.permission.READ_EXTERNAL_STORAGE
     }
+
+private fun mediaAuthorized(
+    context: Context,
+    kind: AndroidMediaKind,
+): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        return context.checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    if (
+        context.checkSelfPermission(mediaPermission(kind)) ==
+        PackageManager.PERMISSION_GRANTED
+    ) {
+        return true
+    }
+
+    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+        kind != AndroidMediaKind.AUDIO &&
+        context.checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) ==
+            PackageManager.PERMISSION_GRANTED
+}
 
 private fun collectionUri(kind: AndroidMediaKind): Uri = when (kind) {
     AndroidMediaKind.IMAGE -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
