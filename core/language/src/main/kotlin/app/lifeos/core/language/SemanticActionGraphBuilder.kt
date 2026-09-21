@@ -89,7 +89,11 @@ class SemanticActionGraphBuilder(
         val ordered = preliminary.sortedBy { it.frame.clauseId }
         val resultResolvedNodeIds = linkedSetOf<SemanticNodeId>()
         ordered.forEachIndexed { index, node ->
-            if (!node.unresolvedReference || index == 0) return@forEachIndexed
+            if (index == 0) return@forEachIndexed
+            val contract = contracts.contract(node.frame.predicate)
+            val consumesPreviousResult =
+                node.unresolvedReference || hasCompositionalResultReference(node.frame, contract)
+            if (!consumesPreviousResult) return@forEachIndexed
             val previous = ordered.subList(0, index)
                 .lastOrNull { it.type == SemanticActionNodeType.ACTION }
                 ?: return@forEachIndexed
@@ -334,6 +338,19 @@ class SemanticActionGraphBuilder(
         return !value.resolved || value.normalized in REFERENCE_WORDS
     }
 
+    private fun hasCompositionalResultReference(
+        frame: PredicateFrame,
+        contract: PredicateActionContract,
+    ): Boolean {
+        val role = contract.referenceRole ?: return false
+        val value = frame.roles[role] ?: return false
+        return sequenceOf(value.rawText, value.normalized)
+            .flatMap { raw ->
+                REFERENCE_TOKEN_REGEX.findAll(raw.lowercase()).map { match -> match.value }
+            }
+            .any { it in REFERENCE_WORDS }
+    }
+
     private fun hasBoundReference(
         frame: PredicateFrame,
         references: List<ResolvedReference>,
@@ -423,6 +440,7 @@ class SemanticActionGraphBuilder(
 
     private companion object {
         const val RESULT_DEPENDENCY_READINESS = 0.94
+        val REFERENCE_TOKEN_REGEX = Regex("[\\p{L}\\p{N}]+")
         val REFERENCE_WORDS = setOf(
             "das", "dies", "diese", "diesen", "dieses", "jenes", "andere", "anderen",
             "ihn", "sie", "es", "ihm", "ihr",
