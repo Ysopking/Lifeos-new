@@ -37,6 +37,9 @@ class ProductivePhotonQueryService(
     override suspend fun exactOutcome(id: PhotonId): Photon? =
         photons.latestRef(id)?.let { ref -> photons.load(ref) }
 
+    suspend fun exactRevision(ref: PhotonRevisionRef): Photon? =
+        photons.load(ref)
+
     suspend fun exact(
         ids: Set<PhotonId>,
         limit: Int = PhotonIndexQuery.DEFAULT_PAGE_LIMIT,
