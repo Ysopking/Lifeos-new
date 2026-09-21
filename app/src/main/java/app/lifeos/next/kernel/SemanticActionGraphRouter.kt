@@ -7,6 +7,7 @@ import app.lifeos.core.language.ReferenceKind
 import app.lifeos.core.language.ResolvedReference
 import app.lifeos.core.language.SemanticActionEdgeType
 import app.lifeos.core.language.SemanticActionGraph
+import app.lifeos.core.language.SemanticActionGroupType
 import app.lifeos.core.language.SemanticActionNode
 import app.lifeos.core.language.SemanticActionNodeType
 import app.lifeos.core.language.SemanticExecutionGate
@@ -73,6 +74,20 @@ class SemanticActionGraphRouter(
         goalPhotonRevision: Long = 1L,
     ): SemanticActionGraphExecutionResult {
         val graph = goal.semanticActionGraph
+        val unresolvedNestedGroup = graph.groups.firstOrNull { group ->
+            group.type == SemanticActionGroupType.CONDITIONAL &&
+                group.nodeIds.any { id ->
+                    graph.nodes.singleOrNull { it.id == id }?.unresolvedCondition == true
+                }
+        }
+        if (unresolvedNestedGroup != null) {
+            return SemanticActionGraphExecutionResult(
+                graphFingerprint = graph.fingerprint,
+                executions = emptyList(),
+                blockedReason = "nested-condition-unresolved:" + unresolvedNestedGroup.id,
+            )
+        }
+
         val runnable = graph.nodes.filter(::isRunnable)
         if (runnable.isEmpty()) {
             return SemanticActionGraphExecutionResult(
