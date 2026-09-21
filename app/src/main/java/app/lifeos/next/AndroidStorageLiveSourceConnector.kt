@@ -34,6 +34,10 @@ import java.time.Instant
  * replayed from a monotonically increasing SQLite revision and current file bytes are decoded only
  * for the bounded delta batch being published.
  */
+internal class StorageProjectionDeferredException(
+    message: String,
+) : IllegalStateException(message)
+
 internal class AndroidStorageLiveSourceConnector(
     private val inventory: StorageChangeJournal,
     private val statusSource: InitialDataSourceAdapter,
@@ -163,7 +167,9 @@ internal class AndroidStorageLiveSourceConnector(
             .toLongOrNull()
             ?: return null
         val change = inventory.loadChange(changeRevision)
-            ?: return null
+            ?: throw StorageProjectionDeferredException(
+                "storage-change-missing:$changeRevision"
+            )
         if (
             change.revision != delta.observationRevision ||
             externalKey(change) != delta.externalKey ||
@@ -171,7 +177,9 @@ internal class AndroidStorageLiveSourceConnector(
             change.previousFingerprint != delta.previousFingerprint ||
             change.newFingerprint != delta.newFingerprint
         ) {
-            return null
+            throw StorageProjectionDeferredException(
+                "storage-change-mismatch:$changeRevision"
+            )
         }
 
         if (delta.kind == SourceDeltaKind.DELETED) {
@@ -180,21 +188,31 @@ internal class AndroidStorageLiveSourceConnector(
 
         val entry =
             inventory.load(change.volumeId, change.relativePath)
-                ?: return null
+                ?: throw StorageProjectionDeferredException(
+                    "storage-entry-missing:$changeRevision"
+                )
 
         val file = File(entry.absolutePath)
-        if (!file.isFile || !file.canRead()) return null
+        if (!file.isFile || !file.canRead()) {
+            throw StorageProjectionDeferredException(
+                "storage-file-not-readable:$changeRevision"
+            )
+        }
         if (
             file.length().coerceAtLeast(0L) != entry.sizeBytes ||
             file.lastModified().coerceAtLeast(0L) != entry.modifiedAtMillis
         ) {
-            return null
+            throw StorageProjectionDeferredException(
+                "storage-file-state-changed:$changeRevision"
+            )
         }
         if (
             delta.newFingerprint != null &&
             delta.newFingerprint != entry.metadataStateFingerprint
         ) {
-            return null
+            throw StorageProjectionDeferredException(
+                "storage-journal-state-stale:$changeRevision"
+            )
         }
 
         val classification =
@@ -208,7 +226,9 @@ internal class AndroidStorageLiveSourceConnector(
             classification.category != entry.category ||
             classification.suspectedEncrypted != entry.suspectedEncrypted
         ) {
-            return null
+            throw StorageProjectionDeferredException(
+                "storage-classification-stale:$changeRevision"
+            )
         }
 
         val extraction = parsers.extract(
