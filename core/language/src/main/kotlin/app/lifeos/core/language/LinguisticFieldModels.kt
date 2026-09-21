@@ -43,13 +43,13 @@ data class LinguisticConcept(
     val id: String,
     val canonical: String,
     val variants: Set<String>,
-    val phraseVariants: Set<String> = emptySet(),
     val semanticTag: String,
     val entityType: EntityType? = null,
     val intentBias: Map<IntentType, Double> = emptyMap(),
     val attractsTags: Set<String> = emptySet(),
     val repelsTags: Set<String> = emptySet(),
     val semanticMass: Double = 1.0,
+    val phraseVariants: Set<String> = emptySet(),
 ) {
     init {
         require(id.isNotBlank())
