@@ -79,3 +79,8 @@ After implementation:
 2. `./gradlew :core:runtime-research:test`
 3. Core Fast.
 4. Clean restack after B399/B398/B397/B396/B395/B394/B393/B392/B391/B380 promotion, then Debug / Recovery / Product Gold before merge.
+
+## Promotion run
+
+- Retargeted to `main` after B399 merge commit `49d7e06510a9067475dba098d32a2976585f05c9`.
+- Documentation-only trigger for exact-head Core Fast / Debug / Recovery / Product Gold promotion gates.
