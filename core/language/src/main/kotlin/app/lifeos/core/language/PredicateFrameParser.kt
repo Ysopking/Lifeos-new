@@ -98,8 +98,11 @@ class PredicateFrameParser(
         val words = tokens.withIndex().filter { it.value.kind == TokenKind.WORD }
 
         val make = words.firstOrNull { it.value.normalized in MAKE_FORMS }
-        if (make != null && words.any { it.value.normalized in IMAGE_WORDS }) {
-            val concept = if (words.any { it.value.normalized in IMAGE_TRANSFORM_MODIFIERS }) {
+        val hasImageNoun = words.any { it.value.normalized in IMAGE_WORDS }
+        val hasTransformModifier = words.any { it.value.normalized in IMAGE_TRANSFORM_MODIFIERS }
+        val hasDeicticObject = words.any { it.value.normalized in REFERENCE_PRONOUNS }
+        if (make != null && (hasImageNoun || hasTransformModifier && hasDeicticObject)) {
+            val concept = if (hasTransformModifier) {
                 PredicateConcept.TRANSFORM_IMAGE
             } else {
                 PredicateConcept.CREATE_IMAGE
@@ -107,9 +110,9 @@ class PredicateFrameParser(
             result += PredicateOccurrence(
                 predicate = concept,
                 localTokenIndex = make.index,
-                confidence = 0.96,
+                confidence = if (hasImageNoun) 0.96 else 0.90,
                 source = "predicate-syntax-v2",
-                detail = "exact-make-image",
+                detail = if (hasImageNoun) "exact-make-image" else "deictic-make-transform",
             )
         }
 
@@ -535,7 +538,8 @@ class PredicateFrameParser(
         private val IMAGE_WORDS = setOf("bild", "foto", "grafik", "image", "photo", "picture")
         private val IMAGE_TRANSFORM_MODIFIERS = setOf(
             "heller", "dunkler", "wärmer", "waermer", "schaerfer", "schärfer",
-            "brighter", "darker", "warmer", "sharper",
+            "größer", "groesser", "kleiner",
+            "brighter", "darker", "warmer", "sharper", "larger", "smaller",
         )
         private val REFERENCE_PRONOUNS = setOf(
             "das", "dies", "diese", "diesen", "dieses", "ihn", "sie", "es", "andere", "anderen",
