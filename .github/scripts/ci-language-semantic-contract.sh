@@ -56,4 +56,50 @@ grep -Fq 'discourseIntentResolver.evidence' "$understanding" || {
   exit 1
 }
 
+test -f core/language/src/main/kotlin/app/lifeos/core/language/DiscourseStateGraph.kt || {
+  echo "language-discourse-state-graph-missing" >&2
+  exit 1
+}
+test -f core/language/src/main/kotlin/app/lifeos/core/language/DependencySyntaxGraph.kt || {
+  echo "language-dependency-syntax-missing" >&2
+  exit 1
+}
+test -f core/language/src/main/kotlin/app/lifeos/core/language/CoreferenceResolverV4.kt || {
+  echo "language-coreference-v4-missing" >&2
+  exit 1
+}
+test -f core/language/src/main/kotlin/app/lifeos/core/language/SemanticInterpretationLattice.kt || {
+  echo "language-interpretation-lattice-missing" >&2
+  exit 1
+}
+test -f core/language/src/main/kotlin/app/lifeos/core/language/ClarificationEngine.kt || {
+  echo "language-clarification-engine-missing" >&2
+  exit 1
+}
+test -f core/language/src/main/kotlin/app/lifeos/core/language/SemanticCorrectionEngine.kt || {
+  echo "language-semantic-correction-engine-missing" >&2
+  exit 1
+}
+test -f core/language/src/main/kotlin/app/lifeos/core/language/PragmaticActResolver.kt || {
+  echo "language-pragmatic-act-resolver-missing" >&2
+  exit 1
+}
+test -f core/language/src/test/kotlin/app/lifeos/core/language/LanguageUnderstandingV2AdversarialGoldTest.kt || {
+  echo "language-v2-adversarial-gold-missing" >&2
+  exit 1
+}
+grep -Fq 'semantic-clarification-required:' core/language/src/main/kotlin/app/lifeos/core/language/SemanticExecutionGate.kt || {
+  echo "language-clarification-execution-gate-missing" >&2
+  exit 1
+}
+grep -Fq 'source = "personal-grammar/v1"' core/language/src/main/kotlin/app/lifeos/core/language/PredicateParaphraseResolver.kt || {
+  echo "personal-grammar-source-contract-missing" >&2
+  exit 1
+}
+grep -Fq 'descriptiveOnly' core/language/src/main/kotlin/app/lifeos/core/language/PragmaticActResolver.kt || {
+  echo "pragmatic-descriptive-only-contract-missing" >&2
+  exit 1
+}
+
+echo "LANGUAGE_UNDERSTANDING_V2_CONTRACT_OK"
 echo "LANGUAGE_SEMANTIC_ARCHITECTURE_CONTRACT_OK"
