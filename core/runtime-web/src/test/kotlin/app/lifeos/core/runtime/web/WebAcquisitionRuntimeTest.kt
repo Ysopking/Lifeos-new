@@ -19,7 +19,7 @@ class WebAcquisitionRuntimeTest {
                 resource.canonicalUrl to WebAcquisitionTransportResponse(
                     statusCode = 200,
                     contentType = "text/plain; charset=utf-8",
-                    etag = ""v1"",
+                    etag = "\"v1\"",
                     body = "hello".encodeToByteArray(),
                 )
             )
@@ -36,7 +36,7 @@ class WebAcquisitionRuntimeTest {
         assertEquals(resource.id, result.receipt.requestedResourceId)
         assertEquals(resource.id, result.receipt.finalResourceId)
         assertEquals("text/plain", result.receipt.contentType)
-        assertEquals(""v1"", result.receipt.etag)
+        assertEquals("\"v1\"", result.receipt.etag)
         assertContentEquals("hello".encodeToByteArray(), assertNotNull(result.payload).bytes())
         assertEquals(result.payload?.sha256, result.receipt.payloadSha256)
         assertEquals(listOf(resource.id), transport.requests.map { it.resource.id })
@@ -187,7 +187,7 @@ class WebAcquisitionRuntimeTest {
                 mapOf(
                     resource.canonicalUrl to WebAcquisitionTransportResponse(
                         statusCode = 304,
-                        etag = ""v2"",
+                        etag = "\"v2\"",
                         lastModified = "Sun, 21 Sep 2026 12:00:00 GMT",
                     )
                 )
@@ -197,7 +197,7 @@ class WebAcquisitionRuntimeTest {
         assertEquals(WebAcquisitionOutcome.NOT_MODIFIED, result.receipt.outcome)
         assertEquals(null, result.payload)
         assertEquals(null, result.receipt.payloadSha256)
-        assertEquals(""v2"", result.receipt.etag)
+        assertEquals("\"v2\"", result.receipt.etag)
     }
 
     @Test
