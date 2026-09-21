@@ -76,4 +76,18 @@ object LifeOsUxPolicy {
         } else {
             null
         }
+
+    fun chatFailureNotice(error: String?): LifeOsUxNotice? {
+        val raw = error?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        val persisted = raw.contains("gespeichert", ignoreCase = true)
+        return LifeOsUxNotice(
+            priority = LifeOsUxPriority.ACTION_REQUIRED,
+            message = if (persisted) {
+                "Deine Nachricht ist gespeichert. Die Antwort konnte nicht abgeschlossen werden."
+            } else {
+                "Das konnte gerade nicht abgeschlossen werden."
+            },
+        )
+    }
 }
