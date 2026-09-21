@@ -40,13 +40,18 @@ class UtteranceNormalizer {
         val words = tokens.asSequence().filter { it.kind == TokenKind.WORD }.map { it.normalized }.toList()
         if (words.isEmpty()) return LanguageCode.UNKNOWN
         val germanMarkers = setOf(
-            "der", "die", "das", "ein", "eine", "und", "oder", "ich", "du", "wir", "bitte",
-            "mach", "mache", "erzeuge", "erstelle", "suche", "finde", "weiter", "gestern", "heute",
-            "morgen", "bild", "datei", "von", "mit", "ohne", "am", "um",
+            "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "und", "oder",
+            "ich", "du", "wir", "ihr", "mir", "mich", "dir", "dich", "bitte", "kannst", "könntest", "koenntest",
+            "mach", "mache", "machen", "erzeuge", "erstelle", "suche", "finde", "schau", "sieh", "guck",
+            "prüf", "pruef", "sende", "schicke", "schreib", "merke", "merk", "plane", "setz", "setze",
+            "weiter", "nochmal", "nein", "doch", "sondern", "statt", "gestern", "heute", "morgen",
+            "bild", "datei", "bescheid", "termin", "von", "mit", "ohne", "am", "um", "nach",
         )
         val englishMarkers = setOf(
-            "the", "a", "an", "and", "or", "i", "you", "we", "please", "make", "create", "generate",
-            "search", "find", "continue", "yesterday", "today", "tomorrow", "image", "file", "with", "without",
+            "the", "a", "an", "and", "or", "i", "you", "we", "they", "me", "my", "your", "please",
+            "can", "could", "would", "make", "create", "generate", "search", "find", "look", "check",
+            "send", "reply", "remember", "store", "schedule", "continue", "again", "no", "rather", "instead",
+            "yesterday", "today", "tomorrow", "image", "file", "message", "appointment", "with", "without",
         )
         val german = words.count { it in germanMarkers }
         val english = words.count { it in englishMarkers }
