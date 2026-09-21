@@ -25,6 +25,7 @@ data class RetrievedLanguageContext(
 class LanguageContextRetriever(
     private val photons: RevisionedPhotonRepository,
     private val builder: PhotonLanguageContextBuilder = PhotonLanguageContextBuilder(),
+    private val semanticPlanner: SemanticContextQueryPlanner = SemanticContextQueryPlanner(),
     private val maxCandidates: Int = 160,
     private val maxSelected: Int = 96,
     private val excludedTags: Set<String> = setOf("corpus:archive", "language-runtime-state", "language-learning-state", "web-evidence-cache"),
@@ -42,6 +43,7 @@ class LanguageContextRetriever(
         zoneId: String = "Europe/Berlin",
     ): RetrievedLanguageContext {
         val terms = normalizedTerms(utterance)
+        val semanticQuery = semanticPlanner.plan(utterance)
         val querySpecs = buildList {
             add("recent" to PhotonIndexQuery(
                 latestOnly = true,
@@ -110,7 +112,7 @@ class LanguageContextRetriever(
 
         val loaded = refs.mapNotNull { photons.load(it) }
         val selected = loaded
-            .map { it to score(it, terms, now) }
+            .map { it to score(it, terms, semanticQuery, now) }
             .sortedWith(
                 compareByDescending<Pair<Photon, Double>> { it.second }
                     .thenByDescending { it.first.provenance.createdAt }
@@ -148,6 +150,7 @@ class LanguageContextRetriever(
     private fun score(
         photon: Photon,
         utteranceTerms: Set<String>,
+        semanticQuery: SemanticContextQuery,
         now: Instant,
     ): Double {
         val photonTerms = normalizedTerms(photon.content).take(MAX_CONTENT_TERMS).toSet()
@@ -168,7 +171,7 @@ class LanguageContextRetriever(
         val result = if ("result" in photon.tags) 1.0 else 0.0
         val semanticMass = (photon.semanticMass / 8.0).coerceIn(0.0, 1.0)
 
-        return (
+        val base = (
             overlap * 0.38 +
                 recency * 0.20 +
                 photon.confidence * 0.12 +
@@ -177,6 +180,29 @@ class LanguageContextRetriever(
                 goalMatter * 0.08 +
                 result * 0.04
             ).coerceIn(0.0, 1.0)
+
+        val conceptTags = photon.tags
+            .filter { it.startsWith("concept:") }
+            .mapTo(linkedSetOf()) { it.substringAfter(':') }
+        val semanticTags = photon.tags
+            .filter { it.startsWith("semantic:") }
+            .mapTo(linkedSetOf()) { normalizeFieldText(it.substringAfter(':')) }
+        val conceptMatch = if (semanticQuery.concepts.isEmpty()) 0.0 else {
+            semanticQuery.concepts.count(conceptTags::contains).toDouble() /
+                semanticQuery.concepts.size.toDouble()
+        }
+        val semanticMatch = if (semanticQuery.semanticTypes.isEmpty()) 0.0 else {
+            semanticQuery.semanticTypes.count(semanticTags::contains).toDouble() /
+                semanticQuery.semanticTypes.size.toDouble()
+        }
+        val kindMatch = if (semanticQuery.preferredKinds.any { it in photon.tags }) 1.0 else 0.0
+        val structural = (
+            conceptMatch * 0.50 +
+                semanticMatch * 0.35 +
+                kindMatch * 0.15
+            ).coerceIn(0.0, 1.0)
+
+        return (base + structural * 0.12).coerceIn(0.0, 1.0)
     }
 
     private fun inferredTag(text: String): String? {
