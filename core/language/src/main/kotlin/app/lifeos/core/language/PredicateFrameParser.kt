@@ -544,6 +544,7 @@ class PredicateFrameParser(
         private val QUOTE_MARKERS = setOf("\"", "„", "“", "”", "«", "»")
         private val OBJECT_STOP_WORDS = setOf(
             "bitte", "please", "mir", "mich", "me", "an", "to", "nicht", "not",
+            "um", "ein", "nach", "durch", "heraus",
             "anschließend", "anschliessend", "danach", "then", "und", "and", "oder", "or",
         )
         private val SENTENCE_INITIAL_NON_NAMES = setOf(
