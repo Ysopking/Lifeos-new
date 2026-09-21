@@ -53,7 +53,7 @@ class DiscourseStateProjector(
                 val score = (
                     item.confidence * 0.34 +
                         (if (item.active) 0.32 else 0.0) +
-                        (if (item.goalId == context.activeGoalId) 0.18 else 0.0) +
+                        (if (item.photonId == context.activeGoalId || item.goalId == context.activeGoalId) 0.18 else 0.0) +
                         (if ("result" in item.semanticTypes) 0.08 else 0.0) +
                         (if ("image" in item.semanticTypes) 0.04 else 0.0) +
                         (if (item.matterId != null) 0.04 else 0.0)
