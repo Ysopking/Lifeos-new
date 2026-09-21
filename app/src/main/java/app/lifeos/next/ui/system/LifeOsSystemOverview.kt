@@ -41,26 +41,18 @@ internal fun LifeOsSystemOverview(
     )
 
     LifeOsContentFrame(modifier = modifier.fillMaxSize()) {
-        Column(
+        Text(
+            text = if (ownerAttention.hasAttention) {
+                "${ownerAttention.totalCount} Punkte brauchen dich."
+            } else {
+                "Alles Wichtige an einem Ort."
+            },
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = LifeOsTokens.Spacing.large),
-            verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.xSmall),
-        ) {
-            Text(
-                text = "System",
-                style = MaterialTheme.typography.headlineMedium,
-            )
-            Text(
-                text = if (ownerAttention.hasAttention) {
-                    "${ownerAttention.totalCount} Punkte brauchen dich."
-                } else {
-                    "Alles Wichtige an einem Ort."
-                },
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        )
 
         SystemSectionLabel("Daten")
         SystemNavigationRow(
