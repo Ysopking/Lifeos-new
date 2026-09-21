@@ -64,6 +64,9 @@ step "gate 03r: runtime-reasoning unit tests"
 step "gate 03a: runtime-contracts unit tests"
 ./gradlew :core:runtime-contracts:test --stacktrace
 
+step "gate 03a2: runtime-web unit tests"
+./gradlew :core:runtime-web:test --stacktrace
+
 step "gate 03b: runtime-deepsearch unit tests"
 ./gradlew :core:runtime-deepsearch:test --stacktrace
 

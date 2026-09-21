@@ -40,6 +40,9 @@
       ":core:runtime-deepsearch"
     ],
     "core/runtime-contracts/build.gradle.kts": [],
+    "core/runtime-web/build.gradle.kts": [
+      ":core:runtime-contracts"
+    ],
     "core/runtime-deepsearch/build.gradle.kts": [
       ":core:field",
       ":core:language",
