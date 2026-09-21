@@ -52,3 +52,7 @@ B367 remains stacked/draft until:
 ## Module placement
 
 B367 stays in `:core:reasoning`; it does not add files to the bounded `core/runtime` monolith.
+
+## Promotion run
+
+B367 is cleanly restacked on merged B366/main. This exact head is the promotion candidate and must pass the main-targeted CI gates before merge.
