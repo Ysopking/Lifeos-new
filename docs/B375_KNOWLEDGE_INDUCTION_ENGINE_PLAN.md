@@ -65,3 +65,7 @@ After implementation:
 1. `./gradlew :core:runtime-reasoning:test --tests 'app.lifeos.core.runtime.reasoning.KnowledgeInductionEngineTest'`
 2. `./gradlew :core:runtime-reasoning:test`
 3. Core Fast Gate after B374/B373 promotion order.
+
+## Promotion run
+
+B375 is cleanly restacked on merged B374/main. This exact head is the promotion candidate for main-targeted CI.
