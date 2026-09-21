@@ -75,3 +75,8 @@ After implementation:
 1. `./gradlew :core:runtime-contracts:test --tests 'app.lifeos.core.runtime.web.WebResourceIdentityTest'`
 2. `./gradlew :core:runtime-contracts:test`
 3. Core Fast after B391 is eventually restacked onto the accepted B380 main head.
+
+## Promotion run
+
+- Retargeted to `main` after B380 merge commit `9a9a6d866cd625ba9532c5a547040ab6359202c4`.
+- This documentation-only commit triggers exact-head promotion CI; production and test semantics are unchanged.
