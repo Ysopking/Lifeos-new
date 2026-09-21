@@ -556,7 +556,15 @@ class LiveSourceDeltaCoordinator(
 
         var accepted = 0
         for (sourceDelta in coalesced) {
-            val projected = connector.project(sourceDelta) ?: continue
+            val projected = try {
+                connector.project(sourceDelta)
+            } catch (error: Exception) {
+                return projectionFailure(
+                    connector = connector,
+                    state = state,
+                    error = error,
+                )
+            } ?: continue
             validateProjection(connector, rawObservation, sourceDelta, projected)
             when (val result = hub.ingest(projected)) {
                 is LiveDataIngestResult.Accepted -> accepted += 1
@@ -732,7 +740,15 @@ class LiveSourceDeltaCoordinator(
         var accepted = 0
 
         for (sourceDelta in coalesced) {
-            val projected = connector.project(sourceDelta) ?: continue
+            val projected = try {
+                connector.project(sourceDelta)
+            } catch (error: Exception) {
+                return projectionFailure(
+                    connector = connector,
+                    state = state,
+                    error = error,
+                )
+            } ?: continue
             validateProjection(connector, rawObservation, sourceDelta, projected)
             when (val result = hub.ingest(projected)) {
                 is LiveDataIngestResult.Accepted -> accepted += 1
@@ -781,6 +797,29 @@ class LiveSourceDeltaCoordinator(
             coalescedDeltaCount = coalesced.size,
             acceptedDeltaCount = accepted,
             state = durable,
+        )
+    }
+
+    private fun projectionFailure(
+        connector: LiveSourceConnector,
+        state: LiveSourceCursorState,
+        error: Exception,
+    ): LiveSourceSyncResult.SourceUnavailable {
+        val sourceId = connector.adapter.sourceId
+        val message =
+            error.message ?: error::class.simpleName
+            ?: "source delta projection failed"
+        health.failed(
+            sourceId,
+            now(),
+            app.lifeos.core.runtime.RuntimeFailureCategory.UNKNOWN,
+            message,
+            true,
+        )
+        return LiveSourceSyncResult.SourceUnavailable(
+            sourceId = sourceId,
+            message = message,
+            state = state,
         )
     }
 
