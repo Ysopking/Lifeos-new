@@ -81,12 +81,14 @@ class ProductivePersonalLanguageLearningRuntime(
                     lexicon.fingerprint,
                     proposal.targetConceptId,
                     proposal.surface,
+                    proposal.kind.name,
                 ),
                 conversationId = conversationId,
                 sourceRef = PhotonRevisionRef(source.id, source.revision),
                 lexiconFingerprint = lexicon.fingerprint,
                 surface = proposal.surface,
                 targetConceptId = proposal.targetConceptId,
+                kind = proposal.kind,
                 createdAt = source.provenance.createdAt,
             )
             val photon = pending.toPhoton()
@@ -218,6 +220,7 @@ class ProductivePersonalLanguageLearningRuntime(
             surface = pending.surface,
             targetConceptId = pending.targetConceptId,
             observations = observations,
+            kind = pending.kind,
         )
     }
 
@@ -319,6 +322,9 @@ class ProductivePersonalLanguageLearningRuntime(
                 lexiconFingerprint = requireNotNull(values["lexicon"]),
                 surface = decode(requireNotNull(values["surface"])),
                 targetConceptId = decode(requireNotNull(values["target"])),
+                kind = values["kind"]
+                    ?.let { PersonalLanguageCandidateKind.valueOf(it) }
+                    ?: PersonalLanguageCandidateKind.LEXICAL_ALIAS,
                 createdAt = photon.provenance.createdAt,
             )
             require(photon.id == pendingPhotonId(pending.id))
@@ -368,6 +374,7 @@ class ProductivePersonalLanguageLearningRuntime(
         val lexiconFingerprint: String,
         val surface: String,
         val targetConceptId: String,
+        val kind: PersonalLanguageCandidateKind,
         val createdAt: Instant,
     ) {
         fun toPhoton(): Photon = Photon(
@@ -381,6 +388,7 @@ class ProductivePersonalLanguageLearningRuntime(
                 "lexicon=" + lexiconFingerprint,
                 "surface=" + encodeStatic(surface),
                 "target=" + encodeStatic(targetConceptId),
+                "kind=" + kind.name,
             ).joinToString("\n"),
             phase = PhotonPhase.ACTIVE,
             semanticMass = 0.05,
@@ -405,6 +413,7 @@ class ProductivePersonalLanguageLearningRuntime(
                     "personal-language-target/v1",
                     targetConceptId,
                 ),
+                "language-learning-kind:" + kind.name.lowercase(),
             ),
         )
     }
@@ -416,7 +425,7 @@ class ProductivePersonalLanguageLearningRuntime(
         const val TAG_PENDING_REF_PREFIX = "language-learning-pending-ref:"
         private const val MAX_PENDING_SCAN = 24
         private const val MAX_OBSERVATION_SCAN = 64
-        private const val MAX_PENDING_PER_TURN = 3
+        private const val MAX_PENDING_PER_TURN = 4
         private const val MAX_CANDIDATE_OBSERVATIONS = 64
 
         private fun encodeStatic(value: String): String =
