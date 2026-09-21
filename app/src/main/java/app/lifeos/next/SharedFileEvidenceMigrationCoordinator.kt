@@ -8,32 +8,43 @@ import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 /**
  * One-way migration barrier from legacy shared-file LifeSource metadata to semantic LiveData files.
  *
  * Legacy evidence is retired only after Storage Intelligence completed a full inventory and the
  * incremental file connector durably consumed every journal revision visible at that boundary.
+ * Durable journal rows are compacted only after the LiveSource cursor itself was committed.
  */
 internal class SharedFileEvidenceMigrationCoordinator(
-    context: Context,
     private val memory: DurableLifeMemoryRuntime,
-    private val inventory: AndroidStorageInventoryStore =
-        AndroidStorageInventoryStore(context),
+    private val inventory: StorageChangeJournal,
     private val now: () -> Instant = Instant::now,
     private val scope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
+    constructor(
+        context: Context,
+        memory: DurableLifeMemoryRuntime,
+    ) : this(
+        memory = memory,
+        inventory = AndroidStorageInventoryStore(context),
+    )
+
     @Volatile
     private var storageSnapshot: StorageIntelligenceSnapshot? = null
 
     @Volatile
     private var liveSnapshot: LiveSourceSyncSnapshot? = null
 
-    private val mutex = Mutex()
+    private val signals = Channel<Unit>(Channel.CONFLATED)
+    private val worker = scope.launch {
+        for (signal in signals) {
+            reconcile()
+        }
+    }
 
     fun onStorageSnapshot(snapshot: StorageIntelligenceSnapshot) {
         storageSnapshot = snapshot
@@ -46,17 +57,13 @@ internal class SharedFileEvidenceMigrationCoordinator(
     }
 
     private fun schedule() {
-        scope.launch {
-            mutex.withLock {
-                retireIfReplacementCaughtUp()
-            }
+        check(worker.isActive) {
+            "Shared-file migration worker is not active"
         }
+        signals.trySend(Unit)
     }
 
-    private suspend fun retireIfReplacementCaughtUp() {
-        val storage = storageSnapshot ?: return
-        if (!storage.inventoryComplete) return
-
+    private suspend fun reconcile() {
         val result = liveSnapshot
             ?.results
             ?.singleOrNull {
@@ -78,10 +85,17 @@ internal class SharedFileEvidenceMigrationCoordinator(
         val cursorRevision =
             state.cursor?.value?.toLongOrNull()
                 ?: return
-        val journalHead =
-            inventory.currentChangeRevision()
 
-        if (cursorRevision < journalHead) return
+        // Cursor persistence happens after every projected delta was accepted by LiveDataHub.
+        // Only that durable boundary is allowed to release historical journal rows.
+        inventory.pruneChangesThrough(cursorRevision)
+
+        val storage = storageSnapshot ?: return
+        if (!storage.inventoryComplete) return
+
+        val pendingHead =
+            inventory.currentChangeRevision()
+        if (pendingHead > cursorRevision) return
 
         memory.retireSourceEvidence(
             sourceId =
