@@ -134,10 +134,7 @@ internal class AndroidStorageLiveSourceConnector(
             SourceDelta(
                 deltaId = "storage-change:" + change.revision,
                 sourceId = sourceId,
-                externalKey = encodeExternalKey(
-                    change.volumeId,
-                    change.relativePath,
-                ),
+                externalKey = externalKey(change),
                 kind = change.kind,
                 previousFingerprint = change.previousFingerprint,
                 newFingerprint = change.newFingerprint,
@@ -161,14 +158,28 @@ internal class AndroidStorageLiveSourceConnector(
         require(delta.sourceId == sourceId)
         val observedAt = now()
 
+        val changeRevision = delta.deltaId
+            .removePrefix(CHANGE_ID_PREFIX)
+            .toLongOrNull()
+            ?: return null
+        val change = inventory.loadChange(changeRevision)
+            ?: return null
+        if (
+            change.revision != delta.observationRevision ||
+            externalKey(change) != delta.externalKey ||
+            change.kind != delta.kind ||
+            change.previousFingerprint != delta.previousFingerprint ||
+            change.newFingerprint != delta.newFingerprint
+        ) {
+            return null
+        }
+
         if (delta.kind == SourceDeltaKind.DELETED) {
             return deleteDelta(delta, observedAt)
         }
 
-        val (volumeId, relativePath) =
-            decodeExternalKey(delta.externalKey)
         val entry =
-            inventory.load(volumeId, relativePath)
+            inventory.load(change.volumeId, change.relativePath)
                 ?: return null
 
         val file = File(entry.absolutePath)
@@ -276,35 +287,14 @@ internal class AndroidStorageLiveSourceConnector(
             payload = null,
         )
 
-    private fun encodeExternalKey(
-        volumeId: String,
-        relativePath: String,
+    private fun externalKey(
+        change: StorageChangeEntry,
     ): String =
-        volumeId.length.toString() +
-            ":" +
-            volumeId +
-            relativePath
-
-    private fun decodeExternalKey(
-        value: String,
-    ): Pair<String, String> {
-        val separator = value.indexOf(':')
-        require(separator > 0) {
-            "Invalid storage external key"
-        }
-        val volumeLength =
-            value.substring(0, separator).toIntOrNull()
-        require(volumeLength != null && volumeLength > 0) {
-            "Invalid storage external-key volume length"
-        }
-        val volumeStart = separator + 1
-        val pathStart = volumeStart + volumeLength
-        require(pathStart < value.length) {
-            "Invalid storage external-key payload"
-        }
-        return value.substring(volumeStart, pathStart) to
-            value.substring(pathStart)
-    }
+        "storage-" + StableCognitiveIds.fingerprint(
+            "android-storage-live-external/v1",
+            change.volumeId,
+            change.relativePath,
+        )
 
     private fun safe(value: String): String =
         value.replace('\n', ' ')
@@ -313,6 +303,7 @@ internal class AndroidStorageLiveSourceConnector(
 
     private companion object {
         const val INITIAL_CURSOR = "0"
+        const val CHANGE_ID_PREFIX = "storage-change:"
         const val MAX_CHANGE_BATCH = 16_384
         const val MAX_EXTRACTED_CONTENT_BYTES =
             448 * 1024
