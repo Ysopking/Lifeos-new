@@ -145,6 +145,7 @@ class SemanticActionGraphRouterTest {
             executeSchedule = { LocalScheduleExecutionResult.Failed("unused") },
             prepareCommunication = { context ->
                 val node = context.goal.semanticActionGraph.nodes.single()
+                assertEquals(produced, context.boundResultPhoton)
                 communicationReference = node.frame.roles[SemanticRole.OBJECT]?.referencePhoton
                 val ref = assertNotNull(communicationReference)
                 assertEquals(PhotonRevisionRef(produced.id, produced.revision), ref)
