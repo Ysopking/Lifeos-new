@@ -400,12 +400,9 @@ private fun decodeEntities(value: String): String {
 }
 
 private fun normalizeVisibleText(value: String): String =
-    value.replace(Regex("[\t\x0B\f\r ]+"), " ")
-        .replace(Regex(" *\n+ *"), "
-")
-        .replace(Regex("\n{3,}"), "
-
-")
+    value.replace(Regex("""[\t\u000B\f\r ]+"""), " ")
+        .replace(Regex(""" *\n+ *"""), "\n")
+        .replace(Regex("""\n{3,}"""), "\n\n")
         .trim()
 
 private fun documentFingerprint(
