@@ -171,6 +171,7 @@ internal class GoalActionCoordinator(
                     sourcePhoton = sourcePhoton,
                     goalPhotonId = goalPhotonId,
                     photons = photons,
+                    boundResultPhoton = boundResultPhoton,
                 )
             ) {
                 is LocalCommunicationGoalResult.Prepared ->
