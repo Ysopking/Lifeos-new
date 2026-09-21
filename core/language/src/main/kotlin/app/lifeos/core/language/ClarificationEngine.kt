@@ -45,12 +45,16 @@ class ClarificationEngine {
             )
         }
 
-        val unresolvedExternal = graph.nodes
-            .filter { it.externalSideEffect }
-            .flatMap { it.unresolvedExternalRoles }
+        // Clarification is mandatory only for roles required by the locally executable
+        // semantic action. External-only roles (for example COMMUNICATE.RECIPIENT) must not
+        // suppress safe local preparation; the external-effect gate remains fail-closed until
+        // those roles are resolved.
+        val unresolvedLocal = graph.nodes
+            .filter { it.type == SemanticActionNodeType.ACTION }
+            .flatMap { it.unresolvedRoles }
             .firstOrNull()
-        if (unresolvedExternal != null) {
-            val label = unresolvedExternal.name.lowercase()
+        if (unresolvedLocal != null) {
+            val label = unresolvedLocal.name.lowercase()
             return ClarificationPlan(
                 required = true,
                 reason = ClarificationReason.ROLE,
