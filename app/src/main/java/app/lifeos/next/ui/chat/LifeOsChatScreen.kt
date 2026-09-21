@@ -23,6 +23,7 @@ import app.lifeos.next.kernel.InitialCognitiveContextRuntimeRegistry
 import app.lifeos.next.ui.components.LifeOsContentFrame
 import app.lifeos.next.ui.components.LifeOsRuntimeAlert
 import app.lifeos.next.ui.components.buildRuntimeHealthUiModel
+import app.lifeos.next.ui.policy.LifeOsUxPolicy
 import app.lifeos.next.ui.system.RuntimeHealthModalSheet
 import app.lifeos.next.ui.theme.LifeOsTokens
 
@@ -41,6 +42,11 @@ fun LifeOsChatScreen(
         topologyEvidence = state.runtimeTopology,
         selfStateEvidence = state.selfState,
     )
+    val chatFailureNotice = if (state.turnProcessing.phase == ChatTurnPhase.FAILED) {
+        null
+    } else {
+        LifeOsUxPolicy.chatFailureNotice(state.error)
+    }
 
     LifeOsContentFrame(
         modifier = modifier
@@ -86,10 +92,11 @@ fun LifeOsChatScreen(
             }
         }
 
-        state.error?.let {
+        chatFailureNotice?.let { notice ->
             Text(
-                text = it,
+                text = notice.message,
                 color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(bottom = LifeOsTokens.Spacing.small),
             )
         }
