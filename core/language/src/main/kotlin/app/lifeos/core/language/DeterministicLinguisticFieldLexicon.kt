@@ -90,23 +90,61 @@ class DeterministicLinguisticFieldLexicon(
             LinguisticConcept(
                 id = "search",
                 canonical = "suchen",
-                variants = setOf("suche", "finden", "finde", "recherchiere", "search", "find", "lookup"),
+                variants = setOf(
+                    "suche", "finden", "finde", "recherchiere", "nachsehen", "nachschauen",
+                    "schau", "sieh", "guck", "prüf", "pruef", "prüfe", "pruefe", "check", "checke",
+                    "search", "find", "lookup", "look",
+                ),
                 semanticTag = "SEARCH",
                 intentBias = mapOf(IntentType.SEARCH to 0.92),
             ),
             LinguisticConcept(
                 id = "continue",
                 canonical = "weiter",
-                variants = setOf("weitermachen", "fortsetzen", "continue", "proceed"),
+                variants = setOf("weitermachen", "fortsetzen", "durchziehen", "weiterziehen", "continue", "proceed"),
                 semanticTag = "CONTINUE",
                 intentBias = mapOf(IntentType.CONTINUE to 0.95),
             ),
             LinguisticConcept(
                 id = "implement",
                 canonical = "implementieren",
-                variants = setOf("implementiere", "umsetzen", "baue", "bauen", "code", "implement", "build"),
+                variants = setOf(
+                    "implementiere", "umsetzen", "umsetze", "umsetz", "baue", "bauen",
+                    "entwickle", "programmiere", "fertigstellen", "code", "implement", "build", "develop",
+                ),
                 semanticTag = "IMPLEMENT",
                 intentBias = mapOf(IntentType.BUILD_OR_IMPLEMENT to 0.92),
+            ),
+            LinguisticConcept(
+                id = "communicate",
+                canonical = "senden",
+                variants = setOf(
+                    "sende", "schicke", "schick", "schreibe", "schreib", "maile", "mail",
+                    "antworte", "teile", "send", "reply", "message", "share",
+                ),
+                semanticTag = "COMMUNICATE",
+                intentBias = mapOf(IntentType.COMMUNICATE to 0.92),
+                semanticMass = 1.05,
+            ),
+            LinguisticConcept(
+                id = "schedule",
+                canonical = "planen",
+                variants = setOf(
+                    "plane", "termin", "kalender", "eintragen", "eintrage", "schedule", "remind", "calendar",
+                ),
+                semanticTag = "SCHEDULE",
+                intentBias = mapOf(IntentType.SCHEDULE to 0.92),
+                semanticMass = 1.05,
+            ),
+            LinguisticConcept(
+                id = "store.memory",
+                canonical = "merken",
+                variants = setOf(
+                    "merke", "merk", "speichere", "speichern", "behalten", "remember", "store", "save",
+                ),
+                semanticTag = "STORE_MEMORY",
+                intentBias = mapOf(IntentType.STORE_OR_REMEMBER to 0.92),
+                semanticMass = 1.05,
             ),
             LinguisticConcept(
                 id = "night",
