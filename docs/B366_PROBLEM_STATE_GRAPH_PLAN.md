@@ -69,3 +69,7 @@ After implementation:
 ## Architecture-budget response
 
 B366 is isolated in the new `:core:reasoning` JVM module so the established `core/runtime` monolith budget remains at 505 Kotlin files. The module depends only on `:core:model`, `:core:language`, and `:core:field`.
+
+## Exact-head Gold rerun note
+
+The B366 code path is isolated from app startup, but GitHub rerunning the same emulator workflow can leave multiple same-name artifacts on one run. Product Gold intentionally rejects ambiguous sibling evidence. Therefore final promotion uses one fresh PR head so Core Fast, Android Debug, Emulator Recovery and Product Gold each produce one unambiguous exact-head evidence set.
