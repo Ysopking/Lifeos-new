@@ -5,8 +5,8 @@ import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -20,33 +20,42 @@ internal class InitialDataProcessController(
     private val scope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
-    private var refreshJob: Job? = null
+    private val refreshSignals = Channel<Unit>(Channel.CONFLATED)
+    private val refreshWorker = scope.launch {
+        for (signal in refreshSignals) {
+            if (!startupReady()) continue
+            runRefreshCycle()
+        }
+    }
 
     fun refresh() {
         if (!startupReady()) return
-        if (refreshJob?.isActive == true) return
+        check(refreshWorker.isActive) {
+            "Initial-data refresh worker is not active"
+        }
+        refreshSignals.trySend(Unit)
+    }
 
-        refreshJob = scope.launch {
-            try {
-                while (currentCoroutineContext().isActive) {
-                    val snapshot = bootstrap().run()
-                    onSnapshot(snapshot)
-                    onFailure(null)
+    private suspend fun runRefreshCycle() {
+        try {
+            while (currentCoroutineContext().isActive) {
+                val snapshot = bootstrap().run()
+                onSnapshot(snapshot)
+                onFailure(null)
 
-                    if (!snapshot.continuationRequired) {
-                        break
-                    }
-
-                    delay(SLICE_DELAY_MILLIS)
+                if (!snapshot.continuationRequired) {
+                    break
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                onFailure(
-                    error.message ?: error::class.simpleName
-                    ?: "initial-data-bootstrap-failed",
-                )
+
+                delay(SLICE_DELAY_MILLIS)
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            onFailure(
+                error.message ?: error::class.simpleName
+                ?: "initial-data-bootstrap-failed",
+            )
         }
     }
 
