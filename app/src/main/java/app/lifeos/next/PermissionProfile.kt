@@ -4,11 +4,13 @@ internal enum class PermissionProfileId {
     INITIAL_DATA,
     INTERACTION,
     BROAD_FILES,
+    ASSISTANT_ACCESS,
     INFRASTRUCTURE,
 }
 
 internal enum class PermissionSpecialAccess {
     BROAD_FILE_ACCESS,
+    NOTIFICATION_LISTENER,
 }
 
 internal data class PermissionProfile(
@@ -53,6 +55,29 @@ internal data class RuntimePermissionRequestPlan(
         get() = permissions.isNotEmpty()
 }
 
+internal data class SpecialAccessRequestPlan(
+    val profileIds: Set<PermissionProfileId>,
+    val accesses: List<PermissionSpecialAccess>,
+) {
+    init {
+        require(accesses == accesses.distinct().sortedBy { it.ordinal }) {
+            "Special-access request plan must be distinct and canonical"
+        }
+    }
+
+    val required: Boolean
+        get() = accesses.isNotEmpty()
+}
+
+internal data class DeviceAccessSnapshot(
+    val runtimePermissionsMissing: List<String>,
+    val specialAccessMissing: List<PermissionSpecialAccess>,
+    val profileStates: Map<PermissionProfileId, PermissionProfileState>,
+) {
+    val converged: Boolean
+        get() = runtimePermissionsMissing.isEmpty() && specialAccessMissing.isEmpty()
+}
+
 internal class PermissionProfileEvaluator(
     private val runtimePermissionGranted: (String) -> Boolean,
     private val specialAccessSupported: (PermissionSpecialAccess) -> Boolean,
@@ -90,11 +115,14 @@ internal class PermissionProfileEvaluator(
 }
 
 internal object PrivatePermissionProfiles {
-    fun initialData(runtimePermissions: Set<String>): PermissionProfile =
+    fun initialData(
+        runtimePermissions: Set<String>,
+        manifestPermissions: Set<String>,
+    ): PermissionProfile =
         PermissionProfile(
             id = PermissionProfileId.INITIAL_DATA,
             runtimePermissions = runtimePermissions,
-            manifestPermissions = runtimePermissions,
+            manifestPermissions = manifestPermissions,
             rationaleTags = setOf("initial-data", "owner-authorized-device-read"),
         )
 
@@ -120,6 +148,16 @@ internal object PrivatePermissionProfiles {
             specialAccess = setOf(PermissionSpecialAccess.BROAD_FILE_ACCESS),
             manifestPermissions = setOf(manageExternalStoragePermission),
             rationaleTags = setOf("owner-confirmed-broad-files"),
+        )
+
+    fun assistantAccess(): PermissionProfile =
+        PermissionProfile(
+            id = PermissionProfileId.ASSISTANT_ACCESS,
+            specialAccess = setOf(PermissionSpecialAccess.NOTIFICATION_LISTENER),
+            rationaleTags = setOf(
+                "live-context",
+                "owner-authorized-notification-observation",
+            ),
         )
 
     fun infrastructure(
