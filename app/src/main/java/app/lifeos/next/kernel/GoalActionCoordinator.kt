@@ -149,12 +149,20 @@ internal class GoalActionCoordinator(
         goalPhotonId: PhotonId,
     ): LocalCommunicationExecutionResult {
         return try {
+            val referencedPhotons = goal.references
+                .asSequence()
+                .mapNotNull { it.targetPhotonRef }
+                .distinct()
+                .mapNotNull { ref -> productivePhotonQueries.exactRevision(ref) }
+                .toList()
+            val photons = (referencedPhotons + boundedContextPhotons())
+                .distinctBy { it.id to it.revision }
             when (
                 val result = localCommunicationGoalEngine.prepare(
                     goal = goal,
                     sourcePhoton = sourcePhoton,
                     goalPhotonId = goalPhotonId,
-                    photons = boundedContextPhotons(),
+                    photons = photons,
                 )
             ) {
                 is LocalCommunicationGoalResult.Prepared ->
