@@ -54,6 +54,32 @@ class LanguageUnderstandingMaxTest {
     }
 
     @Test
+    fun `noun free deictic image follow up binds active image revision`() {
+        val imageId = PhotonId("active-image")
+        val image = LanguageContextItem(
+            photonId = imageId,
+            kind = "image",
+            tags = setOf("image"),
+            createdAt = now.minusSeconds(5),
+            active = true,
+            contentTerms = setOf("bild", "portrait"),
+            revisionRef = app.lifeos.core.model.PhotonRevisionRef(imageId, 7L),
+            semanticTypes = setOf("image"),
+        )
+        val result = engine.understand(
+            "Mach es heller.",
+            LanguageContext(items = listOf(image), now = now),
+        )
+
+        assertEquals(IntentType.TRANSFORM_IMAGE, result.goal.intent)
+        val transform = result.goal.semanticActionGraph.nodes.single {
+            it.frame.predicate == PredicateConcept.TRANSFORM_IMAGE
+        }
+        assertEquals(image.revisionRef, transform.frame.roles[SemanticRole.OBJECT]?.referencePhoton)
+        assertTrue(transform.executable)
+    }
+
+    @Test
     fun `descriptive paraphrase recognition cannot silently authorize communication`() {
         val result = engine.understand(
             "Gib Anna Bescheid.",
