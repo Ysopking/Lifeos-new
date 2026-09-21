@@ -146,6 +146,7 @@ class SpeechActParser private constructor(
 
     companion object {
         val DIRECT_COMMAND_VERBS = setOf(
+            "mach", "mache", "macht", "make",
             "erstelle", "erzeuge", "generiere", "zeichne", "render", "rendere", "create", "generate", "draw",
             "ändere", "aendere", "bearbeite", "edit", "change",
             "suche", "finde", "recherchiere", "schau", "sieh", "guck", "prüf", "pruef", "prüfe", "pruefe", "check", "checke",
