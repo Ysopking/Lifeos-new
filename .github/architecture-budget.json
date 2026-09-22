@@ -86,6 +86,10 @@
     "core/runtime-research/build.gradle.kts": [
       ":core:runtime-deepsearch",
       ":core:runtime-reasoning"
+    ],
+    "core/runtime-android/build.gradle.kts": [
+      ":core:runtime",
+      ":core:runtime-contracts"
     ]
   },
   "forbidden_runtime_package_prefixes": [
