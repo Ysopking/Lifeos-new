@@ -5,6 +5,7 @@ Branch: `b406-file-action-runtime-v1`
 
 Pre-promotion validation trigger: exact clean B405 head
 Stacked validation trigger: exact B405 base.
+Exact-main promotion trigger: 539ec5c50cb0b7c26d1995d4ab2360474a3701ec.
 
 ## Implementation status
 
