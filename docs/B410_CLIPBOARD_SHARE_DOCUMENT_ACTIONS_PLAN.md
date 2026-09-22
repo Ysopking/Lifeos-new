@@ -3,6 +3,8 @@
 Base prepared head: `472c1be3b568186a150c8d1c8e3a7508a40ad923`
 Branch: `b410-clipboard-share-document-actions-v1`
 
+Exact-main promotion trigger after B409 GOLD: 43643d1ced7e72b1fb82762f00d2cf3196b78b96.
+
 ## Pre-implementation audit
 
 1. `LocalShareIntentFactory` already owns the narrow private-cache/FileProvider path for text and encrypted LIFEOS images.
