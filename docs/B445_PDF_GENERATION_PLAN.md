@@ -74,6 +74,10 @@ not
 
 \`PDF presentation -> truth / permission / publication\`
 
+## Validation evidence
+
+Product Gold for B445 is accepted only from successful sibling gates for this exact head. Cancelled or superseded runs are not validation evidence.
+
 ## B446 handoff
 
 B446 adds spreadsheet / CSV generation from explicit structured data models. It should reuse exact evidence and artifact provenance rather than extracting tabular truth from rendered DOCX/PDF bytes.
