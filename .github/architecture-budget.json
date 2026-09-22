@@ -86,6 +86,7 @@
       ":core:runtime"
     ],
     "core/runtime-research/build.gradle.kts": [
+      ":core:runtime",
       ":core:runtime-deepsearch",
       ":core:runtime-reasoning"
     ],
