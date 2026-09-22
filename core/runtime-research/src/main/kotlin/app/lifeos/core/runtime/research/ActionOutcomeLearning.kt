@@ -288,8 +288,7 @@ class ActionOutcomeLearningEngine {
                 direction,
             ),
         )
-
-
+}
 
 private fun learningEvidenceFingerprint(
     graphId: String,
