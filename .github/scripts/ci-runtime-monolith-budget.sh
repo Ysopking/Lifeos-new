@@ -21,11 +21,11 @@ test "$buildstudio_files" = "$root/buildstudio/BuildStudioHostProcessRegistry.kt
   fail "buildstudio-bridge-budget-changed"
 
 total="$(find "$root" -type f -name '*.kt' | wc -l | tr -d ' ')"
-test "$total" -eq 505 || fail "runtime-kotlin-file-count:$total"
+test "$total" -eq 506 || fail "runtime-kotlin-file-count:$total"
 
 declare -A expected=(
   ["(root)"]=47
-  [agency]=8
+  [agency]=9
   [artifact]=14
   [boot]=18
   [buildstudio]=1

@@ -2,10 +2,10 @@
   "schema_version": 1,
   "baseline": {
     "source_head_sha": "38dd46057de874d4304b82b643ba506dbd14f183",
-    "runtime_kotlin_file_count": 505,
+    "runtime_kotlin_file_count": 506,
     "canonical_subsystem_count": 43
   },
-  "runtime_monolith_max_kotlin_files": 505,
+  "runtime_monolith_max_kotlin_files": 506,
   "canonical_subsystem_count": 43,
   "line_budgets": {
     "app/src/main/java/app/lifeos/next/kernel/LifeOsKernel.kt": 386,
