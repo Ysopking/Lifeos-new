@@ -26,6 +26,7 @@
       ":core:language",
       ":core:model",
       ":core:runtime",
+      ":core:runtime-android",
       ":core:runtime-deepsearch",
       ":core:runtime-personal",
       ":core:scene"
