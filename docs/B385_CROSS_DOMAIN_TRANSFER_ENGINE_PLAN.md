@@ -81,3 +81,6 @@ Do not change their existing invariants.
 ## Authority invariant
 
 `structural similarity != semantic identity != transferred prior != target evidence != active strategy`
+
+
+Validation note: Exact-main validation trigger; merge requires Core Fast, Android Debug, Android Emulator Recovery, and LIFEOS Product Gold green on this exact head.
