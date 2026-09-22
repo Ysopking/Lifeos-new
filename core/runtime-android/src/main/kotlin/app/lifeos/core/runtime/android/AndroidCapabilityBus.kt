@@ -1,0 +1,327 @@
+package app.lifeos.core.runtime.android
+
+import app.lifeos.core.runtime.capability.CapabilityDescriptor
+import app.lifeos.core.runtime.capability.CapabilityId
+import app.lifeos.core.runtime.capability.CapabilityProviderCatalog
+import app.lifeos.core.runtime.policy.OwnerEffectType
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+
+enum class AndroidCapabilityRiskClass {
+    LOW,
+    MEDIUM,
+    HIGH,
+    CRITICAL,
+}
+
+enum class AndroidCapabilityReversibility {
+    REVERSIBLE,
+    COMPENSATABLE,
+    IRREVERSIBLE,
+}
+
+enum class AndroidPermissionKind {
+    RUNTIME_PERMISSION,
+    SPECIAL_ACCESS,
+    MANIFEST_DECLARATION,
+}
+
+data class AndroidPermissionRequirement(
+    val kind: AndroidPermissionKind,
+    val name: String,
+) {
+    init {
+        require(name.isNotBlank()) { "Android permission requirement must not be blank" }
+        require('\r' !in name && '\n' !in name) {
+            "Android permission requirement must be single-line"
+        }
+    }
+
+    val key: String = kind.name + ":" + name
+}
+
+enum class AndroidRecoverySemantics {
+    NONE,
+    RETRY_SAFE,
+    IDEMPOTENT_REPLAY,
+    COMPENSATING_ACTION,
+    MANUAL_REVIEW,
+}
+
+data class AndroidCapabilityBinding(
+    val descriptor: CapabilityDescriptor,
+    val providerVersion: String,
+    val requiredOwnerEffect: OwnerEffectType?,
+    val ownerScope: String,
+    val permissions: List<AndroidPermissionRequirement>,
+    val riskClass: AndroidCapabilityRiskClass,
+    val reversibility: AndroidCapabilityReversibility,
+    val recoverySemantics: AndroidRecoverySemantics,
+    val expectedOutcomeContract: String,
+) {
+    init {
+        require(providerVersion.isNotBlank())
+        require(ownerScope.isNotBlank())
+        require(expectedOutcomeContract.isNotBlank())
+        require(
+            permissions == permissions
+                .distinctBy { it.key }
+                .sortedWith(compareBy({ it.kind.ordinal }, { it.name }))
+        ) {
+            "Android capability permissions must be distinct and canonical"
+        }
+        if (reversibility == AndroidCapabilityReversibility.IRREVERSIBLE) {
+            require(riskClass != AndroidCapabilityRiskClass.LOW) {
+                "Irreversible Android capability cannot be LOW risk"
+            }
+        }
+    }
+
+    val capabilityId: CapabilityId
+        get() = descriptor.capabilityId
+
+    val providerId: String
+        get() = descriptor.providerId
+
+    fun matches(descriptor: CapabilityDescriptor): Boolean =
+        capabilityId == descriptor.capabilityId &&
+            providerId == descriptor.providerId &&
+            this.descriptor.providerType == descriptor.providerType &&
+            this.descriptor.contract == descriptor.contract
+
+    val executionAuthority: Boolean
+        get() = false
+
+    val permissionGrantAuthority: Boolean
+        get() = false
+
+    val ownerPolicyAuthority: Boolean
+        get() = false
+
+    fun fingerprint(): String = androidCapabilityFingerprint(
+        "android-capability-binding/v1",
+        descriptor.capabilityId.value,
+        descriptor.providerId,
+        providerVersion,
+        descriptor.providerType.name,
+        descriptor.contract.requiredInputs.sorted().joinToString("\u001f"),
+        descriptor.contract.outputs.sorted().joinToString("\u001f"),
+        requiredOwnerEffect?.name.orEmpty(),
+        ownerScope,
+        permissions.joinToString("\u001f") { it.key },
+        riskClass.name,
+        reversibility.name,
+        recoverySemantics.name,
+        expectedOutcomeContract,
+    )
+}
+
+data class AndroidCapabilityRequest(
+    val capabilityId: CapabilityId,
+    val availableInputs: Set<String>,
+    val requiredOutputs: Set<String>,
+    val resource: String,
+    val scope: String,
+    val providerId: String? = null,
+) {
+    init {
+        require(availableInputs.none { it.isBlank() })
+        require(requiredOutputs.none { it.isBlank() })
+        require(resource.isNotBlank())
+        require(scope.isNotBlank())
+        require(providerId == null || providerId.isNotBlank())
+    }
+
+    fun fingerprint(): String = androidCapabilityFingerprint(
+        "android-capability-request/v1",
+        capabilityId.value,
+        availableInputs.sorted().joinToString("\u001f"),
+        requiredOutputs.sorted().joinToString("\u001f"),
+        resource,
+        scope,
+        providerId.orEmpty(),
+    )
+}
+
+data class AndroidPermissionSnapshot(
+    val granted: Set<AndroidPermissionRequirement>,
+) {
+    init {
+        require(granted.map { it.key }.distinct().size == granted.size)
+    }
+
+    fun missing(
+        required: Collection<AndroidPermissionRequirement>,
+    ): List<AndroidPermissionRequirement> =
+        required.filterNot(granted::contains)
+            .distinctBy { it.key }
+            .sortedWith(compareBy({ it.kind.ordinal }, { it.name }))
+}
+
+data class AndroidCapabilityDispatchPlan(
+    val requestFingerprint: String,
+    val binding: AndroidCapabilityBinding,
+) {
+    init {
+        require(requestFingerprint.matches(Regex("[0-9a-f]{64}")))
+    }
+
+    val capabilityId: CapabilityId
+        get() = binding.capabilityId
+
+    val providerId: String
+        get() = binding.providerId
+
+    val executionAuthority: Boolean
+        get() = false
+
+    val permissionGrantAuthority: Boolean
+        get() = false
+
+    val ownerPolicyAuthority: Boolean
+        get() = false
+
+    fun fingerprint(): String = androidCapabilityFingerprint(
+        "android-capability-dispatch-plan/v1",
+        requestFingerprint,
+        binding.fingerprint(),
+    )
+}
+
+sealed interface AndroidCapabilityResolution {
+    data class Ready(
+        val plan: AndroidCapabilityDispatchPlan,
+    ) : AndroidCapabilityResolution
+
+    data class CapabilityUnavailable(
+        val capabilityId: CapabilityId,
+        val candidateProviderIds: List<String>,
+    ) : AndroidCapabilityResolution {
+        init {
+            require(candidateProviderIds == candidateProviderIds.distinct().sorted())
+        }
+    }
+
+    data class ContractMismatch(
+        val capabilityId: CapabilityId,
+        val candidateProviderIds: List<String>,
+    ) : AndroidCapabilityResolution {
+        init {
+            require(candidateProviderIds == candidateProviderIds.distinct().sorted())
+            require(candidateProviderIds.isNotEmpty())
+        }
+    }
+
+    data class PermissionsMissing(
+        val binding: AndroidCapabilityBinding,
+        val missing: List<AndroidPermissionRequirement>,
+    ) : AndroidCapabilityResolution {
+        init {
+            require(missing.isNotEmpty())
+            require(
+                missing == missing.distinctBy { it.key }
+                    .sortedWith(compareBy({ it.kind.ordinal }, { it.name }))
+            )
+        }
+    }
+}
+
+/**
+ * B405 deterministic Android capability routing.
+ *
+ * The bus resolves already-registered capability providers into a typed dispatch plan. It performs
+ * no Android API call, no permission request, no Owner Policy decision and no side effect. B406+
+ * action runtimes must compose the returned plan with the existing JIT OwnerPolicyEffectGate and
+ * platform permission checks at the exact productive exposure boundary.
+ */
+class AndroidCapabilityBus(
+    private val providerCatalog: CapabilityProviderCatalog,
+    bindings: Collection<AndroidCapabilityBinding>,
+) {
+    private val bindingsByProvider = bindings
+        .associateBy { it.capabilityId to it.providerId }
+        .also { indexed ->
+            require(indexed.size == bindings.size) {
+                "Android capability bindings must be unique per capability/provider"
+            }
+        }
+
+    suspend fun resolve(
+        request: AndroidCapabilityRequest,
+        permissions: AndroidPermissionSnapshot,
+    ): AndroidCapabilityResolution {
+        val providers = providerCatalog.providersFor(
+            capabilityId = request.capabilityId,
+            includeUnavailable = false,
+        )
+        val requestedProviders = providers
+            .filter { request.providerId == null || it.providerId == request.providerId }
+
+        if (requestedProviders.isEmpty()) {
+            return AndroidCapabilityResolution.CapabilityUnavailable(
+                capabilityId = request.capabilityId,
+                candidateProviderIds = providers.map { it.providerId }.distinct().sorted(),
+            )
+        }
+
+        val contractCompatible = requestedProviders.filter { descriptor ->
+            request.availableInputs.containsAll(descriptor.contract.requiredInputs) &&
+                descriptor.contract.outputs.containsAll(request.requiredOutputs)
+        }
+        if (contractCompatible.isEmpty()) {
+            return AndroidCapabilityResolution.ContractMismatch(
+                capabilityId = request.capabilityId,
+                candidateProviderIds = requestedProviders.map { it.providerId }.distinct().sorted(),
+            )
+        }
+
+        val binding = contractCompatible
+            .asSequence()
+            .mapNotNull { descriptor ->
+                bindingsByProvider[descriptor.capabilityId to descriptor.providerId]
+                    ?.takeIf { it.matches(descriptor) }
+            }
+            .firstOrNull()
+            ?: return AndroidCapabilityResolution.CapabilityUnavailable(
+                capabilityId = request.capabilityId,
+                candidateProviderIds = contractCompatible.map { it.providerId }.distinct().sorted(),
+            )
+
+        val missing = permissions.missing(binding.permissions)
+        if (missing.isNotEmpty()) {
+            return AndroidCapabilityResolution.PermissionsMissing(
+                binding = binding,
+                missing = missing,
+            )
+        }
+
+        return AndroidCapabilityResolution.Ready(
+            AndroidCapabilityDispatchPlan(
+                requestFingerprint = request.fingerprint(),
+                binding = binding,
+            )
+        )
+    }
+}
+
+private fun androidCapabilityFingerprint(
+    domain: String,
+    vararg parts: String,
+): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    fun update(value: String) {
+        val bytes = value.toByteArray(StandardCharsets.UTF_8)
+        digest.update(
+            byteArrayOf(
+                (bytes.size ushr 24).toByte(),
+                (bytes.size ushr 16).toByte(),
+                (bytes.size ushr 8).toByte(),
+                bytes.size.toByte(),
+            )
+        )
+        digest.update(bytes)
+    }
+    update(domain)
+    parts.forEach(::update)
+    return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+}
