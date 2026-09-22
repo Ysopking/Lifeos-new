@@ -3,6 +3,8 @@
 Base prepared head: `6ec54ab44ffe4099402f28134b494ed71bf32eef`
 Branch: `b407-calendar-contact-runtime-v1`
 
+Exact-main promotion validation after B406 GOLD.
+
 ## Implementation status
 
 The plan has now been promoted to a stacked implementation on B406:
