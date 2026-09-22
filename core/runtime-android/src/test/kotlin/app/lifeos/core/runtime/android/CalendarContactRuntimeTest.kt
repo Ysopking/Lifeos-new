@@ -269,7 +269,11 @@ class CalendarContactRuntimeTest {
             calendarRows.filter { row ->
                 (query.fromMillis == null || row.state.endMillis >= query.fromMillis) &&
                     (query.untilMillis == null || row.state.startMillis <= query.untilMillis)
-            }.take(query.maxResults)
+            }.sortedWith(
+                compareBy<CalendarEventRevision> { it.state.startMillis }
+                    .thenBy { it.ref.calendarId }
+                    .thenBy { it.ref.eventId }
+            ).take(query.maxResults)
 
         override suspend fun createCalendarEvent(
             request: CalendarCreateRequest,
@@ -298,7 +302,11 @@ class CalendarContactRuntimeTest {
         ): List<ContactRevision> =
             contactRows.filter {
                 it.state.displayName.contains(query.normalized, ignoreCase = true)
-            }.take(query.maxResults)
+            }.sortedWith(
+                compareBy<ContactRevision> { it.state.displayName.lowercase() }
+                    .thenBy { it.ref.contactId }
+                    .thenBy { it.ref.rawContactId }
+            ).take(query.maxResults)
 
         override suspend fun createContact(
             request: ContactCreateRequest,
