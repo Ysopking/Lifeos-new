@@ -92,6 +92,25 @@ class PermissionProfileTest {
     }
 
     @Test
+    fun `productive PIM writes stay separate from initial data reads`() {
+        val profile = PrivatePermissionProfiles.pimWrite(
+            writeCalendarPermission = "android.permission.WRITE_CALENDAR",
+            writeContactsPermission = "android.permission.WRITE_CONTACTS",
+        )
+
+        assertEquals(PermissionProfileId.PIM_WRITE, profile.id)
+        assertEquals(
+            setOf(
+                "android.permission.WRITE_CALENDAR",
+                "android.permission.WRITE_CONTACTS",
+            ),
+            profile.runtimePermissions,
+        )
+        assertFalse("android.permission.READ_CALENDAR" in profile.runtimePermissions)
+        assertFalse("android.permission.READ_CONTACTS" in profile.runtimePermissions)
+    }
+
+    @Test
     fun `device access convergence ignores unsupported special access as missing`() {
         val snapshot = DeviceAccessSnapshot(
             runtimePermissionsMissing = emptyList(),

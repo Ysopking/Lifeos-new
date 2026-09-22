@@ -4,6 +4,7 @@ internal enum class PermissionProfileId {
     INITIAL_DATA,
     INTERACTION,
     BROAD_FILES,
+    PIM_WRITE,
     ASSISTANT_ACCESS,
     INFRASTRUCTURE,
 }
@@ -149,6 +150,16 @@ internal object PrivatePermissionProfiles {
             manifestPermissions = setOf(manageExternalStoragePermission),
             rationaleTags = setOf("owner-confirmed-broad-files"),
         )
+
+    fun pimWrite(
+        writeCalendarPermission: String,
+        writeContactsPermission: String,
+    ): PermissionProfile = PermissionProfile(
+        id = PermissionProfileId.PIM_WRITE,
+        runtimePermissions = setOf(writeCalendarPermission, writeContactsPermission),
+        manifestPermissions = setOf(writeCalendarPermission, writeContactsPermission),
+        rationaleTags = setOf("owner-confirmed-pim-write", "productive-calendar-contact"),
+    )
 
     fun assistantAccess(): PermissionProfile =
         PermissionProfile(

@@ -30,6 +30,8 @@ value class OwnerPolicyGrantId(val value: String) {
 
 enum class OwnerEffectType {
     FILE_WRITE,
+    CALENDAR_WRITE,
+    CONTACT_WRITE,
     NETWORK_ACCESS,
     REMINDER,
     COMMUNICATION,

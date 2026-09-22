@@ -27,6 +27,26 @@ internal class PrivatePermissionController(
         )
     }
 
+    /**
+     * Productive calendar/contact writes are requested only on demand.
+     *
+     * They intentionally stay out of the startup runtimePermissionRequestPlan so observation-only
+     * startup never expands into productive PIM authority merely because B407 is present.
+     */
+    fun pimWritePermissionRequestPlan(): RuntimePermissionRequestPlan {
+        if (!startupReady()) {
+            return RuntimePermissionRequestPlan(emptySet(), emptyList())
+        }
+        val profile = pimWriteProfile()
+        val missing = evaluate(profile).missingRuntimePermissions
+            .distinct()
+            .sorted()
+        return RuntimePermissionRequestPlan(
+            profileIds = setOf(profile.id),
+            permissions = missing,
+        )
+    }
+
     fun specialAccessRequestPlan(): SpecialAccessRequestPlan {
         if (!startupReady()) {
             return SpecialAccessRequestPlan(emptySet(), emptyList())
@@ -92,6 +112,12 @@ internal class PrivatePermissionController(
     private fun broadFilesProfile(): PermissionProfile =
         PrivatePermissionProfiles.broadFiles(
             manageExternalStoragePermission = Manifest.permission.MANAGE_EXTERNAL_STORAGE,
+        )
+
+    private fun pimWriteProfile(): PermissionProfile =
+        PrivatePermissionProfiles.pimWrite(
+            writeCalendarPermission = Manifest.permission.WRITE_CALENDAR,
+            writeContactsPermission = Manifest.permission.WRITE_CONTACTS,
         )
 
     private fun assistantAccessProfile(): PermissionProfile =
