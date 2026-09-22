@@ -506,3 +506,284 @@ class ArtifactCoordinator(
         append('"')
     }
 }
+
+enum class LivingArtifactRefreshState {
+    STABLE,
+    UPDATE_CANDIDATE,
+    BLOCKED,
+}
+
+data class LivingArtifactRefreshCandidate(
+    val parentRevision: ArtifactRevisionRef,
+    val currentSemanticPlanFingerprint: String,
+    val nextSemanticPlanFingerprint: String,
+    val currentWorldRevision: Long,
+    val nextWorldRevision: Long,
+    val mediaType: String,
+    val currentAssetSha256: String,
+    val nextAssetSha256: String,
+    val addedClaimIds: List<String>,
+    val removedClaimIds: List<String>,
+    val changedClaimIds: List<String>,
+    val fingerprint: String,
+) {
+    init {
+        require(currentSemanticPlanFingerprint.matches(SHA_256_B448))
+        require(nextSemanticPlanFingerprint.matches(SHA_256_B448))
+        require(currentWorldRevision >= 0L)
+        require(nextWorldRevision > currentWorldRevision)
+        require(mediaType.isNotBlank())
+        require(currentAssetSha256.matches(SHA_256_B448))
+        require(nextAssetSha256.matches(SHA_256_B448))
+        require(addedClaimIds == addedClaimIds.distinct().sorted())
+        require(removedClaimIds == removedClaimIds.distinct().sorted())
+        require(changedClaimIds == changedClaimIds.distinct().sorted())
+        require(addedClaimIds.isNotEmpty() || removedClaimIds.isNotEmpty() || changedClaimIds.isNotEmpty())
+        require(
+            fingerprint == livingArtifactCandidateFingerprint(
+                parentRevision,
+                currentSemanticPlanFingerprint,
+                nextSemanticPlanFingerprint,
+                currentWorldRevision,
+                nextWorldRevision,
+                mediaType,
+                currentAssetSha256,
+                nextAssetSha256,
+                addedClaimIds,
+                removedClaimIds,
+                changedClaimIds,
+            )
+        )
+    }
+
+    val finalizationAuthority: Boolean get() = false
+    val publicationAuthority: Boolean get() = false
+    val overwriteAuthority: Boolean get() = false
+    val factualAuthority: Boolean get() = false
+    val ownerPolicyAuthority: Boolean get() = false
+}
+
+data class LivingArtifactRefreshReport(
+    val state: LivingArtifactRefreshState,
+    val reasonCode: String,
+    val candidate: LivingArtifactRefreshCandidate?,
+    val fingerprint: String,
+) {
+    init {
+        require(reasonCode.isNotBlank())
+        require((state == LivingArtifactRefreshState.UPDATE_CANDIDATE) == (candidate != null))
+        require(
+            fingerprint == livingArtifactReportFingerprint(
+                state,
+                reasonCode,
+                candidate?.fingerprint,
+            )
+        )
+    }
+
+    val automaticFinalizationAllowed: Boolean get() = false
+    val automaticPublicationAllowed: Boolean get() = false
+}
+
+/**
+ * B448 turns exact knowledge changes into bounded refresh candidates for already materialized
+ * artifacts.
+ *
+ * The runtime does not rewrite, overwrite, finalize or publish an artifact. It only proves whether
+ * a newer closed semantic plan contains an exact relevant change and, when it does, emits a child
+ * revision candidate bound to the current artifact revision. Productive callers must still render
+ * the next asset, re-run the existing factual/quality gates where applicable, and finalize through
+ * [ArtifactCoordinator] with [LivingArtifactRefreshCandidate.parentRevision].
+ */
+class LivingArtifactRuntime {
+    fun evaluate(
+        currentRevision: ArtifactRevisionRef,
+        currentManifest: ArtifactRevisionManifest,
+        currentPlan: SemanticArtifactPlan,
+        nextPlan: SemanticArtifactPlan,
+        nextAsset: AssetRef,
+    ): LivingArtifactRefreshReport {
+        if (currentManifest.id != currentRevision.revisionId) {
+            return report(
+                LivingArtifactRefreshState.BLOCKED,
+                "current-revision-manifest-mismatch",
+            )
+        }
+        if (currentManifest.semanticPlanFingerprint != currentPlan.fingerprint) {
+            return report(
+                LivingArtifactRefreshState.BLOCKED,
+                "current-semantic-plan-lineage-mismatch",
+            )
+        }
+        val currentAsset = currentManifest.materializedAsset
+            ?: return report(
+                LivingArtifactRefreshState.BLOCKED,
+                "current-artifact-not-materialized",
+            )
+        if (currentAsset.mediaType != nextAsset.mediaType) {
+            return report(
+                LivingArtifactRefreshState.BLOCKED,
+                "living-refresh-media-type-change",
+            )
+        }
+        if (currentPlan.kind != nextPlan.kind) {
+            return report(
+                LivingArtifactRefreshState.BLOCKED,
+                "living-refresh-semantic-kind-change",
+            )
+        }
+        if (currentPlan.unresolvedClaimIds.isNotEmpty()) {
+            return report(
+                LivingArtifactRefreshState.BLOCKED,
+                "current-plan-not-closed",
+            )
+        }
+        if (nextPlan.unresolvedClaimIds.isNotEmpty()) {
+            return report(
+                LivingArtifactRefreshState.BLOCKED,
+                "next-plan-not-closed",
+            )
+        }
+        if (nextPlan.sourceWorldRevision < currentPlan.sourceWorldRevision) {
+            return report(
+                LivingArtifactRefreshState.BLOCKED,
+                "world-revision-regression",
+            )
+        }
+
+        val currentClaims = currentPlan.resolvedClaims().associateBy { it.claimId }
+        val nextClaims = nextPlan.resolvedClaims().associateBy { it.claimId }
+        val added = (nextClaims.keys - currentClaims.keys).sorted()
+        val removed = (currentClaims.keys - nextClaims.keys).sorted()
+        val changed = (currentClaims.keys intersect nextClaims.keys)
+            .filter { claimId ->
+                currentClaims.getValue(claimId).fingerprint !=
+                    nextClaims.getValue(claimId).fingerprint
+            }
+            .sorted()
+        val semanticChanged = added.isNotEmpty() || removed.isNotEmpty() || changed.isNotEmpty()
+
+        if (nextPlan.sourceWorldRevision == currentPlan.sourceWorldRevision) {
+            return if (
+                !semanticChanged &&
+                currentPlan.fingerprint == nextPlan.fingerprint &&
+                currentAsset.sha256 == nextAsset.sha256
+            ) {
+                report(
+                    LivingArtifactRefreshState.STABLE,
+                    "exact-artifact-unchanged",
+                )
+            } else {
+                report(
+                    LivingArtifactRefreshState.BLOCKED,
+                    "same-world-revision-mutation",
+                )
+            }
+        }
+
+        if (!semanticChanged) {
+            return if (currentAsset.sha256 == nextAsset.sha256) {
+                report(
+                    LivingArtifactRefreshState.STABLE,
+                    "world-advanced-no-relevant-semantic-change",
+                )
+            } else {
+                report(
+                    LivingArtifactRefreshState.BLOCKED,
+                    "render-drift-without-semantic-change",
+                )
+            }
+        }
+
+        val candidate = LivingArtifactRefreshCandidate(
+            parentRevision = currentRevision,
+            currentSemanticPlanFingerprint = currentPlan.fingerprint,
+            nextSemanticPlanFingerprint = nextPlan.fingerprint,
+            currentWorldRevision = currentPlan.sourceWorldRevision,
+            nextWorldRevision = nextPlan.sourceWorldRevision,
+            mediaType = nextAsset.mediaType,
+            currentAssetSha256 = currentAsset.sha256,
+            nextAssetSha256 = nextAsset.sha256,
+            addedClaimIds = added,
+            removedClaimIds = removed,
+            changedClaimIds = changed,
+            fingerprint = livingArtifactCandidateFingerprint(
+                currentRevision,
+                currentPlan.fingerprint,
+                nextPlan.fingerprint,
+                currentPlan.sourceWorldRevision,
+                nextPlan.sourceWorldRevision,
+                nextAsset.mediaType,
+                currentAsset.sha256,
+                nextAsset.sha256,
+                added,
+                removed,
+                changed,
+            ),
+        )
+        return report(
+            LivingArtifactRefreshState.UPDATE_CANDIDATE,
+            "knowledge-change-refresh-candidate",
+            candidate,
+        )
+    }
+
+    private fun report(
+        state: LivingArtifactRefreshState,
+        reasonCode: String,
+        candidate: LivingArtifactRefreshCandidate? = null,
+    ): LivingArtifactRefreshReport =
+        LivingArtifactRefreshReport(
+            state = state,
+            reasonCode = reasonCode,
+            candidate = candidate,
+            fingerprint = livingArtifactReportFingerprint(
+                state,
+                reasonCode,
+                candidate?.fingerprint,
+            ),
+        )
+}
+
+private fun livingArtifactCandidateFingerprint(
+    parentRevision: ArtifactRevisionRef,
+    currentSemanticPlanFingerprint: String,
+    nextSemanticPlanFingerprint: String,
+    currentWorldRevision: Long,
+    nextWorldRevision: Long,
+    mediaType: String,
+    currentAssetSha256: String,
+    nextAssetSha256: String,
+    addedClaimIds: List<String>,
+    removedClaimIds: List<String>,
+    changedClaimIds: List<String>,
+): String = ArtifactFingerprints.fingerprint(
+    "living-artifact-refresh-candidate/v1",
+    parentRevision.artifactId.value,
+    parentRevision.revisionId.value,
+    parentRevision.photonId.value,
+    currentSemanticPlanFingerprint,
+    nextSemanticPlanFingerprint,
+    currentWorldRevision.toString(),
+    nextWorldRevision.toString(),
+    mediaType,
+    currentAssetSha256,
+    nextAssetSha256,
+    addedClaimIds.joinToString("\u001f"),
+    removedClaimIds.joinToString("\u001f"),
+    changedClaimIds.joinToString("\u001f"),
+)
+
+private fun livingArtifactReportFingerprint(
+    state: LivingArtifactRefreshState,
+    reasonCode: String,
+    candidateFingerprint: String?,
+): String = ArtifactFingerprints.fingerprint(
+    "living-artifact-refresh-report/v1",
+    state.name,
+    reasonCode,
+    candidateFingerprint.orEmpty(),
+)
+
+private val SHA_256_B448 = Regex("[0-9a-f]{64}")
+
