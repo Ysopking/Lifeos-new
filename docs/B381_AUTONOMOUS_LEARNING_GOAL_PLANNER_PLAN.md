@@ -89,3 +89,6 @@ MOD B381 docs only otherwise unless compilation requires a direct existing-modul
 ## Authority invariant
 
 `knowledge gap != learning goal candidate != curriculum priority != durable goal admission != action authority`
+
+
+Validation trigger: exact-main B411 GOLD successor.
