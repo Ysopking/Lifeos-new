@@ -119,10 +119,10 @@ test "$deepsearch_main_count" -eq 17 ||
 test "$deepsearch_test_count" -eq 10 ||
   fail "runtime-deepsearch-test-source-count:$deepsearch_test_count"
 
-test "$buildstudio_main_count" -eq 11 ||
+test "$buildstudio_main_count" -eq 12 ||
   fail "runtime-buildstudio-main-source-count:$buildstudio_main_count"
 
-test "$buildstudio_test_count" -eq 5 ||
+test "$buildstudio_test_count" -eq 6 ||
   fail "runtime-buildstudio-test-source-count:$buildstudio_test_count"
 
 test "$personal_main_count" -eq 6 ||
