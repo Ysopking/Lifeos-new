@@ -53,7 +53,8 @@
     "core/runtime-buildstudio/build.gradle.kts": [
       ":core:field",
       ":core:model",
-      ":core:runtime-contracts"
+      ":core:runtime-contracts",
+      ":core:runtime-web"
     ],
     "core/runtime-personal/build.gradle.kts": [
       ":core:language",
