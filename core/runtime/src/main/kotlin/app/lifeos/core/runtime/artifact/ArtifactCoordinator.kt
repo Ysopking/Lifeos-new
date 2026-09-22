@@ -8,6 +8,7 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.PhotonRepository
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
+import app.lifeos.core.model.DocumentStructurePlan
 import app.lifeos.core.model.SemanticArtifactPlan
 import app.lifeos.core.runtime.cognition.CognitivePriority
 import app.lifeos.core.runtime.cognition.CognitiveWorkBudget
@@ -786,4 +787,291 @@ private fun livingArtifactReportFingerprint(
 )
 
 private val SHA_256_B448 = Regex("[0-9a-f]{64}")
+
+data class CrossArtifactClaimReuse(
+    val sourceRevision: ArtifactRevisionRef,
+    val sourceSemanticPlanFingerprint: String,
+    val targetSemanticPlanFingerprint: String,
+    val sourceWorldRevision: Long,
+    val targetWorldRevision: Long,
+    val claimId: String,
+    val claimFingerprint: String,
+    val evidenceStableKeys: List<String>,
+    val fingerprint: String,
+) {
+    init {
+        require(sourceSemanticPlanFingerprint.matches(SHA_256_B449))
+        require(targetSemanticPlanFingerprint.matches(SHA_256_B449))
+        require(sourceWorldRevision >= 0L)
+        require(targetWorldRevision >= 0L)
+        require(claimId.isNotBlank())
+        require(claimFingerprint.matches(SHA_256_B449))
+        require(evidenceStableKeys.isNotEmpty())
+        require(evidenceStableKeys == evidenceStableKeys.distinct().sorted())
+        require(
+            fingerprint == crossArtifactClaimReuseFingerprint(
+                sourceRevision,
+                sourceSemanticPlanFingerprint,
+                targetSemanticPlanFingerprint,
+                sourceWorldRevision,
+                targetWorldRevision,
+                claimId,
+                claimFingerprint,
+                evidenceStableKeys,
+            )
+        )
+    }
+
+    val factualAuthority: Boolean get() = false
+    val proseReuseAuthority: Boolean get() = false
+    val finalizationAuthority: Boolean get() = false
+}
+
+data class CrossArtifactStructureHint(
+    val sourceStructureFingerprint: String,
+    val coveredClaimIds: List<String>,
+    val sectionClaimIds: List<List<String>>,
+    val fingerprint: String,
+) {
+    init {
+        require(sourceStructureFingerprint.matches(SHA_256_B449))
+        require(coveredClaimIds.isNotEmpty())
+        require(coveredClaimIds == coveredClaimIds.distinct().sorted())
+        require(sectionClaimIds.isNotEmpty())
+        require(sectionClaimIds.flatten().distinct().sorted() == coveredClaimIds)
+        require(sectionClaimIds.all { section -> section.isNotEmpty() && section == section.distinct().sorted() })
+        require(
+            fingerprint == crossArtifactStructureHintFingerprint(
+                sourceStructureFingerprint,
+                coveredClaimIds,
+                sectionClaimIds,
+            )
+        )
+    }
+
+    val targetStructureAuthority: Boolean get() = false
+    val proseAuthority: Boolean get() = false
+    val finalizationAuthority: Boolean get() = false
+}
+
+data class CrossArtifactReusePlan(
+    val sourceRevision: ArtifactRevisionRef,
+    val sourceSemanticPlanFingerprint: String,
+    val targetSemanticPlanFingerprint: String,
+    val requestedClaimIds: List<String>,
+    val bindings: List<CrossArtifactClaimReuse>,
+    val unreusableClaimIds: List<String>,
+    val structureHint: CrossArtifactStructureHint?,
+    val fingerprint: String,
+) {
+    init {
+        require(sourceSemanticPlanFingerprint.matches(SHA_256_B449))
+        require(targetSemanticPlanFingerprint.matches(SHA_256_B449))
+        require(requestedClaimIds.isNotEmpty())
+        require(requestedClaimIds == requestedClaimIds.distinct().sorted())
+        require(bindings == bindings.distinctBy { it.claimId }.sortedBy { it.claimId })
+        require(unreusableClaimIds == unreusableClaimIds.distinct().sorted())
+        require((bindings.map { it.claimId }.toSet() intersect unreusableClaimIds.toSet()).isEmpty())
+        require(bindings.map { it.claimId }.toSet() + unreusableClaimIds.toSet() == requestedClaimIds.toSet())
+        require(
+            fingerprint == crossArtifactReusePlanFingerprint(
+                sourceRevision,
+                sourceSemanticPlanFingerprint,
+                targetSemanticPlanFingerprint,
+                requestedClaimIds,
+                bindings,
+                unreusableClaimIds,
+                structureHint,
+            )
+        )
+    }
+
+    val automaticCopyAllowed: Boolean get() = false
+    val generatedTextEvidenceAuthority: Boolean get() = false
+    val targetStructureAuthority: Boolean get() = false
+    val finalizationAuthority: Boolean get() = false
+}
+
+/**
+ * B449 reuses only exact semantic knowledge and exact non-prose structure lineage across artifacts.
+ *
+ * Generated prose is never treated as evidence. A claim is reusable only when source and target
+ * contain the same exact claim fingerprint, which includes canonical content, confidence and exact
+ * Photon revision evidence. Structure can be emitted only as a non-authoritative hint when its
+ * exact covered claim set is completely reusable.
+ */
+class CrossArtifactKnowledgeReusePlanner {
+    fun plan(
+        sourceRevision: ArtifactRevisionRef,
+        sourceManifest: ArtifactRevisionManifest,
+        sourcePlan: SemanticArtifactPlan,
+        targetPlan: SemanticArtifactPlan,
+        requestedClaimIds: Collection<String> = targetPlan.resolvedClaims().map { it.claimId },
+        sourceStructure: DocumentStructurePlan? = null,
+    ): CrossArtifactReusePlan {
+        require(sourceManifest.id == sourceRevision.revisionId) {
+            "B449 source revision manifest does not match exact source revision"
+        }
+        require(sourceManifest.semanticPlanFingerprint == sourcePlan.fingerprint) {
+            "B449 source artifact semantic plan lineage mismatch"
+        }
+        require(sourcePlan.unresolvedClaimIds.isEmpty()) {
+            "B449 refuses source artifacts with unresolved claims"
+        }
+        require(targetPlan.unresolvedClaimIds.isEmpty()) {
+            "B449 refuses targets with unresolved claims"
+        }
+
+        val requested = requestedClaimIds
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct()
+            .sorted()
+        require(requested.isNotEmpty()) {
+            "B449 requires at least one target claim"
+        }
+
+        val sourceClaims = sourcePlan.resolvedClaims().associateBy { it.claimId }
+        val targetClaims = targetPlan.resolvedClaims().associateBy { it.claimId }
+        require(requested.all { it in targetClaims }) {
+            "B449 requested claim must exist in exact target semantic plan"
+        }
+
+        val bindings = requested.mapNotNull { claimId ->
+            val source = sourceClaims[claimId] ?: return@mapNotNull null
+            val target = targetClaims.getValue(claimId)
+            if (source.fingerprint != target.fingerprint) return@mapNotNull null
+
+            val evidence = source.evidence
+                .map { it.stableKey }
+                .distinct()
+                .sorted()
+            CrossArtifactClaimReuse(
+                sourceRevision = sourceRevision,
+                sourceSemanticPlanFingerprint = sourcePlan.fingerprint,
+                targetSemanticPlanFingerprint = targetPlan.fingerprint,
+                sourceWorldRevision = sourcePlan.sourceWorldRevision,
+                targetWorldRevision = targetPlan.sourceWorldRevision,
+                claimId = claimId,
+                claimFingerprint = source.fingerprint,
+                evidenceStableKeys = evidence,
+                fingerprint = crossArtifactClaimReuseFingerprint(
+                    sourceRevision,
+                    sourcePlan.fingerprint,
+                    targetPlan.fingerprint,
+                    sourcePlan.sourceWorldRevision,
+                    targetPlan.sourceWorldRevision,
+                    claimId,
+                    source.fingerprint,
+                    evidence,
+                ),
+            )
+        }.sortedBy { it.claimId }
+
+        val reusableIds = bindings.map { it.claimId }.toSet()
+        val unreusable = requested.filterNot { it in reusableIds }.sorted()
+        val structureHint = sourceStructure?.let { structure ->
+            require(structure.semanticPlanFingerprint == sourcePlan.fingerprint) {
+                "B449 source structure does not belong to exact source semantic plan"
+            }
+            val covered = structure.coveredClaimIds.sorted()
+            if (
+                covered == requested &&
+                covered.all { it in reusableIds }
+            ) {
+                val sections = structure.sections
+                    .sortedBy { it.ordinal }
+                    .map { it.claimIds.sorted() }
+                CrossArtifactStructureHint(
+                    sourceStructureFingerprint = structure.fingerprint,
+                    coveredClaimIds = covered,
+                    sectionClaimIds = sections,
+                    fingerprint = crossArtifactStructureHintFingerprint(
+                        structure.fingerprint,
+                        covered,
+                        sections,
+                    ),
+                )
+            } else {
+                null
+            }
+        }
+
+        return CrossArtifactReusePlan(
+            sourceRevision = sourceRevision,
+            sourceSemanticPlanFingerprint = sourcePlan.fingerprint,
+            targetSemanticPlanFingerprint = targetPlan.fingerprint,
+            requestedClaimIds = requested,
+            bindings = bindings,
+            unreusableClaimIds = unreusable,
+            structureHint = structureHint,
+            fingerprint = crossArtifactReusePlanFingerprint(
+                sourceRevision,
+                sourcePlan.fingerprint,
+                targetPlan.fingerprint,
+                requested,
+                bindings,
+                unreusable,
+                structureHint,
+            ),
+        )
+    }
+}
+
+private fun crossArtifactClaimReuseFingerprint(
+    sourceRevision: ArtifactRevisionRef,
+    sourceSemanticPlanFingerprint: String,
+    targetSemanticPlanFingerprint: String,
+    sourceWorldRevision: Long,
+    targetWorldRevision: Long,
+    claimId: String,
+    claimFingerprint: String,
+    evidenceStableKeys: List<String>,
+): String = ArtifactFingerprints.fingerprint(
+    "cross-artifact-claim-reuse/v1",
+    sourceRevision.artifactId.value,
+    sourceRevision.revisionId.value,
+    sourceRevision.photonId.value,
+    sourceSemanticPlanFingerprint,
+    targetSemanticPlanFingerprint,
+    sourceWorldRevision.toString(),
+    targetWorldRevision.toString(),
+    claimId,
+    claimFingerprint,
+    evidenceStableKeys.joinToString("\u001f"),
+)
+
+private fun crossArtifactStructureHintFingerprint(
+    sourceStructureFingerprint: String,
+    coveredClaimIds: List<String>,
+    sectionClaimIds: List<List<String>>,
+): String = ArtifactFingerprints.fingerprint(
+    "cross-artifact-structure-hint/v1",
+    sourceStructureFingerprint,
+    coveredClaimIds.joinToString("\u001f"),
+    *sectionClaimIds.map { it.joinToString("\u001f") }.toTypedArray(),
+)
+
+private fun crossArtifactReusePlanFingerprint(
+    sourceRevision: ArtifactRevisionRef,
+    sourceSemanticPlanFingerprint: String,
+    targetSemanticPlanFingerprint: String,
+    requestedClaimIds: List<String>,
+    bindings: List<CrossArtifactClaimReuse>,
+    unreusableClaimIds: List<String>,
+    structureHint: CrossArtifactStructureHint?,
+): String = ArtifactFingerprints.fingerprint(
+    "cross-artifact-reuse-plan/v1",
+    sourceRevision.artifactId.value,
+    sourceRevision.revisionId.value,
+    sourceRevision.photonId.value,
+    sourceSemanticPlanFingerprint,
+    targetSemanticPlanFingerprint,
+    requestedClaimIds.joinToString("\u001f"),
+    unreusableClaimIds.joinToString("\u001f"),
+    structureHint?.fingerprint.orEmpty(),
+    *bindings.map { it.fingerprint }.toTypedArray(),
+)
+
+private val SHA_256_B449 = Regex("[0-9a-f]{64}")
 
