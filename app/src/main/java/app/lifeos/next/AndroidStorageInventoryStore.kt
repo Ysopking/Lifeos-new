@@ -86,7 +86,7 @@ internal class AndroidStorageInventoryStore(
     DATABASE_NAME,
     null,
     DATABASE_VERSION,
-), StorageChangeJournal {
+), StorageChangeJournal, AndroidFileInventoryView {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -368,6 +368,39 @@ internal class AndroidStorageInventoryStore(
         )
     }
 
+    override fun search(
+        query: String,
+        limit: Int,
+    ): List<StorageIndexedFile> {
+        require(query.length <= 1024)
+        require(limit in 1..512)
+        val normalized = query.trim().lowercase()
+        val out = mutableListOf<StorageIndexedFile>()
+        val selection = if (normalized.isBlank()) {
+            null
+        } else {
+            "lower($COL_PATH) LIKE ? ESCAPE '\\\\'"
+        }
+        val args = if (normalized.isBlank()) {
+            null
+        } else {
+            arrayOf("%" + escapeLike(normalized) + "%")
+        }
+        readableDatabase.query(
+            TABLE,
+            COLUMNS,
+            selection,
+            args,
+            null,
+            null,
+            "$COL_VOLUME ASC, $COL_PATH ASC",
+            limit.toString(),
+        ).use { cursor ->
+            while (cursor.moveToNext()) out += cursor.toEntry().asIndexedFile()
+        }
+        return out
+    }
+
     fun exactDuplicateGroups(): List<List<StorageIndexedFile>> {
         val keys = mutableListOf<Pair<Long, String>>()
         readableDatabase.rawQuery(
@@ -610,6 +643,11 @@ internal class AndroidStorageInventoryStore(
 
     private fun android.database.Cursor.getStringOrNull(index: Int): String? =
         if (isNull(index)) null else getString(index)
+
+    private fun escapeLike(value: String): String =
+        value.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
 
     private fun encodePosition(volumeId: String, relativePath: String): String =
         volumeId.length.toString() + ":" + volumeId + relativePath
