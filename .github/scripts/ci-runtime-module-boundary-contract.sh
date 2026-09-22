@@ -18,8 +18,14 @@ test -f core/runtime-buildstudio/build.gradle.kts ||
 test -f core/runtime-personal/build.gradle.kts ||
   fail "runtime-personal-module-missing"
 
+test -f core/runtime-android/build.gradle.kts ||
+  fail "runtime-android-module-missing"
+
 grep -Fq '":core:runtime-contracts"' settings.gradle.kts ||
   fail "runtime-contracts-not-registered"
+
+grep -Fq '":core:runtime-android"' settings.gradle.kts ||
+  fail "runtime-android-not-registered"
 
 grep -Fq 'api(project(":core:runtime-contracts"))' core/runtime/build.gradle.kts ||
   fail "runtime-monolith-contract-edge-missing"
@@ -127,6 +133,9 @@ test "$personal_test_count" -eq 8 ||
 
 grep -Fq ':core:runtime-contracts:test' .github/scripts/ci-core-fast.sh ||
   fail "runtime-contracts-test-gate-missing"
+
+grep -Fq ':core:runtime-android:test' .github/scripts/ci-core-fast.sh ||
+  fail "runtime-android-test-gate-missing"
 
 grep -Fq ':core:runtime-deepsearch:test' .github/scripts/ci-core-fast.sh ||
   fail "runtime-deepsearch-test-gate-missing"

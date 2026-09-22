@@ -12,6 +12,7 @@ include(
     ":core:field",
     ":core:runtime",
     ":core:runtime-contracts",
+    ":core:runtime-android",
     ":core:runtime-web",
     ":core:runtime-deepsearch",
     ":core:runtime-buildstudio",
