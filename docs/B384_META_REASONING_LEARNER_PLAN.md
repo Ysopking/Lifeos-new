@@ -80,3 +80,6 @@ Initial B384 implementation stays as a deterministic pure learner over supplied 
 ## Authority invariant
 
 `strategy use != verified outcome != causal credit != empirical performance != strategy selection != owner utility`
+
+
+Validation note: Exact-main validation trigger; merge requires Core Fast, Android Debug, Android Emulator Recovery, and LIFEOS Product Gold green on this exact head.
