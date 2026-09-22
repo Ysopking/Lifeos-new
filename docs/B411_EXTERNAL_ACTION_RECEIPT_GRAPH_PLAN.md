@@ -96,3 +96,5 @@ NEW `core/data/.../agency/EncryptedExternalActionReceiptGraphRepository.kt`
 ## Authority invariant
 
 `receipt != observation != success != causation`
+
+Validation head is restacked on B410 GOLD main; all four required exact-head gates must pass before merge.
