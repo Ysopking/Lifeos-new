@@ -318,10 +318,14 @@ private fun metrics(text: String): EditMetrics {
 }
 
 private fun canonicalEditText(value: String): String =
-    value.replace("\r\n", "\n").replace('\r', '\n').trim()
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', '\n')
+        .trim()
+        .replace(Regex("[ \\t]+"), " ")
 
 private fun editTextFingerprint(value: String): String =
-    StableCognitiveIds.fingerprint("owner-edit-text/v1", value)
+    StableCognitiveIds.fingerprint("owner-writing-style-text/v1", value)
 
 private fun signal(
     kind: OwnerEditDiffSignalKind,
