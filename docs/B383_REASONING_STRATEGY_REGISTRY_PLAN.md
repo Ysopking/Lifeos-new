@@ -80,3 +80,6 @@ No persistence changes.
 ## Authority invariant
 
 `reasoning strategy descriptor != learned strategy performance != strategy selection != execution != truth`
+
+
+Validation note: Exact-main validation trigger; merge requires Core Fast, Android Debug, Android Emulator Recovery, and LIFEOS Product Gold green on this exact head.
