@@ -14,6 +14,7 @@ dependencies {
     implementation(project(":core:runtime-reasoning"))
     implementation(project(":core:runtime-deepsearch"))
     implementation(project(":core:runtime-personal"))
+    implementation(project(":core:runtime-web"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     testImplementation(kotlin("test-junit"))
 }
