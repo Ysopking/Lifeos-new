@@ -3,6 +3,8 @@
 Base prepared head: `8ec3c5fd744113b5970988745b9d8a370d9ea30d`
 Branch: `b409-notification-action-runtime-v1`
 
+Exact-main promotion trigger after B408 GOLD: c06aae3a7c3228456efe14e6d4bfc5d2859b1358.
+
 ## Pre-implementation audit
 
 1. `LiveNotificationListenerService` already provides owner-enabled notification observation and projects bounded user-visible text into canonical Photons.
