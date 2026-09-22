@@ -346,8 +346,10 @@ class TabularArtifactRenderer {
             }
             require(
                 plan.sheets.single().cells.none { cell ->
+                    val first = cell.value.firstOrNull()
                     (cell.kind == TabularCellKind.HEADER || cell.kind == TabularCellKind.TEXT) &&
-                        cell.value.firstOrNull() in CSV_FORMULA_TRIGGER_CHARS_B446
+                        first != null &&
+                        first in CSV_FORMULA_TRIGGER_CHARS_B446
                 }
             ) {
                 "B446 CSV refuses formula-injection-shaped literal cells"
@@ -562,14 +564,14 @@ private fun xlsxSheetB446(sheet: TabularSheetPlan): String {
                     TabularCellKind.HEADER -> {
                         append("<c r=\"")
                         append(address)
-                        append("\" t=\"inlineStr\" s=\"1\"><is><t>")
+                        append("\" t=\"inlineStr\" s=\"1\"><is><t xml:space=\"preserve\">")
                         append(escapeXmlB446(cell.value))
                         append("</t></is></c>")
                     }
                     TabularCellKind.TEXT -> {
                         append("<c r=\"")
                         append(address)
-                        append("\" t=\"inlineStr\"><is><t>")
+                        append("\" t=\"inlineStr\"><is><t xml:space=\"preserve\">")
                         append(escapeXmlB446(cell.value))
                         append("</t></is></c>")
                     }
