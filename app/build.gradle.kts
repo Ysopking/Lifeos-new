@@ -28,6 +28,7 @@ android {
 dependencies {
     implementation(project(":core:model"))
     implementation(project(":core:runtime"))
+    implementation(project(":core:runtime-android"))
     implementation(project(":core:runtime-deepsearch"))
     implementation(project(":core:runtime-personal"))
     implementation(project(":core:data"))
