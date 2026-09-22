@@ -80,3 +80,6 @@ No new persistence layer.
 ## Authority invariant
 
 `learning-goal value proxy != owner utility != curriculum rank != durable admission != execution`
+
+
+Validation trigger: exact-main B381 GOLD successor.
