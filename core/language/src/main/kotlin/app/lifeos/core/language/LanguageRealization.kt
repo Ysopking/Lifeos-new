@@ -18,6 +18,7 @@ enum class LanguageEpistemicStatus {
     INFERRED,
     QUOTED,
     HYPOTHETICAL,
+    COUNTERFACTUAL,
     UNRESOLVED,
 }
 
@@ -33,9 +34,12 @@ enum class LanguageModalStatus {
     QUESTIONED,
     REQUESTED,
     HYPOTHETICAL,
+    COUNTERFACTUAL,
     QUOTED,
     NEGATED,
     CONDITIONAL,
+    REMEMBERED,
+    PLANNED,
     POSSIBLE,
 }
 
@@ -133,10 +137,21 @@ class LanguageRealizationEngine {
     fun realize(
         utterance: NormalizedUtterance,
         actionGraph: SemanticActionGraph,
+        temporalModalReality: LanguageTemporalModalRealityState =
+            LanguageTemporalModalRealityState.empty(),
     ): LanguageRealizationState {
+        val realityByNode = temporalModalReality.propositions.associateBy { it.nodeId }
+        require(
+            temporalModalReality.propositions.isEmpty() ||
+                realityByNode.keys == actionGraph.nodes.mapTo(linkedSetOf()) { it.id }
+        ) {
+            "Temporal/modal reality does not match semantic action graph"
+        }
         val propositions = actionGraph.nodes
             .sortedBy { it.id.value }
-            .map(::realizeNode)
+            .map { node ->
+                realizeNode(node, realityByNode[node.id])
+            }
 
         return LanguageRealizationState(
             utteranceFingerprint = StableCognitiveIds.fingerprint(
@@ -153,9 +168,10 @@ class LanguageRealizationEngine {
 
     private fun realizeNode(
         node: SemanticActionNode,
+        temporalModal: PropositionTemporalModalState?,
     ): LanguagePropositionRealization {
         val speechAct = node.frame.speechAct.type
-        val modalStatuses = buildSet {
+        val modalStatuses = temporalModal?.modalStatuses ?: buildSet {
             when (speechAct) {
                 SpeechActType.QUESTION ->
                     add(LanguageModalStatus.QUESTIONED)
@@ -202,7 +218,12 @@ class LanguageRealizationEngine {
             LanguageModalStatus.QUOTED in modalStatuses ->
                 LanguageRepresentationLevel.PROJECTED
 
+            LanguageModalStatus.REMEMBERED in modalStatuses ->
+                LanguageRepresentationLevel.HISTORY
+
             LanguageModalStatus.HYPOTHETICAL in modalStatuses ||
+                LanguageModalStatus.COUNTERFACTUAL in modalStatuses ||
+                LanguageModalStatus.PLANNED in modalStatuses ||
                 LanguageModalStatus.QUESTIONED in modalStatuses ||
                 LanguageModalStatus.REQUESTED in modalStatuses ||
                 LanguageModalStatus.CONDITIONAL in modalStatuses ->
@@ -222,6 +243,9 @@ class LanguageRealizationEngine {
         val epistemicStatus = when {
             LanguageModalStatus.QUOTED in modalStatuses ->
                 LanguageEpistemicStatus.QUOTED
+
+            LanguageModalStatus.COUNTERFACTUAL in modalStatuses ->
+                LanguageEpistemicStatus.COUNTERFACTUAL
 
             LanguageModalStatus.HYPOTHETICAL in modalStatuses ->
                 LanguageEpistemicStatus.HYPOTHETICAL
@@ -265,7 +289,8 @@ class LanguageRealizationEngine {
             nodeId = node.id,
             representation = representation,
             epistemicStatus = epistemicStatus,
-            temporalStatus = LanguageTemporalStatus.UNSPECIFIED,
+            temporalStatus =
+                temporalModal?.temporalStatus ?: LanguageTemporalStatus.UNSPECIFIED,
             modalStatuses = modalStatuses,
             speechAct = speechAct,
             groundedReferences = groundedReferences,

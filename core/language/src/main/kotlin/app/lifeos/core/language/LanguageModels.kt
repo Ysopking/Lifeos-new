@@ -199,6 +199,8 @@ data class GoalFrame(
     val propositionGraph: SemanticPropositionGraph = SemanticPropositionGraph.empty(),
     val referenceGrounding: LanguageReferenceGroundingState =
         LanguageReferenceGroundingState.empty(),
+    val temporalModalReality: LanguageTemporalModalRealityState =
+        LanguageTemporalModalRealityState.empty(),
 ) {
     init {
         require(objective.isNotBlank())

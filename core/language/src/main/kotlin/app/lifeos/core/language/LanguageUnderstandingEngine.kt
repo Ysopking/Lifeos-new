@@ -47,6 +47,8 @@ class LanguageUnderstandingEngine(
         SemanticPropositionGraphBuilder(),
     private val worldGroundedReferenceResolver: WorldGroundedReferenceResolver =
         WorldGroundedReferenceResolver(),
+    private val temporalModalRealityEngine: TemporalModalRealityEngine =
+        TemporalModalRealityEngine(),
 ) {
     fun understand(text: String): LanguageUnderstandingResult =
         understand(
@@ -139,9 +141,16 @@ class LanguageUnderstandingEngine(
             frames = predicateFrames,
             references = references,
         )
+        val temporalModalReality = temporalModalRealityEngine.resolve(
+            utterance = utterance,
+            actionGraph = semanticActionGraph,
+            quantityTemporal = quantityTemporal,
+            referenceInstant = context.now,
+        )
         val languageRealization = languageRealizationEngine.realize(
             utterance = utterance,
             actionGraph = semanticActionGraph,
+            temporalModalReality = temporalModalReality,
         )
         val propositionGraph = propositionGraphBuilder.build(
             actionGraph = semanticActionGraph,
@@ -220,6 +229,7 @@ class LanguageUnderstandingEngine(
             languageRealization = languageRealization,
             propositionGraph = propositionGraph,
             referenceGrounding = referenceGrounding,
+            temporalModalReality = temporalModalReality,
         )
         return LanguageUnderstandingResult(
             utterance = utterance,
