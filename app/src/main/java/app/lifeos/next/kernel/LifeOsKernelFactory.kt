@@ -15,6 +15,7 @@ class LifeOsKernelFactory(
     private val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime? = null,
     private val bootReadyMaintenanceTrigger: () -> Unit = {},
     private val authoritativeFieldProcessors: List<AuthoritativeFieldProcessor> = emptyList(),
+    private val personalContextBootBindingSource: PersonalContextBootBindingSource? = null,
 ) {
     fun create(): LifeOsKernel {
         val foundation = KernelFoundationComposition(
@@ -32,6 +33,7 @@ class LifeOsKernelFactory(
         val world = KernelWorldComposition(
             foundation = foundation,
             evolution = evolution,
+            personalContextBootBindingSource = personalContextBootBindingSource,
         ).compose()
 
         val cognition = KernelCognitionComposition(
