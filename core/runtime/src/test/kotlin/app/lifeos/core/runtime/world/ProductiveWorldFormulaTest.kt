@@ -41,6 +41,22 @@ class ProductiveWorldFormulaTest {
     }
 
     @Test
+    fun perceptionBindingParticipatesInCycleFingerprintWithoutChangingLegacyFingerprintPath() {
+        val legacy = cycle(previous = null, id = "cycle-legacy")
+        val bound = legacy.copy(
+            perceptionBinding = PersonalContextBootBinding(
+                personalContextSnapshotId = "personal-context:" + "e".repeat(64),
+                sensorRegistryFingerprint = "sensor-registry:" + "f".repeat(64),
+                ownerObservationPolicyRevision = 11L,
+            )
+        )
+
+        assertTrue(legacy.fingerprint() != bound.fingerprint())
+        assertEquals(null, legacy.perceptionBinding)
+        assertEquals(11L, bound.perceptionBinding?.ownerObservationPolicyRevision)
+    }
+
+    @Test
     fun persistedProductiveSnapshotCommitsThroughSeparateHeadCas() = runTest {
         val snapshots = InMemorySnapshots()
         val heads = InMemoryHeads()

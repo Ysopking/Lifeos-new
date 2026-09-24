@@ -7,6 +7,7 @@ import app.lifeos.core.runtime.boot.BootEngineCycleLoadReport
 import app.lifeos.core.runtime.boot.BootEngineCycleRepository
 import app.lifeos.core.runtime.boot.BootEngineCycleState
 import app.lifeos.core.runtime.world.CognitiveCycleId
+import app.lifeos.core.runtime.world.PersonalContextBootBinding
 import app.lifeos.core.runtime.world.WorldFormulaCycleContext
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -299,7 +300,8 @@ class EncryptedBootEngineCycleRepository(
     }
 
     private object BootEngineCycleCodec {
-        private const val VERSION = 1
+        private const val VERSION = 2
+        private const val LEGACY_VERSION = 1
 
         fun encode(cycle: BootEngineCycle): ByteArray =
             ByteArrayOutputStream().let { output ->
@@ -312,6 +314,12 @@ class EncryptedBootEngineCycleRepository(
                     data.writeUTF(cycle.context.strategySnapshotId)
                     data.writeUTF(cycle.context.equationVersion)
                     data.writeUTF(cycle.context.resourceSnapshotId)
+                    data.writeBoolean(cycle.context.perceptionBinding != null)
+                    cycle.context.perceptionBinding?.let { binding ->
+                        data.writeUTF(binding.personalContextSnapshotId)
+                        data.writeUTF(binding.sensorRegistryFingerprint)
+                        data.writeLong(binding.ownerObservationPolicyRevision)
+                    }
                     data.writeUTF(cycle.frozenInputsFingerprint)
                     data.writeUTF(cycle.state.name)
                     data.writeBoolean(cycle.productiveRequestId != null)
@@ -332,18 +340,33 @@ class EncryptedBootEngineCycleRepository(
         fun decode(bytes: ByteArray): BootEngineCycle {
             require(bytes.isNotEmpty() && bytes.size <= MAX_CYCLE_BYTES)
             val input = DataInputStream(ByteArrayInputStream(bytes))
-            require(input.readInt() == VERSION) {
+            val version = input.readInt()
+            require(version == VERSION || version == LEGACY_VERSION) {
                 "Unsupported BootEngine cycle codec version"
             }
             val cycleId = CognitiveCycleId(input.readUTF())
             val previous = if (input.readBoolean()) input.readUTF() else null
+            val representationSnapshotId = input.readUTF()
+            val strategySnapshotId = input.readUTF()
+            val equationVersion = input.readUTF()
+            val resourceSnapshotId = input.readUTF()
+            val perceptionBinding = if (version >= VERSION && input.readBoolean()) {
+                PersonalContextBootBinding(
+                    personalContextSnapshotId = input.readUTF(),
+                    sensorRegistryFingerprint = input.readUTF(),
+                    ownerObservationPolicyRevision = input.readLong(),
+                )
+            } else {
+                null
+            }
             val context = WorldFormulaCycleContext(
                 cycleId = cycleId,
                 previousWorldSnapshotId = previous,
-                representationSnapshotId = input.readUTF(),
-                strategySnapshotId = input.readUTF(),
-                equationVersion = input.readUTF(),
-                resourceSnapshotId = input.readUTF(),
+                representationSnapshotId = representationSnapshotId,
+                strategySnapshotId = strategySnapshotId,
+                equationVersion = equationVersion,
+                resourceSnapshotId = resourceSnapshotId,
+                perceptionBinding = perceptionBinding,
             )
             val frozenInputsFingerprint = input.readUTF()
             val state = BootEngineCycleState.valueOf(input.readUTF())

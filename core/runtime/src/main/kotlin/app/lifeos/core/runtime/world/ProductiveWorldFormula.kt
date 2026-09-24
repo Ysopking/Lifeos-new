@@ -24,6 +24,7 @@ data class WorldFormulaCycleContext(
     val strategySnapshotId: String,
     val equationVersion: String,
     val resourceSnapshotId: String,
+    val perceptionBinding: PersonalContextBootBinding? = null,
 ) {
     init {
         require(previousWorldSnapshotId == null || previousWorldSnapshotId.isNotBlank())
@@ -41,15 +42,29 @@ data class WorldFormulaCycleContext(
         }
     }
 
-    fun fingerprint(): String = StableFieldIds.fingerprint(
-        "world-formula-cycle-context/v1",
-        cycleId.value,
-        previousWorldSnapshotId.orEmpty(),
-        representationSnapshotId,
-        strategySnapshotId,
-        equationVersion,
-        resourceSnapshotId,
-    )
+    fun fingerprint(): String =
+        if (perceptionBinding == null) {
+            StableFieldIds.fingerprint(
+                "world-formula-cycle-context/v1",
+                cycleId.value,
+                previousWorldSnapshotId.orEmpty(),
+                representationSnapshotId,
+                strategySnapshotId,
+                equationVersion,
+                resourceSnapshotId,
+            )
+        } else {
+            StableFieldIds.fingerprint(
+                "world-formula-cycle-context/v2",
+                cycleId.value,
+                previousWorldSnapshotId.orEmpty(),
+                representationSnapshotId,
+                strategySnapshotId,
+                equationVersion,
+                resourceSnapshotId,
+                perceptionBinding.fingerprint,
+            )
+        }
 }
 
 data class ProductiveWorldFormulaRequest(

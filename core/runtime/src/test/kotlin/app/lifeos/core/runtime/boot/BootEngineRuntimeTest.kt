@@ -9,6 +9,7 @@ import app.lifeos.core.runtime.field.FieldWorldSignalProjection
 import app.lifeos.core.runtime.world.CognitiveCycleId
 import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import app.lifeos.core.runtime.world.InMemoryWorldEquationRegistry
+import app.lifeos.core.runtime.world.PersonalContextBootBinding
 import app.lifeos.core.runtime.world.ProductiveWorldCommitResult
 import app.lifeos.core.runtime.world.ProductiveWorldHead
 import app.lifeos.core.runtime.world.ProductiveWorldHeadCommitter
@@ -56,6 +57,81 @@ class BootEngineRuntimeTest {
         assertEquals(CognitiveWorldEquationProfile.VERSION, committed.cycle.context.equationVersion)
         assertEquals(request.cycle.fingerprint(), committed.worldHead.cycleContextFingerprint)
         assertEquals(request.cycle.cycleId, committed.worldHead.cycleId)
+    }
+
+    @Test
+    fun perceptionBindingIsFrozenIntoProductiveCycleAndWorldHead() = runTest {
+        val fixture = fixture()
+        val runtime = fixture.runtime()
+        val binding = PersonalContextBootBinding(
+            personalContextSnapshotId = "personal-context:" + "a".repeat(64),
+            sensorRegistryFingerprint = "sensor-registry:" + "b".repeat(64),
+            ownerObservationPolicyRevision = 7L,
+        )
+        val cycle = runtime.startCycle(
+            frozenInputs().copy(perceptionBinding = binding)
+        )
+
+        assertEquals(binding, cycle.context.perceptionBinding)
+
+        val request = fixture.profile.request(
+            projection = projection(),
+            links = emptyList(),
+            observedAt = observedAt,
+            cycle = cycle.context,
+            sourceTaskId = TaskId("task-perception"),
+            photonId = PhotonId("photon-perception"),
+            config = WorldFormulaConfig(requiredStableRounds = 1),
+        )
+        val evaluation = assertIs<BootEngineWorldEvaluation.Ready>(
+            runtime.evaluate(cycle.cycleId, request)
+        )
+        val committed = assertIs<BootEngineCommitResult.Committed>(
+            runtime.commit(evaluation)
+        )
+
+        assertEquals(
+            cycle.context.fingerprint(),
+            committed.worldHead.cycleContextFingerprint,
+        )
+        assertEquals(binding, committed.cycle.context.perceptionBinding)
+    }
+
+    @Test
+    fun changedPerceptionBindingIsRejectedInsideActiveCycle() = runTest {
+        val fixture = fixture()
+        val runtime = fixture.runtime()
+        val binding = PersonalContextBootBinding(
+            personalContextSnapshotId = "personal-context:" + "c".repeat(64),
+            sensorRegistryFingerprint = "sensor-registry:" + "d".repeat(64),
+            ownerObservationPolicyRevision = 3L,
+        )
+        val cycle = runtime.startCycle(
+            frozenInputs().copy(perceptionBinding = binding)
+        )
+        val changed = cycle.context.copy(
+            perceptionBinding = binding.copy(
+                ownerObservationPolicyRevision = 4L,
+            )
+        )
+        val request = fixture.profile.request(
+            projection = projection(),
+            links = emptyList(),
+            observedAt = observedAt,
+            cycle = changed,
+            sourceTaskId = TaskId("task-perception-change"),
+            photonId = PhotonId("photon-perception-change"),
+            config = WorldFormulaConfig(requiredStableRounds = 1),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            runtime.evaluate(cycle.cycleId, request)
+        }
+        assertEquals(
+            BootEngineCycleState.PREPARED,
+            fixture.cycles.load(cycle.cycleId)?.state,
+        )
+        assertNull(fixture.heads.load())
     }
 
     @Test

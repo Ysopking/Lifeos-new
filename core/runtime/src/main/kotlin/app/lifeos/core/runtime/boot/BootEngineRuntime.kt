@@ -8,6 +8,7 @@ import app.lifeos.core.runtime.world.ProductiveWorldFormulaRequest
 import app.lifeos.core.runtime.world.ProductiveWorldHead
 import app.lifeos.core.runtime.world.ProductiveWorldHeadCommitter
 import app.lifeos.core.runtime.world.ProductiveWorldHeadRepository
+import app.lifeos.core.runtime.world.PersonalContextBootBinding
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
 import app.lifeos.core.runtime.world.WorldFormulaCycleContext
 import app.lifeos.core.runtime.world.WorldFormulaExecutionState
@@ -19,6 +20,7 @@ data class BootEngineFrozenInputs(
     val strategySnapshotId: String,
     val equationVersion: String,
     val resourceSnapshotId: String,
+    val perceptionBinding: PersonalContextBootBinding? = null,
 ) {
     init {
         require(representationSnapshotId.isNotBlank())
@@ -27,13 +29,25 @@ data class BootEngineFrozenInputs(
         require(resourceSnapshotId.isNotBlank())
     }
 
-    fun fingerprint(): String = StableFieldIds.fingerprint(
-        "boot-engine-frozen-inputs/v1",
-        representationSnapshotId,
-        strategySnapshotId,
-        equationVersion,
-        resourceSnapshotId,
-    )
+    fun fingerprint(): String =
+        if (perceptionBinding == null) {
+            StableFieldIds.fingerprint(
+                "boot-engine-frozen-inputs/v1",
+                representationSnapshotId,
+                strategySnapshotId,
+                equationVersion,
+                resourceSnapshotId,
+            )
+        } else {
+            StableFieldIds.fingerprint(
+                "boot-engine-frozen-inputs/v2",
+                representationSnapshotId,
+                strategySnapshotId,
+                equationVersion,
+                resourceSnapshotId,
+                perceptionBinding.fingerprint,
+            )
+        }
 }
 
 enum class BootEngineCycleState {
@@ -155,6 +169,9 @@ data class BootEngineCycle private constructor(
             require(context.strategySnapshotId == frozenInputs.strategySnapshotId)
             require(context.equationVersion == frozenInputs.equationVersion)
             require(context.resourceSnapshotId == frozenInputs.resourceSnapshotId)
+            require(context.perceptionBinding == frozenInputs.perceptionBinding) {
+                "BootEngine cycle perception binding differs from frozen inputs"
+            }
             return create(
                 cycleId = cycleId,
                 context = context,
@@ -335,6 +352,7 @@ class BootEngineRuntime(
             strategySnapshotId = frozenInputs.strategySnapshotId,
             equationVersion = frozenInputs.equationVersion,
             resourceSnapshotId = frozenInputs.resourceSnapshotId,
+            perceptionBinding = frozenInputs.perceptionBinding,
         )
         val cycle = BootEngineCycle.prepared(cycleId, context, frozenInputs)
         check(cycles.create(cycle)) {
