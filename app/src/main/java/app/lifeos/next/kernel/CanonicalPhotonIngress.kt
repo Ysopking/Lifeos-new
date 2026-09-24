@@ -40,9 +40,11 @@ class CanonicalPhotonIngress(
 ) {
     private val informationObservationFusion = PerceptionFusionEngine()
     private val authorizedObservationCommitter by lazy {
-        AuthorizedObservationPhotonCommitter { photon ->
-            ingest(photon, PhotonIngressMode.ORIGIN)
-        }
+        AuthorizedObservationPhotonCommitter(
+            persistOrigin = { photon ->
+                ingest(photon, PhotonIngressMode.ORIGIN)
+            }
+        )
     }
     private val artifactIngress by lazy {
         CanonicalArtifactPhotonIngress(::ingestWithReceipt)
