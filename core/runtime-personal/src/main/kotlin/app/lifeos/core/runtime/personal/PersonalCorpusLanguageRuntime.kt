@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.personal
 import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.LanguageUnderstandingResult
+import app.lifeos.core.language.LanguageWorldInterpretationEvidence
 import app.lifeos.core.language.LinguisticConcept
 import app.lifeos.core.language.LinguisticLexiconSnapshot
 import app.lifeos.core.language.SemanticSearchTerms
@@ -190,9 +191,18 @@ class PersonalCorpusLanguageRuntime(
         utterance: String,
         context: LanguageContext,
         now: Instant,
+        worldEvidence: List<LanguageWorldInterpretationEvidence> = emptyList(),
     ): PersonalCorpusLanguageDecision {
         val baselineSnapshot = runtime.current()
-        val baseline = baselineSnapshot.understanding.understand(utterance, context)
+        val baseline = if (worldEvidence.isEmpty()) {
+            baselineSnapshot.understanding.understand(utterance, context)
+        } else {
+            baselineSnapshot.understanding.understand(
+                utterance,
+                context,
+                worldEvidence,
+            )
+        }
         if (!needsCorpusAssistance(baseline)) {
             return PersonalCorpusLanguageDecision(
                 understanding = baseline,
@@ -232,7 +242,15 @@ class PersonalCorpusLanguageRuntime(
             )
         }
 
-        val candidate = shadowEngine.understand(utterance, context)
+        val candidate = if (worldEvidence.isEmpty()) {
+            shadowEngine.understand(utterance, context)
+        } else {
+            shadowEngine.understand(
+                utterance,
+                context,
+                worldEvidence,
+            )
+        }
         if (!candidateImprovesSafely(baseline, candidate, hypothesis)) {
             return PersonalCorpusLanguageDecision(
                 understanding = baseline,

@@ -6,6 +6,44 @@ import app.lifeos.core.language.IntentType
 import app.lifeos.core.language.LanguageUnderstandingResult
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
 import app.lifeos.core.runtime.agency.EffectReceipt
+import app.lifeos.core.runtime.world.StateSufficiencyStatus
+
+data class WorldFormulaLanguageRefinementTrace(
+    val initialPlanFingerprint: String,
+    val retrievalNeedsFingerprint: String?,
+    val initialPerceptionNeedCount: Int,
+    val initialClarificationNeedCount: Int,
+    val secondPassApplied: Boolean,
+    val targetedContextItemCount: Int,
+    val finalPlanFingerprint: String,
+    val finalStateStatus: StateSufficiencyStatus?,
+    val finalWorldGapIds: List<String>,
+    val finalClarificationNeedIds: List<String>,
+    val finalInterpretationReady: Boolean,
+    val worldEvidenceFingerprint: String?,
+) {
+    init {
+        require(initialPlanFingerprint.isNotBlank())
+        require(retrievalNeedsFingerprint == null || retrievalNeedsFingerprint.isNotBlank())
+        require(initialPerceptionNeedCount >= 0)
+        require(initialClarificationNeedCount >= 0)
+        require(targetedContextItemCount >= 0)
+        require(finalPlanFingerprint.isNotBlank())
+        require(finalWorldGapIds == finalWorldGapIds.distinct().sorted())
+        require(
+            finalClarificationNeedIds ==
+                finalClarificationNeedIds.distinct().sorted()
+        )
+        require(secondPassApplied == (retrievalNeedsFingerprint != null))
+        require(secondPassApplied || targetedContextItemCount == 0)
+    }
+
+    val executionAuthority: Boolean
+        get() = false
+
+    val directWorldStateMutationAllowed: Boolean
+        get() = false
+}
 
 data class LanguageSubmissionResult(
     val source: PhotonSubmissionResult,
@@ -22,6 +60,7 @@ data class LanguageSubmissionResult(
     val localCommunication: LocalCommunicationExecutionResult? = null,
     val externalEffect: EffectReceipt? = null,
     val actionGraphExecution: SemanticActionGraphExecutionResult? = null,
+    val worldFormulaLanguage: WorldFormulaLanguageRefinementTrace? = null,
     val languageFailure: String? = null,
 ) {
     init {
