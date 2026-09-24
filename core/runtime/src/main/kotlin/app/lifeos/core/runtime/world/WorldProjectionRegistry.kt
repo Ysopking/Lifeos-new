@@ -11,7 +11,12 @@ import app.lifeos.core.runtime.extension.ExtensionPointSnapshot
 import app.lifeos.core.runtime.extension.WorldModelProjectionProvider
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GapSeverity
+import app.lifeos.core.runtime.life.AppSensorRegistry
+import app.lifeos.core.runtime.life.AppSensorRegistrySnapshot
 import app.lifeos.core.runtime.life.ObservationAuthorityClass
+import app.lifeos.core.runtime.life.SensorAttentionMode
+import app.lifeos.core.runtime.life.SensorHealthState
+import app.lifeos.core.runtime.life.SensorId
 import java.time.Duration
 import java.time.Instant
 
@@ -640,4 +645,226 @@ object CapabilityWorldGapAdapter {
         severity = gap.requirement.severity,
         reason = gap.type.name.lowercase(),
     )
+}
+
+
+// ---- B459 Sensor Attention Runtime ----
+
+data class SensorAttentionDemand(
+    val sensorId: SensorId,
+    val informationGainMicros: Long,
+    val goalRelevanceMicros: Long,
+    val verificationValueMicros: Long,
+    val energyCostMicros: Long,
+    val privacyCostMicros: Long,
+    val latencyCostMicros: Long,
+    val resourceCostMicros: Long,
+    val blockingGapCount: Int = 0,
+    val stateDimensions: Set<StateDimensionId> = emptySet(),
+) {
+    init {
+        listOf(
+            informationGainMicros,
+            goalRelevanceMicros,
+            verificationValueMicros,
+            energyCostMicros,
+            privacyCostMicros,
+            latencyCostMicros,
+            resourceCostMicros,
+        ).forEach { value ->
+            require(value in 0L..1_000_000L) {
+                "Sensor attention value must be expressed in 0..1_000_000 micros"
+            }
+        }
+        require(blockingGapCount >= 0)
+    }
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "sensor-attention-demand/v1",
+        sensorId.value,
+        informationGainMicros.toString(),
+        goalRelevanceMicros.toString(),
+        verificationValueMicros.toString(),
+        energyCostMicros.toString(),
+        privacyCostMicros.toString(),
+        latencyCostMicros.toString(),
+        resourceCostMicros.toString(),
+        blockingGapCount.toString(),
+        *stateDimensions.map { it.value }.sorted().toTypedArray(),
+    )
+}
+
+enum class SensorAttentionReason {
+    HEALTH_UNAVAILABLE,
+    BLOCKING_STATE_GAP,
+    VERIFICATION_NEED,
+    HIGH_INFORMATION_GAIN,
+    GOAL_RELEVANT,
+    COST_DOMINATED,
+    NO_CURRENT_DEMAND,
+}
+
+data class SensorAttentionDecision(
+    val sensorId: SensorId,
+    val mode: SensorAttentionMode,
+    val scoreMicros: Long,
+    val reasons: List<SensorAttentionReason>,
+    val stateDimensions: Set<StateDimensionId>,
+) {
+    init {
+        require(reasons.isNotEmpty())
+        require(reasons == reasons.distinct().sortedBy { it.name }) {
+            "Sensor attention reasons must be unique and deterministic"
+        }
+    }
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "sensor-attention-decision/v1",
+        sensorId.value,
+        mode.name,
+        scoreMicros.toString(),
+        *reasons.map { it.name }.toTypedArray(),
+        *stateDimensions.map { it.value }.sorted().toTypedArray(),
+    )
+
+    val observationGrantAuthority: Boolean
+        get() = false
+
+    val effectAuthority: Boolean
+        get() = false
+}
+
+/**
+ * Pure deterministic planner. Scores are fixed-point heuristics, not probabilities.
+ *
+ * Owner observation grants are deliberately outside this planner. Attention can decide whether a
+ * permitted sensor is worth scheduling, but can never create permission.
+ */
+class SensorAttentionPlanner {
+    fun plan(
+        sensors: AppSensorRegistrySnapshot,
+        demands: Collection<SensorAttentionDemand>,
+    ): List<SensorAttentionDecision> {
+        require(demands.map { it.sensorId }.distinct().size == demands.size) {
+            "Sensor attention demand must be unique per sensor"
+        }
+        val stateById = sensors.sensors.associateBy { it.descriptor.sensorId }
+        demands.forEach { demand ->
+            require(demand.sensorId in stateById) {
+                "Sensor attention demand references an unregistered sensor: ${demand.sensorId}"
+            }
+        }
+        val demandById = demands.associateBy { it.sensorId }
+
+        return sensors.sensors
+            .sortedBy { it.descriptor.sensorId.value }
+            .map { state ->
+                val demand = demandById[state.descriptor.sensorId]
+                if (
+                    state.health == SensorHealthState.UNAVAILABLE ||
+                    state.health == SensorHealthState.QUARANTINED ||
+                    state.health == SensorHealthState.DISABLED
+                ) {
+                    SensorAttentionDecision(
+                        sensorId = state.descriptor.sensorId,
+                        mode = SensorAttentionMode.SUSPENDED,
+                        scoreMicros = Long.MIN_VALUE,
+                        reasons = listOf(SensorAttentionReason.HEALTH_UNAVAILABLE),
+                        stateDimensions = demand?.stateDimensions.orEmpty(),
+                    )
+                } else if (demand == null) {
+                    SensorAttentionDecision(
+                        sensorId = state.descriptor.sensorId,
+                        mode = state.descriptor.defaultMode,
+                        scoreMicros = 0L,
+                        reasons = listOf(SensorAttentionReason.NO_CURRENT_DEMAND),
+                        stateDimensions = emptySet(),
+                    )
+                } else {
+                    decide(demand)
+                }
+            }
+    }
+
+    private fun decide(
+        demand: SensorAttentionDemand,
+    ): SensorAttentionDecision {
+        val reasons = linkedSetOf<SensorAttentionReason>()
+        if (demand.blockingGapCount > 0) {
+            reasons += SensorAttentionReason.BLOCKING_STATE_GAP
+        }
+        if (demand.verificationValueMicros >= 500_000L) {
+            reasons += SensorAttentionReason.VERIFICATION_NEED
+        }
+        if (demand.informationGainMicros >= 500_000L) {
+            reasons += SensorAttentionReason.HIGH_INFORMATION_GAIN
+        }
+        if (demand.goalRelevanceMicros >= 500_000L) {
+            reasons += SensorAttentionReason.GOAL_RELEVANT
+        }
+
+        val benefit =
+            demand.informationGainMicros * 4L +
+                demand.goalRelevanceMicros * 3L +
+                demand.verificationValueMicros * 5L +
+                minOf(demand.blockingGapCount.toLong(), 1_000L) * 100_000L
+        val cost =
+            demand.energyCostMicros +
+                demand.privacyCostMicros +
+                demand.latencyCostMicros +
+                demand.resourceCostMicros
+        val score = benefit - cost
+
+        val mode = when {
+            demand.blockingGapCount > 0 && score > 0L ->
+                SensorAttentionMode.FOCUSED
+            demand.verificationValueMicros >= 750_000L && score > 0L ->
+                SensorAttentionMode.FOCUSED
+            score >= 2_000_000L ->
+                SensorAttentionMode.EVENT_DRIVEN
+            score > 0L ->
+                SensorAttentionMode.PERIODIC
+            else -> {
+                reasons += SensorAttentionReason.COST_DOMINATED
+                SensorAttentionMode.SUSPENDED
+            }
+        }
+
+        if (reasons.isEmpty()) {
+            reasons += if (score > 0L) {
+                SensorAttentionReason.HIGH_INFORMATION_GAIN
+            } else {
+                SensorAttentionReason.COST_DOMINATED
+            }
+        }
+
+        return SensorAttentionDecision(
+            sensorId = demand.sensorId,
+            mode = mode,
+            scoreMicros = score,
+            reasons = reasons.sortedBy { it.name },
+            stateDimensions = demand.stateDimensions.toSortedSet(
+                compareBy { it.value }
+            ),
+        )
+    }
+}
+
+/**
+ * Applies a pure attention plan to process-local sensor runtime metadata only.
+ * Policy, evidence authority and world state are untouched.
+ */
+class SensorAttentionRuntime(
+    private val registry: AppSensorRegistry,
+    private val planner: SensorAttentionPlanner = SensorAttentionPlanner(),
+) {
+    suspend fun apply(
+        demands: Collection<SensorAttentionDemand>,
+    ): List<SensorAttentionDecision> {
+        val decisions = planner.plan(registry.snapshot(), demands)
+        decisions.forEach { decision ->
+            registry.updateMode(decision.sensorId, decision.mode)
+        }
+        return decisions
+    }
 }
