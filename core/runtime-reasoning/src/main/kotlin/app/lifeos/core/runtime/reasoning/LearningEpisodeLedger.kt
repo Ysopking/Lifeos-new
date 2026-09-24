@@ -550,3 +550,249 @@ private fun episodeFingerprint(
     summary.fingerprint(),
     createdAt.toString(),
 )
+
+
+// ---- B458 Temporal Episode Graph ----
+
+@JvmInline
+value class TemporalEpisodeNodeId(val value: String) {
+    init {
+        require(value.startsWith(PREFIX))
+        require(value.removePrefix(PREFIX).matches(Regex("[0-9a-f]{64}")))
+    }
+
+    companion object {
+        const val PREFIX = "temporal-episode-node:"
+    }
+}
+
+@JvmInline
+value class TemporalEpisodeEdgeId(val value: String) {
+    init {
+        require(value.startsWith(PREFIX))
+        require(value.removePrefix(PREFIX).matches(Regex("[0-9a-f]{64}")))
+    }
+
+    companion object {
+        const val PREFIX = "temporal-episode-edge:"
+    }
+}
+
+enum class TemporalEpisodeNodeKind {
+    OBSERVATION,
+    GOAL,
+    ACTION,
+    RECEIPT,
+    OUTCOME,
+}
+
+enum class TemporalEpisodeEdgeKind {
+    PRECEDES,
+    REFERENCES,
+    EXPECTS,
+    RECEIPT_FOR,
+    VERIFIES,
+    ASSOCIATED_WITH,
+}
+
+data class TemporalEpisodeNode(
+    val id: TemporalEpisodeNodeId,
+    val kind: TemporalEpisodeNodeKind,
+    val sourceRef: String,
+    val occurredAt: Instant,
+    val payloadFingerprint: String,
+    val attributes: Map<String, String> = emptyMap(),
+) {
+    init {
+        require(sourceRef.isNotBlank())
+        require(payloadFingerprint.isNotBlank())
+        require(attributes.keys.none { it.isBlank() })
+        require(id == expectedId())
+    }
+
+    fun fingerprint(): String = StableFieldIds.fingerprint(
+        "temporal-episode-node/v1",
+        kind.name,
+        sourceRef,
+        occurredAt.toString(),
+        payloadFingerprint,
+        *attributes.toSortedMap().flatMap { (key, value) ->
+            listOf(key, value)
+        }.toTypedArray(),
+    )
+
+    private fun expectedId(): TemporalEpisodeNodeId =
+        TemporalEpisodeNodeId(
+            TemporalEpisodeNodeId.PREFIX + fingerprint()
+        )
+
+    companion object {
+        fun create(
+            kind: TemporalEpisodeNodeKind,
+            sourceRef: String,
+            occurredAt: Instant,
+            payloadFingerprint: String,
+            attributes: Map<String, String> = emptyMap(),
+        ): TemporalEpisodeNode {
+            val fingerprint = StableFieldIds.fingerprint(
+                "temporal-episode-node/v1",
+                kind.name,
+                sourceRef,
+                occurredAt.toString(),
+                payloadFingerprint,
+                *attributes.toSortedMap().flatMap { (key, value) ->
+                    listOf(key, value)
+                }.toTypedArray(),
+            )
+            return TemporalEpisodeNode(
+                id = TemporalEpisodeNodeId(
+                    TemporalEpisodeNodeId.PREFIX + fingerprint
+                ),
+                kind = kind,
+                sourceRef = sourceRef,
+                occurredAt = occurredAt,
+                payloadFingerprint = payloadFingerprint,
+                attributes = attributes.toSortedMap(),
+            )
+        }
+    }
+}
+
+data class TemporalEpisodeEdge(
+    val id: TemporalEpisodeEdgeId,
+    val source: TemporalEpisodeNodeId,
+    val target: TemporalEpisodeNodeId,
+    val kind: TemporalEpisodeEdgeKind,
+    val provenanceFingerprint: String,
+) {
+    init {
+        require(source != target) { "Temporal episode edge cannot point to itself" }
+        require(provenanceFingerprint.isNotBlank())
+        require(id == expectedId())
+    }
+
+    fun fingerprint(): String = StableFieldIds.fingerprint(
+        "temporal-episode-edge/v1",
+        source.value,
+        target.value,
+        kind.name,
+        provenanceFingerprint,
+    )
+
+    private fun expectedId(): TemporalEpisodeEdgeId =
+        TemporalEpisodeEdgeId(
+            TemporalEpisodeEdgeId.PREFIX + fingerprint()
+        )
+
+    companion object {
+        fun create(
+            source: TemporalEpisodeNodeId,
+            target: TemporalEpisodeNodeId,
+            kind: TemporalEpisodeEdgeKind,
+            provenanceFingerprint: String,
+        ): TemporalEpisodeEdge {
+            val fingerprint = StableFieldIds.fingerprint(
+                "temporal-episode-edge/v1",
+                source.value,
+                target.value,
+                kind.name,
+                provenanceFingerprint,
+            )
+            return TemporalEpisodeEdge(
+                id = TemporalEpisodeEdgeId(
+                    TemporalEpisodeEdgeId.PREFIX + fingerprint
+                ),
+                source = source,
+                target = target,
+                kind = kind,
+                provenanceFingerprint = provenanceFingerprint,
+            )
+        }
+    }
+}
+
+/**
+ * B458 immutable temporal association graph.
+ *
+ * The graph can express chronology, references, expectations and verification relationships. It
+ * deliberately has no CAUSES edge. Temporal succession/association never becomes causal knowledge;
+ * causal credit remains owned by the separate verified causal-learning path.
+ */
+data class TemporalEpisodeGraph private constructor(
+    val id: String,
+    val nodes: List<TemporalEpisodeNode>,
+    val edges: List<TemporalEpisodeEdge>,
+) {
+    init {
+        require(nodes.isNotEmpty()) { "Temporal episode graph requires at least one node" }
+        require(nodes.map { it.id }.distinct().size == nodes.size)
+        require(
+            nodes == nodes.sortedWith(
+                compareBy<TemporalEpisodeNode> { it.occurredAt }
+                    .thenBy { it.id.value }
+            )
+        ) {
+            "Temporal episode nodes must be deterministic"
+        }
+        require(edges.map { it.id }.distinct().size == edges.size)
+        require(edges == edges.sortedBy { it.id.value }) {
+            "Temporal episode edges must be deterministic"
+        }
+
+        val byId = nodes.associateBy { it.id }
+        edges.forEach { edge ->
+            val sourceNode = requireNotNull(byId[edge.source]) {
+                "Temporal episode edge source is absent"
+            }
+            val targetNode = requireNotNull(byId[edge.target]) {
+                "Temporal episode edge target is absent"
+            }
+            if (edge.kind == TemporalEpisodeEdgeKind.PRECEDES) {
+                require(!sourceNode.occurredAt.isAfter(targetNode.occurredAt)) {
+                    "PRECEDES edge contradicts node timestamps"
+                }
+            }
+        }
+        require(id == "temporal-episode:${fingerprint()}")
+    }
+
+    val causalClaimsAllowed: Boolean
+        get() = false
+
+    fun fingerprint(): String = StableFieldIds.fingerprint(
+        "temporal-episode-graph/v1",
+        *buildList {
+            nodes.forEach { add("node:${it.id.value}:${it.fingerprint()}") }
+            edges.forEach { add("edge:${it.id.value}:${it.fingerprint()}") }
+        }.toTypedArray(),
+    )
+
+    companion object {
+        fun create(
+            nodes: Collection<TemporalEpisodeNode>,
+            edges: Collection<TemporalEpisodeEdge>,
+        ): TemporalEpisodeGraph {
+            val canonicalNodes = nodes.sortedWith(
+                compareBy<TemporalEpisodeNode> { it.occurredAt }
+                    .thenBy { it.id.value }
+            )
+            val canonicalEdges = edges.sortedBy { it.id.value }
+            val fingerprint = StableFieldIds.fingerprint(
+                "temporal-episode-graph/v1",
+                *buildList {
+                    canonicalNodes.forEach {
+                        add("node:${it.id.value}:${it.fingerprint()}")
+                    }
+                    canonicalEdges.forEach {
+                        add("edge:${it.id.value}:${it.fingerprint()}")
+                    }
+                }.toTypedArray(),
+            )
+            return TemporalEpisodeGraph(
+                id = "temporal-episode:$fingerprint",
+                nodes = canonicalNodes,
+                edges = canonicalEdges,
+            )
+        }
+    }
+}
