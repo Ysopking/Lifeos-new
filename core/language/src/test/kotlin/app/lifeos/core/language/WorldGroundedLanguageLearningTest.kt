@@ -13,7 +13,20 @@ class WorldGroundedLanguageLearningTest {
 
     @Test
     fun verifiedOutcomeIsPositiveOnlyWhenInterpretationIsResolved() {
-        val result = engine.understand("Suche nach dem Dokument.")
+        val base = engine.understand("Erstelle ein Bild.")
+        val result = base.copy(
+            goal = base.goal.copy(
+                interpretationLattice = base.goal.interpretationLattice.copy(
+                    converged = true,
+                    unresolvedDueToWorldState = false,
+                ),
+                languageRealization = base.goal.languageRealization.copy(
+                    propositions = base.goal.languageRealization.propositions
+                        .map { it.copy(unresolvedReasons = emptySet()) }
+                        .sortedBy { it.nodeId.value },
+                ),
+            ),
+        )
         val evidence = WorldGroundedLanguageLearningEvidence.verifiedOutcome(
             result = result,
             outcomeFingerprint = "a".repeat(64),
