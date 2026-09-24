@@ -45,6 +45,8 @@ class LanguageUnderstandingEngine(
         LanguageRealizationEngine(),
     private val propositionGraphBuilder: SemanticPropositionGraphBuilder =
         SemanticPropositionGraphBuilder(),
+    private val worldGroundedReferenceResolver: WorldGroundedReferenceResolver =
+        WorldGroundedReferenceResolver(),
 ) {
     fun understand(text: String): LanguageUnderstandingResult =
         understand(text, LanguageContext(), retainContext = false)
@@ -94,6 +96,10 @@ class LanguageUnderstandingEngine(
             topIntent = topIntent,
             context = context,
             discourse = discourseState,
+        )
+        val referenceGrounding = worldGroundedReferenceResolver.ground(
+            references = references,
+            context = context,
         )
         val speechActs = speechActParser.parse(utterance, semanticGraph)
         val predicateFrames = predicateFrameParser.parse(
@@ -187,6 +193,7 @@ class LanguageUnderstandingEngine(
             interpretationQuality = quality,
             languageRealization = languageRealization,
             propositionGraph = propositionGraph,
+            referenceGrounding = referenceGrounding,
         )
         return LanguageUnderstandingResult(
             utterance = utterance,

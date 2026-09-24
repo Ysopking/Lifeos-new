@@ -197,6 +197,8 @@ data class GoalFrame(
     val interpretationQuality: SemanticInterpretationQuality = SemanticInterpretationQuality.unknown(),
     val languageRealization: LanguageRealizationState = LanguageRealizationState.empty(),
     val propositionGraph: SemanticPropositionGraph = SemanticPropositionGraph.empty(),
+    val referenceGrounding: LanguageReferenceGroundingState =
+        LanguageReferenceGroundingState.empty(),
 ) {
     init {
         require(objective.isNotBlank())
