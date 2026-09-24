@@ -86,6 +86,7 @@
       ":core:runtime"
     ],
     "core/runtime-research/build.gradle.kts": [
+      ":core:creative",
       ":core:runtime",
       ":core:runtime-buildstudio",
       ":core:runtime-deepsearch",
