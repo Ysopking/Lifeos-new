@@ -610,6 +610,21 @@ class AppSensorRegistry(
     }
 }
 
+object AppSensorRegistryRuntimeRegistry {
+    @Volatile
+    private var installed: AppSensorRegistry? = null
+
+    fun install(registry: AppSensorRegistry) {
+        installed = registry
+    }
+
+    fun currentOrNull(): AppSensorRegistry? = installed
+
+    internal fun clearForTests() {
+        installed = null
+    }
+}
+
 // ---- B454 Projection Classification ----
 
 /**

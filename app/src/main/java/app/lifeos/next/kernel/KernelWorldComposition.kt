@@ -15,6 +15,16 @@ import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.worldmodel.EncryptedWorldModelRepository
 import app.lifeos.core.field.StableFieldIds
+import java.time.Instant
+import app.lifeos.core.runtime.world.PersonalContextSnapshot
+import app.lifeos.core.runtime.world.PersonalContextBootBinding
+import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
+import app.lifeos.core.runtime.life.AppSensorRegistrySnapshot
+import app.lifeos.core.runtime.life.AppSensorRegistry
+import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.model.PhotonRevisionRef
+import app.lifeos.core.model.PhotonIndexQuery
+import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.runtime.boot.BootEngineFrozenInputs
 import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootReadSession
@@ -52,6 +62,107 @@ import app.lifeos.core.runtime.world.WorldEquationActivationAuthority
 import app.lifeos.core.runtime.world.WorldFormulaCoordinator
 import app.lifeos.core.runtime.world.WorldFormulaExecutionPolicy
 
+internal data class FrozenProductivePersonalContext(
+    val snapshot: PersonalContextSnapshot,
+    val sensorRegistry: AppSensorRegistrySnapshot,
+    val binding: PersonalContextBootBinding,
+)
+
+internal class ProductivePersonalContextBindingSource(
+    private val photons: RevisionedPhotonRepository,
+    private val sensors: AppSensorRegistry,
+    private val ownerObservationPolicy: OwnerObservationPolicyLedger,
+    private val now: () -> Instant = Instant::now,
+) {
+    suspend fun freeze(): FrozenProductivePersonalContext {
+        val sensorSnapshot = sensors.snapshot()
+        val policySnapshot = ownerObservationPolicy.snapshot()
+        val observationRefs = queryRefs(
+            PhotonIndexQuery(
+                allTags = setOf("information-observation"),
+                latestOnly = true,
+                order = PhotonIndexOrder.NEWEST_FIRST,
+                limit = MAX_OBSERVATION_REFS,
+            )
+        )
+        val evidenceRefs = queryRefs(
+            PhotonIndexQuery(
+                anyTags = setOf(
+                    "information-observation",
+                    "perception",
+                    "evidence",
+                    "result",
+                ),
+                latestOnly = true,
+                order = PhotonIndexOrder.NEWEST_FIRST,
+                limit = MAX_EVIDENCE_REFS,
+            )
+        )
+        val conversationRefs = queryRefs(
+            PhotonIndexQuery(
+                allTags = setOf("chat"),
+                latestOnly = true,
+                order = PhotonIndexOrder.NEWEST_FIRST,
+                limit = MAX_CONVERSATION_REFS,
+            )
+        )
+
+        val snapshot = PersonalContextSnapshot.create(
+            appObservationHeadFingerprint = refSetFingerprint(
+                namespace = "app-observation-head/v1",
+                refs = observationRefs,
+            ),
+            sensorProjectionFingerprint = sensorSnapshot.fingerprint(),
+            conversationStateFingerprint = conversationRefs
+                .takeIf { it.isNotEmpty() }
+                ?.let { refs ->
+                    refSetFingerprint(
+                        namespace = "conversation-state-head/v1",
+                        refs = refs,
+                    )
+                },
+            evidenceHeadFingerprint = refSetFingerprint(
+                namespace = "canonical-evidence-head/v1",
+                refs = evidenceRefs,
+            ),
+            ownerObservationPolicyRevision = policySnapshot.revision,
+            createdAt = now(),
+        )
+        return FrozenProductivePersonalContext(
+            snapshot = snapshot,
+            sensorRegistry = sensorSnapshot,
+            binding = PersonalContextBootBinding(
+                personalContextSnapshotId = snapshot.id,
+                sensorRegistryFingerprint = sensorSnapshot.fingerprint(),
+                ownerObservationPolicyRevision = policySnapshot.revision,
+            ),
+        )
+    }
+
+    private suspend fun queryRefs(
+        query: PhotonIndexQuery,
+    ): List<PhotonRevisionRef> = photons.query(query)
+        .distinct()
+        .sortedWith(
+            compareBy<PhotonRevisionRef> { it.photonId.value }
+                .thenBy { it.revision }
+        )
+
+    private fun refSetFingerprint(
+        namespace: String,
+        refs: List<PhotonRevisionRef>,
+    ): String = StableFieldIds.fingerprint(
+        namespace,
+        *refs.map { it.stableKey }.toTypedArray(),
+    )
+
+    private companion object {
+        const val MAX_OBSERVATION_REFS = 256
+        const val MAX_EVIDENCE_REFS = 256
+        const val MAX_CONVERSATION_REFS = 128
+    }
+}
+
 internal data class KernelWorldGraph(
     val taskRepository: EncryptedTaskRepository,
     val checkpointRepository: EncryptedCheckpointRepository,
@@ -83,6 +194,8 @@ internal data class KernelWorldGraph(
 internal class KernelWorldComposition(
     private val foundation: KernelFoundationGraph,
     private val evolution: KernelEvolutionGraph,
+    private val ownerObservationPolicy: OwnerObservationPolicyLedger? = null,
+    private val appSensorRegistry: AppSensorRegistry? = null,
 ) {
     fun compose(): KernelWorldGraph {
         val appContext = foundation.appContext
@@ -177,6 +290,17 @@ internal class KernelWorldComposition(
             snapshots = worldFormulaSnapshotRepository,
             heads = productiveWorldHeadRepository,
         )
+        val personalContextBindingSource = if (
+            ownerObservationPolicy != null && appSensorRegistry != null
+        ) {
+            ProductivePersonalContextBindingSource(
+                photons = foundation.store,
+                sensors = appSensorRegistry,
+                ownerObservationPolicy = ownerObservationPolicy,
+            )
+        } else {
+            null
+        }
         val bootEngineRuntime = BootEngineRuntime(
             cycles = bootEngineCycleRepository,
             worldHeads = productiveWorldHeadRepository,
@@ -235,6 +359,9 @@ internal class KernelWorldComposition(
                     strategySnapshotId = "goal-strategy:$strategyFingerprint",
                     equationVersion = worldEquationAuthority.activeVersion(),
                     resourceSnapshotId = "hardware-state:${hardware.fingerprint()}",
+                    perceptionBinding = personalContextBindingSource
+                        ?.freeze()
+                        ?.binding,
                 )
             },
         )

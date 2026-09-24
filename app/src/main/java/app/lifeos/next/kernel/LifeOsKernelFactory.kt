@@ -2,6 +2,8 @@ package app.lifeos.next.kernel
 
 import android.content.Context
 import app.lifeos.core.runtime.field.AuthoritativeFieldProcessor
+import app.lifeos.core.runtime.life.AppSensorRegistry
+import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 
@@ -15,6 +17,8 @@ class LifeOsKernelFactory(
     private val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime? = null,
     private val bootReadyMaintenanceTrigger: () -> Unit = {},
     private val authoritativeFieldProcessors: List<AuthoritativeFieldProcessor> = emptyList(),
+    private val ownerObservationPolicy: OwnerObservationPolicyLedger? = null,
+    private val appSensorRegistry: AppSensorRegistry? = null,
 ) {
     fun create(): LifeOsKernel {
         val foundation = KernelFoundationComposition(
@@ -32,6 +36,8 @@ class LifeOsKernelFactory(
         val world = KernelWorldComposition(
             foundation = foundation,
             evolution = evolution,
+            ownerObservationPolicy = ownerObservationPolicy,
+            appSensorRegistry = appSensorRegistry,
         ).compose()
 
         val cognition = KernelCognitionComposition(

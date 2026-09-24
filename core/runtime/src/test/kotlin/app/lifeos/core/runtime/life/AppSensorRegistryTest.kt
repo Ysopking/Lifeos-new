@@ -77,4 +77,15 @@ class AppSensorRegistryTest {
         assertEquals(SensorHealthState.DEGRADED, degraded.health)
         assertEquals("listener-disconnected", degraded.lastFailure)
     }
+    @Test
+    fun processRegistryPublishesOnlyTheInstalledSensorRegistry() = runTest {
+        val registry = AppSensorRegistry()
+        AppSensorRegistryRuntimeRegistry.install(registry)
+
+        assertEquals(registry, AppSensorRegistryRuntimeRegistry.currentOrNull())
+
+        AppSensorRegistryRuntimeRegistry.clearForTests()
+        assertEquals(null, AppSensorRegistryRuntimeRegistry.currentOrNull())
+    }
+
 }

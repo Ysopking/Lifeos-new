@@ -16,6 +16,17 @@ import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RevisionedPhotonRepository
 import app.lifeos.core.runtime.ConversationPath
 import app.lifeos.core.runtime.PhotonIngressMode
+import app.lifeos.core.runtime.policy.OwnerObservationType
+import app.lifeos.core.runtime.policy.OwnerObservationPolicyRepositoryLoadReport
+import app.lifeos.core.runtime.policy.OwnerObservationPolicyRepository
+import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
+import app.lifeos.core.runtime.policy.OwnerObservationPolicyEvent
+import app.lifeos.core.runtime.life.SensorId
+import app.lifeos.core.runtime.life.SensorHealthState
+import app.lifeos.core.runtime.life.SensorDescriptor
+import app.lifeos.core.runtime.life.SensorClass
+import app.lifeos.core.runtime.life.ObservationSurfaceKind
+import app.lifeos.core.runtime.life.AppSensorRegistry
 import app.lifeos.core.runtime.capability.CapabilityRegistry
 import app.lifeos.core.runtime.capability.LanguageGoalCapabilityRouter
 import app.lifeos.core.runtime.cognition.CognitiveScheduler
@@ -248,6 +259,85 @@ class ConversationTurnCoordinatorTest {
             assertNull(result.externalEffect)
             assertTrue(!trace.executionAuthority)
             assertTrue(!trace.directWorldStateMutationAllowed)
+        }
+
+    @Test
+    fun `productive personal context freezes exact sensor policy and photon heads`() =
+        runTest {
+            val repository = InMemoryRevisionedPhotonRepository()
+            repository.save(
+                Photon(
+                    id = PhotonId("observation-1"),
+                    content = "authorized notification observation",
+                    provenance = Provenance(
+                        source = "test",
+                        actor = "sensor",
+                        createdAt = now.minusSeconds(5),
+                    ),
+                    tags = setOf(
+                        "information-observation",
+                        "perception",
+                        "chat",
+                    ),
+                )
+            )
+            val sensors = AppSensorRegistry()
+            val sensorId = SensorId("test-notification")
+            sensors.register(
+                SensorDescriptor(
+                    sensorId = sensorId,
+                    sensorClass = SensorClass.NOTIFICATION,
+                    adapterVersion = "test-v1",
+                    observationType = OwnerObservationType.NOTIFICATION,
+                    resourcePrefix = "test-notification:",
+                    supportedSurfaces =
+                        setOf(ObservationSurfaceKind.NOTIFICATION),
+                )
+            )
+            sensors.updateHealth(
+                sensorId = sensorId,
+                health = SensorHealthState.UNAVAILABLE,
+                failure = "test-offline",
+            )
+            val policy = OwnerObservationPolicyLedger(
+                repository = object : OwnerObservationPolicyRepository {
+                    override suspend fun loadReport() =
+                        OwnerObservationPolicyRepositoryLoadReport(emptyList())
+
+                    override suspend fun append(
+                        expectedRevision: Long,
+                        event: OwnerObservationPolicyEvent,
+                    ): Boolean = false
+                },
+                now = { now },
+            )
+            val source = ProductivePersonalContextBindingSource(
+                photons = repository,
+                sensors = sensors,
+                ownerObservationPolicy = policy,
+                now = { now },
+            )
+
+            val frozen = source.freeze()
+
+            assertEquals(0L, frozen.binding.ownerObservationPolicyRevision)
+            assertEquals(
+                sensors.snapshot().fingerprint(),
+                frozen.binding.sensorRegistryFingerprint,
+            )
+            assertEquals(
+                frozen.snapshot.id,
+                frozen.binding.personalContextSnapshotId,
+            )
+            assertTrue(
+                frozen.snapshot.appObservationHeadFingerprint.isNotBlank()
+            )
+            assertTrue(
+                frozen.snapshot.evidenceHeadFingerprint.isNotBlank()
+            )
+            assertTrue(
+                frozen.snapshot.conversationStateFingerprint != null
+            )
         }
 
     private class InMemoryRevisionedPhotonRepository : RevisionedPhotonRepository {

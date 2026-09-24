@@ -4,6 +4,7 @@ import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.life.AppSensorRegistryRuntimeRegistry
 import app.lifeos.core.runtime.life.ControlStatus
 import app.lifeos.core.runtime.life.EpistemicStatus
 import app.lifeos.core.runtime.life.InformationObservation
@@ -12,6 +13,8 @@ import app.lifeos.core.runtime.life.ObservationPrivacyClass
 import app.lifeos.core.runtime.life.ObservationSurfaceKind
 import app.lifeos.core.runtime.life.RealizationDescriptor
 import app.lifeos.core.runtime.life.RepresentationLevel
+import app.lifeos.core.runtime.life.SensorHealthState
+import app.lifeos.core.runtime.life.SensorId
 import app.lifeos.core.runtime.life.TemporalStatus
 import app.lifeos.core.runtime.android.NotificationActionDescriptor
 import app.lifeos.core.runtime.android.NotificationIdentity
@@ -34,6 +37,7 @@ class LiveNotificationListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        reportSensorHealth(SensorHealthState.HEALTHY)
         LiveNotificationActionRegistry.clear()
         activeNotifications
             ?.sortedWith(compareBy<StatusBarNotification> { it.postTime }.thenBy { it.key })
@@ -41,8 +45,28 @@ class LiveNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        reportSensorHealth(
+            SensorHealthState.UNAVAILABLE,
+            "notification-listener-disconnected",
+        )
         LiveNotificationActionRegistry.clear()
         super.onListenerDisconnected()
+    }
+
+    private fun reportSensorHealth(
+        health: SensorHealthState,
+        failure: String? = null,
+    ) {
+        scope.launch {
+            val registry = AppSensorRegistryRuntimeRegistry.currentOrNull()
+                ?: return@launch
+            val sensorId = SensorId(
+                app.lifeos.next.kernel.PrivateOwnerObservationPolicyBaseline
+                    .NOTIFICATION_SENSOR_ID
+            )
+            if (registry.state(sensorId) == null) return@launch
+            registry.updateHealth(sensorId, health, failure)
+        }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {

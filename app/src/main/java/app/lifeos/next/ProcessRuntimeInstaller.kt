@@ -36,6 +36,15 @@ import app.lifeos.core.runtime.life.FuturePlanningCoordinator
 import app.lifeos.core.runtime.life.FuturePlanningPersistence
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
+import app.lifeos.next.kernel.PrivateOwnerObservationPolicyBaseline
+import app.lifeos.core.runtime.policy.OwnerObservationType
+import app.lifeos.core.runtime.life.SensorId
+import app.lifeos.core.runtime.life.SensorHealthState
+import app.lifeos.core.runtime.life.SensorDescriptor
+import app.lifeos.core.runtime.life.SensorClass
+import app.lifeos.core.runtime.life.ObservationSurfaceKind
+import app.lifeos.core.runtime.life.AppSensorRegistryRuntimeRegistry
+import app.lifeos.core.runtime.life.AppSensorRegistry
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
@@ -75,6 +84,7 @@ internal data class ProcessRuntimeInstallResult(
     val storageIntelligenceController: StorageIntelligenceProcessController,
     val ownerPolicy: OwnerPolicyLedger,
     val ownerObservationPolicy: OwnerObservationPolicyLedger,
+    val appSensorRegistry: AppSensorRegistry,
     val resourceBudgets: ResourceBudgetCoordinator,
     val decisionTraces: DecisionTraceLedger,
     val selfObservationDecisionTraceRecorder: SelfObservationDecisionTraceRecorder,
@@ -105,6 +115,26 @@ internal class ProcessRuntimeInstaller(
         )
         val hardwareResourceIntelligence =
             HardwareResourceIntelligenceRuntime(appContext)
+        val appSensorRegistry = AppSensorRegistry()
+        AppSensorRegistryRuntimeRegistry.install(appSensorRegistry)
+        val notificationSensorId =
+            SensorId(PrivateOwnerObservationPolicyBaseline.NOTIFICATION_SENSOR_ID)
+        appSensorRegistry.register(
+            SensorDescriptor(
+                sensorId = notificationSensorId,
+                sensorClass = SensorClass.NOTIFICATION,
+                adapterVersion = "android-notification-listener-v2",
+                observationType = OwnerObservationType.NOTIFICATION,
+                resourcePrefix =
+                    PrivateOwnerObservationPolicyBaseline.NOTIFICATION_RESOURCE_PREFIX,
+                supportedSurfaces = setOf(ObservationSurfaceKind.NOTIFICATION),
+            )
+        )
+        appSensorRegistry.updateHealth(
+            sensorId = notificationSensorId,
+            health = SensorHealthState.UNAVAILABLE,
+            failure = "notification-listener-not-connected",
+        )
         val storageIntelligence = AndroidStorageIntelligenceRuntime(
             context = appContext,
             hardware = hardwareResourceIntelligence,
@@ -173,6 +203,8 @@ internal class ProcessRuntimeInstaller(
                             hardwareResourceIntelligence,
                         bootReadyMaintenanceTrigger =
                             storageIntelligenceController::refresh,
+                        ownerObservationPolicy = ownerObservationPolicy,
+                        appSensorRegistry = appSensorRegistry,
                     ).create()
 
                     val ownerAssetReviews =
@@ -448,6 +480,7 @@ internal class ProcessRuntimeInstaller(
             storageIntelligenceController = storageIntelligenceController,
             ownerPolicy = ownerPolicy,
             ownerObservationPolicy = ownerObservationPolicy,
+            appSensorRegistry = appSensorRegistry,
             resourceBudgets = resourceBudgets,
             decisionTraces = decisionTraces,
             selfObservationDecisionTraceRecorder =
