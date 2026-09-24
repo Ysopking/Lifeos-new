@@ -45,6 +45,7 @@ import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserver
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserverRegistry
+import app.lifeos.next.kernel.AndroidHardwareSensorBridge
 import app.lifeos.next.kernel.CanonicalLifePhotonRepository
 import app.lifeos.next.kernel.CanonicalPhotonIngress
 import app.lifeos.next.kernel.DurableGoalPlanRuntime
@@ -133,6 +134,7 @@ internal class ProcessRuntimeInstaller(
         lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
         lateinit var kernel: LifeOsKernel
         lateinit var photonIngress: CanonicalPhotonIngress
+        lateinit var hardwareSensorBridge: AndroidHardwareSensorBridge
         lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
         lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
         lateinit var multimodalPerception: MultimodalPerceptionRuntime
@@ -183,6 +185,10 @@ internal class ProcessRuntimeInstaller(
                             ownerAssetReviews = ownerAssetReviews,
                             ownerObservationPolicy = ownerObservationPolicy,
                         )
+                    hardwareSensorBridge = AndroidHardwareSensorBridge(
+                        context = appContext,
+                        photonIngress = photonIngress,
+                    )
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
                         productiveIngress = photonIngress::ingest,
@@ -427,6 +433,7 @@ internal class ProcessRuntimeInstaller(
                 },
                 startKernel = {
                     kernel.start().join()
+                    hardwareSensorBridge.start()
                 },
                 requireCognitiveStateReady = {
                     kernel.requireCognitiveReady()
