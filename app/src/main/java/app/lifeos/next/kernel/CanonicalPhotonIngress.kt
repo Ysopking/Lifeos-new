@@ -8,7 +8,15 @@ import app.lifeos.core.runtime.artifact.OwnerAssetReviewCoordinator
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewRepository
 import app.lifeos.core.runtime.livedata.LiveDataHub
 import app.lifeos.core.runtime.livedata.LiveDataPhotonIngress
+import app.lifeos.core.runtime.life.AppObservationBatch
+import app.lifeos.core.runtime.life.AppObservationIngress
+import app.lifeos.core.runtime.life.AppSensorBudget
+import app.lifeos.core.runtime.life.AppSensorCursor
+import app.lifeos.core.runtime.life.AuthorizedObservationPhotonCommitReceipt
+import app.lifeos.core.runtime.life.AuthorizedObservationPhotonCommitter
+import app.lifeos.core.runtime.life.OwnerAuthorizedAppObservationIngress
 import app.lifeos.core.runtime.life.PerceptionFusionEngine
+import app.lifeos.core.runtime.life.SensorDescriptor
 import app.lifeos.core.runtime.policy.OwnerObservationDecision
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import app.lifeos.core.runtime.policy.OwnerObservationRequest
@@ -31,6 +39,11 @@ class CanonicalPhotonIngress(
     private val ownerObservationPolicy: OwnerObservationPolicyLedger? = null,
 ) {
     private val informationObservationFusion = PerceptionFusionEngine()
+    private val authorizedObservationCommitter by lazy {
+        AuthorizedObservationPhotonCommitter { photon ->
+            ingest(photon, PhotonIngressMode.ORIGIN)
+        }
+    }
     private val artifactIngress by lazy {
         CanonicalArtifactPhotonIngress(::ingestWithReceipt)
     }
@@ -140,6 +153,44 @@ class CanonicalPhotonIngress(
         mode: PhotonIngressMode = PhotonIngressMode.ORIGIN,
     ) {
         ingestWithReceipt(photon, mode)
+    }
+
+    /**
+     * Productive B467 sensor path:
+     * adapter batch -> structural validation -> Owner Observation Policy -> canonical Photon ->
+     * durable ORIGIN cognition.
+     *
+     * Observation permission remains distinct from platform permission and from Owner Effect Policy.
+     */
+    suspend fun ingestSensorBatch(
+        descriptor: SensorDescriptor,
+        cursor: AppSensorCursor,
+        budget: AppSensorBudget,
+        batch: AppObservationBatch,
+        scope: String,
+        salience: Double = 0.5,
+    ): AuthorizedObservationPhotonCommitReceipt {
+        val policy = requireNotNull(ownerObservationPolicy) {
+            "Owner Observation Policy is required for productive sensor ingress"
+        }
+        val validated = AppObservationIngress.validate(
+            descriptor = descriptor,
+            cursor = cursor,
+            budget = budget,
+            batch = batch,
+        )
+        val authorized = OwnerAuthorizedAppObservationIngress(
+            observationPolicy = policy,
+            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+            scope = scope,
+        ).authorize(
+            descriptor = descriptor,
+            batch = validated,
+        )
+        return authorizedObservationCommitter.commit(
+            batch = authorized,
+            salience = salience,
+        )
     }
 
     /**
