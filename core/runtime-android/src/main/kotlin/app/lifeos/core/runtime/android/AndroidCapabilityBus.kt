@@ -4,6 +4,10 @@ import app.lifeos.core.runtime.capability.CapabilityContract
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
 import app.lifeos.core.runtime.capability.CapabilityId
 import app.lifeos.core.runtime.capability.CapabilityProviderCatalog
+import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.ProviderState
+import app.lifeos.core.runtime.capability.ProviderType
+import app.lifeos.core.runtime.capability.TrustLevel
 import app.lifeos.core.runtime.policy.OwnerEffectType
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -504,4 +508,91 @@ class AppCapabilityDiscoveryClassifier(
                     .thenBy { it.providerId }
                     .thenBy { it.fingerprint }
             )
+}
+
+
+// ---- B464B Canonical App Capability Registry Adapter ----
+
+data class AppCapabilityValidationEvidence(
+    val candidateFingerprint: String,
+    val shadowTestFingerprint: String,
+    val contractTestFingerprint: String,
+    val validatedProviderVersion: String,
+) {
+    init {
+        listOf(
+            candidateFingerprint,
+            shadowTestFingerprint,
+            contractTestFingerprint,
+        ).forEach {
+            require(it.matches(Regex("[0-9a-f]{64}"))) {
+                "App capability validation fingerprints must be SHA-256"
+            }
+        }
+        require(validatedProviderVersion.isNotBlank())
+    }
+
+    val fingerprint: String = androidCapabilityFingerprint(
+        "app-capability-validation-evidence/v1",
+        candidateFingerprint,
+        shadowTestFingerprint,
+        contractTestFingerprint,
+        validatedProviderVersion,
+    )
+
+    val effectAuthority: Boolean
+        get() = false
+}
+
+/**
+ * Uses the existing canonical CapabilityRegistry. It owns no second registry and cannot grant an
+ * effect. Productive use still passes platform permission and OwnerPolicy effect gates.
+ */
+class UniversalAppCapabilityRegistryAdapter(
+    private val registry: CapabilityRegistry,
+) {
+    suspend fun promoteValidated(
+        candidate: UniversalAppCapabilityCandidate,
+        evidence: AppCapabilityValidationEvidence,
+    ): CapabilityDescriptor {
+        require(evidence.candidateFingerprint == candidate.fingerprint) {
+            "App capability validation evidence is bound to another candidate"
+        }
+        require(evidence.validatedProviderVersion == candidate.providerVersion) {
+            "App capability provider version changed after validation"
+        }
+
+        val descriptor = CapabilityDescriptor(
+            capabilityId = candidate.capabilityId,
+            providerId = candidate.providerId,
+            providerType = ProviderType.CONNECTOR,
+            contract = candidate.contract,
+            state = ProviderState.ACTIVE,
+            trustLevel = when (candidate.interfaceKind) {
+                AppCapabilityInterfaceKind.OFFICIAL_API,
+                AppCapabilityInterfaceKind.CONTENT_PROVIDER,
+                -> TrustLevel.MEDIUM
+
+                AppCapabilityInterfaceKind.INTENT,
+                AppCapabilityInterfaceKind.DEEP_LINK,
+                AppCapabilityInterfaceKind.SHARE_TARGET,
+                AppCapabilityInterfaceKind.NOTIFICATION_ACTION,
+                AppCapabilityInterfaceKind.ACCESSIBILITY_SEMANTIC,
+                AppCapabilityInterfaceKind.VISUAL_INTERACTION,
+                AppCapabilityInterfaceKind.COORDINATE_AUTOMATION,
+                -> TrustLevel.LOW
+            },
+            reliability = candidate.reliability,
+            cost = candidate.cost,
+        )
+        return registry.register(descriptor)
+    }
+
+    suspend fun current(
+        capabilityId: CapabilityId,
+    ): List<CapabilityDescriptor> =
+        registry.providersFor(
+            capabilityId = capabilityId,
+            includeUnavailable = true,
+        )
 }
