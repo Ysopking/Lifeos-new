@@ -41,6 +41,7 @@ import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
 import app.lifeos.core.runtime.self.SelfObservationDecisionTraceRecorder
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
+import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserver
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserverRegistry
