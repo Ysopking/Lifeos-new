@@ -876,7 +876,7 @@ object AppObservationIngress {
         require(batch.observations.size <= budget.maxObservations) {
             "App sensor batch exceeds observation budget"
         }
-        require(batch.observations.sumOf { it.payload.length } <= budget.maxPayloadChars) {
+        require(batch.observations.sumOf { it.payload.length.toLong() } <= budget.maxPayloadChars.toLong()) {
             "App sensor batch exceeds payload budget"
         }
         batch.observations.forEach { observation ->
