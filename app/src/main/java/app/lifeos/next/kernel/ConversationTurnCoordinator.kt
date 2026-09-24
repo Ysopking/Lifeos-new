@@ -3,17 +3,25 @@ package app.lifeos.next.kernel
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.GoalPhotonFactory
 import app.lifeos.core.language.IntentType
+import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.LanguageContextRetriever
 import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.language.VersionedLanguageRuntime
+import app.lifeos.core.language.WorldFormulaContextNeedPlanner
+import app.lifeos.core.language.LanguageWorldInterpretationEvidence
+import app.lifeos.core.language.LanguageUnderstandingResult
+import app.lifeos.core.language.LanguageReferenceGroundingStatus
+import app.lifeos.core.language.LanguageContextRetrievalNeeds
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.RevisionedPhotonRepository
+import app.lifeos.core.model.StableCognitiveIds
 import app.lifeos.core.runtime.ConversationPath
 import app.lifeos.core.runtime.ConversationSignalClassifier
 import app.lifeos.core.runtime.FastConversationContext
 import app.lifeos.core.runtime.PhotonIngressMode
+import app.lifeos.core.runtime.life.ObservationAuthorityClass
 import app.lifeos.core.runtime.capability.GoalCapabilityResolution
 import app.lifeos.core.runtime.cognition.CognitiveDeltaIdentity
 import app.lifeos.core.runtime.cognition.CognitivePriority
@@ -23,7 +31,12 @@ import app.lifeos.core.runtime.cognition.PhotonDelta
 import app.lifeos.core.runtime.cognition.PhotonDeltaType
 import app.lifeos.core.runtime.cognition.SalienceVector
 import app.lifeos.core.runtime.personal.PersonalCorpusLanguageRuntime
+import app.lifeos.core.runtime.personal.PersonalCorpusLanguageDecision
 import app.lifeos.core.runtime.personal.ProductivePersonalLanguageLearningRuntime
+import app.lifeos.core.runtime.world.StateDimensionEvidence
+import app.lifeos.core.runtime.world.LanguageStateSufficiencyPlan
+import app.lifeos.core.runtime.world.LanguageStateSufficiencyCoordinator
+import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -51,6 +64,10 @@ internal class ConversationTurnCoordinator(
     private val personalCorpusLanguage: PersonalCorpusLanguageRuntime? = null,
     private val fastBackgroundBudget: CognitiveWorkBudget,
     private val classifier: ConversationSignalClassifier = ConversationSignalClassifier(),
+    private val languageStateSufficiency: LanguageStateSufficiencyCoordinator =
+        LanguageStateSufficiencyCoordinator(),
+    private val contextNeedPlanner: WorldFormulaContextNeedPlanner =
+        WorldFormulaContextNeedPlanner(),
 ) {
     suspend fun submitConversationTurn(photon: Photon): ConversationTurnResult {
         require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
@@ -97,24 +114,19 @@ internal class ConversationTurnCoordinator(
 
     suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
         require("chat" in photon.tags) { "User utterance photon must carry the chat tag" }
-        val context = languageContextRetriever.retrieve(
+        val initialContext = languageContextRetriever.retrieve(
             utterance = photon.content,
             now = photon.provenance.createdAt,
             excludeIds = setOf(photon.id),
         ).context
         val source = persistAndIngest(photon, PhotonIngressMode.ORIGIN)
         return try {
-            val corpusDecision = personalCorpusLanguage?.understand(
-                utterance = photon.content,
-                context = context,
-                now = photon.provenance.createdAt,
+            val refined = understandWithWorldFormula(
+                photon = photon,
+                initialContext = initialContext,
             )
-            val understanding = corpusDecision?.understanding ?: run {
-                val understandingEngine =
-                    languageRuntime?.current()?.understanding ?: languageUnderstanding
-                understandingEngine.understand(photon.content, context)
-            }
-            corpusDecision?.evidencePhoton(source.photon)?.let { evidence ->
+            val understanding = refined.understanding
+            refined.corpusDecision?.evidencePhoton(source.photon)?.let { evidence ->
                 persistAndIngest(evidence, PhotonIngressMode.DERIVED)
             }
             observePersonalLanguageLearning(source.photon, understanding)
@@ -167,6 +179,7 @@ internal class ConversationTurnCoordinator(
                 localCommunication = actions.localCommunication,
                 externalEffect = actions.externalEffect,
                 actionGraphExecution = actionGraphExecution,
+                worldFormulaLanguage = refined.trace,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -177,6 +190,254 @@ internal class ConversationTurnCoordinator(
             )
         }
     }
+
+    private suspend fun understandWithWorldFormula(
+        photon: Photon,
+        initialContext: LanguageContext,
+    ): RefinedLanguageTurn {
+        val firstPass = understandOnce(
+            utterance = photon.content,
+            context = initialContext,
+            now = photon.provenance.createdAt,
+            worldEvidence = emptyList(),
+        )
+        val initialPlan = languageStateSufficiency.plan(firstPass.understanding.goal)
+        val initialEvidence = stateEvidence(
+            context = initialContext,
+            plan = initialPlan,
+        )
+        val initialAssessment = languageStateSufficiency.evaluate(
+            goal = firstPass.understanding.goal,
+            evidence = initialEvidence,
+            at = photon.provenance.createdAt,
+        )
+
+        if (initialPlan.perceptionNeeds.isEmpty()) {
+            return RefinedLanguageTurn(
+                understanding = firstPass.understanding,
+                corpusDecision = firstPass.corpusDecision,
+                trace = WorldFormulaLanguageRefinementTrace(
+                    initialPlanFingerprint = initialPlan.fingerprint,
+                    retrievalNeedsFingerprint = null,
+                    initialPerceptionNeedCount = 0,
+                    initialClarificationNeedCount =
+                        initialPlan.clarificationNeeds.size,
+                    secondPassApplied = false,
+                    targetedContextItemCount = 0,
+                    finalPlanFingerprint = initialPlan.fingerprint,
+                    finalStateStatus = initialAssessment.result?.status,
+                    finalWorldGapIds =
+                        initialAssessment.worldGaps.map { it.id }.sorted(),
+                    finalClarificationNeedIds =
+                        initialPlan.clarificationNeeds.map { it.id }.sorted(),
+                    finalInterpretationReady =
+                        initialAssessment.interpretationReady,
+                    worldEvidenceFingerprint =
+                        firstPass.understanding.goal.interpretationLattice
+                            .worldEvidenceFingerprint,
+                ),
+            )
+        }
+
+        val requiredStateDimensions = initialPlan.perceptionNeeds
+            .mapNotNullTo(linkedSetOf()) { it.stateDimension?.value }
+        val baseNeeds = contextNeedPlanner.plan(
+            goal = firstPass.understanding.goal,
+            requiredStateDimensionKeys = requiredStateDimensions,
+        )
+        val recoveryRefs = firstPass.understanding.goal.referenceGrounding.references
+            .asSequence()
+            .filter {
+                it.status == LanguageReferenceGroundingStatus.STALE_REVISION ||
+                    it.status == LanguageReferenceGroundingStatus.OUTSIDE_CONTEXT
+            }
+            .mapNotNull { it.selectedRevisionRef }
+            .toSet()
+        val exactRefs = (baseNeeds.exactRevisionRefs + recoveryRefs)
+            .sortedWith(
+                compareBy<app.lifeos.core.model.PhotonRevisionRef> {
+                    it.photonId.value
+                }.thenBy { it.revision }
+            )
+            .take(LanguageContextRetrievalNeeds.MAX_EXACT_REFS)
+            .toSet()
+        val needs = baseNeeds.copy(exactRevisionRefs = exactRefs)
+
+        val targeted = languageContextRetriever.retrieve(
+            utterance = photon.content,
+            now = photon.provenance.createdAt,
+            excludeIds = setOf(photon.id),
+            zoneId = initialContext.zoneId,
+            needs = needs,
+        )
+        val worldEvidence = worldEvidenceForSecondPass(
+            first = firstPass.understanding,
+            plan = initialPlan,
+            context = targeted.context,
+            needs = needs,
+        )
+        val secondPass = understandOnce(
+            utterance = photon.content,
+            context = targeted.context,
+            now = photon.provenance.createdAt,
+            worldEvidence = worldEvidence,
+        )
+        val finalPlan = languageStateSufficiency.plan(secondPass.understanding.goal)
+        val finalAssessment = languageStateSufficiency.evaluate(
+            goal = secondPass.understanding.goal,
+            evidence = stateEvidence(targeted.context, finalPlan),
+            at = photon.provenance.createdAt,
+        )
+
+        return RefinedLanguageTurn(
+            understanding = secondPass.understanding,
+            corpusDecision = secondPass.corpusDecision,
+            trace = WorldFormulaLanguageRefinementTrace(
+                initialPlanFingerprint = initialPlan.fingerprint,
+                retrievalNeedsFingerprint = needs.fingerprint,
+                initialPerceptionNeedCount = initialPlan.perceptionNeeds.size,
+                initialClarificationNeedCount =
+                    initialPlan.clarificationNeeds.size,
+                secondPassApplied = true,
+                targetedContextItemCount = targeted.context.items.size,
+                finalPlanFingerprint = finalPlan.fingerprint,
+                finalStateStatus = finalAssessment.result?.status,
+                finalWorldGapIds =
+                    finalAssessment.worldGaps.map { it.id }.sorted(),
+                finalClarificationNeedIds =
+                    finalPlan.clarificationNeeds.map { it.id }.sorted(),
+                finalInterpretationReady =
+                    finalAssessment.interpretationReady,
+                worldEvidenceFingerprint =
+                    secondPass.understanding.goal.interpretationLattice
+                        .worldEvidenceFingerprint,
+            ),
+        )
+    }
+
+    private suspend fun understandOnce(
+        utterance: String,
+        context: LanguageContext,
+        now: Instant,
+        worldEvidence: List<LanguageWorldInterpretationEvidence>,
+    ): LanguagePass {
+        val corpusDecision = personalCorpusLanguage?.understand(
+            utterance = utterance,
+            context = context,
+            now = now,
+            worldEvidence = worldEvidence,
+        )
+        if (corpusDecision != null) {
+            return LanguagePass(
+                understanding = corpusDecision.understanding,
+                corpusDecision = corpusDecision,
+            )
+        }
+
+        val engine = languageRuntime?.current()?.understanding ?: languageUnderstanding
+        val understanding = if (worldEvidence.isEmpty()) {
+            engine.understand(utterance, context)
+        } else {
+            engine.understand(
+                utterance,
+                context,
+                worldEvidence,
+            )
+        }
+        return LanguagePass(
+            understanding = understanding,
+            corpusDecision = null,
+        )
+    }
+
+    private fun worldEvidenceForSecondPass(
+        first: LanguageUnderstandingResult,
+        plan: LanguageStateSufficiencyPlan,
+        context: LanguageContext,
+        needs: LanguageContextRetrievalNeeds,
+    ): List<LanguageWorldInterpretationEvidence> {
+        val worldStateNeeds = plan.perceptionNeeds.filter {
+            it.reason == "unresolved-condition"
+        }
+        if (worldStateNeeds.isEmpty()) return emptyList()
+
+        val satisfied = worldStateNeeds.all { need ->
+            val dimension = requireNotNull(need.stateDimension).value
+            context.items.any { dimension in it.stateDimensionKeys }
+        }
+        val supportRefs = worldStateNeeds
+            .flatMap { need ->
+                val dimension = requireNotNull(need.stateDimension).value
+                context.items
+                    .filter { dimension in it.stateDimensionKeys }
+                    .map { item ->
+                        item.revisionRef?.stableKey ?: item.photonId.value
+                    }
+            }
+            .distinct()
+            .sorted()
+        val sourceBase = StableCognitiveIds.fingerprint(
+            "worldformula-language-second-pass-evidence/v1",
+            plan.fingerprint,
+            needs.fingerprint,
+            satisfied.toString(),
+            *supportRefs.toTypedArray(),
+        )
+        return first.intentEvidence
+            .map { it.intent }
+            .distinct()
+            .sortedBy { it.name }
+            .map { intent ->
+                LanguageWorldInterpretationEvidence(
+                    intent = intent,
+                    reference = null,
+                    support = 0.0,
+                    contradiction = 0.0,
+                    stateSufficient = satisfied,
+                    sourceFingerprint = StableCognitiveIds.fingerprint(
+                        "worldformula-language-second-pass-intent/v1",
+                        sourceBase,
+                        intent.name,
+                    ),
+                )
+            }
+    }
+
+    private fun stateEvidence(
+        context: LanguageContext,
+        plan: LanguageStateSufficiencyPlan,
+    ): List<StateDimensionEvidence> =
+        plan.perceptionNeeds.mapNotNull { need ->
+            val dimension = need.stateDimension ?: return@mapNotNull null
+            val matches = context.items.filter {
+                dimension.value in it.stateDimensionKeys
+            }
+            if (matches.isEmpty()) {
+                null
+            } else {
+                StateDimensionEvidence(
+                    dimension = dimension,
+                    evidenceIds = matches.mapTo(linkedSetOf()) { item ->
+                        item.revisionRef?.stableKey ?: item.photonId.value
+                    },
+                    strongestAuthority =
+                        ObservationAuthorityClass.DERIVED_INFERENCE,
+                    latestObservedAt =
+                        matches.maxOf { it.createdAt },
+                )
+            }
+        }
+
+    private data class LanguagePass(
+        val understanding: LanguageUnderstandingResult,
+        val corpusDecision: PersonalCorpusLanguageDecision?,
+    )
+
+    private data class RefinedLanguageTurn(
+        val understanding: LanguageUnderstandingResult,
+        val corpusDecision: PersonalCorpusLanguageDecision?,
+        val trace: WorldFormulaLanguageRefinementTrace,
+    )
 
     private fun enqueueFastConversationBackground(photon: Photon) {
         scope.launch {

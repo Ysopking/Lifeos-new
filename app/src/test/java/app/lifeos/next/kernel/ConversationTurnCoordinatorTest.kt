@@ -22,6 +22,8 @@ import app.lifeos.core.runtime.cognition.CognitiveWorkBudget
 import app.lifeos.core.runtime.cognition.ContinuousCognitionEngine
 import app.lifeos.core.runtime.cognition.InMemoryCognitiveEventJournal
 import app.lifeos.core.runtime.query.ProductivePhotonQueryService
+import app.lifeos.core.runtime.world.StateSufficiencyStatus
+import app.lifeos.core.runtime.world.LanguageStateSufficiencyCoordinator
 import java.time.Instant
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -127,6 +129,124 @@ class ConversationTurnCoordinatorTest {
             assertTrue("conversation-fast-path" in result.assistant.photon.tags)
             assertEquals(setOf(source.id), result.assistant.photon.provenance.parentIds)
             assertEquals(1L, journal.size())
+        }
+
+    @Test
+    fun `non-fast turn performs targeted WorldFormula second pass for missing condition state`() =
+        runTest {
+            val repository = InMemoryRevisionedPhotonRepository()
+            val languageEngine = LanguageUnderstandingEngine()
+            val utterance = "Wenn ich Zeit habe, erstelle ein Bild."
+            val first = languageEngine.understand(
+                utterance,
+                LanguageContext(now = now),
+            )
+            val initialPlan = LanguageStateSufficiencyCoordinator()
+                .plan(first.goal)
+            val conditionNeed = initialPlan.perceptionNeeds.single {
+                it.reason == "unresolved-condition"
+            }
+            val dimension = requireNotNull(conditionNeed.stateDimension)
+
+            repository.save(
+                Photon(
+                    id = PhotonId("condition-state"),
+                    content = "condition state observed",
+                    provenance = Provenance(
+                        source = "test-state",
+                        actor = "lifeos",
+                        createdAt = now.minusSeconds(1),
+                    ),
+                    tags = setOf(
+                        "state-dimension:${dimension.value}",
+                        "representation:projected",
+                        "epistemic:observed",
+                    ),
+                )
+            )
+
+            val journal = InMemoryCognitiveEventJournal()
+            val cognition = ContinuousCognitionEngine(
+                journal = journal,
+                scheduler = CognitiveScheduler(),
+            )
+            val router = LanguageGoalCapabilityRouter(CapabilityRegistry())
+            val actions = GoalActionCoordinator(
+                productivePhotonQueries = ProductivePhotonQueryService(repository),
+                routeGoal = router::route,
+                persistAndIngest = { photon, _ ->
+                    repository.save(photon)
+                    PhotonSubmissionResult(photon, processingQueued = true)
+                },
+            )
+            val dispatcher = GoalActionDispatcher(
+                executeKnowledge = { error("conditional action must not execute") },
+                executeDeepSearch = { error("conditional action must not execute") },
+                executeImageGeneration = { error("conditional action must not execute") },
+                executeImageTransform = { error("conditional action must not execute") },
+                executeSchedule = { error("conditional action must not execute") },
+                prepareCommunication = { error("conditional action must not execute") },
+            )
+            val coordinator = ConversationTurnCoordinator(
+                revisionedPhotonStore = repository,
+                languageContextRetriever = LanguageContextRetriever(repository),
+                languageUnderstanding = languageEngine,
+                goalPhotonFactory = GoalPhotonFactory(),
+                routeGoal = router::route,
+                semanticActionGraphRouter = SemanticActionGraphRouter(
+                    capabilities = router,
+                    dispatcher = dispatcher,
+                ),
+                goalActions = actions,
+                scope = this,
+                continuousCognition = cognition,
+                persistWithoutCognition = { photon, _ ->
+                    repository.save(photon)
+                    PhotonSubmissionResult(photon, processingQueued = false)
+                },
+                persistAndIngest = { photon, _ ->
+                    repository.save(photon)
+                    PhotonSubmissionResult(photon, processingQueued = true)
+                },
+                fastBackgroundBudget = CognitiveWorkBudget(
+                    maxDurationMs = 5_000,
+                    maxModuleInvocations = 4,
+                    maxNewPhotons = 4,
+                    maxNetworkCalls = 0,
+                ),
+            )
+            val source = Photon(
+                id = PhotonId("worldformula-language-source"),
+                content = utterance,
+                provenance = Provenance(
+                    source = "test",
+                    actor = "owner",
+                    createdAt = now,
+                ),
+                tags = setOf(
+                    "chat",
+                    "chat:user",
+                    "conversation:worldformula",
+                ),
+            )
+
+            val result = coordinator.persistUserUtterance(source)
+            val trace = requireNotNull(result.worldFormulaLanguage)
+
+            assertTrue(trace.secondPassApplied)
+            assertTrue(trace.initialPerceptionNeedCount >= 1)
+            assertEquals(StateSufficiencyStatus.SUFFICIENT, trace.finalStateStatus)
+            assertTrue(trace.finalInterpretationReady)
+            assertTrue(trace.worldEvidenceFingerprint != null)
+            assertTrue(
+                result.understanding!!.goal.languageRealization.propositions.any {
+                    app.lifeos.core.language.LanguageModalStatus.CONDITIONAL in
+                        it.modalStatuses
+                }
+            )
+            assertNull(result.externalEffect)
+            assertTrue(!trace.executionAuthority)
+            assertTrue(!trace.directWorldStateMutationAllowed)
         }
 
     private class InMemoryRevisionedPhotonRepository : RevisionedPhotonRepository {
