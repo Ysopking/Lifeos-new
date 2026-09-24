@@ -41,6 +41,8 @@ class LanguageUnderstandingEngine(
     private val domainSemanticInterpreter: DomainSemanticInterpreter = DomainSemanticInterpreter(),
     private val qualityEvaluator: SemanticInterpretationQualityEvaluator =
         SemanticInterpretationQualityEvaluator(),
+    private val languageRealizationEngine: LanguageRealizationEngine =
+        LanguageRealizationEngine(),
 ) {
     fun understand(text: String): LanguageUnderstandingResult =
         understand(text, LanguageContext(), retainContext = false)
@@ -105,6 +107,10 @@ class LanguageUnderstandingEngine(
             semanticGraph = semanticGraph,
             frames = predicateFrames,
             references = references,
+        )
+        val languageRealization = languageRealizationEngine.realize(
+            utterance = utterance,
+            actionGraph = semanticActionGraph,
         )
         val interpretationLattice = interpretationLatticeEngine.converge(
             intents = evidence,
@@ -173,6 +179,7 @@ class LanguageUnderstandingEngine(
             clarification = clarification,
             pragmaticAct = pragmaticAct,
             interpretationQuality = quality,
+            languageRealization = languageRealization,
         )
         return LanguageUnderstandingResult(
             utterance = utterance,
