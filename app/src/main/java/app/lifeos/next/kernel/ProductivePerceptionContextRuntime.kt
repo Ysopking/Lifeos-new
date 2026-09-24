@@ -3,12 +3,12 @@ package app.lifeos.next.kernel
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.life.AppSensorRegistry
 import app.lifeos.core.runtime.life.AppSensorRegistrySnapshot
-import app.lifeos.core.runtime.life.SensorAttentionDecision
-import app.lifeos.core.runtime.life.SensorAttentionDemand
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import app.lifeos.core.runtime.thought.ThoughtGraphWorkingSet
 import app.lifeos.core.runtime.world.PersonalContextBootBinding
 import app.lifeos.core.runtime.world.PersonalContextSnapshot
+import app.lifeos.core.runtime.world.SensorAttentionDecision
+import app.lifeos.core.runtime.world.SensorAttentionDemand
 import app.lifeos.core.runtime.world.SensorAttentionRuntime
 
 /**
