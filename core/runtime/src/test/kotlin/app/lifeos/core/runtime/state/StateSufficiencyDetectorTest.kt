@@ -1,4 +1,4 @@
-package app.lifeos.core.runtime.state
+package app.lifeos.core.runtime.world
 
 import app.lifeos.core.field.FieldDomainId
 import app.lifeos.core.runtime.life.ObservationAuthorityClass

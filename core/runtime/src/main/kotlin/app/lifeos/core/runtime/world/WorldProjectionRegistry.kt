@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.world
 
+import app.lifeos.core.field.FieldDomainId
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.field.world.WorldNodeKind
 import app.lifeos.core.field.world.WorldSignalDimension
@@ -8,6 +9,11 @@ import app.lifeos.core.runtime.extension.ExtensionPointKind
 import app.lifeos.core.runtime.extension.ExtensionPointRegistration
 import app.lifeos.core.runtime.extension.ExtensionPointSnapshot
 import app.lifeos.core.runtime.extension.WorldModelProjectionProvider
+import app.lifeos.core.runtime.capability.CapabilityGap
+import app.lifeos.core.runtime.capability.GapSeverity
+import app.lifeos.core.runtime.life.ObservationAuthorityClass
+import java.time.Duration
+import java.time.Instant
 
 enum class WorldSemanticRelationKind {
     DERIVED_FROM,
@@ -280,4 +286,358 @@ class WorldProjectionRegistry(
         }
         return projection
     }
+}
+
+// ---- B455 State Contract + Sufficiency ----
+
+@JvmInline
+value class StateDimensionId(val value: String) {
+    init {
+        require(value.isNotBlank()) { "State dimension id must not be blank" }
+    }
+
+    override fun toString(): String = value
+}
+
+data class StateDimensionRequirement(
+    val dimension: StateDimensionId,
+    val minimumAuthority: ObservationAuthorityClass,
+    val maximumAge: Duration? = null,
+    val minimumEvidenceCount: Int = 1,
+    val allowConflicts: Boolean = false,
+) {
+    init {
+        require(minimumEvidenceCount > 0)
+        require(maximumAge == null || (!maximumAge.isNegative && !maximumAge.isZero))
+    }
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "state-dimension-requirement/v1",
+        dimension.value,
+        minimumAuthority.name,
+        maximumAge?.toString().orEmpty(),
+        minimumEvidenceCount.toString(),
+        allowConflicts.toString(),
+    )
+}
+
+data class StateContract(
+    val id: String,
+    val domain: FieldDomainId,
+    val dimensions: List<StateDimensionRequirement>,
+) {
+    init {
+        require(id.isNotBlank())
+        require(dimensions.isNotEmpty())
+        require(dimensions.map { it.dimension }.distinct().size == dimensions.size)
+        require(dimensions == dimensions.sortedBy { it.dimension.value }) {
+            "State contract dimensions must be canonical"
+        }
+    }
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "state-contract/v1",
+        id,
+        domain.value,
+        *dimensions.map { it.fingerprint }.toTypedArray(),
+    )
+
+    companion object {
+        fun create(
+            id: String,
+            domain: FieldDomainId,
+            dimensions: Collection<StateDimensionRequirement>,
+        ): StateContract = StateContract(
+            id = id,
+            domain = domain,
+            dimensions = dimensions.sortedBy { it.dimension.value },
+        )
+    }
+}
+
+data class StateDimensionEvidence(
+    val dimension: StateDimensionId,
+    val evidenceIds: Set<String>,
+    val strongestAuthority: ObservationAuthorityClass,
+    val latestObservedAt: Instant,
+    val conflictCount: Int = 0,
+) {
+    init {
+        require(evidenceIds.none { it.isBlank() })
+        require(conflictCount >= 0)
+    }
+}
+
+enum class StateSufficiencyStatus {
+    SUFFICIENT,
+    INSUFFICIENT,
+    STALE,
+    CONFLICTED,
+}
+
+data class StateSufficiencyResult(
+    val contractId: String,
+    val contractFingerprint: String,
+    val status: StateSufficiencyStatus,
+    val satisfied: Set<StateDimensionId>,
+    val missing: Set<StateDimensionId>,
+    val stale: Set<StateDimensionId>,
+    val conflicted: Set<StateDimensionId>,
+    val supportingEvidenceIds: Set<String>,
+) {
+    init {
+        require(contractId.isNotBlank())
+        require(contractFingerprint.isNotBlank())
+        require(
+            listOf(satisfied, missing, stale, conflicted)
+                .flatten()
+                .groupingBy { it }
+                .eachCount()
+                .values
+                .all { it == 1 }
+        ) {
+            "One state dimension cannot occupy multiple sufficiency result classes"
+        }
+        require(supportingEvidenceIds.none { it.isBlank() })
+    }
+}
+
+/**
+ * B455 deterministic state sufficiency detector.
+ *
+ * Sufficiency is evaluated against an explicit contract. Confidence alone cannot create a complete
+ * state; missing dimensions, weak authority, stale evidence and conflicts remain explicit.
+ */
+class StateSufficiencyDetector {
+    fun evaluate(
+        contract: StateContract,
+        evidence: Collection<StateDimensionEvidence>,
+        at: Instant,
+    ): StateSufficiencyResult {
+        val byDimension = evidence
+            .groupBy { it.dimension }
+            .mapValues { (_, entries) ->
+                require(entries.size == 1) {
+                    "State dimension evidence must be pre-reconciled into one summary"
+                }
+                entries.single()
+            }
+
+        val satisfied = linkedSetOf<StateDimensionId>()
+        val missing = linkedSetOf<StateDimensionId>()
+        val stale = linkedSetOf<StateDimensionId>()
+        val conflicted = linkedSetOf<StateDimensionId>()
+        val supporting = linkedSetOf<String>()
+
+        contract.dimensions.forEach { requirement ->
+            val current = byDimension[requirement.dimension]
+            if (
+                current == null ||
+                current.evidenceIds.size < requirement.minimumEvidenceCount ||
+                current.strongestAuthority.rank < requirement.minimumAuthority.rank
+            ) {
+                missing += requirement.dimension
+                return@forEach
+            }
+
+            supporting += current.evidenceIds
+
+            if (current.conflictCount > 0 && !requirement.allowConflicts) {
+                conflicted += requirement.dimension
+                return@forEach
+            }
+
+            val maximumAge = requirement.maximumAge
+            if (
+                maximumAge != null &&
+                current.latestObservedAt.plus(maximumAge).isBefore(at)
+            ) {
+                stale += requirement.dimension
+                return@forEach
+            }
+
+            satisfied += requirement.dimension
+        }
+
+        val status = when {
+            conflicted.isNotEmpty() -> StateSufficiencyStatus.CONFLICTED
+            missing.isNotEmpty() -> StateSufficiencyStatus.INSUFFICIENT
+            stale.isNotEmpty() -> StateSufficiencyStatus.STALE
+            else -> StateSufficiencyStatus.SUFFICIENT
+        }
+
+        return StateSufficiencyResult(
+            contractId = contract.id,
+            contractFingerprint = contract.fingerprint,
+            status = status,
+            satisfied = satisfied,
+            missing = missing,
+            stale = stale,
+            conflicted = conflicted,
+            supportingEvidenceIds = supporting,
+        )
+    }
+}
+
+// ---- B456 Unified World Gaps ----
+
+sealed interface WorldGap {
+    val id: String
+    val domain: FieldDomainId
+    val severity: GapSeverity
+    val reason: String
+
+    data class Perception(
+        override val domain: FieldDomainId,
+        val missingDimensions: Set<StateDimensionId>,
+        val staleDimensions: Set<StateDimensionId> = emptySet(),
+        override val severity: GapSeverity = GapSeverity.BLOCKING,
+        override val reason: String,
+    ) : WorldGap {
+        init {
+            require(missingDimensions.isNotEmpty() || staleDimensions.isNotEmpty())
+            require(reason.isNotBlank())
+        }
+
+        override val id: String = "world-gap:" + StableFieldIds.fingerprint(
+            "world-gap-perception/v1",
+            domain.value,
+            severity.name,
+            reason,
+            *missingDimensions.map { "missing:${it.value}" }.sorted().toTypedArray(),
+            *staleDimensions.map { "stale:${it.value}" }.sorted().toTypedArray(),
+        )
+    }
+
+    data class Capability(
+        override val domain: FieldDomainId,
+        val capabilityId: String,
+        val providerCandidates: Set<String> = emptySet(),
+        override val severity: GapSeverity = GapSeverity.BLOCKING,
+        override val reason: String,
+    ) : WorldGap {
+        init {
+            require(capabilityId.isNotBlank())
+            require(providerCandidates.none { it.isBlank() })
+            require(reason.isNotBlank())
+        }
+
+        override val id: String = "world-gap:" + StableFieldIds.fingerprint(
+            "world-gap-capability/v1",
+            domain.value,
+            capabilityId,
+            severity.name,
+            reason,
+            *providerCandidates.sorted().toTypedArray(),
+        )
+    }
+
+    data class Consistency(
+        override val domain: FieldDomainId,
+        val conflictingDimensions: Set<StateDimensionId>,
+        val evidenceIds: Set<String>,
+        override val severity: GapSeverity = GapSeverity.BLOCKING,
+        override val reason: String,
+    ) : WorldGap {
+        init {
+            require(conflictingDimensions.isNotEmpty())
+            require(evidenceIds.none { it.isBlank() })
+            require(reason.isNotBlank())
+        }
+
+        override val id: String = "world-gap:" + StableFieldIds.fingerprint(
+            "world-gap-consistency/v1",
+            domain.value,
+            severity.name,
+            reason,
+            *conflictingDimensions.map { it.value }.sorted().toTypedArray(),
+            *evidenceIds.sorted().toTypedArray(),
+        )
+    }
+
+    data class Verification(
+        override val domain: FieldDomainId,
+        val actionGraphId: String,
+        val expectedStateContract: String,
+        val missingObservationContract: String,
+        override val severity: GapSeverity = GapSeverity.BLOCKING,
+        override val reason: String,
+    ) : WorldGap {
+        init {
+            require(actionGraphId.isNotBlank())
+            require(expectedStateContract.isNotBlank())
+            require(missingObservationContract.isNotBlank())
+            require(reason.isNotBlank())
+        }
+
+        override val id: String = "world-gap:" + StableFieldIds.fingerprint(
+            "world-gap-verification/v1",
+            domain.value,
+            actionGraphId,
+            expectedStateContract,
+            missingObservationContract,
+            severity.name,
+            reason,
+        )
+    }
+}
+
+/**
+ * B456 bridge from B455 StateSufficiency to explicit world gaps.
+ *
+ * Perception and consistency are intentionally separate: contradictory evidence is not represented
+ * as merely "more information needed".
+ */
+object StateWorldGapDetector {
+    fun detect(
+        contract: StateContract,
+        result: StateSufficiencyResult,
+    ): List<WorldGap> {
+        require(result.contractId == contract.id)
+        require(result.contractFingerprint == contract.fingerprint)
+
+        return buildList {
+            if (result.missing.isNotEmpty() || result.stale.isNotEmpty()) {
+                add(
+                    WorldGap.Perception(
+                        domain = contract.domain,
+                        missingDimensions = result.missing,
+                        staleDimensions = result.stale,
+                        reason = when {
+                            result.missing.isNotEmpty() && result.stale.isNotEmpty() ->
+                                "state-dimensions-missing-and-stale"
+                            result.missing.isNotEmpty() ->
+                                "state-dimensions-missing"
+                            else ->
+                                "state-dimensions-stale"
+                        },
+                    )
+                )
+            }
+            if (result.conflicted.isNotEmpty()) {
+                add(
+                    WorldGap.Consistency(
+                        domain = contract.domain,
+                        conflictingDimensions = result.conflicted,
+                        evidenceIds = result.supportingEvidenceIds,
+                        reason = "state-evidence-conflict",
+                    )
+                )
+            }
+        }.sortedBy { it.id }
+    }
+}
+
+/** Adapts the existing capability gap model instead of replacing CapabilityRegistry semantics. */
+object CapabilityWorldGapAdapter {
+    fun adapt(
+        domain: FieldDomainId,
+        gap: CapabilityGap,
+    ): WorldGap.Capability = WorldGap.Capability(
+        domain = domain,
+        capabilityId = gap.requirement.capabilityId.value,
+        providerCandidates = gap.candidateProviderIds.toSet(),
+        severity = gap.requirement.severity,
+        reason = gap.type.name.lowercase(),
+    )
 }
