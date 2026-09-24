@@ -1,6 +1,11 @@
 package app.lifeos.core.runtime.android
 
+import app.lifeos.core.runtime.capability.CapabilityContract
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
+import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.ProviderState
+import app.lifeos.core.runtime.capability.ProviderType
+import app.lifeos.core.runtime.capability.TrustLevel
 import app.lifeos.core.runtime.capability.CapabilityId
 import app.lifeos.core.runtime.capability.CapabilityProviderCatalog
 import app.lifeos.core.runtime.policy.OwnerEffectType
@@ -324,4 +329,148 @@ private fun androidCapabilityFingerprint(
     update(domain)
     parts.forEach(::update)
     return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+}
+
+
+// ---- B461 Universal App Capability Registry Adapter ----
+
+enum class AppCapabilityInterfaceKind(val stabilityRank: Int) {
+    OFFICIAL_API(8),
+    CONTENT_PROVIDER(7),
+    INTENT(6),
+    DEEP_LINK(5),
+    SHARE_TARGET(4),
+    NOTIFICATION_ACTION(3),
+    ACCESSIBILITY_SEMANTIC(2),
+    VISUAL_INTERACTION(1),
+    COORDINATE_AUTOMATION(0),
+}
+
+data class UniversalAppCapabilityCandidate(
+    val capabilityId: CapabilityId,
+    val providerId: String,
+    val providerVersion: String,
+    val interfaceKind: AppCapabilityInterfaceKind,
+    val contract: CapabilityContract,
+    val sourceFingerprint: String,
+    val reliability: Double,
+    val cost: Double,
+) {
+    init {
+        require(providerId.isNotBlank())
+        require(providerVersion.isNotBlank())
+        require(sourceFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(reliability.isFinite() && reliability in 0.0..1.0)
+        require(cost.isFinite() && cost >= 0.0)
+    }
+
+    val fingerprint: String = androidCapabilityFingerprint(
+        "universal-app-capability-candidate/v1",
+        capabilityId.value,
+        providerId,
+        providerVersion,
+        interfaceKind.name,
+        contract.requiredInputs.sorted().joinToString("\u001f"),
+        contract.outputs.sorted().joinToString("\u001f"),
+        sourceFingerprint,
+        java.lang.Double.toHexString(reliability),
+        java.lang.Double.toHexString(cost),
+    )
+
+    val activationAuthority: Boolean
+        get() = false
+
+    val executionAuthority: Boolean
+        get() = false
+
+    val ownerPolicyAuthority: Boolean
+        get() = false
+}
+
+data class AppCapabilityValidationEvidence(
+    val candidateFingerprint: String,
+    val shadowTestFingerprint: String,
+    val contractTestFingerprint: String,
+    val validatedProviderVersion: String,
+) {
+    init {
+        listOf(
+            candidateFingerprint,
+            shadowTestFingerprint,
+            contractTestFingerprint,
+        ).forEach {
+            require(it.matches(Regex("[0-9a-f]{64}"))) {
+                "App capability validation fingerprints must be SHA-256"
+            }
+        }
+        require(validatedProviderVersion.isNotBlank())
+    }
+
+    val fingerprint: String = androidCapabilityFingerprint(
+        "app-capability-validation-evidence/v1",
+        candidateFingerprint,
+        shadowTestFingerprint,
+        contractTestFingerprint,
+        validatedProviderVersion,
+    )
+
+    val effectAuthority: Boolean
+        get() = false
+}
+
+/**
+ * B461 adapter over the one canonical CapabilityRegistry.
+ *
+ * It owns no provider store. A discovered app surface remains a candidate until explicit shadow and
+ * contract evidence is bound to the exact candidate/provider version. Registration only exposes a
+ * capability descriptor; every productive Android action still passes the existing Android
+ * permission and OwnerPolicy effect gates at execution time.
+ */
+class UniversalAppCapabilityRegistryAdapter(
+    private val registry: CapabilityRegistry,
+) {
+    suspend fun promoteValidated(
+        candidate: UniversalAppCapabilityCandidate,
+        evidence: AppCapabilityValidationEvidence,
+    ): CapabilityDescriptor {
+        require(evidence.candidateFingerprint == candidate.fingerprint) {
+            "App capability validation evidence is bound to another candidate"
+        }
+        require(evidence.validatedProviderVersion == candidate.providerVersion) {
+            "App capability provider version changed after validation"
+        }
+
+        val descriptor = CapabilityDescriptor(
+            capabilityId = candidate.capabilityId,
+            providerId = candidate.providerId,
+            providerType = ProviderType.CONNECTOR,
+            contract = candidate.contract,
+            state = ProviderState.ACTIVE,
+            trustLevel = when (candidate.interfaceKind) {
+                AppCapabilityInterfaceKind.OFFICIAL_API,
+                AppCapabilityInterfaceKind.CONTENT_PROVIDER,
+                -> TrustLevel.MEDIUM
+
+                AppCapabilityInterfaceKind.INTENT,
+                AppCapabilityInterfaceKind.DEEP_LINK,
+                AppCapabilityInterfaceKind.SHARE_TARGET,
+                AppCapabilityInterfaceKind.NOTIFICATION_ACTION,
+                AppCapabilityInterfaceKind.ACCESSIBILITY_SEMANTIC,
+                AppCapabilityInterfaceKind.VISUAL_INTERACTION,
+                AppCapabilityInterfaceKind.COORDINATE_AUTOMATION,
+                -> TrustLevel.LOW
+            },
+            reliability = candidate.reliability,
+            cost = candidate.cost,
+        )
+        return registry.register(descriptor)
+    }
+
+    suspend fun current(
+        capabilityId: CapabilityId,
+    ): List<CapabilityDescriptor> =
+        registry.providersFor(
+            capabilityId = capabilityId,
+            includeUnavailable = true,
+        )
 }
