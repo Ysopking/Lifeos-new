@@ -8,7 +8,6 @@ import app.lifeos.core.runtime.artifact.OwnerAssetReviewCoordinator
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewRepository
 import app.lifeos.core.runtime.livedata.LiveDataHub
 import app.lifeos.core.runtime.livedata.LiveDataPhotonIngress
-import app.lifeos.core.runtime.life.PerceptionFusionEngine
 import app.lifeos.core.runtime.policy.OwnerObservationDecision
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import app.lifeos.core.runtime.policy.OwnerObservationRequest
@@ -30,7 +29,9 @@ class CanonicalPhotonIngress(
     ownerAssetReviews: OwnerAssetReviewRepository? = null,
     private val ownerObservationPolicy: OwnerObservationPolicyLedger? = null,
 ) {
-    private val informationObservationFusion = PerceptionFusionEngine()
+    private val informationObservationIngress by lazy {
+        CanonicalInformationObservationIngress(::ingestWithReceipt)
+    }
     private val artifactIngress by lazy {
         CanonicalArtifactPhotonIngress(::ingestWithReceipt)
     }
@@ -96,6 +97,9 @@ class CanonicalPhotonIngress(
                 photon
             },
         )
+        AuthorizedObservationPhotonIngress.install { observation ->
+            informationObservationIngress.ingest(observation)
+        }
         LiveNotificationPhotonIngress.install { observation ->
             val policy = ownerObservationPolicy
             val authorized = if (policy == null) {
@@ -120,17 +124,10 @@ class CanonicalPhotonIngress(
             }
 
             if (authorized != null) {
-                val photon = informationObservationFusion
-                    .fuse(
-                        listOf(
-                            authorized.toPerceptionSignal(
-                                salience = 0.6,
-                            )
-                        )
-                    )
-                    .photons
-                    .single()
-                ingest(photon, PhotonIngressMode.ORIGIN)
+                informationObservationIngress.ingest(
+                    observation = authorized,
+                    salience = 0.6,
+                )
             }
         }
     }
