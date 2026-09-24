@@ -75,6 +75,7 @@ import app.lifeos.next.kernel.MultimodalPerceptionRuntime
 import app.lifeos.next.kernel.PrivateEscalationRuntime
 import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
+import app.lifeos.next.kernel.PrivateOwnerObservationPolicyBaseline
 import app.lifeos.next.kernel.PrivateOwnerPolicyBaseline
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
 import app.lifeos.next.kernel.WebDeepSearchRuntime
@@ -204,7 +205,6 @@ internal class ProcessRuntimeInstaller(
                     GeneratedProviderRestoreAuthorityRuntimeRegistry.install(
                         GeneratedProviderRestoreAuthority(
                             ownerPolicy = ownerPolicy,
-            ownerObservationPolicy = ownerObservationPolicy,
                             actorId = PrivateOwnerPolicyBaseline.ownerActorId,
                             scope =
                                 PrivateOwnerPolicyBaseline
@@ -504,6 +504,7 @@ internal class ProcessRuntimeInstaller(
             storageMaintenance = storageMaintenance,
             storageIntelligenceController = storageIntelligenceController,
             ownerPolicy = ownerPolicy,
+            ownerObservationPolicy = ownerObservationPolicy,
             resourceBudgets = resourceBudgets,
             decisionTraces = decisionTraces,
             selfObservationDecisionTraceRecorder =
