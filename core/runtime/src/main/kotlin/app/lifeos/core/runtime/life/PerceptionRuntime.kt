@@ -1242,3 +1242,107 @@ class AuthorizedObservationPhotonCommitter(
         )
     }
 }
+
+
+// ---- B468 Hardware Sensor Observation Bridge ----
+
+data class HardwareSensorSample(
+    val sensorType: Int,
+    val sensorName: String,
+    val sensorVendor: String?,
+    val sensorVersion: Int?,
+    val accuracy: Int?,
+    val eventTimestampNanos: Long,
+    val observedAt: Instant,
+    val values: List<Double>,
+) {
+    init {
+        require(sensorType >= 0)
+        require(sensorName.isNotBlank())
+        require(sensorVendor == null || sensorVendor.isNotBlank())
+        require(sensorVersion == null || sensorVersion >= 0)
+        require(eventTimestampNanos >= 0L)
+        require(values.isNotEmpty())
+        require(values.all { it.isFinite() })
+    }
+
+    val sourceRevision: String = StableCognitiveIds.fingerprint(
+        "hardware-sensor-sample-source/v1",
+        sensorType.toString(),
+        sensorName,
+        sensorVendor.orEmpty(),
+        sensorVersion?.toString().orEmpty(),
+        accuracy?.toString().orEmpty(),
+        eventTimestampNanos.toString(),
+        *values.map(java.lang.Double::toHexString).toTypedArray(),
+    )
+}
+
+/**
+ * Maps one platform hardware sample into the same B451 InformationObservation grammar used by apps,
+ * files, browser surfaces and notifications.
+ *
+ * Raw sensor values remain observations. They are never promoted to owner intent, health facts,
+ * domain facts or action authority at this layer.
+ */
+class HardwareSensorObservationFactory(
+    private val sensorId: SensorId,
+) {
+    fun create(sample: HardwareSensorSample): InformationObservation =
+        InformationObservation(
+            sourceId = sensorId.value,
+            sourceResource = "android-sensor:${sample.sensorType}/${resourceComponent(sample.sensorName)}",
+            surface = ObservationSurfaceKind.SENSOR,
+            observedAt = sample.observedAt,
+            sourceTimestamp = sample.observedAt,
+            sourceRevision = sample.sourceRevision,
+            mimeType = "application/vnd.lifeos.hardware-sensor+text",
+            payload = buildString {
+                appendLine("sensor_type=${sample.sensorType}")
+                appendLine("sensor_name=${sample.sensorName}")
+                appendLine("sensor_vendor=${sample.sensorVendor.orEmpty()}")
+                appendLine("sensor_version=${sample.sensorVersion?.toString().orEmpty()}")
+                appendLine("accuracy=${sample.accuracy?.toString().orEmpty()}")
+                appendLine("event_timestamp_nanos=${sample.eventTimestampNanos}")
+                append(
+                    "values_hex=" +
+                        sample.values.joinToString(",") { java.lang.Double.toHexString(it) }
+                )
+            },
+            realization = RealizationDescriptor(
+                representation = RepresentationLevel.PROJECTED,
+                epistemicStatus = EpistemicStatus.OBSERVED,
+                temporalStatus = TemporalStatus.CURRENT,
+                controlStatus = ControlStatus.PASSIVE,
+            ),
+            authority = ObservationAuthorityClass.PLATFORM_PROVIDER,
+            privacy = ObservationPrivacyClass.PERSONAL,
+            confidence = 1.0,
+            tags = setOf(
+                "hardware-sensor",
+                "device-context",
+                "sensor-type:${sample.sensorType}",
+            ),
+            metadata = buildMap {
+                put("sensorType", sample.sensorType.toString())
+                put("sensorName", sample.sensorName)
+                sample.sensorVendor?.let { put("sensorVendor", it) }
+                sample.sensorVersion?.let { put("sensorVersion", it.toString()) }
+                sample.accuracy?.let { put("accuracy", it.toString()) }
+            },
+        )
+
+    private fun resourceComponent(value: String): String =
+        value.lowercase()
+            .map { character ->
+                when {
+                    character.isLetterOrDigit() -> character
+                    character == '-' || character == '_' || character == '.' -> character
+                    else -> '-'
+                }
+            }
+            .joinToString("")
+            .replace(Regex("-+"), "-")
+            .trim('-')
+            .ifBlank { "sensor" }
+}
