@@ -49,15 +49,38 @@ class LanguageUnderstandingEngine(
         WorldGroundedReferenceResolver(),
 ) {
     fun understand(text: String): LanguageUnderstandingResult =
-        understand(text, LanguageContext(), retainContext = false)
+        understand(
+            text = text,
+            context = LanguageContext(),
+            retainContext = false,
+            worldEvidence = emptyList(),
+        )
 
     fun understand(text: String, context: LanguageContext): LanguageUnderstandingResult =
-        understand(text, context, retainContext = true)
+        understand(
+            text = text,
+            context = context,
+            retainContext = true,
+            worldEvidence = emptyList(),
+        )
+
+    fun understand(
+        text: String,
+        context: LanguageContext,
+        worldEvidence: List<LanguageWorldInterpretationEvidence>,
+    ): LanguageUnderstandingResult =
+        understand(
+            text = text,
+            context = context,
+            retainContext = true,
+            worldEvidence = worldEvidence,
+        )
 
     private fun understand(
         text: String,
         context: LanguageContext,
         retainContext: Boolean,
+        worldEvidence: List<LanguageWorldInterpretationEvidence>,
     ): LanguageUnderstandingResult {
         val utterance = normalizer.normalize(text)
         val pragmaticAct = pragmaticActResolver.resolve(utterance)
@@ -129,19 +152,22 @@ class LanguageUnderstandingEngine(
             references = references,
             actionGraph = semanticActionGraph,
             linguisticField = linguisticField,
+            worldEvidence = worldEvidence,
         )
         val semanticIntent = interpretationLattice.winner
             ?.takeIf { interpretationLattice.converged }
             ?.intent
             ?: topIntent
         val operationalIntent = deriveOperationalIntent(semanticIntent, semanticActionGraph)
-        val ambiguities = buildAmbiguities(
-            evidence = evidence,
-            references = references,
-            topIntent = topIntent,
-            linguisticField = linguisticField,
-            actionGraph = semanticActionGraph,
-        )
+        val ambiguities = (
+            buildAmbiguities(
+                evidence = evidence,
+                references = references,
+                topIntent = topIntent,
+                linguisticField = linguisticField,
+                actionGraph = semanticActionGraph,
+            ) + buildWorldInterpretationAmbiguities(interpretationLattice)
+        ).distinctBy { it.code to it.message }
         val clarification = clarificationEngine.build(
             ambiguities = ambiguities,
             graph = semanticActionGraph,
@@ -414,6 +440,34 @@ class LanguageUnderstandingEngine(
             )
         }
         return result.distinctBy { it.code to it.message }
+    }
+
+    private fun buildWorldInterpretationAmbiguities(
+        lattice: SemanticInterpretationLattice,
+    ): List<Ambiguity> = buildList {
+        if (lattice.unresolvedDueToWorldState) {
+            val winner = lattice.winner
+            if (winner?.blockers?.contains("world-state-insufficient") == true) {
+                add(
+                    Ambiguity(
+                        code = "world_state_insufficient",
+                        message = "Interpretation requires world state that is not sufficiently established",
+                        alternatives = lattice.candidates.take(3).map { it.intent.name },
+                        severity = 0.90,
+                    )
+                )
+            }
+            if (winner?.blockers?.contains("world-contradiction") == true) {
+                add(
+                    Ambiguity(
+                        code = "world_evidence_conflict",
+                        message = "World evidence contradicts the leading language interpretation",
+                        alternatives = lattice.candidates.take(3).map { it.intent.name },
+                        severity = 0.95,
+                    )
+                )
+            }
+        }
     }
 
     private fun calculateConfidence(
