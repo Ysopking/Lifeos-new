@@ -57,6 +57,22 @@ class PhotonLanguageContextBuilder {
                     ?.substringAfter(':')
                     ?.takeIf { it.isNotBlank() }
                     ?.let(::PhotonId),
+                stateDimensionKeys = photon.tags
+                    .filter { it.startsWith("state-dimension:") }
+                    .mapTo(linkedSetOf()) { it.substringAfter("state-dimension:") },
+                episodeRefs = photon.tags
+                    .filter {
+                        it.startsWith("temporal-episode:") ||
+                            it.startsWith("episode:")
+                    }
+                    .toCollection(linkedSetOf()),
+                realizationKeys = photon.tags
+                    .filter {
+                        it.startsWith("representation:") ||
+                            it.startsWith("epistemic:") ||
+                            it.startsWith("temporal:")
+                    }
+                    .toCollection(linkedSetOf()),
             )
         }
         return LanguageContext(items = items, activeGoalId = activeGoal, now = now)
