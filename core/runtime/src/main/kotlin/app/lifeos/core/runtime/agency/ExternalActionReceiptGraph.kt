@@ -1,6 +1,12 @@
 package app.lifeos.core.runtime.agency
 
+import app.lifeos.core.field.FieldDomainId
+import app.lifeos.core.runtime.life.EpistemicStatus
+import app.lifeos.core.runtime.life.InformationObservation
+import app.lifeos.core.runtime.life.ObservationAuthorityClass
+import app.lifeos.core.runtime.life.RepresentationLevel
 import app.lifeos.core.runtime.policy.OwnerPolicyAssessment
+import app.lifeos.core.runtime.world.WorldGap
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -544,6 +550,14 @@ data class ExternalActionObservationExpectation(
         require(horizon <= MAX_RECONCILIATION_HORIZON)
         validateFieldFingerprints(expectedFieldFingerprints)
     }
+
+    fun fingerprint(): String = externalActionFingerprint(
+        "external-action-observation-expectation/v1",
+        resourceIdentity,
+        exposedAt.toString(),
+        horizon.toString(),
+        canonicalFieldFingerprint(expectedFieldFingerprints),
+    )
 }
 
 data class ExternalActionReconciliation(
@@ -1071,3 +1085,121 @@ private const val MAX_FIELD_KEY_CHARS = 256
 private const val MAX_OBSERVATION_FIELDS = 256
 private const val MAX_NODES_PER_REVISION = 512
 private const val MAX_EDGES_PER_REVISION = 1024
+
+// ---- B463 Authorized Action Re-observation Bridge ----
+
+sealed interface ExternalActionReobservationDecision {
+    val sourceObservationId: String
+
+    data class Eligible(
+        override val sourceObservationId: String,
+        val node: ExternalObservationNode,
+    ) : ExternalActionReobservationDecision
+
+    data class Insufficient(
+        override val sourceObservationId: String,
+        val reasonCode: String,
+    ) : ExternalActionReobservationDecision {
+        init {
+            require(reasonCode.isNotBlank())
+        }
+    }
+}
+
+/**
+ * Turns an already owner-authorized B451 observation into a candidate for the existing B411
+ * reconciliation path. Weak/projected observations remain context evidence but cannot close an
+ * external-action verification loop.
+ */
+object ExternalActionReobservationBridge {
+    fun fromObservation(
+        observation: InformationObservation,
+        fieldFingerprints: Map<String, String>,
+    ): ExternalActionReobservationDecision {
+        val sourceId = observation.id.value
+        if (observation.observationGrantId == null) {
+            return ExternalActionReobservationDecision.Insufficient(
+                sourceId,
+                "owner-observation-grant-missing",
+            )
+        }
+        if (observation.realization.representation != RepresentationLevel.ACTUAL) {
+            return ExternalActionReobservationDecision.Insufficient(
+                sourceId,
+                "observation-not-actual",
+            )
+        }
+        if (observation.authority.rank < ObservationAuthorityClass.PLATFORM_PROVIDER.rank) {
+            return ExternalActionReobservationDecision.Insufficient(
+                sourceId,
+                "observation-authority-insufficient",
+            )
+        }
+        if (
+            observation.realization.epistemicStatus == EpistemicStatus.INFERRED ||
+            observation.realization.epistemicStatus == EpistemicStatus.BELIEVED
+        ) {
+            return ExternalActionReobservationDecision.Insufficient(
+                sourceId,
+                "observation-epistemic-state-insufficient",
+            )
+        }
+        if (fieldFingerprints.isEmpty()) {
+            return ExternalActionReobservationDecision.Insufficient(
+                sourceId,
+                "no-verifiable-fields",
+            )
+        }
+
+        return ExternalActionReobservationDecision.Eligible(
+            sourceObservationId = sourceId,
+            node = ExternalObservationNode(
+                observationFingerprint = observation.sourceObservationFingerprint,
+                resourceIdentity = observation.sourceResource,
+                observedAt = observation.observedAt,
+                observationRevision = observation.sourceRevision,
+                fieldFingerprints = fieldFingerprints.toSortedMap(),
+            ),
+        )
+    }
+}
+
+// ---- B464 Closed Perception / Action Verification Gap ----
+
+/**
+ * Bridges the existing external-action reconciliation state into the B456 WorldGap vocabulary.
+ *
+ * CONFIRMED and CONTRADICTED are both verified terminal observations: one confirms the expected
+ * post-state and the other verifies that the expected transition did not occur. PARTIAL/UNKNOWN
+ * remain verification gaps and must not be treated as successful execution.
+ */
+object ExternalActionVerificationGapResolver {
+    fun resolve(
+        domainId: FieldDomainId,
+        graphId: ExternalActionGraphId,
+        expectation: ExternalActionObservationExpectation,
+        reconciliation: ExternalActionReconciliation,
+    ): WorldGap.Verification? =
+        when (reconciliation.state) {
+            ExternalActionOutcomeState.CONFIRMED,
+            ExternalActionOutcomeState.CONTRADICTED,
+            -> null
+
+            ExternalActionOutcomeState.PARTIAL,
+            ExternalActionOutcomeState.UNKNOWN,
+            -> WorldGap.Verification(
+                domain = domainId,
+                actionGraphId = graphId.value,
+                expectedStateContract =
+                    "external-action-expectation:${expectation.fingerprint()}",
+                missingObservationContract =
+                    "external-observation:${externalActionFingerprint(
+                        "external-action-observation-contract/v1",
+                        expectation.resourceIdentity,
+                        canonicalFieldFingerprint(expectation.expectedFieldFingerprints),
+                    )}",
+                reason = reconciliation.reasonCode,
+            )
+        }
+}
+
