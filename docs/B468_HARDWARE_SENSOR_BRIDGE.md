@@ -32,4 +32,7 @@ Hard invariants:
 - Owner Observation Policy is checked for every emitted batch
 - owner revocation remains effective because the grant is evaluated at ingest time
 - samples are rate-limited before cognition to avoid a raw high-frequency stream flooding the field
+- default EVENT_DRIVEN startup registers only Android on-change sensors
+- continuous accelerometer/gyro/etc. acquisition is reserved for PERIODIC or FOCUSED attention
+- SUSPENDED unregisters the bridge completely
 - the bridge owns no second durable truth store
