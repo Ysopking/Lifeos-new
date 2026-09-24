@@ -1,8 +1,13 @@
 package app.lifeos.core.runtime.android
 
+import app.lifeos.core.runtime.capability.CapabilityContract
 import app.lifeos.core.runtime.capability.CapabilityDescriptor
 import app.lifeos.core.runtime.capability.CapabilityId
 import app.lifeos.core.runtime.capability.CapabilityProviderCatalog
+import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.ProviderState
+import app.lifeos.core.runtime.capability.ProviderType
+import app.lifeos.core.runtime.capability.TrustLevel
 import app.lifeos.core.runtime.policy.OwnerEffectType
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -304,7 +309,7 @@ class AndroidCapabilityBus(
     }
 }
 
-private fun androidCapabilityFingerprint(
+internal fun androidCapabilityFingerprint(
     domain: String,
     vararg parts: String,
 ): String {
@@ -324,4 +329,270 @@ private fun androidCapabilityFingerprint(
     update(domain)
     parts.forEach(::update)
     return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+}
+
+
+// ---- B464A Explicit App Capability Discovery ----
+
+enum class AppCapabilityInterfaceKind(val stabilityRank: Int) {
+    OFFICIAL_API(8),
+    CONTENT_PROVIDER(7),
+    INTENT(6),
+    DEEP_LINK(5),
+    SHARE_TARGET(4),
+    NOTIFICATION_ACTION(3),
+    ACCESSIBILITY_SEMANTIC(2),
+    VISUAL_INTERACTION(1),
+    COORDINATE_AUTOMATION(0),
+}
+
+data class AppSurfaceEvidence(
+    val providerId: String,
+    val providerVersion: String,
+    val interfaceKind: AppCapabilityInterfaceKind,
+    val surfaceKey: String,
+    val semanticContracts: Set<String>,
+    val sourceFingerprint: String,
+) {
+    init {
+        require(providerId.isNotBlank())
+        require(providerVersion.isNotBlank())
+        require(surfaceKey.isNotBlank())
+        require(semanticContracts.isNotEmpty())
+        require(semanticContracts.none { it.isBlank() })
+        require(sourceFingerprint.matches(Regex("[0-9a-f]{64}")))
+    }
+
+    val fingerprint: String = androidCapabilityFingerprint(
+        "app-surface-evidence/v1",
+        providerId,
+        providerVersion,
+        interfaceKind.name,
+        surfaceKey,
+        semanticContracts.sorted().joinToString("\u001f"),
+        sourceFingerprint,
+    )
+
+    val platformInspectionAuthority: Boolean
+        get() = false
+}
+
+data class AppCapabilityDiscoveryRule(
+    val ruleId: String,
+    val capabilityId: CapabilityId,
+    val acceptedInterfaces: Set<AppCapabilityInterfaceKind>,
+    val requiredSemanticContracts: Set<String>,
+    val capabilityContract: CapabilityContract,
+    val reliability: Double,
+    val cost: Double,
+) {
+    init {
+        require(ruleId.isNotBlank())
+        require(acceptedInterfaces.isNotEmpty())
+        require(requiredSemanticContracts.isNotEmpty())
+        require(requiredSemanticContracts.none { it.isBlank() })
+        require(reliability.isFinite() && reliability in 0.0..1.0)
+        require(cost.isFinite() && cost >= 0.0)
+    }
+
+    val fingerprint: String = androidCapabilityFingerprint(
+        "app-capability-discovery-rule/v1",
+        ruleId,
+        capabilityId.value,
+        acceptedInterfaces.map { it.name }.sorted().joinToString("\u001f"),
+        requiredSemanticContracts.sorted().joinToString("\u001f"),
+        capabilityContract.requiredInputs.sorted().joinToString("\u001f"),
+        capabilityContract.outputs.sorted().joinToString("\u001f"),
+        java.lang.Double.toHexString(reliability),
+        java.lang.Double.toHexString(cost),
+    )
+}
+
+data class UniversalAppCapabilityCandidate(
+    val capabilityId: CapabilityId,
+    val providerId: String,
+    val providerVersion: String,
+    val interfaceKind: AppCapabilityInterfaceKind,
+    val contract: CapabilityContract,
+    val sourceFingerprint: String,
+    val discoveryRuleFingerprint: String,
+    val reliability: Double,
+    val cost: Double,
+) {
+    init {
+        require(providerId.isNotBlank())
+        require(providerVersion.isNotBlank())
+        require(sourceFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(discoveryRuleFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(reliability.isFinite() && reliability in 0.0..1.0)
+        require(cost.isFinite() && cost >= 0.0)
+    }
+
+    val fingerprint: String = androidCapabilityFingerprint(
+        "universal-app-capability-candidate/v1",
+        capabilityId.value,
+        providerId,
+        providerVersion,
+        interfaceKind.name,
+        contract.requiredInputs.sorted().joinToString("\u001f"),
+        contract.outputs.sorted().joinToString("\u001f"),
+        sourceFingerprint,
+        discoveryRuleFingerprint,
+        java.lang.Double.toHexString(reliability),
+        java.lang.Double.toHexString(cost),
+    )
+
+    val activationAuthority: Boolean
+        get() = false
+    val executionAuthority: Boolean
+        get() = false
+    val ownerPolicyAuthority: Boolean
+        get() = false
+}
+
+/**
+ * Pure classifier over already-authorized surface evidence. It does not enumerate apps, request
+ * permissions or activate providers. A rule match creates a SHADOW candidate only.
+ */
+class AppCapabilityDiscoveryClassifier(
+    rules: Collection<AppCapabilityDiscoveryRule>,
+) {
+    private val rules = rules.sortedBy { it.ruleId }.also { canonical ->
+        require(canonical.map { it.ruleId }.distinct().size == canonical.size) {
+            "App capability discovery rule ids must be unique"
+        }
+    }
+
+    fun classify(
+        evidence: Collection<AppSurfaceEvidence>,
+    ): List<UniversalAppCapabilityCandidate> =
+        evidence
+            .sortedWith(
+                compareBy<AppSurfaceEvidence> { it.providerId }
+                    .thenByDescending { it.interfaceKind.stabilityRank }
+                    .thenBy { it.surfaceKey }
+                    .thenBy { it.fingerprint }
+            )
+            .flatMap { surface ->
+                rules.asSequence()
+                    .filter { surface.interfaceKind in it.acceptedInterfaces }
+                    .filter {
+                        surface.semanticContracts.containsAll(
+                            it.requiredSemanticContracts
+                        )
+                    }
+                    .map { rule ->
+                        UniversalAppCapabilityCandidate(
+                            capabilityId = rule.capabilityId,
+                            providerId = surface.providerId,
+                            providerVersion = surface.providerVersion,
+                            interfaceKind = surface.interfaceKind,
+                            contract = rule.capabilityContract,
+                            sourceFingerprint = androidCapabilityFingerprint(
+                                "app-capability-discovery-source/v1",
+                                surface.fingerprint,
+                                rule.fingerprint,
+                            ),
+                            discoveryRuleFingerprint = rule.fingerprint,
+                            reliability = rule.reliability,
+                            cost = rule.cost,
+                        )
+                    }
+                    .toList()
+            }
+            .distinctBy { it.fingerprint }
+            .sortedWith(
+                compareBy<UniversalAppCapabilityCandidate> {
+                    it.capabilityId.value
+                }.thenByDescending { it.interfaceKind.stabilityRank }
+                    .thenBy { it.providerId }
+                    .thenBy { it.fingerprint }
+            )
+}
+
+
+// ---- B464B Canonical App Capability Registry Adapter ----
+
+data class AppCapabilityValidationEvidence(
+    val candidateFingerprint: String,
+    val shadowTestFingerprint: String,
+    val contractTestFingerprint: String,
+    val validatedProviderVersion: String,
+) {
+    init {
+        listOf(
+            candidateFingerprint,
+            shadowTestFingerprint,
+            contractTestFingerprint,
+        ).forEach {
+            require(it.matches(Regex("[0-9a-f]{64}"))) {
+                "App capability validation fingerprints must be SHA-256"
+            }
+        }
+        require(validatedProviderVersion.isNotBlank())
+    }
+
+    val fingerprint: String = androidCapabilityFingerprint(
+        "app-capability-validation-evidence/v1",
+        candidateFingerprint,
+        shadowTestFingerprint,
+        contractTestFingerprint,
+        validatedProviderVersion,
+    )
+
+    val effectAuthority: Boolean
+        get() = false
+}
+
+/**
+ * Uses the existing canonical CapabilityRegistry. It owns no second registry and cannot grant an
+ * effect. Productive use still passes platform permission and OwnerPolicy effect gates.
+ */
+class UniversalAppCapabilityRegistryAdapter(
+    private val registry: CapabilityRegistry,
+) {
+    suspend fun promoteValidated(
+        candidate: UniversalAppCapabilityCandidate,
+        evidence: AppCapabilityValidationEvidence,
+    ): CapabilityDescriptor {
+        require(evidence.candidateFingerprint == candidate.fingerprint) {
+            "App capability validation evidence is bound to another candidate"
+        }
+        require(evidence.validatedProviderVersion == candidate.providerVersion) {
+            "App capability provider version changed after validation"
+        }
+
+        val descriptor = CapabilityDescriptor(
+            capabilityId = candidate.capabilityId,
+            providerId = candidate.providerId,
+            providerType = ProviderType.CONNECTOR,
+            contract = candidate.contract,
+            state = ProviderState.ACTIVE,
+            trustLevel = when (candidate.interfaceKind) {
+                AppCapabilityInterfaceKind.OFFICIAL_API,
+                AppCapabilityInterfaceKind.CONTENT_PROVIDER,
+                -> TrustLevel.MEDIUM
+
+                AppCapabilityInterfaceKind.INTENT,
+                AppCapabilityInterfaceKind.DEEP_LINK,
+                AppCapabilityInterfaceKind.SHARE_TARGET,
+                AppCapabilityInterfaceKind.NOTIFICATION_ACTION,
+                AppCapabilityInterfaceKind.ACCESSIBILITY_SEMANTIC,
+                AppCapabilityInterfaceKind.VISUAL_INTERACTION,
+                AppCapabilityInterfaceKind.COORDINATE_AUTOMATION,
+                -> TrustLevel.LOW
+            },
+            reliability = candidate.reliability,
+            cost = candidate.cost,
+        )
+        return registry.register(descriptor)
+    }
+
+    suspend fun current(
+        capabilityId: CapabilityId,
+    ): List<CapabilityDescriptor> =
+        registry.providersFor(
+            capabilityId = capabilityId,
+            includeUnavailable = true,
+        )
 }
