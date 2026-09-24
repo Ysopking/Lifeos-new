@@ -5,6 +5,8 @@ import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.field.world.WorldNodeKind
 import app.lifeos.core.field.world.WorldSignalDimension
 import app.lifeos.core.field.world.WorldTargetRef
+import app.lifeos.core.language.GoalFrame
+import app.lifeos.core.language.LanguageReferenceGroundingStatus
 import app.lifeos.core.runtime.extension.ExtensionPointKind
 import app.lifeos.core.runtime.extension.ExtensionPointRegistration
 import app.lifeos.core.runtime.extension.ExtensionPointSnapshot
@@ -973,3 +975,245 @@ data class PersonalContextBootBinding(
         get() = false
 }
 
+
+
+// ---- B472 Language State Sufficiency ----
+
+enum class LanguageInterpretationNeedKind {
+    PERCEPTION,
+    CLARIFICATION,
+}
+
+data class LanguageInterpretationNeed(
+    val id: String,
+    val kind: LanguageInterpretationNeedKind,
+    val reason: String,
+    val stateDimension: StateDimensionId? = null,
+) {
+    init {
+        require(id.isNotBlank())
+        require(reason.isNotBlank())
+        if (kind == LanguageInterpretationNeedKind.PERCEPTION) {
+            require(stateDimension != null)
+        }
+    }
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "language-interpretation-need/v1",
+        id,
+        kind.name,
+        reason,
+        stateDimension?.value.orEmpty(),
+    )
+}
+
+data class LanguageStateSufficiencyPlan(
+    val contract: StateContract?,
+    val perceptionNeeds: List<LanguageInterpretationNeed>,
+    val clarificationNeeds: List<LanguageInterpretationNeed>,
+) {
+    init {
+        require(perceptionNeeds.all { it.kind == LanguageInterpretationNeedKind.PERCEPTION })
+        require(clarificationNeeds.all { it.kind == LanguageInterpretationNeedKind.CLARIFICATION })
+        require(
+            perceptionNeeds == perceptionNeeds.sortedBy { it.id } &&
+                clarificationNeeds == clarificationNeeds.sortedBy { it.id }
+        ) {
+            "Language interpretation needs must be deterministic"
+        }
+        require(
+            contract != null || perceptionNeeds.isEmpty()
+        ) {
+            "Perception needs require a state contract"
+        }
+    }
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "language-state-sufficiency-plan/v1",
+        contract?.fingerprint.orEmpty(),
+        *perceptionNeeds.map { "perception:${it.fingerprint}" }.toTypedArray(),
+        *clarificationNeeds.map { "clarification:${it.fingerprint}" }.toTypedArray(),
+    )
+}
+
+data class LanguageStateSufficiencyAssessment(
+    val plan: LanguageStateSufficiencyPlan,
+    val result: StateSufficiencyResult?,
+    val worldGaps: List<WorldGap>,
+) {
+    init {
+        require(
+            (plan.contract == null && result == null && worldGaps.isEmpty()) ||
+                (plan.contract != null && result != null)
+        )
+        require(worldGaps == worldGaps.sortedBy { it.id })
+    }
+
+    val interpretationReady: Boolean
+        get() =
+            plan.clarificationNeeds.isEmpty() &&
+                (result == null || result.status == StateSufficiencyStatus.SUFFICIENT)
+
+    val executionAuthority: Boolean
+        get() = false
+
+    val directWorldStateMutationAllowed: Boolean
+        get() = false
+}
+
+/**
+ * B472 converts unresolved language semantics into explicit StateSufficiency and clarification
+ * requirements. Modal semantics such as negation, quotation and hypothetical scope are not treated
+ * as missing state.
+ *
+ * Language sufficiency is descriptive only. Even a SUFFICIENT interpretation grants neither effect
+ * authority nor world-state mutation.
+ */
+class LanguageStateSufficiencyCoordinator(
+    private val detector: StateSufficiencyDetector = StateSufficiencyDetector(),
+) {
+    fun plan(goal: GoalFrame): LanguageStateSufficiencyPlan {
+        val perception = linkedMapOf<String, LanguageInterpretationNeed>()
+        val clarification = linkedMapOf<String, LanguageInterpretationNeed>()
+
+        goal.referenceGrounding.references.forEach { grounding ->
+            when (grounding.status) {
+                LanguageReferenceGroundingStatus.EXACT_REVISION -> Unit
+
+                LanguageReferenceGroundingStatus.AMBIGUOUS -> {
+                    val id = "reference-clarification:" + grounding.fingerprint
+                    clarification[id] = LanguageInterpretationNeed(
+                        id = id,
+                        kind = LanguageInterpretationNeedKind.CLARIFICATION,
+                        reason = "ambiguous-reference",
+                    )
+                }
+
+                LanguageReferenceGroundingStatus.STALE_REVISION,
+                LanguageReferenceGroundingStatus.OUTSIDE_CONTEXT,
+                LanguageReferenceGroundingStatus.LEGACY_ID_ONLY,
+                LanguageReferenceGroundingStatus.MISSING,
+                -> {
+                    val dimension = StateDimensionId(
+                        "language.reference." + StableFieldIds.fingerprint(
+                            "language-reference-state-dimension/v1",
+                            grounding.fingerprint,
+                        )
+                    )
+                    val id = "reference-perception:" + grounding.fingerprint
+                    perception[id] = LanguageInterpretationNeed(
+                        id = id,
+                        kind = LanguageInterpretationNeedKind.PERCEPTION,
+                        reason = grounding.status.name.lowercase(),
+                        stateDimension = dimension,
+                    )
+                }
+            }
+        }
+
+        goal.languageRealization.propositions.forEach { proposition ->
+            proposition.unresolvedReasons.sorted().forEach { reason ->
+                when {
+                    reason == "condition" -> {
+                        val dimension = StateDimensionId(
+                            "language.condition." + StableFieldIds.fingerprint(
+                                "language-condition-state-dimension/v1",
+                                proposition.nodeId.value,
+                            )
+                        )
+                        val id = "condition-perception:" + proposition.nodeId.value
+                        perception[id] = LanguageInterpretationNeed(
+                            id = id,
+                            kind = LanguageInterpretationNeedKind.PERCEPTION,
+                            reason = "unresolved-condition",
+                            stateDimension = dimension,
+                        )
+                    }
+
+                    reason == "reference" &&
+                        goal.referenceGrounding.references.isEmpty() -> {
+                        val dimension = StateDimensionId(
+                            "language.reference." + StableFieldIds.fingerprint(
+                                "language-proposition-reference-state-dimension/v1",
+                                proposition.nodeId.value,
+                            )
+                        )
+                        val id = "proposition-reference-perception:" + proposition.nodeId.value
+                        perception[id] = LanguageInterpretationNeed(
+                            id = id,
+                            kind = LanguageInterpretationNeedKind.PERCEPTION,
+                            reason = "unresolved-reference",
+                            stateDimension = dimension,
+                        )
+                    }
+
+                    reason.startsWith("role:") -> {
+                        val id = "role-clarification:${proposition.nodeId.value}:$reason"
+                        clarification[id] = LanguageInterpretationNeed(
+                            id = id,
+                            kind = LanguageInterpretationNeedKind.CLARIFICATION,
+                            reason = reason,
+                        )
+                    }
+
+                    else -> Unit
+                }
+            }
+        }
+
+        val perceptionNeeds = perception.values.sortedBy { it.id }
+        val clarificationNeeds = clarification.values.sortedBy { it.id }
+        val contract = if (perceptionNeeds.isEmpty()) {
+            null
+        } else {
+            StateContract.create(
+                id = "language-interpretation:" + StableFieldIds.fingerprint(
+                    "language-interpretation-state-contract/v1",
+                    goal.propositionGraph.fingerprint,
+                    goal.referenceGrounding.fingerprint,
+                    *perceptionNeeds.map { it.fingerprint }.toTypedArray(),
+                ),
+                domain = FieldDomainId("language"),
+                dimensions = perceptionNeeds.map {
+                    StateDimensionRequirement(
+                        dimension = requireNotNull(it.stateDimension),
+                        minimumAuthority = ObservationAuthorityClass.DERIVED_INFERENCE,
+                    )
+                },
+            )
+        }
+
+        return LanguageStateSufficiencyPlan(
+            contract = contract,
+            perceptionNeeds = perceptionNeeds,
+            clarificationNeeds = clarificationNeeds,
+        )
+    }
+
+    fun evaluate(
+        goal: GoalFrame,
+        evidence: Collection<StateDimensionEvidence>,
+        at: Instant,
+    ): LanguageStateSufficiencyAssessment {
+        val plan = plan(goal)
+        val contract = plan.contract
+        if (contract == null) {
+            return LanguageStateSufficiencyAssessment(
+                plan = plan,
+                result = null,
+                worldGaps = emptyList(),
+            )
+        }
+
+        val result = detector.evaluate(
+            contract = contract,
+            evidence = evidence,
+            at = at,
+        )
+        return LanguageStateSufficiencyAssessment(
+            plan = plan,
+            result = result,
+            worldGaps = StateWorldGapDetector.detect(contract, result),
+        )
+    }
+}
