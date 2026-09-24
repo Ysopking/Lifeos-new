@@ -756,3 +756,239 @@ class ProjectionClassificationEngine {
         }
     }
 }
+
+// ---- B460 Universal App Observation Ingress ----
+
+data class AppSensorCursor(
+    val sensorId: SensorId,
+    val revision: Long,
+    val sourcePosition: String? = null,
+) {
+    init {
+        require(revision >= 0L)
+        require(sourcePosition == null || sourcePosition.isNotBlank())
+    }
+
+    val fingerprint: String = StableCognitiveIds.fingerprint(
+        "app-sensor-cursor/v1",
+        sensorId.value,
+        revision.toString(),
+        sourcePosition.orEmpty(),
+    )
+}
+
+data class AppSensorBudget(
+    val maxObservations: Int = 128,
+    val maxPayloadChars: Int = 128 * 1024,
+) {
+    init {
+        require(maxObservations in 1..4096)
+        require(maxPayloadChars in 1..4 * 1024 * 1024)
+    }
+}
+
+data class AppObservationBatch private constructor(
+    val sensorId: SensorId,
+    val observations: List<InformationObservation>,
+    val nextCursor: AppSensorCursor,
+    val exhausted: Boolean,
+) {
+    init {
+        require(nextCursor.sensorId == sensorId)
+        require(observations.map { it.id }.distinct().size == observations.size)
+        require(
+            observations == observations.sortedWith(
+                compareBy<InformationObservation> { it.observedAt }
+                    .thenBy { it.id.value }
+            )
+        ) {
+            "App observation batches must use deterministic ordering"
+        }
+    }
+
+    val fingerprint: String = StableCognitiveIds.fingerprint(
+        "app-observation-batch/v1",
+        sensorId.value,
+        nextCursor.fingerprint,
+        exhausted.toString(),
+        *observations.map { it.provenanceFingerprint }.toTypedArray(),
+    )
+
+    companion object {
+        fun create(
+            sensorId: SensorId,
+            observations: Collection<InformationObservation>,
+            nextCursor: AppSensorCursor,
+            exhausted: Boolean,
+        ): AppObservationBatch {
+            require(nextCursor.sensorId == sensorId)
+            val grouped = observations.groupBy { it.id }
+            grouped.forEach { (id, copies) ->
+                require(copies.distinct().size == 1) {
+                    "Conflicting replay copies for observation $id"
+                }
+            }
+            val canonical = grouped.values
+                .map { it.first() }
+                .sortedWith(
+                    compareBy<InformationObservation> { it.observedAt }
+                        .thenBy { it.id.value }
+                )
+            return AppObservationBatch(
+                sensorId = sensorId,
+                observations = canonical,
+                nextCursor = nextCursor,
+                exhausted = exhausted,
+            )
+        }
+    }
+}
+
+interface AppSensorAdapter {
+    val descriptor: SensorDescriptor
+
+    suspend fun availability(): SensorHealthState
+
+    suspend fun observe(
+        cursor: AppSensorCursor,
+        budget: AppSensorBudget,
+    ): AppObservationBatch
+}
+
+/**
+ * B460 validates a sensor batch before Owner Observation Policy and canonical Photon persistence.
+ *
+ * Adapters can describe observations, but cannot mint owner grants, choose another sensor identity or
+ * emit resources/surfaces outside their registered descriptor.
+ */
+object AppObservationIngress {
+    fun validate(
+        descriptor: SensorDescriptor,
+        cursor: AppSensorCursor,
+        budget: AppSensorBudget,
+        batch: AppObservationBatch,
+    ): AppObservationBatch {
+        require(cursor.sensorId == descriptor.sensorId)
+        require(batch.sensorId == descriptor.sensorId)
+        require(batch.nextCursor.revision >= cursor.revision) {
+            "App sensor cursor revision must not move backwards"
+        }
+        require(batch.observations.size <= budget.maxObservations) {
+            "App sensor batch exceeds observation budget"
+        }
+        require(batch.observations.sumOf { it.payload.length } <= budget.maxPayloadChars) {
+            "App sensor batch exceeds payload budget"
+        }
+        batch.observations.forEach { observation ->
+            require(observation.sourceId == descriptor.sensorId.value) {
+                "Observation source id must be the registered sensor id"
+            }
+            require(observation.sourceResource.startsWith(descriptor.resourcePrefix)) {
+                "Observation resource is outside the sensor descriptor"
+            }
+            require(observation.surface in descriptor.supportedSurfaces) {
+                "Observation surface is outside the sensor descriptor"
+            }
+            require(observation.observationGrantId == null) {
+                "Sensor adapter cannot self-authorize Owner Observation Policy"
+            }
+        }
+        return batch
+    }
+}
+
+// ---- B461 App Usage Context ----
+
+enum class AppUsageEventType {
+    FOREGROUND_ENTER,
+    FOREGROUND_EXIT,
+    FOREGROUND_INTERVAL,
+}
+
+data class AppUsageEvent(
+    val packageName: String,
+    val foregroundSince: Instant,
+    val backgroundAt: Instant?,
+    val observedAt: Instant,
+    val eventType: AppUsageEventType,
+    val sourceRevision: String,
+) {
+    init {
+        require(packageName.isNotBlank())
+        require(sourceRevision.isNotBlank())
+        require(!observedAt.isBefore(foregroundSince))
+        when (eventType) {
+            AppUsageEventType.FOREGROUND_ENTER ->
+                require(backgroundAt == null) {
+                    "Foreground-enter usage event must remain open"
+                }
+            AppUsageEventType.FOREGROUND_EXIT,
+            AppUsageEventType.FOREGROUND_INTERVAL,
+            -> require(backgroundAt != null && !backgroundAt.isBefore(foregroundSince)) {
+                "Closed usage event requires a non-decreasing background time"
+            }
+        }
+        backgroundAt?.let {
+            require(!observedAt.isBefore(it)) {
+                "Usage observation cannot predate the closed foreground interval"
+            }
+        }
+    }
+
+    val durationMillis: Long?
+        get() = backgroundAt?.let {
+            java.time.Duration.between(foregroundSince, it).toMillis()
+        }
+}
+
+/**
+ * B461 emits behavior/context evidence only. App usage never exposes screen contents and never
+ * becomes owner intent or a domain fact by itself.
+ */
+class AppUsageObservationFactory(
+    private val sensorId: SensorId,
+) {
+    fun create(event: AppUsageEvent): InformationObservation =
+        InformationObservation(
+            sourceId = sensorId.value,
+            sourceResource = "android-usage:${event.packageName}",
+            surface = ObservationSurfaceKind.APP_USAGE,
+            observedAt = event.observedAt,
+            sourceTimestamp = event.backgroundAt ?: event.foregroundSince,
+            sourceRevision = event.sourceRevision,
+            mimeType = "application/vnd.lifeos.app-usage+text",
+            payload = buildString {
+                appendLine("package=${event.packageName}")
+                appendLine("event=${event.eventType.name}")
+                appendLine("foreground_since=${event.foregroundSince}")
+                appendLine("background_at=${event.backgroundAt.orEmptyString()}")
+                append("duration_ms=${event.durationMillis?.toString().orEmpty()}")
+            },
+            realization = RealizationDescriptor(
+                representation = RepresentationLevel.PROJECTED,
+                epistemicStatus = EpistemicStatus.OBSERVED,
+                temporalStatus = if (event.backgroundAt == null) {
+                    TemporalStatus.CURRENT
+                } else {
+                    TemporalStatus.HISTORY
+                },
+                controlStatus = ControlStatus.PASSIVE,
+            ),
+            authority = ObservationAuthorityClass.PLATFORM_PROVIDER,
+            privacy = ObservationPrivacyClass.PERSONAL,
+            confidence = 1.0,
+            tags = setOf(
+                "app-usage",
+                "behavior-context",
+                "app:${event.packageName}",
+            ),
+            metadata = buildMap {
+                put("package", event.packageName)
+                put("eventType", event.eventType.name)
+                event.durationMillis?.let { put("durationMillis", it.toString()) }
+            },
+        )
+
+    private fun Instant?.orEmptyString(): String = this?.toString().orEmpty()
+}
+
