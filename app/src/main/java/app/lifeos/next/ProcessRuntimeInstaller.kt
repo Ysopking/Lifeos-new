@@ -8,6 +8,7 @@ import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
 import app.lifeos.core.data.goal.EncryptedGoalCognitiveCycleBindingRepository
+import app.lifeos.core.data.policy.EncryptedOwnerObservationPolicyRepository
 import app.lifeos.core.data.policy.EncryptedOwnerPolicyRepository
 import app.lifeos.core.data.resource.EncryptedResourceBudgetRepository
 import app.lifeos.core.data.trace.EncryptedDecisionTraceRepository
@@ -46,6 +47,7 @@ import app.lifeos.core.runtime.life.FuturePlanningCoordinator
 import app.lifeos.core.runtime.life.FuturePlanningPersistence
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuite
 import app.lifeos.core.runtime.life.LifeOsIntegratedCognitionSuiteRegistry
+import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import app.lifeos.core.runtime.policy.OwnerPolicyEffectGate
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
@@ -90,6 +92,7 @@ internal data class ProcessRuntimeInstallResult(
     val storageMaintenance: AndroidStorageMaintenanceRuntime,
     val storageIntelligenceController: StorageIntelligenceProcessController,
     val ownerPolicy: OwnerPolicyLedger,
+    val ownerObservationPolicy: OwnerObservationPolicyLedger,
     val resourceBudgets: ResourceBudgetCoordinator,
     val decisionTraces: DecisionTraceLedger,
     val selfObservationDecisionTraceRecorder: SelfObservationDecisionTraceRecorder,
@@ -140,6 +143,7 @@ internal class ProcessRuntimeInstaller(
         )
 
         lateinit var ownerPolicy: OwnerPolicyLedger
+        lateinit var ownerObservationPolicy: OwnerObservationPolicyLedger
         lateinit var resourceBudgets: ResourceBudgetCoordinator
         lateinit var decisionTraces: DecisionTraceLedger
         lateinit var selfObservationDecisionTraceRecorder:
@@ -161,6 +165,9 @@ internal class ProcessRuntimeInstaller(
                     )
                     ownerPolicy = OwnerPolicyLedger(
                         EncryptedOwnerPolicyRepository(appContext)
+                    )
+                    ownerObservationPolicy = OwnerObservationPolicyLedger(
+                        EncryptedOwnerObservationPolicyRepository(appContext)
                     )
                     ExternalEffectRuntimeRegistry.install(
                         PolicyGatedExternalEffectExecutor(
@@ -192,10 +199,12 @@ internal class ProcessRuntimeInstaller(
                         LifecycleDecisionTraceRecorder(decisionTraces)
                     )
                     PrivateOwnerPolicyBaseline.ensure(ownerPolicy)
+                    PrivateOwnerObservationPolicyBaseline.ensure(ownerObservationPolicy)
                     WebDeepSearchRuntime.installPolicy(ownerPolicy)
                     GeneratedProviderRestoreAuthorityRuntimeRegistry.install(
                         GeneratedProviderRestoreAuthority(
                             ownerPolicy = ownerPolicy,
+            ownerObservationPolicy = ownerObservationPolicy,
                             actorId = PrivateOwnerPolicyBaseline.ownerActorId,
                             scope =
                                 PrivateOwnerPolicyBaseline
@@ -226,7 +235,11 @@ internal class ProcessRuntimeInstaller(
                     val ownerAssetReviews =
                         EncryptedOwnerAssetReviewRepository(appContext)
                     photonIngress =
-                        CanonicalPhotonIngress(kernel, ownerAssetReviews)
+                        CanonicalPhotonIngress(
+                            kernel = kernel,
+                            ownerAssetReviews = ownerAssetReviews,
+                            ownerObservationPolicy = ownerObservationPolicy,
+                        )
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
                         productiveIngress = photonIngress::ingest,
