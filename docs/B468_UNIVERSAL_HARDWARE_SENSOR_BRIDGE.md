@@ -16,3 +16,5 @@ Invariants:
 - commit failure preserves the previous checkpoint and marks the sensor degraded
 - unavailable, quarantined, or disabled sources are not polled
 - the bridge itself does not activate hardware or grant permissions
+
+The productive commit boundary remains the B467 authorized-observation ingress.
