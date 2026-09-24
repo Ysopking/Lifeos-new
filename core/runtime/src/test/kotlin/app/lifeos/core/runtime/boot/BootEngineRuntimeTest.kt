@@ -135,6 +135,82 @@ class BootEngineRuntimeTest {
     }
 
     @Test
+    fun perceptionDriftBeforeEvaluationFailsCycleWithoutPublishingWorldHead() = runTest {
+        val fixture = fixture()
+        val first = perceptionBinding("first", 1L)
+        var live = first
+        val runtime = fixture.runtime(
+            BootEnginePerceptionBindingSource { live }
+        )
+        val cycle = runtime.startCycle(
+            frozenInputs().copy(perceptionBinding = first)
+        )
+        live = perceptionBinding("second", 2L)
+        val request = fixture.profile.request(
+            projection = projection(),
+            links = emptyList(),
+            observedAt = observedAt,
+            cycle = cycle.context,
+            sourceTaskId = TaskId("task-perception-drift-evaluate"),
+            photonId = PhotonId("photon-perception-drift-evaluate"),
+            config = WorldFormulaConfig(requiredStableRounds = 1),
+        )
+
+        val failed = assertIs<BootEngineWorldEvaluation.Failed>(
+            runtime.evaluate(cycle.cycleId, request)
+        )
+
+        assertEquals(
+            "perception-binding-changed-before-world-evaluation",
+            failed.reason,
+        )
+        assertEquals(BootEngineCycleState.FAILED, failed.cycle.state)
+        assertNull(fixture.heads.load())
+        assertNull(fixture.cycles.loadActive())
+    }
+
+    @Test
+    fun perceptionDriftAfterEvaluationBlocksCommitAndTerminalizesCycle() = runTest {
+        val fixture = fixture()
+        val first = perceptionBinding("commit-first", 3L)
+        var live = first
+        val runtime = fixture.runtime(
+            BootEnginePerceptionBindingSource { live }
+        )
+        val cycle = runtime.startCycle(
+            frozenInputs().copy(perceptionBinding = first)
+        )
+        val request = fixture.profile.request(
+            projection = projection(),
+            links = emptyList(),
+            observedAt = observedAt,
+            cycle = cycle.context,
+            sourceTaskId = TaskId("task-perception-drift-commit"),
+            photonId = PhotonId("photon-perception-drift-commit"),
+            config = WorldFormulaConfig(requiredStableRounds = 1),
+        )
+        val evaluation = assertIs<BootEngineWorldEvaluation.Ready>(
+            runtime.evaluate(cycle.cycleId, request)
+        )
+        live = perceptionBinding("commit-second", 4L)
+
+        val blocked = assertIs<BootEngineCommitResult.Blocked>(
+            runtime.commit(evaluation)
+        )
+
+        assertEquals(
+            "perception-binding-changed-before-world-commit",
+            blocked.reason,
+        )
+        assertNull(fixture.heads.load())
+        assertNull(fixture.cycles.loadActive())
+        assertEquals(
+            BootEngineCycleState.FAILED,
+            fixture.cycles.load(cycle.cycleId)?.state,
+        )
+    }
+
+    @Test
     fun changedFrozenContextIsRejectedInsideActiveCycle() = runTest {
         val fixture = fixture()
         val runtime = fixture.runtime()
@@ -224,6 +300,23 @@ class BootEngineRuntimeTest {
         resourceSnapshotId = "resource-v1",
     )
 
+    private fun perceptionBinding(
+        seed: String,
+        policyRevision: Long,
+    ) = PersonalContextBootBinding(
+        personalContextSnapshotId = "personal-context:" +
+            app.lifeos.core.field.StableFieldIds.fingerprint(
+                "bootengine-perception-test/v1",
+                seed,
+            ),
+        sensorRegistryFingerprint =
+            app.lifeos.core.field.StableFieldIds.fingerprint(
+                "bootengine-sensor-test/v1",
+                seed,
+            ),
+        ownerObservationPolicyRevision = policyRevision,
+    )
+
     private fun projection() = FieldWorldSignalProjection(
         inputs = listOf(
             WorldFormulaInputSnapshot(
@@ -247,7 +340,9 @@ class BootEngineRuntimeTest {
     ) {
         private var nextCycle = 0
 
-        fun runtime(): BootEngineRuntime = BootEngineRuntime(
+        fun runtime(
+            perceptionBindingSource: BootEnginePerceptionBindingSource? = null,
+        ): BootEngineRuntime = BootEngineRuntime(
             cycles = cycles,
             worldHeads = heads,
             worldCoordinator = coordinator,
@@ -256,6 +351,7 @@ class BootEngineRuntimeTest {
                 nextCycle += 1
                 CognitiveCycleId("cycle-$nextCycle")
             },
+            perceptionBindingSource = perceptionBindingSource,
         )
     }
 

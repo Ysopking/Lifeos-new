@@ -305,6 +305,10 @@ sealed interface BootEngineCommitResult {
     }
 }
 
+fun interface BootEnginePerceptionBindingSource {
+    suspend fun current(): PersonalContextBootBinding?
+}
+
 sealed interface BootEngineRecoveryResult {
     data object NoActiveCycle : BootEngineRecoveryResult
     data class ResumePrepared(val cycle: BootEngineCycle) : BootEngineRecoveryResult
@@ -325,6 +329,7 @@ class BootEngineRuntime(
     private val worldCoordinator: WorldFormulaCoordinator,
     private val worldCommitter: ProductiveWorldHeadCommitter,
     private val newCycleId: () -> CognitiveCycleId,
+    private val perceptionBindingSource: BootEnginePerceptionBindingSource? = null,
 ) {
     private val mutex = Mutex()
 
@@ -344,6 +349,12 @@ class BootEngineRuntime(
             "BootEngine cannot start a new cycle while ${active?.cycleId} is active"
         }
         val currentWorldHead = worldHeads.load()
+        val frozenPerception = frozenInputs.perceptionBinding
+        if (frozenPerception != null && perceptionBindingSource != null) {
+            require(perceptionBindingSource.current() == frozenPerception) {
+                "BootEngine cannot start from a stale perception binding"
+            }
+        }
         val cycleId = newCycleId()
         val context = WorldFormulaCycleContext(
             cycleId = cycleId,
@@ -373,6 +384,18 @@ class BootEngineRuntime(
         }
         require(request.cycle == cycle.context) {
             "BootEngine request changed frozen cycle context"
+        }
+
+        if (!perceptionBindingMatches(cycle.context.perceptionBinding)) {
+            val reason = "perception-binding-changed-before-world-evaluation"
+            val failed = cycle.failed(reason)
+            check(cycles.compareAndSet(cycle.fingerprint, failed)) {
+                "BootEngine cycle changed while fail-closing perception drift"
+            }
+            return@withLock BootEngineWorldEvaluation.Failed(
+                cycle = failed,
+                reason = reason,
+            )
         }
 
         val execution = worldCoordinator.evaluate(request.request)
@@ -417,6 +440,15 @@ class BootEngineRuntime(
         require(evaluation.candidate.request.cycle == durableCycle.context)
         require(evaluation.candidate.request.id == durableCycle.productiveRequestId)
         require(evaluation.candidate.snapshot.id == durableCycle.worldSnapshotId)
+
+        if (!perceptionBindingMatches(durableCycle.context.perceptionBinding)) {
+            val reason = "perception-binding-changed-before-world-commit"
+            val failed = durableCycle.failed(reason)
+            if (!cycles.compareAndSet(durableCycle.fingerprint, failed)) {
+                return@withLock BootEngineCommitResult.ConcurrentCycleChanged
+            }
+            return@withLock BootEngineCommitResult.Blocked(reason)
+        }
 
         val liveHead = worldHeads.load()
         val expectedPrevious = durableCycle.context.previousWorldSnapshotId
@@ -483,8 +515,17 @@ class BootEngineRuntime(
             ?: return@withLock BootEngineRecoveryResult.NoActiveCycle
 
         when (cycle.state) {
-            BootEngineCycleState.PREPARED ->
-                BootEngineRecoveryResult.ResumePrepared(cycle)
+            BootEngineCycleState.PREPARED -> {
+                if (!perceptionBindingMatches(cycle.context.perceptionBinding)) {
+                    failRecoveredCycle(
+                        cycle,
+                        "perception-binding-changed-during-recovery",
+                    )
+                    BootEngineRecoveryResult.NoActiveCycle
+                } else {
+                    BootEngineRecoveryResult.ResumePrepared(cycle)
+                }
+            }
 
             BootEngineCycleState.WORLD_EVALUATED -> {
                 val head = worldReport.head
@@ -498,6 +539,12 @@ class BootEngineRuntime(
                         "BootEngine recovery could not finalize committed cycle"
                     }
                     BootEngineRecoveryResult.RecoveredCommitted(completed)
+                } else if (!perceptionBindingMatches(cycle.context.perceptionBinding)) {
+                    failRecoveredCycle(
+                        cycle,
+                        "perception-binding-changed-during-recovery",
+                    )
+                    BootEngineRecoveryResult.NoActiveCycle
                 } else {
                     BootEngineRecoveryResult.ResumeCommit(cycle)
                 }
@@ -507,6 +554,24 @@ class BootEngineRuntime(
             BootEngineCycleState.FAILED -> error(
                 "Terminal BootEngine cycle must not be returned as active"
             )
+        }
+    }
+
+    private suspend fun perceptionBindingMatches(
+        expected: PersonalContextBootBinding?,
+    ): Boolean {
+        if (expected == null) return true
+        val source = perceptionBindingSource ?: return true
+        return source.current() == expected
+    }
+
+    private suspend fun failRecoveredCycle(
+        cycle: BootEngineCycle,
+        reason: String,
+    ) {
+        val failed = cycle.failed(reason)
+        check(cycles.compareAndSet(cycle.fingerprint, failed)) {
+            "BootEngine cycle changed while fail-closing recovered perception drift"
         }
     }
 }

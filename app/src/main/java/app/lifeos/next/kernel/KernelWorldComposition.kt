@@ -26,6 +26,7 @@ import app.lifeos.core.model.PhotonRevisionRef
 import app.lifeos.core.model.PhotonIndexQuery
 import app.lifeos.core.model.PhotonIndexOrder
 import app.lifeos.core.runtime.boot.BootEngineFrozenInputs
+import app.lifeos.core.runtime.boot.BootEnginePerceptionBindingSource
 import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootReadSession
 import app.lifeos.core.runtime.boot.BootSnapshotLoader
@@ -322,6 +323,11 @@ internal class KernelWorldComposition(
             worldCommitter = productiveWorldHeadCommitter,
             newCycleId = {
                 CognitiveCycleId("cycle:${java.util.UUID.randomUUID()}")
+            },
+            perceptionBindingSource = personalContextBindingSource?.let { source ->
+                BootEnginePerceptionBindingSource {
+                    source.freeze().binding
+                }
             },
         )
         val productiveDecisionCoordinator = DurableConvergenceDecisionCoordinator(
