@@ -309,7 +309,7 @@ class AndroidCapabilityBus(
     }
 }
 
-private fun androidCapabilityFingerprint(
+internal fun androidCapabilityFingerprint(
     domain: String,
     vararg parts: String,
 ): String {
