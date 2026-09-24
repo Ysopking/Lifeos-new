@@ -61,6 +61,10 @@ internal class AndroidHardwareSensorBridge(
     private val observationFactory =
         HardwareSensorObservationFactory(descriptor.sensorId)
     private val started = AtomicBoolean(false)
+
+    @Volatile
+    private var attentionMode: SensorAttentionMode = SensorAttentionMode.EVENT_DRIVEN
+
     private val ingestMutex = Mutex()
     private val lastAcceptedEventNanos = ConcurrentHashMap<Int, Long>()
     private var cursor = AppSensorCursor(
@@ -69,32 +73,47 @@ internal class AndroidHardwareSensorBridge(
         sourcePosition = null,
     )
 
-    fun start(): Int {
-        if (!started.compareAndSet(false, true)) return 0
+    fun start(): Int = applyAttention(SensorAttentionMode.EVENT_DRIVEN)
 
+    /**
+     * Physical continuous sensors are active acquisition and therefore follow B459 attention.
+     * EVENT_DRIVEN subscribes only to Android on-change sensors. PERIODIC/FOCUSED may additionally
+     * activate continuous sensors; SUSPENDED turns the bridge off.
+     */
+    fun applyAttention(mode: SensorAttentionMode): Int {
+        attentionMode = mode
+        sensorManager.unregisterListener(this)
+        lastAcceptedEventNanos.clear()
+
+        if (mode == SensorAttentionMode.SUSPENDED) {
+            started.set(false)
+            return 0
+        }
+
+        started.set(true)
         var registered = 0
         supportedSensorTypes.forEach { sensorType ->
             sensorManager.getDefaultSensor(sensorType)?.let { sensor ->
+                if (!eligibleForMode(sensor, mode)) return@let
                 if (
                     sensorManager.registerListener(
                         this,
                         sensor,
-                        SAMPLING_PERIOD_US,
-                        MAX_REPORT_LATENCY_US,
+                        samplingPeriodUs(mode),
+                        maxReportLatencyUs(mode),
                     )
                 ) {
                     registered += 1
                 }
             }
         }
-        if (registered == 0) {
-            started.set(false)
-        }
+        if (registered == 0) started.set(false)
         return registered
     }
 
     fun stop() {
-        if (!started.compareAndSet(true, false)) return
+        attentionMode = SensorAttentionMode.SUSPENDED
+        started.set(false)
         sensorManager.unregisterListener(this)
         lastAcceptedEventNanos.clear()
     }
@@ -155,11 +174,17 @@ internal class AndroidHardwareSensorBridge(
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     private fun acceptByRateLimit(event: SensorEvent): Boolean {
+        val minimumIntervalNanos = when (attentionMode) {
+            SensorAttentionMode.FOCUSED -> FOCUSED_MIN_EVENT_INTERVAL_NANOS
+            SensorAttentionMode.PERIODIC -> PERIODIC_MIN_EVENT_INTERVAL_NANOS
+            SensorAttentionMode.EVENT_DRIVEN -> EVENT_MIN_EVENT_INTERVAL_NANOS
+            SensorAttentionMode.SUSPENDED -> Long.MAX_VALUE
+        }
         val previous = lastAcceptedEventNanos[event.sensor.type]
         if (
             previous != null &&
             event.timestamp >= previous &&
-            event.timestamp - previous < MIN_EVENT_INTERVAL_NANOS
+            event.timestamp - previous < minimumIntervalNanos
         ) {
             return false
         }
@@ -167,13 +192,46 @@ internal class AndroidHardwareSensorBridge(
         return true
     }
 
+    private fun eligibleForMode(
+        sensor: Sensor,
+        mode: SensorAttentionMode,
+    ): Boolean = when (mode) {
+        SensorAttentionMode.SUSPENDED -> false
+        SensorAttentionMode.EVENT_DRIVEN ->
+            sensor.reportingMode == Sensor.REPORTING_MODE_ON_CHANGE
+        SensorAttentionMode.PERIODIC,
+        SensorAttentionMode.FOCUSED,
+        -> sensor.reportingMode == Sensor.REPORTING_MODE_ON_CHANGE ||
+            sensor.reportingMode == Sensor.REPORTING_MODE_CONTINUOUS
+    }
+
+    private fun samplingPeriodUs(mode: SensorAttentionMode): Int = when (mode) {
+        SensorAttentionMode.FOCUSED -> FOCUSED_SAMPLING_PERIOD_US
+        SensorAttentionMode.PERIODIC -> PERIODIC_SAMPLING_PERIOD_US
+        SensorAttentionMode.EVENT_DRIVEN -> EVENT_SAMPLING_PERIOD_US
+        SensorAttentionMode.SUSPENDED -> PERIODIC_SAMPLING_PERIOD_US
+    }
+
+    private fun maxReportLatencyUs(mode: SensorAttentionMode): Int = when (mode) {
+        SensorAttentionMode.FOCUSED -> FOCUSED_MAX_REPORT_LATENCY_US
+        SensorAttentionMode.PERIODIC -> PERIODIC_MAX_REPORT_LATENCY_US
+        SensorAttentionMode.EVENT_DRIVEN -> EVENT_MAX_REPORT_LATENCY_US
+        SensorAttentionMode.SUSPENDED -> PERIODIC_MAX_REPORT_LATENCY_US
+    }
+
     private companion object {
         const val SENSOR_ID = "android-hardware-sensor-manager"
         const val ADAPTER_VERSION = "1"
         const val RESOURCE_PREFIX = "android-sensor:"
-        const val SAMPLING_PERIOD_US = 1_000_000
-        const val MAX_REPORT_LATENCY_US = 5_000_000
-        const val MIN_EVENT_INTERVAL_NANOS = 5_000_000_000L
+        const val FOCUSED_SAMPLING_PERIOD_US = 1_000_000
+        const val FOCUSED_MAX_REPORT_LATENCY_US = 5_000_000
+        const val PERIODIC_SAMPLING_PERIOD_US = 5_000_000
+        const val PERIODIC_MAX_REPORT_LATENCY_US = 30_000_000
+        const val EVENT_SAMPLING_PERIOD_US = 5_000_000
+        const val EVENT_MAX_REPORT_LATENCY_US = 30_000_000
+        const val FOCUSED_MIN_EVENT_INTERVAL_NANOS = 5_000_000_000L
+        const val PERIODIC_MIN_EVENT_INTERVAL_NANOS = 60_000_000_000L
+        const val EVENT_MIN_EVENT_INTERVAL_NANOS = 5_000_000_000L
         const val SENSOR_SALIENCE = 0.35
 
         val SENSOR_BUDGET = AppSensorBudget(
