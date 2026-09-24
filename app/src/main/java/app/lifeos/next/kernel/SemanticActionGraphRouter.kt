@@ -4,6 +4,9 @@ import app.lifeos.core.language.ClarificationPlan
 import app.lifeos.core.language.ClarificationReason
 import app.lifeos.core.language.GoalFrame
 import app.lifeos.core.language.IntentType
+import app.lifeos.core.language.LanguageReferenceGrounding
+import app.lifeos.core.language.LanguageReferenceGroundingState
+import app.lifeos.core.language.LanguageReferenceGroundingStatus
 import app.lifeos.core.language.ReferenceExpression
 import app.lifeos.core.language.ReferenceKind
 import app.lifeos.core.language.ResolvedReference
@@ -302,6 +305,23 @@ class SemanticActionGraphRouter(
                 targetPhotonRef = ref,
             )
         }
+        val dependencyGrounding = resultDependency?.let { ref ->
+            val expression = requireNotNull(dependencyReference).expression
+            LanguageReferenceGrounding(
+                expression = expression,
+                selectedPhotonId = ref.photonId,
+                selectedRevisionRef = ref,
+                status = LanguageReferenceGroundingStatus.EXACT_REVISION,
+                score = 1.0,
+                runnerUpScore = null,
+                matchedContextFingerprint = StableCognitiveIds.fingerprint(
+                    "semantic-action-result-grounding/v1",
+                    base.semanticActionGraph.fingerprint,
+                    updatedNode.id.value,
+                    ref.stableKey,
+                ),
+            )
+        }
 
         val dependencyRawText = dependencyReference?.expression?.rawText
         val nodeConfidence = when (updatedNode.type) {
@@ -345,6 +365,31 @@ class SemanticActionGraphRouter(
             ambiguities = scopedAmbiguities,
             clarification = scopedClarification,
             semanticActionGraph = nodeGraph,
+            referenceGrounding = if (dependencyGrounding == null) {
+                base.referenceGrounding
+            } else {
+                LanguageReferenceGroundingState(
+                    references = buildList {
+                        add(dependencyGrounding)
+                        addAll(
+                            base.referenceGrounding.references.filterNot { grounding ->
+                                grounding.selectedRevisionRef == resultDependency ||
+                                    grounding.selectedPhotonId == resultDependency?.photonId ||
+                                    grounding.expression.kind == ReferenceKind.LAST_RESULT ||
+                                    grounding.expression.rawText.equals(
+                                        dependencyRawText,
+                                        ignoreCase = true,
+                                    )
+                            }
+                        )
+                    }.sortedWith(
+                        compareBy<LanguageReferenceGrounding> { it.expression.rawText }
+                            .thenBy { it.expression.kind.name }
+                            .thenBy { it.selectedRevisionRef?.stableKey.orEmpty() }
+                            .thenBy { it.selectedPhotonId?.value.orEmpty() }
+                    )
+                )
+            },
         )
     }
 
