@@ -868,3 +868,108 @@ class SensorAttentionRuntime(
         return decisions
     }
 }
+
+// ---- B462 Personal Context Snapshot ----
+
+data class PersonalContextSnapshot private constructor(
+    val id: String,
+    val appObservationHeadFingerprint: String,
+    val sensorProjectionFingerprint: String,
+    val financialStateFingerprint: String?,
+    val relationshipStateFingerprint: String?,
+    val conversationStateFingerprint: String?,
+    val lifeGraphFingerprint: String?,
+    val evidenceHeadFingerprint: String,
+    val ownerObservationPolicyRevision: Long,
+    val createdAt: Instant,
+) {
+    init {
+        require(appObservationHeadFingerprint.isNotBlank())
+        require(sensorProjectionFingerprint.isNotBlank())
+        require(financialStateFingerprint == null || financialStateFingerprint.isNotBlank())
+        require(relationshipStateFingerprint == null || relationshipStateFingerprint.isNotBlank())
+        require(conversationStateFingerprint == null || conversationStateFingerprint.isNotBlank())
+        require(lifeGraphFingerprint == null || lifeGraphFingerprint.isNotBlank())
+        require(evidenceHeadFingerprint.isNotBlank())
+        require(ownerObservationPolicyRevision >= 0L)
+        require(id == "personal-context:${fingerprint()}")
+    }
+
+    val directWorldStateMutationAllowed: Boolean
+        get() = false
+
+    fun fingerprint(): String = StableFieldIds.fingerprint(
+        "personal-context-snapshot/v1",
+        appObservationHeadFingerprint,
+        sensorProjectionFingerprint,
+        financialStateFingerprint.orEmpty(),
+        relationshipStateFingerprint.orEmpty(),
+        conversationStateFingerprint.orEmpty(),
+        lifeGraphFingerprint.orEmpty(),
+        evidenceHeadFingerprint,
+        ownerObservationPolicyRevision.toString(),
+        createdAt.toString(),
+    )
+
+    companion object {
+        fun create(
+            appObservationHeadFingerprint: String,
+            sensorProjectionFingerprint: String,
+            financialStateFingerprint: String? = null,
+            relationshipStateFingerprint: String? = null,
+            conversationStateFingerprint: String? = null,
+            lifeGraphFingerprint: String? = null,
+            evidenceHeadFingerprint: String,
+            ownerObservationPolicyRevision: Long,
+            createdAt: Instant,
+        ): PersonalContextSnapshot {
+            val fingerprint = StableFieldIds.fingerprint(
+                "personal-context-snapshot/v1",
+                appObservationHeadFingerprint,
+                sensorProjectionFingerprint,
+                financialStateFingerprint.orEmpty(),
+                relationshipStateFingerprint.orEmpty(),
+                conversationStateFingerprint.orEmpty(),
+                lifeGraphFingerprint.orEmpty(),
+                evidenceHeadFingerprint,
+                ownerObservationPolicyRevision.toString(),
+                createdAt.toString(),
+            )
+            return PersonalContextSnapshot(
+                id = "personal-context:$fingerprint",
+                appObservationHeadFingerprint = appObservationHeadFingerprint,
+                sensorProjectionFingerprint = sensorProjectionFingerprint,
+                financialStateFingerprint = financialStateFingerprint,
+                relationshipStateFingerprint = relationshipStateFingerprint,
+                conversationStateFingerprint = conversationStateFingerprint,
+                lifeGraphFingerprint = lifeGraphFingerprint,
+                evidenceHeadFingerprint = evidenceHeadFingerprint,
+                ownerObservationPolicyRevision = ownerObservationPolicyRevision,
+                createdAt = createdAt,
+            )
+        }
+    }
+}
+
+data class PersonalContextBootBinding(
+    val personalContextSnapshotId: String,
+    val sensorRegistryFingerprint: String,
+    val ownerObservationPolicyRevision: Long,
+) {
+    init {
+        require(personalContextSnapshotId.startsWith("personal-context:"))
+        require(sensorRegistryFingerprint.isNotBlank())
+        require(ownerObservationPolicyRevision >= 0L)
+    }
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "personal-context-boot-binding/v1",
+        personalContextSnapshotId,
+        sensorRegistryFingerprint,
+        ownerObservationPolicyRevision.toString(),
+    )
+
+    val sensorPayloadAuthority: Boolean
+        get() = false
+}
+
