@@ -1,6 +1,7 @@
 package app.lifeos.next.kernel
 
 import app.lifeos.core.language.GoalPhotonFactory
+import app.lifeos.core.language.LanguageContext
 import app.lifeos.core.language.LanguageContextRetriever
 import app.lifeos.core.language.LanguageUnderstandingEngine
 import app.lifeos.core.model.Photon
