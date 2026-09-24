@@ -53,7 +53,12 @@ object SemanticExecutionGate {
             else -> {
                 val node = graph.executableNodeFor(goal.intent)
                 if (node != null) {
-                    SemanticExecutionDecision(true, "semantic-action-ready", node.id)
+                    val worldFormulaBlock = worldFormulaActionBlocker(goal, node)
+                    if (worldFormulaBlock == null) {
+                        SemanticExecutionDecision(true, "semantic-action-ready", node.id)
+                    } else {
+                        SemanticExecutionDecision(false, worldFormulaBlock, node.id)
+                    }
                 } else {
                     val predicate = goal.intent.toPredicateConcept()
                     val candidate = graph.nodes
@@ -78,6 +83,47 @@ object SemanticExecutionGate {
         }
     }
 
+    private fun worldFormulaActionBlocker(
+        goal: GoalFrame,
+        node: SemanticActionNode,
+    ): String? {
+        if (goal.interpretationLattice.unresolvedDueToWorldState) {
+            return "semantic-action-world-state-unresolved"
+        }
+
+        val realization = goal.languageRealization.propositions
+            .firstOrNull { it.nodeId == node.id }
+        if (realization != null) {
+            val blockingMode = BLOCKING_ACTION_MODALITIES
+                .firstOrNull { it in realization.modalStatuses }
+            if (blockingMode != null) {
+                return "semantic-action-worldformula-modal:" +
+                    blockingMode.name.lowercase().replace('_', '-')
+            }
+            if (realization.epistemicStatus == LanguageEpistemicStatus.COUNTERFACTUAL) {
+                return "semantic-action-worldformula-counterfactual"
+            }
+        }
+
+        val nodeRefs = node.frame.roles.values
+            .mapNotNullTo(linkedSetOf()) { it.referencePhoton }
+        if (nodeRefs.isNotEmpty() && goal.referenceGrounding.references.isNotEmpty()) {
+            val groundingsByRef = goal.referenceGrounding.references
+                .filter { it.selectedRevisionRef != null }
+                .groupBy { it.selectedRevisionRef }
+            val unresolved = nodeRefs.firstOrNull { ref ->
+                groundingsByRef[ref]
+                    ?.none { it.status == LanguageReferenceGroundingStatus.EXACT_REVISION }
+                    ?: true
+            }
+            if (unresolved != null) {
+                return "semantic-action-reference-not-exact-revision"
+            }
+        }
+
+        return null
+    }
+
     fun externalEffectAllowed(goal: GoalFrame): Boolean {
         val decision = evaluate(goal)
         if (!decision.allowed) return false
@@ -87,4 +133,14 @@ object SemanticExecutionGate {
             ?.externalEffectExecutable
             ?: false
     }
+
+    private val BLOCKING_ACTION_MODALITIES = setOf(
+        LanguageModalStatus.QUOTED,
+        LanguageModalStatus.HYPOTHETICAL,
+        LanguageModalStatus.COUNTERFACTUAL,
+        LanguageModalStatus.NEGATED,
+        LanguageModalStatus.CONDITIONAL,
+        LanguageModalStatus.REMEMBERED,
+        LanguageModalStatus.PLANNED,
+    )
 }
