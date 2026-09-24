@@ -74,13 +74,6 @@ data class SemanticPropositionNode(
     val realization: LanguagePropositionRealization,
     val confidence: Double,
 ) {
-    init {
-        require(clauseId >= 0)
-        require(confidence.isFinite() && confidence in 0.0..1.0)
-        require(realization.nodeId == sourceActionNodeId)
-        require(id == expectedId())
-    }
-
     val fingerprint: String = StableCognitiveIds.fingerprint(
         "semantic-proposition-node/v1",
         sourceActionNodeId.value,
@@ -104,6 +97,13 @@ data class SemanticPropositionNode(
             }
             .toTypedArray(),
     )
+
+    init {
+        require(clauseId >= 0)
+        require(confidence.isFinite() && confidence in 0.0..1.0)
+        require(realization.nodeId == sourceActionNodeId)
+        require(id == expectedId())
+    }
 
     val directWorldTruthAuthority: Boolean
         get() = false
@@ -169,12 +169,6 @@ data class SemanticPropositionEdge(
     val sourceActionEdgeId: SemanticActionEdgeId,
     val confidence: Double,
 ) {
-    init {
-        require(from != to)
-        require(confidence.isFinite() && confidence in 0.0..1.0)
-        require(id == expectedId())
-    }
-
     val fingerprint: String = StableCognitiveIds.fingerprint(
         "semantic-proposition-edge/v1",
         from.value,
@@ -183,6 +177,12 @@ data class SemanticPropositionEdge(
         sourceActionEdgeId.value,
         java.lang.Double.toHexString(confidence),
     )
+
+    init {
+        require(from != to)
+        require(confidence.isFinite() && confidence in 0.0..1.0)
+        require(id == expectedId())
+    }
 
     val worldCausalityAuthority: Boolean
         get() = false
