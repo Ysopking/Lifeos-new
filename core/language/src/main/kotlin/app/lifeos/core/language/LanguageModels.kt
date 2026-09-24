@@ -123,10 +123,16 @@ data class LanguageContextItem(
     val conversationId: String? = null,
     val matterId: String? = null,
     val goalId: PhotonId? = null,
+    val stateDimensionKeys: Set<String> = emptySet(),
+    val episodeRefs: Set<String> = emptySet(),
+    val realizationKeys: Set<String> = emptySet(),
 ) {
     init {
         require(kind.isNotBlank())
         require(confidence in 0.0..1.0)
+        require(stateDimensionKeys.none { it.isBlank() })
+        require(episodeRefs.none { it.isBlank() })
+        require(realizationKeys.none { it.isBlank() })
     }
 }
 
@@ -196,6 +202,11 @@ data class GoalFrame(
     val pragmaticAct: PragmaticAct = PragmaticAct.none(),
     val interpretationQuality: SemanticInterpretationQuality = SemanticInterpretationQuality.unknown(),
     val languageRealization: LanguageRealizationState = LanguageRealizationState.empty(),
+    val propositionGraph: SemanticPropositionGraph = SemanticPropositionGraph.empty(),
+    val referenceGrounding: LanguageReferenceGroundingState =
+        LanguageReferenceGroundingState.empty(),
+    val temporalModalReality: LanguageTemporalModalRealityState =
+        LanguageTemporalModalRealityState.empty(),
 ) {
     init {
         require(objective.isNotBlank())
