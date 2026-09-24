@@ -1,6 +1,8 @@
 package app.lifeos.core.runtime.agency
 
+import app.lifeos.core.field.FieldDomainId
 import app.lifeos.core.runtime.policy.OwnerPolicyAssessment
+import app.lifeos.core.runtime.world.WorldGap
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -544,6 +546,14 @@ data class ExternalActionObservationExpectation(
         require(horizon <= MAX_RECONCILIATION_HORIZON)
         validateFieldFingerprints(expectedFieldFingerprints)
     }
+
+    fun fingerprint(): String = externalActionFingerprint(
+        "external-action-observation-expectation/v1",
+        resourceIdentity,
+        exposedAt.toString(),
+        horizon.toString(),
+        canonicalFieldFingerprint(expectedFieldFingerprints),
+    )
 }
 
 data class ExternalActionReconciliation(
@@ -1071,3 +1081,43 @@ private const val MAX_FIELD_KEY_CHARS = 256
 private const val MAX_OBSERVATION_FIELDS = 256
 private const val MAX_NODES_PER_REVISION = 512
 private const val MAX_EDGES_PER_REVISION = 1024
+
+
+// ---- B464 Closed Perception / Action Verification Gap ----
+
+/**
+ * Bridges the existing external-action reconciliation state into the B456 WorldGap vocabulary.
+ *
+ * CONFIRMED and CONTRADICTED are both verified terminal observations: one confirms the expected
+ * post-state and the other verifies that the expected transition did not occur. PARTIAL/UNKNOWN
+ * remain verification gaps and must not be treated as successful execution.
+ */
+object ExternalActionVerificationGapResolver {
+    fun resolve(
+        domainId: FieldDomainId,
+        graphId: ExternalActionGraphId,
+        expectation: ExternalActionObservationExpectation,
+        reconciliation: ExternalActionReconciliation,
+    ): WorldGap.Verification? =
+        when (reconciliation.state) {
+            ExternalActionOutcomeState.CONFIRMED,
+            ExternalActionOutcomeState.CONTRADICTED,
+            -> null
+
+            ExternalActionOutcomeState.PARTIAL,
+            ExternalActionOutcomeState.UNKNOWN,
+            -> WorldGap.Verification(
+                domain = domainId,
+                actionGraphId = graphId.value,
+                expectedStateContract =
+                    "external-action-expectation:${expectation.fingerprint()}",
+                missingObservationContract =
+                    "external-observation:${externalActionFingerprint(
+                        "external-action-observation-contract/v1",
+                        expectation.resourceIdentity,
+                        canonicalFieldFingerprint(expectation.expectedFieldFingerprints),
+                    )}",
+                reason = reconciliation.reasonCode,
+            )
+        }
+}
