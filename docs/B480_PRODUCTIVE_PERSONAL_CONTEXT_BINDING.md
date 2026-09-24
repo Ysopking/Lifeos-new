@@ -20,3 +20,9 @@ Hard invariants:
 - Photon heads are bounded and exact-revision based
 - missing domain projections remain null rather than invented
 - a productive cycle receives exactly the observation/policy context frozen at cycle start
+
+
+Snapshot identity is stable while the underlying bounded Photon heads, sensor checkpoints/health and
+policy revision are unchanged. Capture time is derived from the latest participating Photon or sensor
+checkpoint (or EPOCH for an empty context), so merely reading the same context twice cannot create a
+new BootEngine perception identity.

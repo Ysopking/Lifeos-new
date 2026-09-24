@@ -315,7 +315,6 @@ class ConversationTurnCoordinatorTest {
                 photons = repository,
                 sensors = sensors,
                 ownerObservationPolicy = policy,
-                now = { now },
             )
 
             val frozen = source.freeze()
@@ -337,6 +336,14 @@ class ConversationTurnCoordinatorTest {
             )
             assertTrue(
                 frozen.snapshot.conversationStateFingerprint != null
+            )
+            assertEquals(
+                now.minusSeconds(5),
+                frozen.snapshot.createdAt,
+            )
+            assertEquals(
+                frozen.binding,
+                source.freeze().binding,
             )
         }
 

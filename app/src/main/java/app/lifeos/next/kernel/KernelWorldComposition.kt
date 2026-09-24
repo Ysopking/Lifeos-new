@@ -72,7 +72,6 @@ internal class ProductivePersonalContextBindingSource(
     private val photons: RevisionedPhotonRepository,
     private val sensors: AppSensorRegistry,
     private val ownerObservationPolicy: OwnerObservationPolicyLedger,
-    private val now: () -> Instant = Instant::now,
 ) {
     suspend fun freeze(): FrozenProductivePersonalContext {
         val sensorSnapshot = sensors.snapshot()
@@ -126,7 +125,10 @@ internal class ProductivePersonalContextBindingSource(
                 refs = evidenceRefs,
             ),
             ownerObservationPolicyRevision = policySnapshot.revision,
-            createdAt = now(),
+            createdAt = stableContextTime(
+                refs = observationRefs + evidenceRefs + conversationRefs,
+                sensorSnapshot = sensorSnapshot,
+            ),
         )
         return FrozenProductivePersonalContext(
             snapshot = snapshot,
@@ -155,6 +157,18 @@ internal class ProductivePersonalContextBindingSource(
         namespace,
         *refs.map { it.stableKey }.toTypedArray(),
     )
+
+    private suspend fun stableContextTime(
+        refs: List<PhotonRevisionRef>,
+        sensorSnapshot: AppSensorRegistrySnapshot,
+    ): Instant {
+        val photonTimes = refs
+            .distinct()
+            .mapNotNull { ref -> photons.load(ref)?.provenance?.createdAt }
+        val sensorTimes = sensorSnapshot.sensors
+            .mapNotNull { it.checkpoint?.committedAt }
+        return (photonTimes + sensorTimes).maxOrNull() ?: Instant.EPOCH
+    }
 
     private companion object {
         const val MAX_OBSERVATION_REFS = 256
