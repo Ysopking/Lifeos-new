@@ -3,10 +3,16 @@ package app.lifeos.next
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import app.lifeos.core.model.Photon
-import app.lifeos.core.model.PhotonId
-import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.life.ControlStatus
+import app.lifeos.core.runtime.life.EpistemicStatus
+import app.lifeos.core.runtime.life.InformationObservation
+import app.lifeos.core.runtime.life.ObservationAuthorityClass
+import app.lifeos.core.runtime.life.ObservationPrivacyClass
+import app.lifeos.core.runtime.life.ObservationSurfaceKind
+import app.lifeos.core.runtime.life.RealizationDescriptor
+import app.lifeos.core.runtime.life.RepresentationLevel
+import app.lifeos.core.runtime.life.TemporalStatus
 import app.lifeos.core.runtime.android.NotificationActionDescriptor
 import app.lifeos.core.runtime.android.NotificationIdentity
 import app.lifeos.next.kernel.LiveNotificationPhotonIngress
@@ -63,7 +69,7 @@ class LiveNotificationListenerService : NotificationListenerService() {
         } ?: LiveNotificationActionRegistry.remove(sbn.key)
 
         scope.launch {
-            LiveNotificationPhotonIngress.ingest(projection.photon)
+            LiveNotificationPhotonIngress.ingest(projection.observation)
         }
     }
 
@@ -109,9 +115,15 @@ class LiveNotificationListenerService : NotificationListenerService() {
             actionLabels.joinToString("\u001f"),
         )
         val isMessage = category == Notification.CATEGORY_MESSAGE || conversation.isNotBlank()
-        val photon = Photon(
-            id = PhotonId("android-notification-$fingerprint"),
-            content = buildString {
+        val observation = InformationObservation(
+            sourceId = "android-notification-listener",
+            sourceResource = "android-notification:$packageName:$key",
+            surface = ObservationSurfaceKind.NOTIFICATION,
+            observedAt = postedAt,
+            sourceTimestamp = postedAt,
+            sourceRevision = fingerprint,
+            mimeType = "application/vnd.lifeos.android-notification+text",
+            payload = buildString {
                 appendLine("package=$packageName")
                 appendLine("category=$category")
                 appendLine("title=$title")
@@ -121,13 +133,15 @@ class LiveNotificationListenerService : NotificationListenerService() {
                 appendLine("action_labels=${actionLabels.joinToString(" || ")}")
                 append("posted_at=$postedAt")
             },
-            mimeType = "application/vnd.lifeos.android-notification+text",
-            confidence = 1.0,
-            provenance = Provenance(
-                source = "android-notification-listener",
-                actor = packageName,
-                createdAt = postedAt,
+            realization = RealizationDescriptor(
+                representation = RepresentationLevel.PROJECTED,
+                epistemicStatus = EpistemicStatus.OBSERVED,
+                temporalStatus = TemporalStatus.CURRENT,
+                controlStatus = ControlStatus.PASSIVE,
             ),
+            authority = ObservationAuthorityClass.PLATFORM_NOTIFICATION,
+            privacy = ObservationPrivacyClass.PERSONAL,
+            confidence = 1.0,
             tags = buildSet {
                 add("notification")
                 add("live-context")
@@ -136,6 +150,12 @@ class LiveNotificationListenerService : NotificationListenerService() {
                 if (isMessage) add("message")
                 if (conversation.isNotBlank()) add("conversation:$conversation")
                 if (actionLabels.isNotEmpty()) add("notification-actions")
+            },
+            metadata = buildMap {
+                put("package", packageName)
+                put("notificationKey", key)
+                put("category", category)
+                if (conversation.isNotBlank()) put("conversation", conversation)
             },
         )
 
@@ -177,7 +197,7 @@ class LiveNotificationListenerService : NotificationListenerService() {
         }
 
         return NotificationProjection(
-            photon = photon,
+            observation = observation,
             identity = identity,
             handles = handles,
         )
@@ -190,7 +210,7 @@ class LiveNotificationListenerService : NotificationListenerService() {
         .take(MAX_TEXT_LENGTH)
 
     private data class NotificationProjection(
-        val photon: Photon,
+        val observation: InformationObservation,
         val identity: NotificationIdentity?,
         val handles: List<LiveNotificationActionHandle>,
     )

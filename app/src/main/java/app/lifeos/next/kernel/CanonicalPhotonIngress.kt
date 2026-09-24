@@ -8,6 +8,7 @@ import app.lifeos.core.runtime.artifact.OwnerAssetReviewCoordinator
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewRepository
 import app.lifeos.core.runtime.livedata.LiveDataHub
 import app.lifeos.core.runtime.livedata.LiveDataPhotonIngress
+import app.lifeos.core.runtime.life.PerceptionFusionEngine
 
 /**
  * Single productive Android ingress for Photons that must become immediately visible to the live
@@ -24,6 +25,7 @@ class CanonicalPhotonIngress(
     private val kernel: LifeOsKernel,
     ownerAssetReviews: OwnerAssetReviewRepository? = null,
 ) {
+    private val informationObservationFusion = PerceptionFusionEngine()
     private val artifactIngress by lazy {
         CanonicalArtifactPhotonIngress(::ingestWithReceipt)
     }
@@ -89,7 +91,17 @@ class CanonicalPhotonIngress(
                 photon
             },
         )
-        LiveNotificationPhotonIngress.install { photon ->
+        LiveNotificationPhotonIngress.install { observation ->
+            val photon = informationObservationFusion
+                .fuse(
+                    listOf(
+                        observation.toPerceptionSignal(
+                            salience = 0.6,
+                        )
+                    )
+                )
+                .photons
+                .single()
             ingest(photon, PhotonIngressMode.ORIGIN)
         }
     }
