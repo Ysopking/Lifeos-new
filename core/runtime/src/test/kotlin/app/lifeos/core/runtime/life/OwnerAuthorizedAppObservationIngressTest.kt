@@ -175,9 +175,11 @@ class OwnerAuthorizedAppObservationIngressTest {
         )
 
         val persisted = mutableListOf<Photon>()
-        val receipt = AuthorizedObservationPhotonCommitter { photon ->
-            persisted += photon
-        }.commit(authorized)
+        val receipt = AuthorizedObservationPhotonCommitter(
+            persistOrigin = { photon ->
+                persisted += photon
+            }
+        ).commit(authorized)
 
         assertEquals(1, persisted.size)
         assertEquals(1, receipt.committed.size)
@@ -204,9 +206,11 @@ class OwnerAuthorizedAppObservationIngressTest {
         )
 
         var writes = 0
-        val receipt = AuthorizedObservationPhotonCommitter {
-            writes += 1
-        }.commit(blocked)
+        val receipt = AuthorizedObservationPhotonCommitter(
+            persistOrigin = {
+                writes += 1
+            }
+        ).commit(blocked)
 
         assertEquals(0, writes)
         assertTrue(receipt.committed.isEmpty())
