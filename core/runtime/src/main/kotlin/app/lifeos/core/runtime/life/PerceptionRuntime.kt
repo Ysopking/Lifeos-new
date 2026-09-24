@@ -6,6 +6,10 @@ import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.core.runtime.policy.OwnerActorId
+import app.lifeos.core.runtime.policy.OwnerObservationDecision
+import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
+import app.lifeos.core.runtime.policy.OwnerObservationRequest
 import app.lifeos.core.runtime.policy.OwnerObservationType
 import java.time.Instant
 import kotlinx.coroutines.sync.Mutex
@@ -992,3 +996,249 @@ class AppUsageObservationFactory(
     private fun Instant?.orEmptyString(): String = this?.toString().orEmpty()
 }
 
+
+
+// ---- B466 Owner-Authorized Sensor Ingress ----
+
+data class BlockedInformationObservation(
+    val observationId: InformationObservationId,
+    val policyRevision: Long,
+    val reasons: List<String>,
+) {
+    init {
+        require(policyRevision >= 0L)
+        require(reasons.isNotEmpty())
+        require(reasons == reasons.distinct().sorted()) {
+            "Blocked observation reasons must be unique and canonical"
+        }
+    }
+
+    val fingerprint: String = StableCognitiveIds.fingerprint(
+        "blocked-information-observation/v1",
+        observationId.value,
+        policyRevision.toString(),
+        *reasons.toTypedArray(),
+    )
+}
+
+data class OwnerAuthorizedObservationBatch(
+    val sensorId: SensorId,
+    val authorized: List<InformationObservation>,
+    val blocked: List<BlockedInformationObservation>,
+) {
+    init {
+        require(
+            authorized == authorized.sortedWith(
+                compareBy<InformationObservation> { it.observedAt }
+                    .thenBy { it.id.value }
+            )
+        ) {
+            "Authorized observations must use deterministic ordering"
+        }
+        require(blocked == blocked.sortedBy { it.observationId.value }) {
+            "Blocked observations must use deterministic ordering"
+        }
+        require(authorized.all { it.observationGrantId != null }) {
+            "Authorized observations must carry Owner Observation Policy provenance"
+        }
+        val allIds =
+            authorized.map { it.id.value } + blocked.map { it.observationId.value }
+        require(allIds.distinct().size == allIds.size) {
+            "Observation may not be both authorized and blocked"
+        }
+    }
+
+    val fingerprint: String = StableCognitiveIds.fingerprint(
+        "owner-authorized-observation-batch/v1",
+        sensorId.value,
+        *authorized.map { "authorized:${it.provenanceFingerprint}" }.toTypedArray(),
+        *blocked.map { "blocked:${it.fingerprint}" }.toTypedArray(),
+    )
+
+    val effectAuthority: Boolean
+        get() = false
+
+    val ownerPolicyEffectAuthority: Boolean
+        get() = false
+}
+
+/**
+ * Applies the dedicated Owner Observation Policy after adapter validation.
+ *
+ * The adapter remains incapable of self-authorizing. This boundary binds an existing owner grant
+ * to an immutable InformationObservation as provenance only. It cannot authorize effects, activate
+ * capabilities or promote an observation into fact/state.
+ */
+class OwnerAuthorizedAppObservationIngress(
+    private val observationPolicy: OwnerObservationPolicyLedger,
+    private val actorId: OwnerActorId,
+    private val scope: String,
+) {
+    init {
+        require(scope.isNotBlank())
+    }
+
+    suspend fun authorize(
+        descriptor: SensorDescriptor,
+        batch: AppObservationBatch,
+    ): OwnerAuthorizedObservationBatch {
+        require(batch.sensorId == descriptor.sensorId) {
+            "Authorized observation batch sensor differs from descriptor"
+        }
+
+        val authorized = mutableListOf<InformationObservation>()
+        val blocked = mutableListOf<BlockedInformationObservation>()
+
+        batch.observations.forEach { observation ->
+            require(observation.sourceId == descriptor.sensorId.value) {
+                "Observation source id differs from registered sensor"
+            }
+            require(observation.sourceResource.startsWith(descriptor.resourcePrefix)) {
+                "Observation resource is outside registered sensor prefix"
+            }
+            require(observation.surface in descriptor.supportedSurfaces) {
+                "Observation surface is outside registered sensor contract"
+            }
+            require(observation.observationGrantId == null) {
+                "Sensor observation arrived pre-authorized"
+            }
+
+            when (
+                val decision = observationPolicy.evaluate(
+                    OwnerObservationRequest(
+                        actorId = actorId,
+                        observationType = descriptor.observationType,
+                        resource = observation.sourceResource,
+                        scope = scope,
+                        sensorId = descriptor.sensorId.value,
+                    ),
+                    at = observation.observedAt,
+                )
+            ) {
+                is OwnerObservationDecision.Allowed ->
+                    authorized += observation.authorizedBy(decision.grantId.value)
+
+                is OwnerObservationDecision.Blocked ->
+                    blocked += BlockedInformationObservation(
+                        observationId = observation.id,
+                        policyRevision = decision.policyRevision,
+                        reasons = decision.reasons.distinct().sorted(),
+                    )
+            }
+        }
+
+        return OwnerAuthorizedObservationBatch(
+            sensorId = descriptor.sensorId,
+            authorized = authorized.sortedWith(
+                compareBy<InformationObservation> { it.observedAt }
+                    .thenBy { it.id.value }
+            ),
+            blocked = blocked.sortedBy { it.observationId.value },
+        )
+    }
+}
+
+// ---- B467 Authorized Observation -> Photon Commit ----
+
+data class AuthorizedObservationPhotonCommit(
+    val observationId: InformationObservationId,
+    val photonId: PhotonId,
+    val photonRevision: Long,
+    val observationGrantId: String,
+) {
+    init {
+        require(photonRevision > 0L)
+        require(observationGrantId.isNotBlank())
+    }
+
+    val fingerprint: String = StableCognitiveIds.fingerprint(
+        "authorized-observation-photon-commit/v1",
+        observationId.value,
+        photonId.value,
+        photonRevision.toString(),
+        observationGrantId,
+    )
+}
+
+data class AuthorizedObservationPhotonCommitReceipt(
+    val sensorId: SensorId,
+    val authorizedBatchFingerprint: String,
+    val committed: List<AuthorizedObservationPhotonCommit>,
+    val blocked: List<BlockedInformationObservation>,
+) {
+    init {
+        require(authorizedBatchFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(committed.map { it.observationId }.distinct().size == committed.size)
+        require(blocked.map { it.observationId }.distinct().size == blocked.size)
+        require(
+            committed.map { it.observationId }.toSet()
+                .intersect(blocked.map { it.observationId }.toSet())
+                .isEmpty()
+        ) {
+            "Committed and blocked observations must remain disjoint"
+        }
+    }
+
+    val fingerprint: String = StableCognitiveIds.fingerprint(
+        "authorized-observation-photon-commit-receipt/v1",
+        sensorId.value,
+        authorizedBatchFingerprint,
+        *committed.map { "committed:${it.fingerprint}" }.toTypedArray(),
+        *blocked.map { "blocked:${it.fingerprint}" }.toTypedArray(),
+    )
+
+    val effectAuthority: Boolean
+        get() = false
+}
+
+/**
+ * Converts only owner-authorized observations into canonical perception Photons and hands them to
+ * the productive ORIGIN persistence/cognition boundary supplied by the caller.
+ *
+ * The callback is deliberately the only effect. This type owns no second store, no execution
+ * authority and no ability to authorize an observation by itself.
+ */
+class AuthorizedObservationPhotonCommitter(
+    private val persistOrigin: suspend (Photon) -> Unit,
+    private val fusion: PerceptionFusionEngine = PerceptionFusionEngine(),
+) {
+    suspend fun commit(
+        batch: OwnerAuthorizedObservationBatch,
+        salience: Double = 0.5,
+    ): AuthorizedObservationPhotonCommitReceipt {
+        require(salience.isFinite() && salience in 0.0..1.0)
+
+        val committed = mutableListOf<AuthorizedObservationPhotonCommit>()
+        batch.authorized.forEach { observation ->
+            val grantId = requireNotNull(observation.observationGrantId) {
+                "Authorized observation lost Owner Observation Policy provenance"
+            }
+            val photon = fusion.fuse(
+                listOf(
+                    observation.toPerceptionSignal(
+                        salience = salience,
+                        extraTags = setOf(
+                            "owner-authorized-observation",
+                            "sensor:${batch.sensorId.value}",
+                        ),
+                    )
+                )
+            ).photons.single()
+
+            persistOrigin(photon)
+            committed += AuthorizedObservationPhotonCommit(
+                observationId = observation.id,
+                photonId = photon.id,
+                photonRevision = photon.revision,
+                observationGrantId = grantId,
+            )
+        }
+
+        return AuthorizedObservationPhotonCommitReceipt(
+            sensorId = batch.sensorId,
+            authorizedBatchFingerprint = batch.fingerprint,
+            committed = committed,
+            blocked = batch.blocked,
+        )
+    }
+}
