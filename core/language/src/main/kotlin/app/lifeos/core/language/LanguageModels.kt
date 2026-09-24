@@ -195,6 +195,7 @@ data class GoalFrame(
     val clarification: ClarificationPlan = ClarificationPlan.none(),
     val pragmaticAct: PragmaticAct = PragmaticAct.none(),
     val interpretationQuality: SemanticInterpretationQuality = SemanticInterpretationQuality.unknown(),
+    val languageRealization: LanguageRealizationState = LanguageRealizationState.empty(),
 ) {
     init {
         require(objective.isNotBlank())
