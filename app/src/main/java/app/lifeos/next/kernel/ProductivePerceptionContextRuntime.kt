@@ -17,7 +17,7 @@ import app.lifeos.core.runtime.world.SensorAttentionRuntime
  * It owns only sensor scheduling metadata and the exact PersonalContext boot binding. Observation
  * permission remains in OwnerObservationPolicyLedger; effect authority remains outside this runtime.
  */
-internal fun interface PersonalContextBootBindingSource {
+fun interface PersonalContextBootBindingSource {
     suspend fun freeze(
         workingSet: ThoughtGraphWorkingSet,
     ): PersonalContextBootBinding
