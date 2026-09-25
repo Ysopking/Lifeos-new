@@ -6,6 +6,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
+
+internal enum class LifeOsStartupLane {
+    CRITICAL,
+    WARM,
+}
 
 /** Ordered process lifecycle stages exposed to the unified LIFEOS runtime topology. */
 internal enum class LifeOsStartupStage(
@@ -60,6 +66,7 @@ internal data class LifeOsStartupStageSpec(
     val stage: LifeOsStartupStage,
     val dependencies: Set<LifeOsStartupStage>,
     val parallelSafe: Boolean,
+    val lane: LifeOsStartupLane,
 )
 
 /** Deterministic evidence emitted only after one startup action completed successfully. */
@@ -79,8 +86,8 @@ internal data class LifeOsStartupStageEvidence(
 /**
  * Lifecycle diagnostics emitted around each concrete startup action.
  *
- * Completed events remain canonical per startup layer. Failed identifies the exact stage that threw;
- * sibling cancellation is not misreported as a second startup failure.
+ * Critical failures still fail fast. Warm failures are attributed to the exact stage but are
+ * isolated from sibling warm stages and returned in [LifeOsWarmStartupReport].
  */
 internal sealed interface LifeOsStartupStageEvent {
     val stage: LifeOsStartupStage
@@ -133,60 +140,101 @@ internal sealed interface LifeOsStartupStageEvent {
     }
 }
 
+internal data class LifeOsWarmStartupFailure(
+    val stage: LifeOsStartupStage,
+    val diagnosticCode: String,
+    val message: String,
+) {
+    init {
+        require(diagnosticCode == stage.diagnosticCode)
+        require(message.isNotBlank())
+    }
+}
+
+internal data class LifeOsWarmStartupReport(
+    val completedStages: Set<LifeOsStartupStage>,
+    val failures: List<LifeOsWarmStartupFailure>,
+) {
+    init {
+        require(completedStages.all { LifeOsStartupStageGraph.laneFor(it) == LifeOsStartupLane.WARM })
+        require(failures.all { LifeOsStartupStageGraph.laneFor(it.stage) == LifeOsStartupLane.WARM })
+        require(failures == failures.sortedBy { it.stage.ordinal })
+    }
+
+    val degraded: Boolean
+        get() = failures.isNotEmpty()
+}
+
 /**
- * Process-hook DAG. Subsystem dependency truth remains in the core manifest graph; these lifecycle
- * gates model only construction prerequisites that cannot be inferred from runtime subsystem edges.
+ * Process-hook DAG. Critical startup reaches RUNTIME_STARTED without waiting for optional warm
+ * subsystems. Warm stages depend on that boundary and can be isolated independently.
  */
 internal object LifeOsStartupStageGraph {
     val specs: List<LifeOsStartupStageSpec> = listOf(
-        LifeOsStartupStageSpec(LifeOsStartupStage.SHARED_RESOURCES, emptySet(), parallelSafe = false),
+        LifeOsStartupStageSpec(
+            LifeOsStartupStage.SHARED_RESOURCES,
+            emptySet(),
+            parallelSafe = false,
+            lane = LifeOsStartupLane.CRITICAL,
+        ),
         LifeOsStartupStageSpec(
             LifeOsStartupStage.GOAL_EXECUTION,
             setOf(LifeOsStartupStage.SHARED_RESOURCES),
             parallelSafe = false,
+            lane = LifeOsStartupLane.CRITICAL,
         ),
         LifeOsStartupStageSpec(
             LifeOsStartupStage.KERNEL_GRAPH,
             setOf(LifeOsStartupStage.GOAL_EXECUTION),
             parallelSafe = false,
+            lane = LifeOsStartupLane.CRITICAL,
         ),
         LifeOsStartupStageSpec(
             LifeOsStartupStage.KERNEL_BOOT,
             setOf(LifeOsStartupStage.KERNEL_GRAPH),
             parallelSafe = false,
+            lane = LifeOsStartupLane.CRITICAL,
         ),
         LifeOsStartupStageSpec(
             LifeOsStartupStage.COGNITIVE_STATE_READY,
             setOf(LifeOsStartupStage.KERNEL_BOOT),
             parallelSafe = false,
-        ),
-        LifeOsStartupStageSpec(
-            LifeOsStartupStage.DEEP_SEARCH,
-            setOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
-            parallelSafe = true,
-        ),
-        LifeOsStartupStageSpec(
-            LifeOsStartupStage.SELF_HEALING,
-            setOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
-            parallelSafe = true,
-        ),
-        LifeOsStartupStageSpec(
-            LifeOsStartupStage.DURABLE_GOALS,
-            setOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
-            parallelSafe = true,
+            lane = LifeOsStartupLane.CRITICAL,
         ),
         LifeOsStartupStageSpec(
             LifeOsStartupStage.RUNTIME_STARTED,
-            setOf(
-                LifeOsStartupStage.DEEP_SEARCH,
-                LifeOsStartupStage.SELF_HEALING,
-                LifeOsStartupStage.DURABLE_GOALS,
-            ),
+            setOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
             parallelSafe = false,
+            lane = LifeOsStartupLane.CRITICAL,
+        ),
+        LifeOsStartupStageSpec(
+            LifeOsStartupStage.DEEP_SEARCH,
+            setOf(LifeOsStartupStage.RUNTIME_STARTED),
+            parallelSafe = true,
+            lane = LifeOsStartupLane.WARM,
+        ),
+        LifeOsStartupStageSpec(
+            LifeOsStartupStage.SELF_HEALING,
+            setOf(LifeOsStartupStage.RUNTIME_STARTED),
+            parallelSafe = true,
+            lane = LifeOsStartupLane.WARM,
+        ),
+        LifeOsStartupStageSpec(
+            LifeOsStartupStage.DURABLE_GOALS,
+            setOf(LifeOsStartupStage.RUNTIME_STARTED),
+            parallelSafe = true,
+            lane = LifeOsStartupLane.WARM,
         ),
     )
 
     val layers: List<List<LifeOsStartupStageSpec>> = computeLayers(specs)
+    private val specsByStage = specs.associateBy { it.stage }
+
+    fun laneFor(stage: LifeOsStartupStage): LifeOsStartupLane =
+        specsByStage.getValue(stage).lane
+
+    fun specsFor(lane: LifeOsStartupLane): List<LifeOsStartupStageSpec> =
+        specs.filter { it.lane == lane }
 
     private fun computeLayers(specs: List<LifeOsStartupStageSpec>): List<List<LifeOsStartupStageSpec>> {
         require(specs.map { it.stage }.distinct().size == specs.size) { "Duplicate startup stage" }
@@ -213,12 +261,6 @@ internal object LifeOsStartupStageGraph {
     }
 }
 
-/**
- * JVM-safe startup seam for the process composition owned by [LifeOsApplication].
- *
- * The hooks deliberately contain no Android types. Independent post-kernel stages may execute in
- * parallel, while successful completion evidence is always emitted in canonical stage order.
- */
 internal data class LifeOsStartupHooks(
     val installSharedResourceRuntime: suspend () -> Unit,
     val installGoalExecutionRuntime: suspend () -> Unit,
@@ -233,20 +275,88 @@ internal data class LifeOsStartupHooks(
 
 internal object LifeOsStartupComposition {
     suspend fun start(hooks: LifeOsStartupHooks) {
+        startCritical(hooks)
+        startWarm(hooks)
+    }
+
+    suspend fun startCritical(hooks: LifeOsStartupHooks) {
         LifeOsStartupStageGraph.layers.forEachIndexed { layerIndex, layer ->
-            val completed = executeLayer(layerIndex, layer, hooks)
+            val critical = layer.filter { it.lane == LifeOsStartupLane.CRITICAL }
+            if (critical.isEmpty()) return@forEachIndexed
+            val completed = executeCriticalLayer(layerIndex, critical, hooks)
             completed.sortedBy { it.spec.stage.ordinal }.forEach { execution ->
-                hooks.stageObserver(
-                    LifeOsStartupStageEvent.Completed(
-                        evidence = evidence(execution.spec.stage, layerIndex),
-                        durationNanos = execution.durationNanos,
-                    )
-                )
+                emitCompleted(execution, layerIndex, hooks)
             }
         }
     }
 
-    private suspend fun executeLayer(
+    suspend fun startWarm(hooks: LifeOsStartupHooks): LifeOsWarmStartupReport {
+        val completedWarm = linkedSetOf<LifeOsStartupStage>()
+        val failures = mutableListOf<LifeOsWarmStartupFailure>()
+
+        LifeOsStartupStageGraph.layers.forEachIndexed { layerIndex, layer ->
+            val warm = layer.filter { it.lane == LifeOsStartupLane.WARM }
+            if (warm.isEmpty()) return@forEachIndexed
+
+            val runnable = mutableListOf<LifeOsStartupStageSpec>()
+            warm.sortedBy { it.stage.ordinal }.forEach { spec ->
+                val blockedWarmDependencies = spec.dependencies
+                    .filter {
+                        LifeOsStartupStageGraph.laneFor(it) == LifeOsStartupLane.WARM &&
+                            it !in completedWarm
+                    }
+                    .sortedBy { it.ordinal }
+                if (blockedWarmDependencies.isEmpty()) {
+                    runnable += spec
+                } else {
+                    val message =
+                        "blocked-by:" + blockedWarmDependencies.joinToString(",") { it.name }
+                    hooks.stageObserver(
+                        LifeOsStartupStageEvent.Failed(
+                            stage = spec.stage,
+                            layerIndex = layerIndex,
+                            diagnosticCode = spec.stage.diagnosticCode,
+                            durationNanos = 0L,
+                            causeType = "WarmDependencyUnavailable",
+                            message = message,
+                        )
+                    )
+                    failures += LifeOsWarmStartupFailure(
+                        stage = spec.stage,
+                        diagnosticCode = spec.stage.diagnosticCode,
+                        message = message,
+                    )
+                }
+            }
+
+            val outcomes = executeWarmLayer(layerIndex, runnable, hooks)
+            outcomes.sortedBy { it.spec.stage.ordinal }.forEach { outcome ->
+                if (outcome.failure == null) {
+                    completedWarm += outcome.spec.stage
+                    emitCompleted(
+                        StageExecution(outcome.spec, outcome.durationNanos),
+                        layerIndex,
+                        hooks,
+                    )
+                } else {
+                    failures += LifeOsWarmStartupFailure(
+                        stage = outcome.spec.stage,
+                        diagnosticCode = outcome.spec.stage.diagnosticCode,
+                        message = outcome.failure.message?.takeIf { it.isNotBlank() }
+                            ?: outcome.failure::class.simpleName
+                            ?: "warm-startup-failed",
+                    )
+                }
+            }
+        }
+
+        return LifeOsWarmStartupReport(
+            completedStages = completedWarm.toSet(),
+            failures = failures.sortedBy { it.stage.ordinal },
+        )
+    }
+
+    private suspend fun executeCriticalLayer(
         layerIndex: Int,
         layer: List<LifeOsStartupStageSpec>,
         hooks: LifeOsStartupHooks,
@@ -264,6 +374,36 @@ internal object LifeOsStartupComposition {
             layer.map { spec ->
                 executeStage(spec, layerIndex, hooks)
             }
+        }
+    }
+
+    private suspend fun executeWarmLayer(
+        layerIndex: Int,
+        layer: List<LifeOsStartupStageSpec>,
+        hooks: LifeOsStartupHooks,
+    ): List<WarmStageOutcome> {
+        if (layer.isEmpty()) return emptyList()
+        return supervisorScope {
+            layer.map { spec ->
+                async {
+                    try {
+                        val execution = executeStage(spec, layerIndex, hooks)
+                        WarmStageOutcome(
+                            spec = spec,
+                            durationNanos = execution.durationNanos,
+                            failure = null,
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        WarmStageOutcome(
+                            spec = spec,
+                            durationNanos = 0L,
+                            failure = error,
+                        )
+                    }
+                }
+            }.awaitAll()
         }
     }
 
@@ -288,12 +428,13 @@ internal object LifeOsStartupComposition {
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
+            val durationNanos = elapsedNanos(startedNanos)
             hooks.stageObserver(
                 LifeOsStartupStageEvent.Failed(
                     stage = spec.stage,
                     layerIndex = layerIndex,
                     diagnosticCode = spec.stage.diagnosticCode,
-                    durationNanos = elapsedNanos(startedNanos),
+                    durationNanos = durationNanos,
                     causeType = error::class.qualifiedName ?: error::class.simpleName ?: "Throwable",
                     message = error.message?.takeIf { it.isNotBlank() }
                         ?: error::class.simpleName
@@ -302,6 +443,19 @@ internal object LifeOsStartupComposition {
             )
             throw error
         }
+    }
+
+    private fun emitCompleted(
+        execution: StageExecution,
+        layerIndex: Int,
+        hooks: LifeOsStartupHooks,
+    ) {
+        hooks.stageObserver(
+            LifeOsStartupStageEvent.Completed(
+                evidence = evidence(execution.spec.stage, layerIndex),
+                durationNanos = execution.durationNanos,
+            )
+        )
     }
 
     private fun elapsedNanos(startedNanos: Long): Long =
@@ -337,5 +491,11 @@ internal object LifeOsStartupComposition {
     private data class StageExecution(
         val spec: LifeOsStartupStageSpec,
         val durationNanos: Long,
+    )
+
+    private data class WarmStageOutcome(
+        val spec: LifeOsStartupStageSpec,
+        val durationNanos: Long,
+        val failure: Throwable?,
     )
 }

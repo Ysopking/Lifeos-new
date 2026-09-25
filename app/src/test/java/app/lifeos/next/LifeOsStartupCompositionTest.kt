@@ -1,141 +1,120 @@
 package app.lifeos.next
 
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
 
 class LifeOsStartupCompositionTest {
     @Test
-    fun `startup DAG preserves prerequisites and deterministic completion evidence`() = runTest {
+    fun `critical startup reaches runtime boundary before warm stages`() = runTest {
         val actions = mutableListOf<String>()
         val events = mutableListOf<LifeOsStartupStageEvent>()
-        val arrivals = AtomicInteger(0)
-        val parallelRelease = CompletableDeferred<Unit>()
-
-        fun parallelAction(name: String): suspend () -> Unit = {
-            if (arrivals.incrementAndGet() == 3) {
-                parallelRelease.complete(Unit)
-            }
-            parallelRelease.await()
-            actions += name
-        }
-
-        LifeOsStartupComposition.start(
-            LifeOsStartupHooks(
-                installSharedResourceRuntime = { actions += "shared-resources" },
-                installGoalExecutionRuntime = { actions += "goal-execution" },
-                createKernel = { actions += "kernel-created" },
-                startKernel = { actions += "kernel-start" },
-                requireCognitiveStateReady = { actions += "cognitive-ready" },
-                installDeepSearchRuntime = parallelAction("deepsearch"),
-                startSelfHealingRuntime = parallelAction("self-healing"),
-                installDurableGoalPlanRuntime = parallelAction("goal-plan"),
-                stageObserver = { events += it },
-            )
+        val hooks = LifeOsStartupHooks(
+            installSharedResourceRuntime = { actions += "shared-resources" },
+            installGoalExecutionRuntime = { actions += "goal-execution" },
+            createKernel = { actions += "kernel-created" },
+            startKernel = { actions += "kernel-start" },
+            requireCognitiveStateReady = { actions += "cognitive-ready" },
+            installDeepSearchRuntime = { actions += "deepsearch" },
+            startSelfHealingRuntime = { actions += "self-healing" },
+            installDurableGoalPlanRuntime = { actions += "goal-plan" },
+            stageObserver = { events += it },
         )
 
-        assertEquals(
-            listOf("shared-resources", "goal-execution", "kernel-created"),
-            actions.take(3),
-        )
-        assertEquals(
-            listOf("kernel-start", "cognitive-ready"),
-            actions.subList(3, 5),
-        )
-        assertEquals(
-            listOf("deepsearch", "self-healing", "goal-plan").toSet(),
-            actions.subList(5, 8).toSet(),
-        )
+        LifeOsStartupComposition.startCritical(hooks)
 
-        val completed = events.filterIsInstance<LifeOsStartupStageEvent.Completed>()
         assertEquals(
-            LifeOsStartupStage.entries.toList(),
-            completed.map { it.stage },
+            listOf(
+                "shared-resources",
+                "goal-execution",
+                "kernel-created",
+                "kernel-start",
+                "cognitive-ready",
+            ),
+            actions,
         )
-        assertTrue(completed.all { it.durationNanos >= 0L })
+        val criticalCompleted =
+            events.filterIsInstance<LifeOsStartupStageEvent.Completed>().map { it.stage }
+        assertEquals(
+            listOf(
+                LifeOsStartupStage.SHARED_RESOURCES,
+                LifeOsStartupStage.GOAL_EXECUTION,
+                LifeOsStartupStage.KERNEL_GRAPH,
+                LifeOsStartupStage.KERNEL_BOOT,
+                LifeOsStartupStage.COGNITIVE_STATE_READY,
+                LifeOsStartupStage.RUNTIME_STARTED,
+            ),
+            criticalCompleted,
+        )
+        assertFalse(events.any { LifeOsStartupStageGraph.laneFor(it.stage) == LifeOsStartupLane.WARM })
+
+        val report = LifeOsStartupComposition.startWarm(hooks)
+
+        assertFalse(report.degraded)
+        assertEquals(
+            setOf(
+                LifeOsStartupStage.DEEP_SEARCH,
+                LifeOsStartupStage.SELF_HEALING,
+                LifeOsStartupStage.DURABLE_GOALS,
+            ),
+            report.completedStages,
+        )
+        assertEquals(
+            setOf("deepsearch", "self-healing", "goal-plan"),
+            actions.drop(5).toSet(),
+        )
         assertTrue(
-            completed.all {
+            events.filterIsInstance<LifeOsStartupStageEvent.Completed>().all {
                 it.evidence.manifestGraphFingerprint == LifeOsProcessTopology.manifestFingerprint
             }
         )
-
-        LifeOsStartupStage.entries.forEach { stage ->
-            val startedIndex = events.indexOfFirst {
-                it is LifeOsStartupStageEvent.Started && it.stage == stage
-            }
-            val completedIndex = events.indexOfFirst {
-                it is LifeOsStartupStageEvent.Completed && it.stage == stage
-            }
-            assertTrue(startedIndex >= 0, "missing STARTED event for $stage")
-            assertTrue(completedIndex > startedIndex, "COMPLETED must follow STARTED for $stage")
-        }
     }
 
     @Test
-    fun `parallel startup failure cancels siblings and attributes exact stage`() = runTest {
+    fun `warm startup failure does not cancel successful siblings`() = runTest {
+        val actions = mutableListOf<String>()
         val events = mutableListOf<LifeOsStartupStageEvent>()
-        val siblingStarts = AtomicInteger(0)
-        val siblingsReady = CompletableDeferred<Unit>()
-        val cancelledSiblings = mutableListOf<String>()
-
-        fun cancellableSibling(name: String): suspend () -> Unit = {
-            if (siblingStarts.incrementAndGet() == 2) {
-                siblingsReady.complete(Unit)
-            }
-            try {
-                awaitCancellation()
-            } finally {
-                cancelledSiblings += name
-            }
-        }
-
-        val failure = try {
-            LifeOsStartupComposition.start(
-                LifeOsStartupHooks(
-                    installSharedResourceRuntime = {},
-                    installGoalExecutionRuntime = {},
-                    createKernel = {},
-                    startKernel = {},
-                    requireCognitiveStateReady = {},
-                    installDeepSearchRuntime = cancellableSibling("deepsearch"),
-                    startSelfHealingRuntime = {
-                        siblingsReady.await()
-                        error("startup-failure")
-                    },
-                    installDurableGoalPlanRuntime = cancellableSibling("goal-plan"),
-                    stageObserver = { events += it },
-                )
-            )
-            null
-        } catch (error: IllegalStateException) {
-            error
-        }
-
-        assertEquals("startup-failure", failure?.message)
-        assertEquals(
-            setOf("deepsearch", "goal-plan"),
-            cancelledSiblings.toSet(),
+        val hooks = LifeOsStartupHooks(
+            installSharedResourceRuntime = {},
+            installGoalExecutionRuntime = {},
+            createKernel = {},
+            startKernel = {},
+            requireCognitiveStateReady = {},
+            installDeepSearchRuntime = { actions += "deepsearch" },
+            startSelfHealingRuntime = {
+                actions += "self-healing"
+                error("startup-failure")
+            },
+            installDurableGoalPlanRuntime = { actions += "goal-plan" },
+            stageObserver = { events += it },
         )
-        assertFalse(
+
+        LifeOsStartupComposition.startCritical(hooks)
+        val report = LifeOsStartupComposition.startWarm(hooks)
+
+        assertEquals(
+            setOf("deepsearch", "self-healing", "goal-plan"),
+            actions.toSet(),
+        )
+        assertTrue(report.degraded)
+        assertEquals(
+            setOf(LifeOsStartupStage.DEEP_SEARCH, LifeOsStartupStage.DURABLE_GOALS),
+            report.completedStages,
+        )
+        val failure = report.failures.single()
+        assertEquals(LifeOsStartupStage.SELF_HEALING, failure.stage)
+        assertEquals("BOOT-SH-001", failure.diagnosticCode)
+        assertEquals("startup-failure", failure.message)
+
+        val failedEvent = events.filterIsInstance<LifeOsStartupStageEvent.Failed>().single()
+        assertEquals(LifeOsStartupStage.SELF_HEALING, failedEvent.stage)
+        assertTrue(
             events.filterIsInstance<LifeOsStartupStageEvent.Completed>()
                 .any { it.stage == LifeOsStartupStage.RUNTIME_STARTED }
         )
-        assertEquals(
-            LifeOsStartupStage.COGNITIVE_STATE_READY,
-            events.filterIsInstance<LifeOsStartupStageEvent.Completed>().last().stage,
-        )
-
-        val failed = events.filterIsInstance<LifeOsStartupStageEvent.Failed>().single()
-        assertEquals(LifeOsStartupStage.SELF_HEALING, failed.stage)
-        assertEquals("BOOT-SH-001", failed.diagnosticCode)
-        assertEquals("startup-failure", failed.message)
-        assertTrue(failed.durationNanos >= 0L)
     }
 
     @Test
@@ -149,7 +128,7 @@ class LifeOsStartupCompositionTest {
     }
 
     @Test
-    fun `startup layers are deterministic and expose one parallel post-kernel layer`() {
+    fun `startup lanes are deterministic and warm depends on runtime boundary`() {
         assertEquals(
             listOf(
                 listOf(LifeOsStartupStage.SHARED_RESOURCES),
@@ -157,15 +136,26 @@ class LifeOsStartupCompositionTest {
                 listOf(LifeOsStartupStage.KERNEL_GRAPH),
                 listOf(LifeOsStartupStage.KERNEL_BOOT),
                 listOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
+                listOf(LifeOsStartupStage.RUNTIME_STARTED),
                 listOf(
                     LifeOsStartupStage.DEEP_SEARCH,
                     LifeOsStartupStage.SELF_HEALING,
                     LifeOsStartupStage.DURABLE_GOALS,
                 ),
-                listOf(LifeOsStartupStage.RUNTIME_STARTED),
             ),
             LifeOsStartupStageGraph.layers.map { layer -> layer.map { it.stage } },
         )
-        assertTrue(LifeOsStartupStageGraph.layers[5].all { it.parallelSafe })
+        assertTrue(
+            LifeOsStartupStageGraph.specsFor(LifeOsStartupLane.CRITICAL)
+                .all { it.stage !in setOf(
+                    LifeOsStartupStage.DEEP_SEARCH,
+                    LifeOsStartupStage.SELF_HEALING,
+                    LifeOsStartupStage.DURABLE_GOALS,
+                ) }
+        )
+        assertTrue(
+            LifeOsStartupStageGraph.specsFor(LifeOsStartupLane.WARM)
+                .all { LifeOsStartupStage.RUNTIME_STARTED in it.dependencies }
+        )
     }
 }
