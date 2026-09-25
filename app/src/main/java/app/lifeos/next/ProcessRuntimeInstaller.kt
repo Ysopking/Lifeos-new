@@ -46,6 +46,7 @@ import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserver
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserverRegistry
 import app.lifeos.next.kernel.AndroidHardwareSensorBridge
+import app.lifeos.next.kernel.AndroidNotificationSensorBridge
 import app.lifeos.next.kernel.CanonicalLifePhotonRepository
 import app.lifeos.next.kernel.CanonicalPhotonIngress
 import app.lifeos.next.kernel.DurableGoalPlanRuntime
@@ -201,6 +202,13 @@ internal class ProcessRuntimeInstaller(
                     )
                     productivePerceptionContext.attachHardwareBridge(
                         hardwareSensorBridge
+                    )
+                    val notificationSensorBridge = AndroidNotificationSensorBridge(
+                        photonIngress::ingestSensorBatch
+                    )
+                    notificationSensorBridge.install()
+                    productivePerceptionContext.attachSensorTarget(
+                        notificationSensorBridge
                     )
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
