@@ -7,6 +7,7 @@ import app.lifeos.core.runtime.life.SensorClass
 import app.lifeos.core.runtime.life.SensorHealthState
 import java.time.Clock
 import java.time.Instant
+import java.time.ZoneId
 import java.time.ZoneOffset
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -66,6 +67,61 @@ class AndroidAppUsageSensorBridgeTest {
         bridge.applyAttention(SensorAttentionMode.SUSPENDED)
         assertEquals(0, bridge.pollOnce())
         assertEquals(listOf(0L to 1L), revisions)
+    }
+
+    @Test
+    fun `failed productive commit replays identical usage observation identities`() = runTest {
+        var now = Instant.parse("2026-09-25T01:00:30Z")
+        val clock = object : Clock() {
+            override fun getZone(): ZoneId = ZoneOffset.UTC
+            override fun withZone(zone: ZoneId): Clock = this
+            override fun instant(): Instant = now
+        }
+        val source = FakeUsageSource(
+            granted = true,
+            events = listOf(
+                PlatformAppUsageEvent(
+                    packageName = "com.example.app",
+                    timestampMillis = Instant.parse("2026-09-25T01:00:10Z").toEpochMilli(),
+                    kind = PlatformAppUsageEventKind.FOREGROUND,
+                ),
+                PlatformAppUsageEvent(
+                    packageName = "com.example.app",
+                    timestampMillis = Instant.parse("2026-09-25T01:00:20Z").toEpochMilli(),
+                    kind = PlatformAppUsageEventKind.BACKGROUND,
+                ),
+            ),
+        )
+        val attempts = mutableListOf<List<String>>()
+        var firstAttempt = true
+        val bridge = AndroidAppUsageSensorBridge(
+            source = source,
+            commitBatch = AppUsageBatchCommitter { _, _, _, batch ->
+                attempts += batch.observations.map { it.id.value }
+                if (firstAttempt) {
+                    firstAttempt = false
+                    error("synthetic-commit-failure")
+                }
+            },
+            clock = clock,
+            scope = this,
+        )
+        bridge.bindHealthReporter { _, _ -> Unit }
+        bridge.applyAttention(SensorAttentionMode.PERIODIC)
+
+        var failed = false
+        try {
+            bridge.pollOnce()
+        } catch (_: IllegalStateException) {
+            failed = true
+        }
+        assertTrue(failed)
+
+        now = Instant.parse("2026-09-25T01:00:40Z")
+        assertEquals(2, bridge.pollOnce())
+
+        assertEquals(2, attempts.size)
+        assertEquals(attempts.first(), attempts.last())
     }
 
     @Test
