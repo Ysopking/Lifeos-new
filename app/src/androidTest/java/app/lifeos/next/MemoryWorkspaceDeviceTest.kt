@@ -27,7 +27,8 @@ class MemoryWorkspaceDeviceTest {
     @Test
     fun productiveSnapshotProjectsWithoutMemoryMutation() = runBlocking {
         val boot = awaitBoot()
-        assertTrue("Kernel must complete boot before F5 memory proof", boot.ready)
+        assertTrue("Kernel critical boot must complete before F5 memory proof", boot.ready)
+        awaitPersonalRuntimeWarmup()
 
         val snapshot = app.lifeMemoryRuntime.current()
         assertNotNull("Productive DurableLifeMemoryRuntime snapshot must exist", snapshot)
@@ -78,6 +79,15 @@ class MemoryWorkspaceDeviceTest {
             "F5 projection must preserve every pre-existing Photon revision; changed=${missingOrChanged.map { "${it.id.value}@${it.revision}" }}",
             missingOrChanged.isEmpty(),
         )
+    }
+
+    private suspend fun awaitPersonalRuntimeWarmup() {
+        withTimeout(BOOT_TIMEOUT_MS) {
+            app.warmStartupReport.first { report ->
+                report != null &&
+                    LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP in report.completedStages
+            }
+        }
     }
 
     private suspend fun awaitBoot(): KernelBootstrapState {

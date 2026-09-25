@@ -125,7 +125,7 @@ class SemanticActionRecoveryDeviceTest {
                     (processStartup.failure ?: "unknown")
             )
         }
-        app.kernel.bootstrapState.first { state ->
+        val kernelState = app.kernel.bootstrapState.first { state ->
             state.status == KernelBootstrapStatus.READY ||
                 state.status == KernelBootstrapStatus.DEGRADED ||
                 state.status == KernelBootstrapStatus.FAILED
@@ -137,10 +137,18 @@ class SemanticActionRecoveryDeviceTest {
                 )
             }
         }
+        withTimeout(WARM_TIMEOUT_MS) {
+            app.warmStartupReport.first { report ->
+                report != null &&
+                    LifeOsStartupStage.DURABLE_GOALS in report.completedStages
+            }
+        }
+        kernelState
     }
 
     companion object {
         private const val BOOT_TIMEOUT_MS = 20_000L
+        private const val WARM_TIMEOUT_MS = 30_000L
         private const val USER_SENTINEL_TAG = "semantic-action-recovery:user"
         private const val GOAL_MIME = "application/vnd.lifeos.goal+text"
     }
