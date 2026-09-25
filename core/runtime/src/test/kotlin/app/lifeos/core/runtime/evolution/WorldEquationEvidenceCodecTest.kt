@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.evolution
 import app.lifeos.core.runtime.world.CognitiveWorldEquationProfile
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class WorldEquationEvidenceCodecTest {
     @Test
@@ -51,5 +52,42 @@ class WorldEquationEvidenceCodecTest {
         assertEquals(record, decoded)
         assertEquals(record.id, decoded.id)
         assertEquals(record.fingerprint, decoded.fingerprint)
+    }
+
+    @Test
+    fun legacyV2PayloadRemainsReadableWithoutAntiVacuityAttestation() {
+        val baseline = CognitiveWorldEquationProfile().spec
+        val first = baseline.stableCoefficients().first()
+        val candidate = baseline.copy(
+            version = baseline.version + "-legacy",
+            coefficients = baseline.coefficients.map {
+                if (it.id == first.id) it.copy(multiplier = it.multiplier + 0.01) else it
+            },
+        )
+        val protocol = WorldEquationEvaluationProtocol(
+            version = "legacy-v2",
+            primaryMetric = WorldEquationPrimaryMetric.CONFLICT_COUNT,
+            minimumIndependentRuns = 2,
+            minimumDistinctWorkloads = 1,
+            minimumActiveObservationsPerChangedCoefficient = 1,
+        )
+        val record = WorldEquationEvidenceRecord.create(
+            revision = 1L,
+            state = WorldEquationLifecycleState.CONJECTURE,
+            evidence = WorldEquationEvidenceSet.empty(
+                candidate = candidate,
+                baseline = baseline,
+                protocol = protocol,
+                policyFingerprint = WorldEquationPromotionPolicy.V1.fingerprint(),
+            ),
+        )
+
+        val decoded = WorldEquationEvidenceCodec.decode(
+            WorldEquationEvidenceCodec.encodeLegacyV2ForTest(record)
+        )
+
+        assertEquals(record, decoded)
+        assertFalse(decoded.evidence.protocol.antiVacuityAttested)
+        assertEquals(0, decoded.evidence.protocol.minimumExclusionRuns)
     }
 }

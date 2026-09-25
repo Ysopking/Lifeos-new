@@ -33,6 +33,11 @@ class WorldEquationEvidenceCoordinatorTest {
             minimumIndependentRuns = 3,
             minimumDistinctWorkloads = 2,
             minimumActiveObservationsPerChangedCoefficient = 2,
+            realizationProfileFingerprint = "realization-profile:lifecycle",
+            stateSpaceFingerprint = "state-space:lifecycle",
+            observableContractFingerprint = "observables:lifecycle",
+            failureCriteriaFingerprint = "failures:lifecycle",
+            minimumExclusionRuns = 1,
         )
         val policy = WorldEquationPromotionPolicy(
             version = "lifecycle-policy-v1",
@@ -61,7 +66,7 @@ class WorldEquationEvidenceCoordinatorTest {
             baseline,
             observation(baseline, candidate, coefficient.id, "run-2", "a"),
         )
-        val promotable = coordinator.recordObservation(
+        val supported = coordinator.recordObservation(
             candidate,
             baseline,
             observation(
@@ -73,7 +78,20 @@ class WorldEquationEvidenceCoordinatorTest {
                 WorldEquationEvidencePartition.HOLDOUT,
             ),
         )
+        assertEquals(WorldEquationLifecycleState.SUPPORTED, supported.state)
 
+        val promotable = coordinator.recordObservation(
+            candidate,
+            baseline,
+            observation(
+                baseline,
+                candidate,
+                coefficient.id,
+                "run-4",
+                "b",
+                WorldEquationEvidencePartition.EXCLUSION,
+            ),
+        )
         assertEquals(WorldEquationLifecycleState.PROMOTABLE, promotable.state)
     }
 
@@ -101,6 +119,11 @@ class WorldEquationEvidenceCoordinatorTest {
             minimumIndependentRuns = 2,
             minimumDistinctWorkloads = 1,
             minimumActiveObservationsPerChangedCoefficient = 1,
+            realizationProfileFingerprint = "realization-profile:rollback",
+            stateSpaceFingerprint = "state-space:rollback",
+            observableContractFingerprint = "observables:rollback",
+            failureCriteriaFingerprint = "failures:rollback",
+            minimumExclusionRuns = 1,
         )
         val repository = InMemoryWorldEquationEvidenceRepository()
         val coordinator = WorldEquationEvidenceCoordinator(
@@ -113,7 +136,7 @@ class WorldEquationEvidenceCoordinatorTest {
             baseline,
             observation(baseline, candidate, coefficient.id, "run-1", "a"),
         )
-        val promotable = coordinator.recordObservation(
+        val supported = coordinator.recordObservation(
             candidate,
             baseline,
             observation(
@@ -123,6 +146,19 @@ class WorldEquationEvidenceCoordinatorTest {
                 "run-2",
                 "a",
                 WorldEquationEvidencePartition.HOLDOUT,
+            ),
+        )
+        assertEquals(WorldEquationLifecycleState.SUPPORTED, supported.state)
+        val promotable = coordinator.recordObservation(
+            candidate,
+            baseline,
+            observation(
+                baseline,
+                candidate,
+                coefficient.id,
+                "run-3",
+                "a",
+                WorldEquationEvidencePartition.EXCLUSION,
             ),
         )
         assertEquals(WorldEquationLifecycleState.PROMOTABLE, promotable.state)
