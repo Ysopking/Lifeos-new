@@ -320,8 +320,11 @@ class DurableSchemaGenerationStore(
         bytes: ByteArray,
     ) {
         require(bytes.isNotEmpty())
-        check(target.parentFile?.isDirectory == true)
-        val staging = target.parentFile.resolve(target.name + TEMP_SUFFIX)
+        val parent = requireNotNull(target.parentFile) {
+            "Durable schema target must have a parent directory"
+        }
+        check(parent.isDirectory)
+        val staging = parent.resolve(target.name + TEMP_SUFFIX)
         FileOutputStream(staging).use { output ->
             output.write(bytes)
             output.fd.sync()
