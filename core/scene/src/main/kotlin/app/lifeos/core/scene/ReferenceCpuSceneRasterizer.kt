@@ -42,6 +42,7 @@ class ReferenceCpuSceneRasterizer(
         }
 
         val camera = CameraFrame.from(graph.camera, size)
+        val rayGrid = camera.prepareRayGrid(size)
         val preparedNodes = graph.nodes.map(::prepareNode)
         val pixels = size.pixelCount
         val albedo = FloatArray(pixels * 4)
@@ -63,7 +64,7 @@ class ReferenceCpuSceneRasterizer(
         for (y in 0 until size.height) {
             for (x in 0 until size.width) {
                 val pixel = y * size.width + x
-                val ray = camera.rayForPixel(x, y, size)
+                val ray = rayGrid.rayForPixel(x, y)
                 val hit = nearestHit(ray, preparedNodes) ?: continue
                 if (hit.distance !in nearMeters..farMeters) continue
 
@@ -377,16 +378,24 @@ class ReferenceCpuSceneRasterizer(
         val up: Vec3,
         val tanHalfVerticalFov: Double,
     ) {
-        fun rayForPixel(x: Int, y: Int, size: SceneRasterSize): Ray {
-            val ndcX = ((x + 0.5) / size.width.toDouble()) * 2.0 - 1.0
-            val ndcY = 1.0 - ((y + 0.5) / size.height.toDouble()) * 2.0
-            val aspect = size.width.toDouble() / size.height.toDouble()
-            val direction = (
-                forward +
-                    right * (ndcX * tanHalfVerticalFov * aspect) +
-                    up * (ndcY * tanHalfVerticalFov)
-                ).normalized()
-            return Ray(origin, direction)
+        fun prepareRayGrid(size: SceneRasterSize): PreparedRayGrid {
+            val width = size.width.toDouble()
+            val height = size.height.toDouble()
+            val aspect = width / height
+            val xOffsets = Array(size.width) { x ->
+                val ndcX = ((x + 0.5) / width) * 2.0 - 1.0
+                right * (ndcX * tanHalfVerticalFov * aspect)
+            }
+            val yOffsets = Array(size.height) { y ->
+                val ndcY = 1.0 - ((y + 0.5) / height) * 2.0
+                up * (ndcY * tanHalfVerticalFov)
+            }
+            return PreparedRayGrid(
+                origin = origin,
+                forward = forward,
+                xOffsets = xOffsets,
+                yOffsets = yOffsets,
+            )
         }
 
         /** View-space normal where +Z points from the surface toward the camera, matching MMSI's view vector. */
@@ -411,6 +420,19 @@ class ReferenceCpuSceneRasterizer(
                 return CameraFrame(origin, forward, right, up, tanHalfVerticalFov)
             }
         }
+    }
+
+    private data class PreparedRayGrid(
+        val origin: Vec3,
+        val forward: Vec3,
+        val xOffsets: Array<Vec3>,
+        val yOffsets: Array<Vec3>,
+    ) {
+        fun rayForPixel(x: Int, y: Int): Ray =
+            Ray(
+                origin = origin,
+                direction = (forward + xOffsets[x] + yOffsets[y]).normalized(),
+            )
     }
 
     private data class Vec3(val x: Double, val y: Double, val z: Double) {
