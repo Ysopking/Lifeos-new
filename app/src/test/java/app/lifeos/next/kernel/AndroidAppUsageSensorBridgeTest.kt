@@ -286,6 +286,7 @@ class AndroidAppUsageSensorBridgeTest {
             assertEquals(SensorHealthState.UNAVAILABLE, state)
             failure = reason
         }
+        bridge.applyAttention(SensorAttentionMode.PERIODIC)
 
         assertEquals(0, bridge.pollOnce())
 
