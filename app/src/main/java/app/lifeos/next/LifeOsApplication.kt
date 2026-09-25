@@ -220,7 +220,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         mutableStartupState.value = LifeOsProcessStartupState.ready(availability)
     }
 
-    private fun applyWarmInstall(installed: ProcessRuntimeWarmInstallResult) {
+    private suspend fun applyWarmInstall(installed: ProcessRuntimeWarmInstallResult) {
         installed.selfHealingRuntime?.let { selfHealingRuntime = it }
         installed.escalationRuntime?.let { escalationRuntime = it }
         mutableStartupState.value = LifeOsStartupStateProjector.projectWarmCompletion(
