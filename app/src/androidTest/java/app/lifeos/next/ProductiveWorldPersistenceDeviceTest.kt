@@ -188,6 +188,27 @@ class ProductiveWorldPersistenceDeviceTest {
         return generations.last()
     }
 
+    private fun activeGenerationRoot(
+        filesRoot: File,
+        vaultDirectory: String,
+    ): File {
+        val generations = filesRoot
+            .resolve(vaultDirectory)
+            .resolve(".schema/generations")
+        assertTrue("Schema generations directory must exist", generations.isDirectory)
+        val candidates = generations.listFiles().orEmpty()
+            .filter { file ->
+                file.isDirectory && file.name.matches(Regex("g[0-9]{8,}"))
+            }
+            .sortedBy { it.name }
+        assertEquals(
+            "Isolated fixture must have exactly one active schema generation",
+            1,
+            candidates.size,
+        )
+        return candidates.single()
+    }
+
     private fun sha256(value: String): String =
         MessageDigest.getInstance("SHA-256")
             .digest(value.encodeToByteArray())
