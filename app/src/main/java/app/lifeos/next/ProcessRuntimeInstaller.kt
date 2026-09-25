@@ -1,7 +1,6 @@
 package app.lifeos.next
 
 import android.content.Context
-import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
@@ -45,8 +44,6 @@ import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserver
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserverRegistry
-import app.lifeos.next.kernel.AndroidAppUsageSensorBridge
-import app.lifeos.next.kernel.AndroidSemanticAppContentSensorBridge
 import app.lifeos.next.kernel.AndroidHardwareSensorBridge
 import app.lifeos.next.kernel.CanonicalLifePhotonRepository
 import app.lifeos.next.kernel.CanonicalPhotonIngress
@@ -58,15 +55,13 @@ import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
 import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
-import app.lifeos.next.kernel.LiveNotificationSensorBridge
 import app.lifeos.next.kernel.MultimodalPerceptionRuntime
 import app.lifeos.next.kernel.PrivateEscalationRuntime
 import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
-import app.lifeos.next.kernel.ProductiveAppUsageSensorRuntimeRegistry
+import app.lifeos.next.kernel.ProductivePerceptionComposition
 import app.lifeos.next.kernel.ProductivePerceptionContextRuntime
-import app.lifeos.next.kernel.ProductiveWorldGapAttentionRuntimeRegistry
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -177,10 +172,9 @@ internal class ProcessRuntimeInstaller(
                 },
                 createKernel = {
                     productivePerceptionContext =
-                        ProductivePerceptionContextRuntime(ownerObservationPolicy)
-                    ProductiveWorldGapAttentionRuntimeRegistry.install(
-                        productivePerceptionContext
-                    )
+                        ProductivePerceptionComposition.prepare(
+                            ownerObservationPolicy
+                        )
                     kernel = LifeOsKernelFactory(
                         context = appContext,
                         hardwareResourceIntelligence =
@@ -191,35 +185,16 @@ internal class ProcessRuntimeInstaller(
                             productivePerceptionContext,
                     ).create()
 
-                    val ownerAssetReviews =
-                        EncryptedOwnerAssetReviewRepository(appContext)
-                    photonIngress =
-                        CanonicalPhotonIngress(
+                    val perceptionBinding =
+                        ProductivePerceptionComposition.bind(
+                            context = appContext,
                             kernel = kernel,
-                            ownerAssetReviews = ownerAssetReviews,
                             ownerObservationPolicy = ownerObservationPolicy,
+                            perceptionContext = productivePerceptionContext,
                         )
-                    hardwareSensorBridge = AndroidHardwareSensorBridge(
-                        context = appContext,
-                        photonIngress = photonIngress,
-                    )
-                    productivePerceptionContext.attachHardwareBridge(
-                        hardwareSensorBridge
-                    )
-                    productivePerceptionContext.attachNotificationBridge(
-                        LiveNotificationSensorBridge(photonIngress)
-                    )
-                    val appUsageSensorBridge =
-                        AndroidAppUsageSensorBridge(appContext, photonIngress)
-                    productivePerceptionContext.attachAppUsageBridge(
-                        appUsageSensorBridge
-                    )
-                    ProductiveAppUsageSensorRuntimeRegistry.install(
-                        appUsageSensorBridge
-                    )
-                    productivePerceptionContext.attachAppContentBridge(
-                        AndroidSemanticAppContentSensorBridge(photonIngress)
-                    )
+                    photonIngress = perceptionBinding.photonIngress
+                    hardwareSensorBridge =
+                        perceptionBinding.hardwareSensorBridge
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
                         productiveIngress = photonIngress::ingest,
