@@ -42,6 +42,7 @@ class ReferenceCpuSceneRasterizer(
         }
 
         val camera = CameraFrame.from(graph.camera, size)
+        val preparedNodes = graph.nodes.map(::prepareNode)
         val pixels = size.pixelCount
         val albedo = FloatArray(pixels * 4)
         val normals = FloatArray(pixels * 3)
@@ -63,7 +64,7 @@ class ReferenceCpuSceneRasterizer(
             for (x in 0 until size.width) {
                 val pixel = y * size.width + x
                 val ray = camera.rayForPixel(x, y, size)
-                val hit = nearestHit(ray, graph.nodes) ?: continue
+                val hit = nearestHit(ray, preparedNodes) ?: continue
                 if (hit.distance !in nearMeters..farMeters) continue
 
                 val material = materials.material(hit.node, hit.humanoidPart)
@@ -111,48 +112,43 @@ class ReferenceCpuSceneRasterizer(
     private fun normalizeDepth(distance: Double): Double =
         ((distance - nearMeters) / (farMeters - nearMeters)).coerceIn(0.0, 1.0)
 
-    private fun nearestHit(ray: Ray, nodes: List<SceneNode>): Hit? {
+    private fun nearestHit(ray: Ray, nodes: List<PreparedNode>): Hit? {
         var nearest: Hit? = null
-        for (node in nodes) {
-            val hit = when (node.geometry.primitive) {
-                GeometryPrimitive.SPHERE -> intersectSphereNode(ray, node)
-                GeometryPrimitive.PLANE -> intersectPlaneNode(ray, node)
-                GeometryPrimitive.BOX -> intersectBoxNode(ray, node)
-                GeometryPrimitive.PARAMETRIC_HUMANOID -> intersectHumanoid(ray, node)
+        for (prepared in nodes) {
+            val hit = when (prepared.node.geometry.primitive) {
+                GeometryPrimitive.SPHERE -> intersectSphereNode(ray, prepared)
+                GeometryPrimitive.PLANE -> intersectPlaneNode(ray, prepared)
+                GeometryPrimitive.BOX -> intersectBoxNode(ray, prepared)
+                GeometryPrimitive.PARAMETRIC_HUMANOID -> intersectHumanoid(ray, prepared)
             } ?: continue
             if (hit.distance > EPSILON && (nearest == null || hit.distance < nearest.distance)) nearest = hit
         }
         return nearest
     }
 
-    private fun intersectSphereNode(ray: Ray, node: SceneNode): Hit? {
-        val dimensions = scaledDimensions(node)
-        val radii = Vec3(
-            dimensions.x * 0.5,
-            dimensions.y * 0.5,
-            dimensions.z * 0.5,
-        )
-        return intersectEllipsoid(ray, Vec3.from(node.transform.position), radii)?.let { intersection ->
-            Hit(node, intersection.distance, intersection.normal)
+    private fun intersectSphereNode(ray: Ray, prepared: PreparedNode): Hit? {
+        val radii = requireNotNull(prepared.sphereRadii)
+        return intersectEllipsoid(ray, prepared.center, radii)?.let { intersection ->
+            Hit(prepared.node, intersection.distance, intersection.normal)
         }
     }
 
-    private fun intersectPlaneNode(ray: Ray, node: SceneNode): Hit? {
-        val dimensions = scaledDimensions(node)
+    private fun intersectPlaneNode(ray: Ray, prepared: PreparedNode): Hit? {
         if (abs(ray.direction.z) < EPSILON) return null
-        val center = Vec3.from(node.transform.position)
-        val surfaceZ = center.z + dimensions.z * 0.5
+        val dimensions = prepared.dimensions
+        val center = prepared.center
+        val surfaceZ = requireNotNull(prepared.planeSurfaceZ)
         val t = (surfaceZ - ray.origin.z) / ray.direction.z
         if (t <= EPSILON) return null
         val p = ray.at(t)
         if (abs(p.x - center.x) > dimensions.x * 0.5 || abs(p.y - center.y) > dimensions.y * 0.5) return null
-        return Hit(node, t, Vec3(0.0, 0.0, 1.0))
+        return Hit(prepared.node, t, Vec3(0.0, 0.0, 1.0))
     }
 
-    private fun intersectBoxNode(ray: Ray, node: SceneNode): Hit? {
-        val dimensions = scaledDimensions(node)
-        val center = Vec3.from(node.transform.position)
-        val half = dimensions * 0.5
+    private fun intersectBoxNode(ray: Ray, prepared: PreparedNode): Hit? {
+        val node = prepared.node
+        val center = prepared.center
+        val half = requireNotNull(prepared.boxHalf)
         val minCorner = center - half
         val maxCorner = center + half
         var tMin = Double.NEGATIVE_INFINITY
@@ -191,17 +187,11 @@ class ReferenceCpuSceneRasterizer(
         return Hit(node, t, normal)
     }
 
-    private fun intersectHumanoid(ray: Ray, node: SceneNode): Hit? {
-        val dimensions = scaledDimensions(node)
-        val center = Vec3.from(node.transform.position)
-        val width = dimensions.x
-        val depth = dimensions.y
-        val height = dimensions.z
-        val parts = humanoidParts(node, center, width, depth, height)
+    private fun intersectHumanoid(ray: Ray, prepared: PreparedNode): Hit? {
         var nearest: Hit? = null
-        for (part in parts) {
+        for (part in prepared.humanoidParts) {
             val intersection = intersectEllipsoid(ray, part.center, part.radii) ?: continue
-            val hit = Hit(node, intersection.distance, intersection.normal, part.part)
+            val hit = Hit(prepared.node, intersection.distance, intersection.normal, part.part)
             if (nearest == null || hit.distance < nearest.distance) nearest = hit
         }
         return nearest
@@ -263,6 +253,54 @@ class ReferenceCpuSceneRasterizer(
         return parts
     }
 
+    private fun prepareNode(node: SceneNode): PreparedNode {
+        val dimensions = scaledDimensions(node)
+        val center = Vec3.from(node.transform.position)
+        return when (node.geometry.primitive) {
+            GeometryPrimitive.SPHERE ->
+                PreparedNode(
+                    node = node,
+                    center = center,
+                    dimensions = dimensions,
+                    sphereRadii = Vec3(
+                        dimensions.x * 0.5,
+                        dimensions.y * 0.5,
+                        dimensions.z * 0.5,
+                    ),
+                )
+
+            GeometryPrimitive.PLANE ->
+                PreparedNode(
+                    node = node,
+                    center = center,
+                    dimensions = dimensions,
+                    planeSurfaceZ = center.z + dimensions.z * 0.5,
+                )
+
+            GeometryPrimitive.BOX ->
+                PreparedNode(
+                    node = node,
+                    center = center,
+                    dimensions = dimensions,
+                    boxHalf = dimensions * 0.5,
+                )
+
+            GeometryPrimitive.PARAMETRIC_HUMANOID ->
+                PreparedNode(
+                    node = node,
+                    center = center,
+                    dimensions = dimensions,
+                    humanoidParts = humanoidParts(
+                        node = node,
+                        center = center,
+                        width = dimensions.x,
+                        depth = dimensions.y,
+                        height = dimensions.z,
+                    ),
+                )
+        }
+    }
+
     private fun scaledDimensions(node: SceneNode): Vec3 {
         val d = node.geometry.dimensionsMeters
         val s = node.transform.scale
@@ -299,6 +337,16 @@ class ReferenceCpuSceneRasterizer(
         ).normalized()
         return EllipsoidIntersection(t, normal)
     }
+
+    private data class PreparedNode(
+        val node: SceneNode,
+        val center: Vec3,
+        val dimensions: Vec3,
+        val sphereRadii: Vec3? = null,
+        val planeSurfaceZ: Double? = null,
+        val boxHalf: Vec3? = null,
+        val humanoidParts: List<HumanoidEllipsoid> = emptyList(),
+    )
 
     private data class HumanoidEllipsoid(
         val part: HumanoidPart,
