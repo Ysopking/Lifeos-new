@@ -20,7 +20,6 @@ import app.lifeos.core.runtime.life.SpeechWordObservation
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.topology.LifeOsSubsystemState
 import app.lifeos.next.kernel.KernelBootstrapStatus
-import app.lifeos.next.ui.chat.ChatClarificationPolicy
 import app.lifeos.next.ui.chat.ChatImagePreviewLoader
 import app.lifeos.next.ui.chat.ChatImagePreviewState
 import app.lifeos.next.ui.chat.ChatTimelineItem
@@ -105,7 +104,6 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
             )
         }
     }
-
     fun dismissError() {
         mutableState.update { current ->
             current.copy(
@@ -118,7 +116,6 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
             )
         }
     }
-
     fun beginVoiceCapture(): ChatVoiceStartResult {
         val current = mutableState.value
         if (!ChatVoicePolicy.canStartVoice(current.bootStatus, current.turnProcessing, current.voice)) {
@@ -154,7 +151,6 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
     }
-
     fun stopVoiceCapture() {
         val current = mutableState.value
         if (current.voice.phase != ChatVoicePhase.RECORDING) return
@@ -168,7 +164,6 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
             )
         }
     }
-
     fun acceptStagedVoiceTranscript() {
         val current = mutableState.value
         val transcript = current.voice.stagedTranscript ?: return
@@ -200,13 +195,6 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                 )
             )
         }
-    }
-
-    fun answerClarification(option: String) {
-        val current = mutableState.value
-        if (option !in current.clarificationOptions) return
-        editDraft(option)
-        sendMessage()
     }
 
     fun sendMessage() {
@@ -273,20 +261,11 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                     )
                 }
 
-                val clarification = turn.language
-                    ?.understanding
-                    ?.goal
-                    ?.clarification
-                val clarificationOptions = ChatClarificationPolicy.options(
-                    required = clarification?.required == true,
-                    alternatives = clarification?.alternatives.orEmpty(),
-                )
                 mutableState.update { state ->
                     state.copy(
                         turnProcessing = ChatTurnProcessingState.idle(),
-                        clarificationOptions = clarificationOptions,
                         error = turn.assistant.processingFailure ?: state.error,
-                    )
+                    ).withClarificationFrom(turn)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
