@@ -98,7 +98,7 @@ class PhotonRehydrator(
         // Internal cognition journals share the encrypted Photon repository. When a shared boot
         // session exists, validate the already decrypted snapshot instead of loading journal refs.
         val verifier = CognitionJournalIntegrityVerifier(repository, journalIndex)
-        if (sessionSnapshot != null) verifier.verify(photons) else verifier.verify()
+        if (sessionReport != null) verifier.verify(photons) else verifier.verify()
 
         val assessments = validator.assess(photons)
         val quarantined = assessments
