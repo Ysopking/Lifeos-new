@@ -58,8 +58,8 @@ class ClarificationEngine {
             return ClarificationPlan(
                 required = true,
                 reason = ClarificationReason.ROLE,
-                questionDe = "Für die Aktion fehlt noch eine eindeutige Angabe: " + label + ".",
-                questionEn = "The action still needs an unambiguous value for: " + label + ".",
+                questionDe = "Welche Angabe soll ich für $label verwenden?",
+                questionEn = "Which value should I use for $label?",
                 alternatives = emptyList(),
             )
         }
@@ -74,8 +74,8 @@ class ClarificationEngine {
             return ClarificationPlan(
                 required = true,
                 reason = ClarificationReason.INTERPRETATION,
-                questionDe = "Welche Bedeutung meinst du?",
-                questionEn = "Which meaning do you mean?",
+                questionDe = "Welche Bedeutung meinst du genau?",
+                questionEn = "Which meaning do you mean exactly?",
                 alternatives = lattice.candidates.take(3).map { it.intent.name },
             )
         }
