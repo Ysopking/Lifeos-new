@@ -217,14 +217,6 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
         val availability = kernel.bootstrapState.value.availability
         mutableStartupState.value = LifeOsProcessStartupState.ready(availability)
-
-        if (startupState.value.actionable) {
-            selfObservationController.start()
-            liveSourceController.startContinuousRefresh()
-            refreshInitialDataBootstrap()
-            refreshLiveSources()
-            refreshStorageIntelligence()
-        }
     }
 
     private fun applyWarmInstall(installed: ProcessRuntimeWarmInstallResult) {
@@ -235,7 +227,14 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             kernelAvailability = kernel.bootstrapState.value.availability,
             report = installed.startupReport,
         )
-        if (startupState.value.actionable) refreshSelfObservation()
+        if (startupState.value.actionable) {
+            selfObservationController.start()
+            liveSourceController.startContinuousRefresh()
+            refreshInitialDataBootstrap()
+            refreshLiveSources()
+            refreshStorageIntelligence()
+            refreshSelfObservation()
+        }
     }
 
     fun refreshSelfObservation() {

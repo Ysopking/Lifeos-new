@@ -18,6 +18,7 @@ class LifeOsStartupCompositionTest {
             createKernel = { actions += "kernel-created" },
             startKernel = { actions += "kernel-start" },
             requireCognitiveStateReady = { actions += "cognitive-ready" },
+            warmPersonalRuntime = { actions += "personal-warmup" },
             installDeepSearchRuntime = { actions += "deepsearch" },
             startSelfHealingRuntime = { actions += "self-healing" },
             installDurableGoalPlanRuntime = { actions += "goal-plan" },
@@ -56,6 +57,7 @@ class LifeOsStartupCompositionTest {
         assertFalse(report.degraded)
         assertEquals(
             setOf(
+                LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
                 LifeOsStartupStage.DEEP_SEARCH,
                 LifeOsStartupStage.SELF_HEALING,
                 LifeOsStartupStage.DURABLE_GOALS,
@@ -63,7 +65,7 @@ class LifeOsStartupCompositionTest {
             report.completedStages,
         )
         assertEquals(
-            setOf("deepsearch", "self-healing", "goal-plan"),
+            setOf("personal-warmup", "deepsearch", "self-healing", "goal-plan"),
             actions.drop(5).toSet(),
         )
         assertTrue(
@@ -83,6 +85,7 @@ class LifeOsStartupCompositionTest {
             createKernel = {},
             startKernel = {},
             requireCognitiveStateReady = {},
+            warmPersonalRuntime = { actions += "personal-warmup" },
             installDeepSearchRuntime = { actions += "deepsearch" },
             startSelfHealingRuntime = {
                 actions += "self-healing"
@@ -96,12 +99,16 @@ class LifeOsStartupCompositionTest {
         val report = LifeOsStartupComposition.startWarm(hooks)
 
         assertEquals(
-            setOf("deepsearch", "self-healing", "goal-plan"),
+            setOf("personal-warmup", "deepsearch", "self-healing", "goal-plan"),
             actions.toSet(),
         )
         assertTrue(report.degraded)
         assertEquals(
-            setOf(LifeOsStartupStage.DEEP_SEARCH, LifeOsStartupStage.DURABLE_GOALS),
+            setOf(
+                LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
+                LifeOsStartupStage.DEEP_SEARCH,
+                LifeOsStartupStage.DURABLE_GOALS,
+            ),
             report.completedStages,
         )
         val failure = report.failures.single()
@@ -138,16 +145,18 @@ class LifeOsStartupCompositionTest {
                 listOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
                 listOf(LifeOsStartupStage.RUNTIME_STARTED),
                 listOf(
+                    LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
                     LifeOsStartupStage.DEEP_SEARCH,
                     LifeOsStartupStage.SELF_HEALING,
-                    LifeOsStartupStage.DURABLE_GOALS,
                 ),
+                listOf(LifeOsStartupStage.DURABLE_GOALS),
             ),
             LifeOsStartupStageGraph.layers.map { layer -> layer.map { it.stage } },
         )
         assertTrue(
             LifeOsStartupStageGraph.specsFor(LifeOsStartupLane.CRITICAL)
                 .all { it.stage !in setOf(
+                    LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
                     LifeOsStartupStage.DEEP_SEARCH,
                     LifeOsStartupStage.SELF_HEALING,
                     LifeOsStartupStage.DURABLE_GOALS,
@@ -155,7 +164,14 @@ class LifeOsStartupCompositionTest {
         )
         assertTrue(
             LifeOsStartupStageGraph.specsFor(LifeOsStartupLane.WARM)
+                .filter { it.stage != LifeOsStartupStage.DURABLE_GOALS }
                 .all { LifeOsStartupStage.RUNTIME_STARTED in it.dependencies }
+        )
+        assertEquals(
+            setOf(LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP),
+            LifeOsStartupStageGraph.specs
+                .single { it.stage == LifeOsStartupStage.DURABLE_GOALS }
+                .dependencies,
         )
     }
 }

@@ -60,6 +60,10 @@ internal enum class LifeOsStartupStage(
         diagnosticCode = "BOOT-RT-001",
         displayName = "Runtime",
     ),
+    PERSONAL_RUNTIME_WARMUP(
+        diagnosticCode = "BOOT-PW-001",
+        displayName = "Personal Runtime Warmup",
+    ),
 }
 
 internal data class LifeOsStartupStageSpec(
@@ -208,6 +212,12 @@ internal object LifeOsStartupStageGraph {
             lane = LifeOsStartupLane.CRITICAL,
         ),
         LifeOsStartupStageSpec(
+            LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
+            setOf(LifeOsStartupStage.RUNTIME_STARTED),
+            parallelSafe = true,
+            lane = LifeOsStartupLane.WARM,
+        ),
+        LifeOsStartupStageSpec(
             LifeOsStartupStage.DEEP_SEARCH,
             setOf(LifeOsStartupStage.RUNTIME_STARTED),
             parallelSafe = true,
@@ -221,7 +231,7 @@ internal object LifeOsStartupStageGraph {
         ),
         LifeOsStartupStageSpec(
             LifeOsStartupStage.DURABLE_GOALS,
-            setOf(LifeOsStartupStage.RUNTIME_STARTED),
+            setOf(LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP),
             parallelSafe = true,
             lane = LifeOsStartupLane.WARM,
         ),
@@ -267,6 +277,7 @@ internal data class LifeOsStartupHooks(
     val createKernel: suspend () -> Unit,
     val startKernel: suspend () -> Unit,
     val requireCognitiveStateReady: suspend () -> Unit,
+    val warmPersonalRuntime: suspend () -> Unit,
     val installDeepSearchRuntime: suspend () -> Unit,
     val startSelfHealingRuntime: suspend () -> Unit,
     val installDurableGoalPlanRuntime: suspend () -> Unit,
@@ -470,6 +481,7 @@ internal object LifeOsStartupComposition {
         LifeOsStartupStage.KERNEL_GRAPH -> hooks.createKernel
         LifeOsStartupStage.KERNEL_BOOT -> hooks.startKernel
         LifeOsStartupStage.COGNITIVE_STATE_READY -> hooks.requireCognitiveStateReady
+        LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP -> hooks.warmPersonalRuntime
         LifeOsStartupStage.DEEP_SEARCH -> hooks.installDeepSearchRuntime
         LifeOsStartupStage.SELF_HEALING -> hooks.startSelfHealingRuntime
         LifeOsStartupStage.DURABLE_GOALS -> hooks.installDurableGoalPlanRuntime

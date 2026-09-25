@@ -10,7 +10,6 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.CausalCognitionEngine
 import app.lifeos.core.runtime.CausalDerivedPhotonPersistence
-import app.lifeos.core.runtime.CognitiveSnapshotRuntimeRegistry
 import app.lifeos.core.runtime.PhotonBackedCausalLedgerStore
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RecursiveCausalCognitionCoordinator
@@ -62,7 +61,6 @@ import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
 import app.lifeos.next.kernel.ProductivePerceptionComposition
 import app.lifeos.next.kernel.ProductivePerceptionContextRuntime
-import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -120,6 +118,7 @@ internal class ProcessRuntimeInstaller(
         lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
         lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
         lateinit var multimodalPerception: MultimodalPerceptionRuntime
+        lateinit var personalRuntimeWarmup: PostReadyPersonalRuntimeWarmup
         var selfHealingRuntime: PrivateSelfHealingRuntime? = null
         var escalationRuntime: PrivateEscalationRuntime? = null
 
@@ -219,15 +218,12 @@ internal class ProcessRuntimeInstaller(
                         planning = futurePlanning,
                     )
 
-                    lifePhotonRepository.reconcilePersisted()
-                    lifeMemoryRuntime.rebuild(Instant.now())
-                    CognitiveSnapshotRuntimeRegistry.captureLatest()
-                    futurePlanning.reconsiderAll().forEach { planned ->
-                        photonIngress.ingest(
-                            planned,
-                            PhotonIngressMode.DERIVED,
-                        )
-                    }
+                    personalRuntimeWarmup = PostReadyPersonalRuntimeWarmup(
+                        photons = lifePhotonRepository,
+                        memory = lifeMemoryRuntime,
+                        futurePlanning = futurePlanning,
+                        ingress = photonIngress,
+                    )
 
                     val frozenCognitiveModules =
                         kernel.freezeCognitiveModulesForCurrentCycle(
@@ -289,6 +285,9 @@ internal class ProcessRuntimeInstaller(
                         )
                         Unit
                     }
+                },
+                warmPersonalRuntime = {
+                    personalRuntimeWarmup.run()
                 },
                 installDeepSearchRuntime = {
                     DeepSearchMissionRuntimeRegistry.install(
@@ -457,10 +456,13 @@ internal class ProcessRuntimeInstaller(
         onCriticalReady(critical)
 
         kernel.startWarmBoot().join()
-        if (kernel.bootstrapState.value.actionable) {
+        val warmReport = LifeOsStartupComposition.startWarm(startupHooks)
+        if (
+            kernel.bootstrapState.value.actionable &&
+            LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP in warmReport.completedStages
+        ) {
             productivePerceptionContext.start()
         }
-        val warmReport = LifeOsStartupComposition.startWarm(startupHooks)
         return ProcessRuntimeInstallResult(
             critical = critical,
             warm = ProcessRuntimeWarmInstallResult(
