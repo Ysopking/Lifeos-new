@@ -64,6 +64,7 @@ internal class AndroidUsageStatsEventSource(
     context: Context,
 ) : AppUsageEventSource {
     private val appContext = context.applicationContext
+    private val ownPackageName = appContext.packageName
     private val usageStatsManager =
         requireNotNull(
             appContext.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
@@ -103,6 +104,7 @@ internal class AndroidUsageStatsEventSource(
         while (usageEvents.hasNextEvent() && result.size < maxEvents) {
             usageEvents.getNextEvent(event)
             val packageName = event.packageName?.takeIf { it.isNotBlank() } ?: continue
+            if (packageName == ownPackageName) continue
             val kind = when (event.eventType) {
                 UsageEvents.Event.MOVE_TO_FOREGROUND -> PlatformAppUsageEventKind.FOREGROUND
                 UsageEvents.Event.MOVE_TO_BACKGROUND -> PlatformAppUsageEventKind.BACKGROUND
@@ -143,6 +145,7 @@ internal fun interface AppUsageBatchCommitter {
 internal class AndroidAppUsageSensorBridge(
     private val source: AppUsageEventSource,
     private val commitBatch: AppUsageBatchCommitter,
+    private val excludedPackageNames: Set<String> = emptySet(),
     private val clock: Clock = Clock.systemUTC(),
     private val scope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Default),
@@ -166,6 +169,7 @@ internal class AndroidAppUsageSensorBridge(
             )
             Unit
         },
+        excludedPackageNames = setOf(context.applicationContext.packageName),
         clock = clock,
         scope = scope,
     )
@@ -407,7 +411,7 @@ internal class AndroidAppUsageSensorBridge(
                 beginMillis = beginMillis,
                 endMillis = boundedEnd,
                 maxEvents = APP_USAGE_BUDGET.maxObservations + 1,
-            )
+            ).filterNot { it.packageName in excludedPackageNames }
             if (events.size <= APP_USAGE_BUDGET.maxObservations) {
                 return BoundedPlatformRead(
                     events = events,
