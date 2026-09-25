@@ -67,36 +67,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 
-internal data class ProcessRuntimeCriticalInstallResult(
-    val kernel: LifeOsKernel,
-    val photonIngress: CanonicalPhotonIngress,
-    val generatedToolStatusReader: GeneratedToolRuntimeStatusReader,
-    val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime,
-    val storageIntelligence: AndroidStorageIntelligenceRuntime,
-    val storageMaintenance: AndroidStorageMaintenanceRuntime,
-    val storageIntelligenceController: StorageIntelligenceProcessController,
-    val ownerPolicy: OwnerPolicyLedger,
-    val ownerObservationPolicy: OwnerObservationPolicyLedger,
-    val resourceBudgets: ResourceBudgetCoordinator,
-    val decisionTraces: DecisionTraceLedger,
-    val selfObservationDecisionTraceRecorder: SelfObservationDecisionTraceRecorder,
-    val goalDecisionTraceRecorder: GoalDecisionTraceRecorder,
-    val lifePhotonRepository: CanonicalLifePhotonRepository,
-    val lifeMemoryRuntime: DurableLifeMemoryRuntime,
-    val multimodalPerception: MultimodalPerceptionRuntime,
-)
-
-internal data class ProcessRuntimeWarmInstallResult(
-    val selfHealingRuntime: PrivateSelfHealingRuntime?,
-    val escalationRuntime: PrivateEscalationRuntime?,
-    val startupReport: LifeOsWarmStartupReport,
-)
-
-internal data class ProcessRuntimeInstallResult(
-    val critical: ProcessRuntimeCriticalInstallResult,
-    val warm: ProcessRuntimeWarmInstallResult,
-)
-
 internal class ProcessRuntimeInstaller(
     context: Context,
     private val onSelfObservationRequested:
