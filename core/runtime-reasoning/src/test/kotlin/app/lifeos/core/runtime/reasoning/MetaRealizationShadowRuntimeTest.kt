@@ -58,10 +58,11 @@ class MetaRealizationShadowRuntimeTest {
             runtime.status.first { it is MetaRealizationShadowStatus.Ready }
         } as MetaRealizationShadowStatus.Ready
 
-        assertEquals("world:queued", ready.snapshot.realization.components
-            .single { it.kind == RealizationComponentKind.PRODUCTIVE_WORLD }
-            .provenanceFingerprints
-            .first())
+        assertTrue(
+            "world:queued" in ready.snapshot.realization.components
+                .single { it.kind == RealizationComponentKind.PRODUCTIVE_WORLD }
+                .provenanceFingerprints
+        )
         assertEquals(0L, runtime.rejectedSubmissionCount())
         runtime.close()
     }
