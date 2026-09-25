@@ -173,7 +173,7 @@ class WorldEquationPromotionEvaluator(
                 "independent-runs:" + independentRuns + "/" + protocol.minimumIndependentRuns,
             )
         } else {
-            val fraction = observations.count {
+            val fraction = performanceObservations.count {
                 it.improvement(protocol.primaryMetric) > 0.0
             }.toDouble() / performanceObservations.size
             result(
