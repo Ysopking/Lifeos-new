@@ -22,7 +22,7 @@ class ProceduralMmsiReferenceShading(
 
     class Scratch internal constructor(
         internal val coefficients: DoubleArray,
-        internal val rgb: DoubleArray,
+        val rgb: DoubleArray,
     )
 
     fun newScratch(): Scratch =
