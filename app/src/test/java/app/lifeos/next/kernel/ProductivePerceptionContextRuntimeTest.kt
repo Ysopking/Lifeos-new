@@ -301,6 +301,57 @@ class ProductivePerceptionContextRuntimeTest {
     }
 
     @Test
+    fun appContentBridgeStartsUnavailableThenReplansOnlyAfterServiceConnection() = runTest {
+        val registry = AppSensorRegistry()
+        val runtime = ProductivePerceptionContextRuntime(
+            ownerObservationPolicy = OwnerObservationPolicyLedger(EmptyPolicyRepository()),
+            sensorRegistry = registry,
+        )
+        val bridge = AndroidSemanticAppContentSensorBridge(
+            AppContentBatchCommitter { _, _, _, _ -> Unit }
+        )
+
+        try {
+            runtime.attachAppContentBridge(bridge)
+
+            assertEquals(
+                SensorHealthState.UNAVAILABLE,
+                registry.state(bridge.descriptor.sensorId)?.health,
+            )
+            assertEquals(
+                SensorAttentionMode.SUSPENDED,
+                registry.state(bridge.descriptor.sensorId)?.mode,
+            )
+
+            bridge.connected()
+
+            assertEquals(
+                SensorHealthState.HEALTHY,
+                registry.state(bridge.descriptor.sensorId)?.health,
+            )
+
+            val update = runtime.applyWorldGaps(
+                listOf(
+                    WorldGap.Perception(
+                        domain = FieldDomainId("app"),
+                        missingDimensions = setOf(StateDimensionId("app.ui.current")),
+                        reason = "semantic-app-ui-missing",
+                    )
+                )
+            )
+
+            assertEquals(
+                SensorAttentionMode.FOCUSED,
+                registry.state(bridge.descriptor.sensorId)?.mode,
+            )
+            assertFalse(update.observationGrantAuthority)
+            assertFalse(update.effectAuthority)
+        } finally {
+            ProductiveSemanticAppContentIngress.clearForTests()
+        }
+    }
+
+    @Test
     fun notificationBridgeBuildsCanonicalSensorBatchAndHonorsSuspension() = runTest {
         val revisions = mutableListOf<Pair<Long, Long>>()
         val committed = mutableListOf<InformationObservation>()

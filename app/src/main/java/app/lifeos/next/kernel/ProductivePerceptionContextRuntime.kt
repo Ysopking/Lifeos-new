@@ -199,6 +199,38 @@ internal class ProductivePerceptionContextRuntime(
     }
 
     /**
+     * B485 registers semantic Accessibility UI as APP_CONTENT. Android accessibility enablement
+     * controls source availability only; Owner Observation Policy still authorizes every batch.
+     */
+    suspend fun attachAppContentBridge(
+        bridge: AndroidSemanticAppContentSensorBridge,
+    ) {
+        val attached = attachTarget(
+            owner = bridge,
+            target = ProductiveSensorAttentionTarget(
+                descriptor = bridge.descriptor,
+                coverage = bridge.attentionCoverage,
+                applyAttention = bridge::applyAttention,
+            ),
+        )
+        if (!attached) return
+
+        sensorRegistry.updateHealth(
+            bridge.descriptor.sensorId,
+            SensorHealthState.UNAVAILABLE,
+            "accessibility-service-not-connected",
+        )
+        bridge.bindHealthReporter { health, failure ->
+            updateSensorHealth(
+                sensorId = bridge.descriptor.sensorId,
+                health = health,
+                failure = failure,
+            )
+        }
+        ProductiveSemanticAppContentIngress.install(bridge)
+    }
+
+    /**
      * Applies registry defaults after the kernel is ready. Unavailable sensors fail closed to
      * SUSPENDED until their lifecycle reports HEALTHY.
      */
