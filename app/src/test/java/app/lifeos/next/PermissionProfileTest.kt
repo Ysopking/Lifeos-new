@@ -102,6 +102,29 @@ class PermissionProfileTest {
     }
 
     @Test
+    fun `semantic app content remains owner special access`() {
+        val profile = PrivatePermissionProfiles.assistantAccess(
+            semanticAppContentAccess = true,
+        )
+        val evaluator = PermissionProfileEvaluator(
+            runtimePermissionGranted = { true },
+            specialAccessSupported = { true },
+            specialAccessGranted = {
+                it == PermissionSpecialAccess.NOTIFICATION_LISTENER
+            },
+        )
+
+        val result = evaluator.evaluate(profile)
+
+        assertEquals(PermissionProfileState.OWNER_ACTION_REQUIRED, result.state)
+        assertEquals(
+            setOf(PermissionSpecialAccess.ACCESSIBILITY_SERVICE),
+            result.missingSpecialAccess,
+        )
+        assertTrue(profile.runtimePermissions.isEmpty())
+    }
+
+    @Test
     fun `special access request plan is deterministic`() {
         val plan = SpecialAccessRequestPlan(
             profileIds = setOf(
