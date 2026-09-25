@@ -2,6 +2,8 @@ package app.lifeos.core.runtime.capability
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.runtime.boot.WarmRuntimeFeature
+import app.lifeos.core.runtime.boot.WarmRuntimeReadinessRegistry
 import java.time.Instant
 
 /**
@@ -22,6 +24,7 @@ class GeneratedToolUserActionCoordinator(
     private val now: () -> Instant = Instant::now,
 ) {
     suspend fun generateExplicitlyApproved(gap: CapabilityGap): GeneratedToolUserActionResult {
+        WarmRuntimeReadinessRegistry.requireReady(WarmRuntimeFeature.GENERATED_TOOLS)
         val requestedAt = now()
         val (requestPhoton, createdRequest) = GeneratedToolRequestPhotonCodec.createRequestPhoton(
             gap = gap,

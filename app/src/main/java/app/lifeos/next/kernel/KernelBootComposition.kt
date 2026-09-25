@@ -21,6 +21,8 @@ import app.lifeos.core.runtime.boot.RuntimeBootstrapper
 import app.lifeos.core.runtime.boot.StateRehydrator
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmup
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
+import app.lifeos.core.runtime.boot.WarmRuntimeFeature
+import app.lifeos.core.runtime.boot.WarmRuntimeReadinessRegistry
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 
@@ -204,7 +206,11 @@ internal class KernelBootComposition(
                     setOf("generated-artifact-verify"),
                     BootCriticality.OPTIONAL_WARM,
                 ) {
-                    evolution.generatedToolBootRehydrator.rehydrateOrVerify()
+                    WarmRuntimeReadinessRegistry.runWarmup(
+                        WarmRuntimeFeature.GENERATED_TOOLS
+                    ) {
+                        evolution.generatedToolBootRehydrator.rehydrateOrVerify()
+                    }
                 },
             )
         )

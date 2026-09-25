@@ -4,6 +4,8 @@ import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.buildstudio.BuildActorAction
 import app.lifeos.core.runtime.buildstudio.BuildActorEvidence
 import app.lifeos.core.runtime.buildstudio.BuildActorRole
+import app.lifeos.core.runtime.boot.WarmRuntimeFeature
+import app.lifeos.core.runtime.boot.WarmRuntimeReadinessRegistry
 import app.lifeos.core.runtime.capability.CapabilityGapDetector
 import app.lifeos.core.runtime.capability.CapabilityGapType
 import app.lifeos.core.runtime.capability.CapabilityRegistry
@@ -102,6 +104,7 @@ class PrivateNovelCapabilityActivationCoordinator(
         toolId: String,
         ownerActorId: String,
     ): PrivateNovelCapabilityActivationResult {
+        WarmRuntimeReadinessRegistry.requireReady(WarmRuntimeFeature.GENERATED_TOOLS)
         require(toolId.isNotBlank())
         require(ownerActorId.isNotBlank())
         require(ownerActorId != REVIEWER_ACTOR_ID) {

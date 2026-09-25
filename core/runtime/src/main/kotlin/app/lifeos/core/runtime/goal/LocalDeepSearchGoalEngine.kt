@@ -33,6 +33,8 @@ import app.lifeos.core.runtime.deepsearch.DeepSearchSourceKind
 import app.lifeos.core.runtime.deepsearch.DeepSearchSourceSnapshot
 import app.lifeos.core.runtime.deepsearch.DeepSearchStatus
 import app.lifeos.core.runtime.deepsearch.RuntimeDeepSearchPermissionGate
+import app.lifeos.core.runtime.boot.WarmRuntimeFeature
+import app.lifeos.core.runtime.boot.WarmRuntimeReadinessRegistry
 import app.lifeos.core.runtime.level7.EvidenceActionKind
 import app.lifeos.core.runtime.level7.LanguageActiveEvidenceBridge
 import app.lifeos.core.runtime.resource.ResourceBudgetDemand
@@ -86,6 +88,7 @@ class LocalDeepSearchGoalEngine(
         missionId: DeepSearchMissionId? = null,
     ): LocalDeepSearchGoalResult {
         if (!supports(goal.intent)) return LocalDeepSearchGoalResult.Unsupported(goal.intent)
+        WarmRuntimeReadinessRegistry.requireReady(WarmRuntimeFeature.DEEP_SEARCH)
         val searchPlan = searchQueryPlanner.plan(goal)
 
         if (missionId == null && resume == null && checkpointSink == null) {

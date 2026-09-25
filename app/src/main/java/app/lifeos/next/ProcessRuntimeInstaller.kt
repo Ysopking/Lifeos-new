@@ -80,6 +80,7 @@ internal class ProcessRuntimeInstaller(
         CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     suspend fun install(): ProcessRuntimeInstallResult {
+        LifeOsWarmRuntimeBinding.beginBoot()
         val generatedToolStatusReader = GeneratedToolRuntimeStatusReader(
             EncryptedGeneratedToolStateRepository(appContext),
         )
@@ -429,6 +430,7 @@ internal class ProcessRuntimeInstaller(
                 if (event is LifeOsStartupStageEvent.Completed) {
                     LifeOsRuntimeWiring.onStageReady(event.evidence)
                 }
+                LifeOsWarmRuntimeBinding.observe(event)
                 onStartupEvent(event)
             },
         )
@@ -455,25 +457,13 @@ internal class ProcessRuntimeInstaller(
         )
         onCriticalReady(critical)
 
-        kernel.startWarmBoot().join()
-        val warmReport = LifeOsStartupComposition.startWarm(startupHooks)
-        if (
-            kernel.bootstrapState.value.actionable &&
-            LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP in warmReport.completedStages
-        ) {
-            productivePerceptionContext.start()
-        }
-        return ProcessRuntimeInstallResult(
-            critical = critical,
-            warm = ProcessRuntimeWarmInstallResult(
-                selfHealingRuntime = selfHealingRuntime.takeIf {
-                    LifeOsStartupStage.SELF_HEALING in warmReport.completedStages
-                },
-                escalationRuntime = escalationRuntime.takeIf {
-                    LifeOsStartupStage.SELF_HEALING in warmReport.completedStages
-                },
-                startupReport = warmReport,
-            ),
+        val warm = LifeOsWarmRuntimeBinding.finish(
+            kernel = kernel,
+            hooks = startupHooks,
+            perception = productivePerceptionContext,
+            selfHealing = selfHealingRuntime,
+            escalation = escalationRuntime,
         )
+        return ProcessRuntimeInstallResult(critical = critical, warm = warm)
     }
 }

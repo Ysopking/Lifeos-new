@@ -8,6 +8,8 @@ import app.lifeos.core.model.PhotonPhase
 import app.lifeos.core.model.PhotonRelation
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.model.RelationType
+import app.lifeos.core.runtime.boot.WarmRuntimeFeature
+import app.lifeos.core.runtime.boot.WarmRuntimeReadinessRegistry
 import app.lifeos.core.runtime.convergence.ConvergenceDecisionState
 import app.lifeos.core.runtime.goal.DurableGoalPlanLedger
 import app.lifeos.core.runtime.goal.GoalCognitiveCycleBindingRecord
@@ -476,5 +478,8 @@ object DurableGoalPlanRuntimeRegistry {
         installed = runtime
     }
 
-    fun currentOrNull(): DurableGoalPlanRuntime? = installed
+    fun currentOrNull(): DurableGoalPlanRuntime? {
+        WarmRuntimeReadinessRegistry.requireReady(WarmRuntimeFeature.DURABLE_GOALS)
+        return installed
+    }
 }
