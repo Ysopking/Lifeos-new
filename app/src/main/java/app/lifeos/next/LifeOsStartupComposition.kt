@@ -344,11 +344,6 @@ internal object LifeOsStartupComposition {
             outcomes.sortedBy { it.spec.stage.ordinal }.forEach { outcome ->
                 if (outcome.failure == null) {
                     completedWarm += outcome.spec.stage
-                    emitCompleted(
-                        StageExecution(outcome.spec, outcome.durationNanos),
-                        layerIndex,
-                        hooks,
-                    )
                 } else {
                     failures += LifeOsWarmStartupFailure(
                         stage = outcome.spec.stage,
@@ -399,6 +394,7 @@ internal object LifeOsStartupComposition {
                 async {
                     try {
                         val execution = executeStage(spec, layerIndex, hooks)
+                        emitCompleted(execution, layerIndex, hooks)
                         WarmStageOutcome(
                             spec = spec,
                             durationNanos = execution.durationNanos,

@@ -29,6 +29,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 
@@ -153,8 +154,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private fun onStartupEvent(event: LifeOsStartupStageEvent) {
-        mutableWarmStartupReport.value =
-            LifeOsWarmStartupProgressProjector.project(mutableWarmStartupReport.value, event)
+        mutableWarmStartupReport.update { current ->
+            LifeOsWarmStartupProgressProjector.project(current, event)
+        }
         mutableStartupState.value =
             LifeOsStartupStateProjector.projectEvent(mutableStartupState.value, event)
     }

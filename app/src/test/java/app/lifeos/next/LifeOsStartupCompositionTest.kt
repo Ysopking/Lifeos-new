@@ -5,6 +5,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 
 class LifeOsStartupCompositionTest {
@@ -73,6 +75,46 @@ class LifeOsStartupCompositionTest {
                 it.evidence.manifestGraphFingerprint == LifeOsProcessTopology.manifestFingerprint
             }
         )
+    }
+
+    @Test
+    fun `warm completion is emitted before a slower sibling finishes`() = runTest {
+        val personalStarted = CompletableDeferred<Unit>()
+        val releasePersonal = CompletableDeferred<Unit>()
+        val durableCompleted = CompletableDeferred<Unit>()
+        val hooks = LifeOsStartupHooks(
+            installSharedResourceRuntime = {},
+            installGoalExecutionRuntime = {},
+            createKernel = {},
+            startKernel = {},
+            requireCognitiveStateReady = {},
+            warmPersonalRuntime = {
+                personalStarted.complete(Unit)
+                releasePersonal.await()
+            },
+            installDeepSearchRuntime = {},
+            startSelfHealingRuntime = {},
+            installDurableGoalPlanRuntime = {},
+            stageObserver = { event ->
+                if (
+                    event is LifeOsStartupStageEvent.Completed &&
+                    event.stage == LifeOsStartupStage.DURABLE_GOALS
+                ) {
+                    durableCompleted.complete(Unit)
+                }
+            },
+        )
+
+        LifeOsStartupComposition.startCritical(hooks)
+        val warm = async { LifeOsStartupComposition.startWarm(hooks) }
+
+        personalStarted.await()
+        durableCompleted.await()
+        assertFalse(warm.isCompleted)
+
+        releasePersonal.complete(Unit)
+        val report = warm.await()
+        assertTrue(LifeOsStartupStage.DURABLE_GOALS in report.completedStages)
     }
 
     @Test
