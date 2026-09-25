@@ -233,6 +233,7 @@ internal class AndroidAppUsageSensorBridge(
         sourcePosition = null,
     )
     private var lastQueryEndMillis: Long? = null
+    private val pollLock = Any()
     private var pollJob: Job? = null
 
     internal fun bindHealthReporter(
@@ -253,29 +254,54 @@ internal class AndroidAppUsageSensorBridge(
 
     internal fun applyAttention(mode: SensorAttentionMode) {
         attentionMode = mode
+        updatePolling()
     }
 
     internal fun start() {
         if (!started.compareAndSet(false, true)) return
-        pollJob = scope.launch {
-            while (isActive) {
-                try {
-                    pollOnce()
-                } catch (_: RuntimeException) {
-                    reportHealth(
-                        SensorHealthState.DEGRADED,
-                        "app-usage-query-failed",
-                    )
-                }
-                delay(pollIntervalMillis(attentionMode))
-            }
-        }
+        updatePolling()
     }
 
     internal fun stop() {
         started.set(false)
-        pollJob?.cancel()
-        pollJob = null
+        synchronized(pollLock) {
+            pollJob?.cancel()
+            pollJob = null
+        }
+    }
+
+    /**
+     * A SUSPENDED app-usage sensor owns no background polling job. This keeps app usage strictly
+     * WorldGap-demand-driven and removes idle AppOps/UsageStats work from unrelated product flows.
+     */
+    private fun updatePolling() {
+        synchronized(pollLock) {
+            val shouldPoll =
+                started.get() && attentionMode != SensorAttentionMode.SUSPENDED
+            if (!shouldPoll) {
+                pollJob?.cancel()
+                pollJob = null
+                return
+            }
+            if (pollJob?.isActive == true) return
+            pollJob = scope.launch {
+                while (
+                    isActive &&
+                    started.get() &&
+                    attentionMode != SensorAttentionMode.SUSPENDED
+                ) {
+                    try {
+                        pollOnce()
+                    } catch (_: RuntimeException) {
+                        reportHealth(
+                            SensorHealthState.DEGRADED,
+                            "app-usage-query-failed",
+                        )
+                    }
+                    delay(pollIntervalMillis(attentionMode))
+                }
+            }
+        }
     }
 
     internal suspend fun refreshAvailability(): SensorHealthState {
@@ -292,8 +318,8 @@ internal class AndroidAppUsageSensorBridge(
     }
 
     internal suspend fun pollOnce(): Int {
-        if (refreshAvailability() != SensorHealthState.HEALTHY) return 0
         if (attentionMode == SensorAttentionMode.SUSPENDED) return 0
+        if (refreshAvailability() != SensorHealthState.HEALTHY) return 0
 
         return mutex.withLock {
             if (attentionMode == SensorAttentionMode.SUSPENDED) return@withLock 0
