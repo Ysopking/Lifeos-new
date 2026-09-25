@@ -4,6 +4,7 @@ import android.app.Application
 import app.lifeos.core.data.LiveSourceSyncSnapshot
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
 import app.lifeos.core.runtime.life.DurableLifeMemoryRuntime
+import app.lifeos.core.runtime.life.InitialDataBootstrapRuntime
 import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
