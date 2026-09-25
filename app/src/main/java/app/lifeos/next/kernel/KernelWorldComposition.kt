@@ -83,6 +83,7 @@ internal data class KernelWorldGraph(
 internal class KernelWorldComposition(
     private val foundation: KernelFoundationGraph,
     private val evolution: KernelEvolutionGraph,
+    private val personalContextBootBindingSource: PersonalContextBootBindingSource? = null,
 ) {
     fun compose(): KernelWorldGraph {
         val appContext = foundation.appContext
@@ -235,6 +236,8 @@ internal class KernelWorldComposition(
                     strategySnapshotId = "goal-strategy:$strategyFingerprint",
                     equationVersion = worldEquationAuthority.activeVersion(),
                     resourceSnapshotId = "hardware-state:${hardware.fingerprint()}",
+                    perceptionBinding =
+                        personalContextBootBindingSource?.freeze(workingSet),
                 )
             },
         )

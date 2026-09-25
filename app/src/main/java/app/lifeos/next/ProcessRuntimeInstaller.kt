@@ -61,6 +61,7 @@ import app.lifeos.next.kernel.PrivateEscalationRuntime
 import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
+import app.lifeos.next.kernel.ProductivePerceptionContextRuntime
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -134,6 +135,7 @@ internal class ProcessRuntimeInstaller(
         lateinit var goalDecisionTraceRecorder: GoalDecisionTraceRecorder
         lateinit var kernel: LifeOsKernel
         lateinit var photonIngress: CanonicalPhotonIngress
+        lateinit var productivePerceptionContext: ProductivePerceptionContextRuntime
         lateinit var hardwareSensorBridge: AndroidHardwareSensorBridge
         lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
         lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
@@ -169,12 +171,16 @@ internal class ProcessRuntimeInstaller(
                     )
                 },
                 createKernel = {
+                    productivePerceptionContext =
+                        ProductivePerceptionContextRuntime(ownerObservationPolicy)
                     kernel = LifeOsKernelFactory(
                         context = appContext,
                         hardwareResourceIntelligence =
                             hardwareResourceIntelligence,
                         bootReadyMaintenanceTrigger =
                             storageIntelligenceController::refresh,
+                        personalContextBootBindingSource =
+                            productivePerceptionContext,
                     ).create()
 
                     val ownerAssetReviews =
@@ -188,6 +194,9 @@ internal class ProcessRuntimeInstaller(
                     hardwareSensorBridge = AndroidHardwareSensorBridge(
                         context = appContext,
                         photonIngress = photonIngress,
+                    )
+                    productivePerceptionContext.attachHardwareBridge(
+                        hardwareSensorBridge
                     )
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
@@ -433,7 +442,7 @@ internal class ProcessRuntimeInstaller(
                 },
                 startKernel = {
                     kernel.start().join()
-                    hardwareSensorBridge.start()
+                    productivePerceptionContext.start()
                 },
                 requireCognitiveStateReady = {
                     kernel.requireCognitiveReady()

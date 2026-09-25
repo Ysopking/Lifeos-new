@@ -141,11 +141,23 @@ def artifact_for_run(repository: str, run_id: int, name: str, token: str) -> dic
         for artifact in payload.get("artifacts", [])
         if artifact.get("name") == name and not artifact.get("expired", False)
     ]
-    if len(matches) != 1:
+    if not matches:
         raise EvidenceReuseError(
-            f"artifact-count-invalid:{name}:run={run_id}:count={len(matches)}"
+            f"artifact-count-invalid:{name}:run={run_id}:count=0"
         )
-    return matches[0]
+
+    # GitHub keeps artifacts from earlier attempts when a workflow job is re-run. Reusing
+    # evidence must therefore select the newest non-expired artifact for this exact run/head
+    # instead of failing merely because an earlier attempt left an artifact with the same name.
+    # created_at is RFC3339/ISO-8601, so lexical ordering is chronological; artifact id is a
+    # deterministic tie-breaker only.
+    return max(
+        matches,
+        key=lambda artifact: (
+            str(artifact.get("created_at", "")),
+            int(artifact.get("id", 0)),
+        ),
+    )
 
 
 def safe_extract(payload: bytes, destination: Path) -> None:

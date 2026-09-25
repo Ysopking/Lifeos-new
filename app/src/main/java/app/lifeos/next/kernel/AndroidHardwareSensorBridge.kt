@@ -49,7 +49,7 @@ internal class AndroidHardwareSensorBridge(
             "Android SensorManager unavailable"
         }
 
-    private val descriptor = SensorDescriptor(
+    internal val descriptor = SensorDescriptor(
         sensorId = SensorId(SENSOR_ID),
         sensorClass = SensorClass.DEVICE,
         adapterVersion = ADAPTER_VERSION,
