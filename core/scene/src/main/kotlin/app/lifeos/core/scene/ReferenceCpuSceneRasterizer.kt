@@ -1,5 +1,6 @@
 package app.lifeos.core.scene
 
+import java.util.stream.IntStream
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -56,12 +57,17 @@ class ReferenceCpuSceneRasterizer(
             normals[i * 3 + 2] = 1f
         }
 
-        var covered = 0
-        var actors = 0
-        var objects = 0
-        var ground = 0
+        val coveredByRow = IntArray(size.height)
+        val actorsByRow = IntArray(size.height)
+        val objectsByRow = IntArray(size.height)
+        val groundByRow = IntArray(size.height)
 
-        for (y in 0 until size.height) {
+        IntStream.range(0, size.height).parallel().forEach { y ->
+            var rowCovered = 0
+            var rowActors = 0
+            var rowObjects = 0
+            var rowGround = 0
+
             for (x in 0 until size.width) {
                 val pixel = y * size.width + x
                 val ray = rayGrid.rayForPixel(x, y)
@@ -83,15 +89,25 @@ class ReferenceCpuSceneRasterizer(
                 depth[pixel] = normalizeDepth(hit.distance).toFloat()
                 roughness[pixel] = material.roughness
 
-                covered++
+                rowCovered++
                 when (hit.node.role) {
-                    SceneNodeRole.ACTOR -> actors++
-                    SceneNodeRole.OBJECT -> objects++
-                    SceneNodeRole.GROUND -> ground++
+                    SceneNodeRole.ACTOR -> rowActors++
+                    SceneNodeRole.OBJECT -> rowObjects++
+                    SceneNodeRole.GROUND -> rowGround++
                     SceneNodeRole.ENVIRONMENT -> Unit
                 }
             }
+
+            coveredByRow[y] = rowCovered
+            actorsByRow[y] = rowActors
+            objectsByRow[y] = rowObjects
+            groundByRow[y] = rowGround
         }
+
+        val covered = coveredByRow.sum()
+        val actors = actorsByRow.sum()
+        val objects = objectsByRow.sum()
+        val ground = groundByRow.sum()
 
         return SceneRasterResult.Rasterized(
             buffers = MmsiSceneRasterBuffers(
