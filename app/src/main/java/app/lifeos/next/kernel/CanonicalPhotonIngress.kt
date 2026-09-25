@@ -44,6 +44,13 @@ class CanonicalPhotonIngress(
     private val artifactIngress by lazy {
         CanonicalArtifactPhotonIngress(::ingestWithReceipt)
     }
+    private val semanticProjection by lazy {
+        AuthorizedObservationSemanticProjectionRuntime(
+            persistDerived = { photon ->
+                ingest(photon, PhotonIngressMode.DERIVED)
+            }
+        )
+    }
 
     /** Productive collaborative-artifact runtime bound to the same canonical Photon ingress. */
     val artifacts: ArtifactCoordinator by lazy {
@@ -147,10 +154,27 @@ class CanonicalPhotonIngress(
             descriptor = descriptor,
             batch = validated,
         )
-        return authorizedObservationCommitter.commit(
+        val receipt = authorizedObservationCommitter.commit(
             batch = authorized,
             salience = salience,
         )
+        val authorizedById = authorized.authorized.associateBy { it.id }
+        receipt.committed.forEach { commit ->
+            val observation = requireNotNull(authorizedById[commit.observationId]) {
+                "Committed observation disappeared before semantic projection"
+            }
+            val sourcePhoton = requireNotNull(kernel.photonStore.load(commit.photonId)) {
+                "Committed observation Photon disappeared before semantic projection"
+            }
+            require(sourcePhoton.revision == commit.photonRevision) {
+                "Committed observation Photon revision drifted before semantic projection"
+            }
+            semanticProjection.project(
+                observation = observation,
+                sourcePhoton = sourcePhoton,
+            )
+        }
+        return receipt
     }
 
     /**
