@@ -326,11 +326,16 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             escalationRuntime = it
         }
 
-        if (installed.startupReport.degraded) {
+        val kernelAvailability = kernel.bootstrapState.value.availability
+        val warmDegraded =
+            installed.startupReport.degraded ||
+                kernelAvailability == RuntimeAvailability.DEGRADED
+        if (warmDegraded) {
             val current = mutableStartupState.value
             if (current.ready) {
                 val summary = installed.startupReport.failures
                     .joinToString("; ") { "${it.diagnosticCode}:${it.stage.displayName}" }
+                    .ifBlank { "kernel-warm-rehydration" }
                 mutableStartupState.value = current.copy(
                     availability = if (current.availability == RuntimeAvailability.FULL) {
                         RuntimeAvailability.DEGRADED

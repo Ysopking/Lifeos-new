@@ -486,10 +486,10 @@ internal class ProcessRuntimeInstaller(
         )
         onCriticalReady(critical)
 
+        kernel.startWarmBoot().join()
         if (kernel.bootstrapState.value.actionable) {
             productivePerceptionContext.start()
         }
-        kernel.startWarmBoot()
         val warmReport = LifeOsStartupComposition.startWarm(startupHooks)
         return ProcessRuntimeInstallResult(
             critical = critical,
