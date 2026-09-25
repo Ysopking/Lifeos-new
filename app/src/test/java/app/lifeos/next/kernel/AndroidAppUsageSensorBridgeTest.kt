@@ -70,6 +70,44 @@ class AndroidAppUsageSensorBridgeTest {
     }
 
     @Test
+    fun `saturated usage window drains without skipping unread platform events`() = runTest {
+        val now = Instant.parse("2026-09-25T01:01:00Z")
+        val baseMillis = Instant.parse("2026-09-25T01:00:10Z").toEpochMilli()
+        val source = FakeUsageSource(
+            granted = true,
+            events = (0 until 65).map { index ->
+                PlatformAppUsageEvent(
+                    packageName = "com.example.app$index",
+                    timestampMillis = baseMillis + index * 500L,
+                    kind = PlatformAppUsageEventKind.FOREGROUND,
+                )
+            },
+        )
+        val committed = mutableListOf<InformationObservation>()
+        val exhausted = mutableListOf<Boolean>()
+        val bridge = AndroidAppUsageSensorBridge(
+            source = source,
+            commitBatch = AppUsageBatchCommitter { _, _, _, batch ->
+                committed += batch.observations
+                exhausted += batch.exhausted
+            },
+            clock = Clock.fixed(now, ZoneOffset.UTC),
+            scope = this,
+        )
+        bridge.bindHealthReporter { _, _ -> Unit }
+        bridge.applyAttention(SensorAttentionMode.PERIODIC)
+
+        val first = bridge.pollOnce()
+        val second = bridge.pollOnce()
+
+        assertTrue(first in 1..64)
+        assertEquals(65, first + second)
+        assertEquals(65, committed.map { it.id }.distinct().size)
+        assertEquals(listOf(false, true), exhausted)
+        assertTrue(source.queryCount >= 3)
+    }
+
+    @Test
     fun `failed productive commit replays identical usage observation identities`() = runTest {
         var now = Instant.parse("2026-09-25T01:00:30Z")
         val clock = object : Clock() {
