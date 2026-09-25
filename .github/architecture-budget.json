@@ -27,6 +27,7 @@
       ":core:model",
       ":core:runtime",
       ":core:runtime-android",
+      ":core:runtime-reasoning",
       ":core:runtime-deepsearch",
       ":core:runtime-personal",
       ":core:scene"

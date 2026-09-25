@@ -211,6 +211,11 @@ class WorldEquationActivationAuthorityTest {
             minimumIndependentRuns = 2,
             minimumDistinctWorkloads = 1,
             minimumActiveObservationsPerChangedCoefficient = 1,
+            realizationProfileFingerprint = "realization-profile:activation",
+            stateSpaceFingerprint = "state-space:activation",
+            observableContractFingerprint = "observables:activation",
+            failureCriteriaFingerprint = "failures:activation",
+            minimumExclusionRuns = 1,
         )
         coordinator.beginShadow(candidate, baseline, protocol)
         val activeId = baseline.stableCoefficients().first().id
@@ -228,6 +233,17 @@ class WorldEquationActivationAuthorityTest {
                 activeId,
                 "run-2",
                 WorldEquationEvidencePartition.HOLDOUT,
+            ),
+        )
+        coordinator.recordObservation(
+            candidate,
+            baseline,
+            observation(
+                baseline,
+                candidate,
+                activeId,
+                "run-3",
+                WorldEquationEvidencePartition.EXCLUSION,
             ),
         )
         val gate = WorldEquationEvolutionAdmissionGate(repository, evaluator)

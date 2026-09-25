@@ -18,6 +18,11 @@ class WorldEquationPromotionEvaluatorTest {
         minimumIndependentRuns = 3,
         minimumDistinctWorkloads = 2,
         minimumActiveObservationsPerChangedCoefficient = 2,
+        realizationProfileFingerprint = "realization-profile:test",
+        stateSpaceFingerprint = "state-space:test",
+        observableContractFingerprint = "observables:test",
+        failureCriteriaFingerprint = "failures:test",
+        minimumExclusionRuns = 1,
     )
     private val policy = WorldEquationPromotionPolicy(
         version = "test-policy-v1",
@@ -36,6 +41,7 @@ class WorldEquationPromotionEvaluatorTest {
                 observation("run-1", "workload-a", 5, 3),
                 observation("run-2", "workload-a", 6, 4),
                 observation("run-3", "workload-b", 5, 4, WorldEquationEvidencePartition.HOLDOUT),
+                observation("run-4", "workload-b", 5, 4, WorldEquationEvidencePartition.EXCLUSION),
             )
         )
 
@@ -43,6 +49,51 @@ class WorldEquationPromotionEvaluatorTest {
 
         assertEquals(WorldEquationPromotionDecision.PROMOTABLE, verdict.decision)
         assertTrue(verdict.gateResults.all { it.status == WorldEquationGateStatus.PASS })
+    }
+
+    @Test
+    fun unattestedLegacyProtocolCannotBecomePromotable() {
+        val legacy = protocol.copy(
+            realizationProfileFingerprint = null,
+            stateSpaceFingerprint = null,
+            observableContractFingerprint = null,
+            failureCriteriaFingerprint = null,
+            minimumExclusionRuns = 0,
+        )
+        val evidence = WorldEquationEvidenceSet.empty(
+            candidate = candidate,
+            baseline = baseline,
+            protocol = legacy,
+            policyFingerprint = policy.fingerprint(),
+        ).copy(
+            observations = listOf(
+                observation("legacy-run-1", "workload-a", 5, 3),
+                observation(
+                    "legacy-run-2",
+                    "workload-b",
+                    5,
+                    3,
+                    WorldEquationEvidencePartition.HOLDOUT,
+                ),
+                observation(
+                    "legacy-run-3",
+                    "workload-b",
+                    5,
+                    3,
+                    WorldEquationEvidencePartition.EXCLUSION,
+                ),
+            )
+        )
+
+        val verdict = evaluator.evaluate(candidate, baseline, evidence)
+
+        assertTrue(verdict.decision != WorldEquationPromotionDecision.PROMOTABLE)
+        assertEquals(
+            WorldEquationGateStatus.INCONCLUSIVE,
+            verdict.gateResults.single {
+                it.gate == WorldEquationEvidenceGate.ANTI_VACUITY
+            }.status,
+        )
     }
 
     @Test

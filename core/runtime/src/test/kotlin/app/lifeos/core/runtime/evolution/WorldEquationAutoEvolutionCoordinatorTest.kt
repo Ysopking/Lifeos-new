@@ -79,6 +79,11 @@ class WorldEquationAutoEvolutionCoordinatorTest {
             minimumIndependentRuns = 2,
             minimumDistinctWorkloads = 1,
             minimumActiveObservationsPerChangedCoefficient = 1,
+            realizationProfileFingerprint = "realization-profile:auto",
+            stateSpaceFingerprint = "state-space:auto",
+            observableContractFingerprint = "observables:auto",
+            failureCriteriaFingerprint = "failures:auto",
+            minimumExclusionRuns = 1,
         )
 
         assertIs<WorldEquationAutoEvolutionResult.Started>(
@@ -87,10 +92,16 @@ class WorldEquationAutoEvolutionCoordinatorTest {
         assertIs<WorldEquationAutoEvolutionResult.Observed>(
             coordinator.observe(candidate, shadowCase("run-1"))
         )
-        val promoted = assertIs<WorldEquationAutoEvolutionResult.Promoted>(
+        assertIs<WorldEquationAutoEvolutionResult.Observed>(
             coordinator.observe(
                 candidate,
                 shadowCase("run-2", WorldEquationEvidencePartition.HOLDOUT),
+            )
+        )
+        val promoted = assertIs<WorldEquationAutoEvolutionResult.Promoted>(
+            coordinator.observe(
+                candidate,
+                shadowCase("run-3", WorldEquationEvidencePartition.EXCLUSION),
             )
         )
 

@@ -10,21 +10,39 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 
 object WorldEquationEvidenceCodec {
-    const val VERSION = 2
+    const val VERSION = 3
+    internal const val LEGACY_VERSION = 2
     const val MAX_ENCODED_BYTES = 8 * 1024 * 1024
     private const val MAX_STRING_BYTES = 1024 * 1024
     private const val MAX_OBSERVATIONS = 10_000
     private const val MAX_ACTIVE_COEFFICIENTS = 4096
     private const val MAX_SAFETY_OBSERVATIONS = 10_000
 
-    fun encode(record: WorldEquationEvidenceRecord): ByteArray {
+    fun encode(record: WorldEquationEvidenceRecord): ByteArray =
+        encode(record, VERSION)
+
+    internal fun encodeLegacyV2ForTest(record: WorldEquationEvidenceRecord): ByteArray {
+        require(!record.evidence.protocol.antiVacuityAttested)
+        require(
+            record.evidence.observations.none {
+                it.partition == WorldEquationEvidencePartition.EXCLUSION
+            }
+        )
+        return encode(record, LEGACY_VERSION)
+    }
+
+    private fun encode(
+        record: WorldEquationEvidenceRecord,
+        codecVersion: Int,
+    ): ByteArray {
+        require(codecVersion == VERSION || codecVersion == LEGACY_VERSION)
         val output = ByteArrayOutputStream()
         DataOutputStream(output).use { data ->
-            data.writeInt(VERSION)
+            data.writeInt(codecVersion)
             data.writeString(record.id)
             data.writeLong(record.revision)
             data.writeString(record.state.name)
-            writeEvidence(data, record.evidence)
+            writeEvidence(data, record.evidence, codecVersion)
             data.writeNullableString(record.latestVerdictId)
             data.writeNullableString(record.activationHeadFingerprint)
             data.writeNullableString(record.rollbackDecisionId)
@@ -52,13 +70,14 @@ object WorldEquationEvidenceCodec {
             "World equation evidence payload size is invalid"
         }
         return DataInputStream(ByteArrayInputStream(bytes)).use { data ->
-            require(data.readInt() == VERSION) {
+            val codecVersion = data.readInt()
+            require(codecVersion == VERSION || codecVersion == LEGACY_VERSION) {
                 "Unsupported WorldEquation evidence codec"
             }
             val storedId = data.readString()
             val revision = data.readLong()
             val state = WorldEquationLifecycleState.valueOf(data.readString())
-            val evidence = readEvidence(data)
+            val evidence = readEvidence(data, codecVersion)
             val verdictId = data.readNullableString()
             val activationHead = data.readNullableString()
             val rollbackDecision = data.readNullableString()
@@ -108,6 +127,7 @@ object WorldEquationEvidenceCodec {
     private fun writeEvidence(
         data: DataOutputStream,
         evidence: WorldEquationEvidenceSet,
+        codecVersion: Int,
     ) {
         data.writeString(evidence.candidateVersion)
         data.writeString(evidence.candidateEquationFingerprint)
@@ -123,6 +143,16 @@ object WorldEquationEvidenceCodec {
         data.writeInt(evidence.protocol.minimumActiveObservationsPerChangedCoefficient)
         data.writeInt(evidence.protocol.minimumShadowRuns)
         data.writeInt(evidence.protocol.minimumHoldoutRuns)
+        if (codecVersion >= VERSION) {
+            data.writeBoolean(evidence.protocol.antiVacuityAttested)
+            if (evidence.protocol.antiVacuityAttested) {
+                data.writeString(requireNotNull(evidence.protocol.realizationProfileFingerprint))
+                data.writeString(requireNotNull(evidence.protocol.stateSpaceFingerprint))
+                data.writeString(requireNotNull(evidence.protocol.observableContractFingerprint))
+                data.writeString(requireNotNull(evidence.protocol.failureCriteriaFingerprint))
+                data.writeInt(evidence.protocol.minimumExclusionRuns)
+            }
+        }
         data.writeString(evidence.policyFingerprint)
         require(evidence.observations.size <= MAX_OBSERVATIONS)
         data.writeInt(evidence.observations.size)
@@ -140,7 +170,10 @@ object WorldEquationEvidenceCodec {
             }
     }
 
-    private fun readEvidence(data: DataInputStream): WorldEquationEvidenceSet {
+    private fun readEvidence(
+        data: DataInputStream,
+        codecVersion: Int,
+    ): WorldEquationEvidenceSet {
         val candidateVersion = data.readString()
         val candidateEquationFingerprint = data.readString()
         val candidatePhysicsFingerprint = data.readString()
@@ -148,15 +181,42 @@ object WorldEquationEvidenceCodec {
         val baselineEquationFingerprint = data.readString()
         val baselinePhysicsFingerprint = data.readString()
         val schemaFingerprint = data.readString()
-        val protocol = WorldEquationEvaluationProtocol(
-            version = data.readString(),
-            primaryMetric = WorldEquationPrimaryMetric.valueOf(data.readString()),
-            minimumIndependentRuns = data.readInt(),
-            minimumDistinctWorkloads = data.readInt(),
-            minimumActiveObservationsPerChangedCoefficient = data.readInt(),
-            minimumShadowRuns = data.readInt(),
-            minimumHoldoutRuns = data.readInt(),
-        )
+        val protocolVersion = data.readString()
+        val primaryMetric = WorldEquationPrimaryMetric.valueOf(data.readString())
+        val minimumIndependentRuns = data.readInt()
+        val minimumDistinctWorkloads = data.readInt()
+        val minimumActiveObservationsPerChangedCoefficient = data.readInt()
+        val minimumShadowRuns = data.readInt()
+        val minimumHoldoutRuns = data.readInt()
+        val attested = codecVersion >= VERSION && data.readBoolean()
+        val protocol = if (attested) {
+            WorldEquationEvaluationProtocol(
+                version = protocolVersion,
+                primaryMetric = primaryMetric,
+                minimumIndependentRuns = minimumIndependentRuns,
+                minimumDistinctWorkloads = minimumDistinctWorkloads,
+                minimumActiveObservationsPerChangedCoefficient =
+                    minimumActiveObservationsPerChangedCoefficient,
+                minimumShadowRuns = minimumShadowRuns,
+                minimumHoldoutRuns = minimumHoldoutRuns,
+                realizationProfileFingerprint = data.readString(),
+                stateSpaceFingerprint = data.readString(),
+                observableContractFingerprint = data.readString(),
+                failureCriteriaFingerprint = data.readString(),
+                minimumExclusionRuns = data.readInt(),
+            )
+        } else {
+            WorldEquationEvaluationProtocol(
+                version = protocolVersion,
+                primaryMetric = primaryMetric,
+                minimumIndependentRuns = minimumIndependentRuns,
+                minimumDistinctWorkloads = minimumDistinctWorkloads,
+                minimumActiveObservationsPerChangedCoefficient =
+                    minimumActiveObservationsPerChangedCoefficient,
+                minimumShadowRuns = minimumShadowRuns,
+                minimumHoldoutRuns = minimumHoldoutRuns,
+            )
+        }
         val policyFingerprint = data.readString()
         val observationCount = data.readInt()
         require(observationCount in 0..MAX_OBSERVATIONS) {

@@ -99,25 +99,45 @@ class LifeOsStartupCompositionTest {
         val report = LifeOsStartupComposition.startWarm(hooks)
 
         assertEquals(
-            setOf("personal-warmup", "deepsearch", "self-healing", "goal-plan"),
+            setOf("deepsearch", "self-healing", "goal-plan"),
             actions.toSet(),
         )
         assertTrue(report.degraded)
         assertEquals(
             setOf(
-                LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
                 LifeOsStartupStage.DEEP_SEARCH,
                 LifeOsStartupStage.DURABLE_GOALS,
             ),
             report.completedStages,
         )
-        val failure = report.failures.single()
-        assertEquals(LifeOsStartupStage.SELF_HEALING, failure.stage)
-        assertEquals("BOOT-SH-001", failure.diagnosticCode)
-        assertEquals("startup-failure", failure.message)
+        assertEquals(
+            setOf(
+                LifeOsStartupStage.SELF_HEALING,
+                LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
+            ),
+            report.failures.map { it.stage }.toSet(),
+        )
+        val selfHealingFailure =
+            report.failures.single { it.stage == LifeOsStartupStage.SELF_HEALING }
+        assertEquals("BOOT-SH-001", selfHealingFailure.diagnosticCode)
+        assertEquals("startup-failure", selfHealingFailure.message)
 
-        val failedEvent = events.filterIsInstance<LifeOsStartupStageEvent.Failed>().single()
-        assertEquals(LifeOsStartupStage.SELF_HEALING, failedEvent.stage)
+        val personalWarmupFailure =
+            report.failures.single { it.stage == LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP }
+        assertEquals("BOOT-PW-001", personalWarmupFailure.diagnosticCode)
+        assertEquals(
+            "blocked-by:SELF_HEALING",
+            personalWarmupFailure.message,
+        )
+
+        val failedEvents = events.filterIsInstance<LifeOsStartupStageEvent.Failed>()
+        assertEquals(
+            setOf(
+                LifeOsStartupStage.SELF_HEALING,
+                LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
+            ),
+            failedEvents.map { it.stage }.toSet(),
+        )
         assertTrue(
             events.filterIsInstance<LifeOsStartupStageEvent.Completed>()
                 .any { it.stage == LifeOsStartupStage.RUNTIME_STARTED }
@@ -147,9 +167,9 @@ class LifeOsStartupCompositionTest {
                 listOf(
                     LifeOsStartupStage.DEEP_SEARCH,
                     LifeOsStartupStage.SELF_HEALING,
-                    LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
+                    LifeOsStartupStage.DURABLE_GOALS,
                 ),
-                listOf(LifeOsStartupStage.DURABLE_GOALS),
+                listOf(LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP),
             ),
             LifeOsStartupStageGraph.layers.map { layer -> layer.map { it.stage } },
         )
@@ -164,13 +184,17 @@ class LifeOsStartupCompositionTest {
         )
         assertTrue(
             LifeOsStartupStageGraph.specsFor(LifeOsStartupLane.WARM)
-                .filter { it.stage != LifeOsStartupStage.DURABLE_GOALS }
                 .all { LifeOsStartupStage.RUNTIME_STARTED in it.dependencies }
         )
         assertEquals(
-            setOf(LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP),
+            setOf(
+                LifeOsStartupStage.RUNTIME_STARTED,
+                LifeOsStartupStage.DEEP_SEARCH,
+                LifeOsStartupStage.SELF_HEALING,
+                LifeOsStartupStage.DURABLE_GOALS,
+            ),
             LifeOsStartupStageGraph.specs
-                .single { it.stage == LifeOsStartupStage.DURABLE_GOALS }
+                .single { it.stage == LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP }
                 .dependencies,
         )
     }

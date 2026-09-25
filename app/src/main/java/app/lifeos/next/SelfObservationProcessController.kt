@@ -6,6 +6,7 @@ import app.lifeos.core.runtime.health.HealthNodeId
 import app.lifeos.core.runtime.health.HealthObservation
 import app.lifeos.core.runtime.health.HealthScope
 import app.lifeos.core.runtime.health.HealthState
+import app.lifeos.core.runtime.reasoning.MetaRealizationShadowRuntimeRegistry
 import app.lifeos.core.runtime.self.SELF_OBSERVATION_HEALTH_NODE_ID
 import app.lifeos.core.runtime.self.SELF_OBSERVATION_HEALTH_SOURCE
 import app.lifeos.core.runtime.self.SelfObservationCoordinator
@@ -99,6 +100,8 @@ internal class SelfObservationProcessController(
             val assessment =
                 SelfStateWorldFormulaRuntimeRegistry.requireCurrent().evaluate(cycle.result)
             onAnalysis(SelfObservationAnalysisState(cycle, assessment))
+            MetaRealizationShadowRuntimeRegistry.currentOrNull()
+                ?.observe(cycle.result)
 
             val traceIdentity =
                 cycle.snapshot.authorityFingerprint + ":" + assessment.band.name

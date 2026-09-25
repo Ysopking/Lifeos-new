@@ -92,6 +92,11 @@ class WorldEquationAutoEvolutionRecoveryDeviceTest {
             minimumIndependentRuns = 2,
             minimumDistinctWorkloads = 1,
             minimumActiveObservationsPerChangedCoefficient = 1,
+            realizationProfileFingerprint = "realization-profile:device",
+            stateSpaceFingerprint = "state-space:device",
+            observableContractFingerprint = "observables:device",
+            failureCriteriaFingerprint = "failures:device",
+            minimumExclusionRuns = 1,
         )
         evidenceCoordinator.beginShadow(candidate, baseline, protocol)
         evidenceCoordinator.recordObservation(
@@ -104,7 +109,7 @@ class WorldEquationAutoEvolutionRecoveryDeviceTest {
                 runId = "device-run-1",
             ),
         )
-        val promotable = evidenceCoordinator.recordObservation(
+        val supported = evidenceCoordinator.recordObservation(
             candidate,
             baseline,
             passingObservation(
@@ -113,6 +118,18 @@ class WorldEquationAutoEvolutionRecoveryDeviceTest {
                 coefficientId = coefficient.id,
                 runId = "device-run-2",
                 partition = WorldEquationEvidencePartition.HOLDOUT,
+            ),
+        )
+        assertEquals(WorldEquationLifecycleState.SUPPORTED, supported.state)
+        val promotable = evidenceCoordinator.recordObservation(
+            candidate,
+            baseline,
+            passingObservation(
+                baseline = baseline.fingerprint(),
+                candidate = candidate.fingerprint(),
+                coefficientId = coefficient.id,
+                runId = "device-run-3",
+                partition = WorldEquationEvidencePartition.EXCLUSION,
             ),
         )
         assertEquals(WorldEquationLifecycleState.PROMOTABLE, promotable.state)

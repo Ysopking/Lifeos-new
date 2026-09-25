@@ -233,7 +233,7 @@ class OfflineImageArtifactDeviceTest {
         if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
             error("Process startup failed during image E2E: ${processStartup.failure ?: "unknown"}")
         }
-        return withTimeout(BOOT_TIMEOUT_MS) {
+        val kernelState = withTimeout(BOOT_TIMEOUT_MS) {
             app.kernel.bootstrapState.first { state ->
                 state.status == KernelBootstrapStatus.READY ||
                     state.status == KernelBootstrapStatus.DEGRADED ||
@@ -244,6 +244,13 @@ class OfflineImageArtifactDeviceTest {
                 error("Kernel boot failed during image E2E: ${state.failureMessage ?: "unknown"}")
             }
         }
+        withTimeout(WARM_TIMEOUT_MS) {
+            app.warmStartupReport.first { report ->
+                report != null &&
+                    LifeOsStartupStage.DURABLE_GOALS in report.completedStages
+            }
+        }
+        return kernelState
     }
 
     private fun sha256(bytes: ByteArray): String =
@@ -253,6 +260,7 @@ class OfflineImageArtifactDeviceTest {
 
     companion object {
         private const val BOOT_TIMEOUT_MS = 20_000L
+        private const val WARM_TIMEOUT_MS = 30_000L
         private val PNG_SIGNATURE = byteArrayOf(
             0x89.toByte(),
             0x50,
