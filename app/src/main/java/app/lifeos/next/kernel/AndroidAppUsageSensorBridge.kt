@@ -309,7 +309,7 @@ internal class AndroidAppUsageSensorBridge(
                 maxEvents = APP_USAGE_BUDGET.maxObservations,
             )
             val candidateForeground = LinkedHashMap(openForegroundByPackage)
-            val observedAt = Instant.ofEpochMilli(endMillis)
+            val pollAt = Instant.ofEpochMilli(endMillis)
             val observations = buildList {
                 platformEvents.forEach { event ->
                     val eventAt = Instant.ofEpochMilli(event.timestampMillis)
@@ -322,7 +322,7 @@ internal class AndroidAppUsageSensorBridge(
                                         packageName = event.packageName,
                                         foregroundSince = eventAt,
                                         backgroundAt = null,
-                                        observedAt = observedAt,
+                                        observedAt = eventAt,
                                         eventType = AppUsageEventType.FOREGROUND_ENTER,
                                         sourceRevision = sourceRevision(event),
                                     )
@@ -341,7 +341,7 @@ internal class AndroidAppUsageSensorBridge(
                                         packageName = event.packageName,
                                         foregroundSince = foregroundSince,
                                         backgroundAt = eventAt,
-                                        observedAt = observedAt,
+                                        observedAt = eventAt,
                                         eventType = AppUsageEventType.FOREGROUND_INTERVAL,
                                         sourceRevision = intervalRevision(
                                             packageName = event.packageName,
@@ -380,7 +380,7 @@ internal class AndroidAppUsageSensorBridge(
 
             openForegroundByPackage.clear()
             openForegroundByPackage.putAll(candidateForeground)
-            pruneForegroundSessions(observedAt)
+            pruneForegroundSessions(pollAt)
             lastQueryEndMillis = endMillis
             observations.size
         }
