@@ -196,6 +196,68 @@ class ProductivePerceptionContextRuntimeTest {
         }
     }
 
+    @Test
+    fun multipleSensorTargetsShareOneRegistryAndOneAttentionRuntime() = runTest {
+        val runtime = ProductivePerceptionContextRuntime(
+            ownerObservationPolicy = OwnerObservationPolicyLedger(EmptyPolicyRepository()),
+        )
+        val first = RecordingTarget("sensor-a", "app.notification.")
+        val second = RecordingTarget("sensor-b", "device.motion.")
+
+        runtime.attachSensorTarget(second)
+        runtime.attachSensorTarget(first)
+        val defaults = runtime.start()
+
+        assertEquals(listOf("sensor-a", "sensor-b"), defaults.map { it.sensorId.value })
+        assertEquals(listOf(SensorAttentionMode.EVENT_DRIVEN), first.appliedModes)
+        assertEquals(listOf(SensorAttentionMode.EVENT_DRIVEN), second.appliedModes)
+        assertEquals(
+            listOf("sensor-a", "sensor-b"),
+            runtime.sensorRegistrySnapshot().sensors.map { it.descriptor.sensorId.value },
+        )
+        assertEquals(
+            listOf("sensor-a", "sensor-b"),
+            runtime.coverageSnapshot().map { it.sensorId.value },
+        )
+    }
+
+    private class RecordingTarget(
+        id: String,
+        dimensionPrefix: String,
+    ) : ProductiveSensorAttentionTarget {
+        override val descriptor = SensorDescriptor(
+            sensorId = SensorId(id),
+            sensorClass = SensorClass.APP_CONTENT,
+            adapterVersion = "1",
+            observationType = OwnerObservationType.APP_CONTENT,
+            resourcePrefix = "target:$id:",
+            supportedSurfaces = setOf(ObservationSurfaceKind.CONTENT_PROVIDER),
+            defaultMode = SensorAttentionMode.EVENT_DRIVEN,
+        )
+        override val attentionCoverage = SensorAttentionCoverageProfile(
+            sensorId = descriptor.sensorId,
+            stateDimensions = listOf(
+                SensorStateDimensionSelector(
+                    SensorStateDimensionSelectorType.PREFIX,
+                    dimensionPrefix,
+                )
+            ),
+            informationGainMicros = 500_000L,
+            goalRelevanceMicros = 500_000L,
+            verificationValueMicros = 500_000L,
+            energyCostMicros = 100_000L,
+            privacyCostMicros = 100_000L,
+            latencyCostMicros = 100_000L,
+            resourceCostMicros = 100_000L,
+        )
+        val appliedModes = mutableListOf<SensorAttentionMode>()
+
+        override fun applyAttention(mode: SensorAttentionMode): Int {
+            appliedModes += mode
+            return if (mode == SensorAttentionMode.SUSPENDED) 0 else 1
+        }
+    }
+
     private fun workingSet() = ThoughtGraphWorkingSet(
         sourceSnapshotId = "goal-thought-snapshot:test",
         sourceRevision = 7L,
