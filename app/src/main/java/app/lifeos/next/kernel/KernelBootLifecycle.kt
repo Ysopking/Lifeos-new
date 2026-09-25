@@ -255,11 +255,11 @@ internal class KernelBootLifecycle(
             unreadableFiles = context.photons.unreadableFiles.size,
             warnings = warnings,
         )
-        bootReadyMaintenanceTrigger()
     }
 
     private suspend fun warmBootstrap() {
         if (!mutableBootstrapState.value.actionable) return
+        bootReadyMaintenanceTrigger()
         try {
             val report = warmBootRehydrator()
             val limitations = buildList {

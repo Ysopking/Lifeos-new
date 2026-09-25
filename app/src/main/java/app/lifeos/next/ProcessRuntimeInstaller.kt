@@ -452,9 +452,6 @@ internal class ProcessRuntimeInstaller(
                 },
                 startKernel = {
                     kernel.start().join()
-                    if (kernel.bootstrapState.value.actionable) {
-                        productivePerceptionContext.start()
-                    }
                 },
                 requireCognitiveStateReady = {
                     kernel.requireReadable()
@@ -489,6 +486,9 @@ internal class ProcessRuntimeInstaller(
         )
         onCriticalReady(critical)
 
+        if (kernel.bootstrapState.value.actionable) {
+            productivePerceptionContext.start()
+        }
         kernel.startWarmBoot()
         val warmReport = LifeOsStartupComposition.startWarm(startupHooks)
         return ProcessRuntimeInstallResult(
