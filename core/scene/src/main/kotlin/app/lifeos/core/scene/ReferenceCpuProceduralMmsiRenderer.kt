@@ -51,15 +51,16 @@ class ReferenceCpuProceduralMmsiRenderer(
 
             val albedoBase = pixel * 4
             val normalBase = pixel * 3
+            // ReferenceCpuSceneRasterizer writes normalized view-space normals.
             val normal = SurfaceNormal(
                 buffers.normalsXyz[normalBase].toDouble(),
                 buffers.normalsXyz[normalBase + 1].toDouble(),
                 buffers.normalsXyz[normalBase + 2].toDouble(),
-            ).normalized()
+            )
             val roughness = buffers.roughness[pixel].toDouble()
             val shadow = softShadow(pixel, buffers, shadowKernel)
             val ambientOcclusion = (0.35 + 0.65 * normal.z).coerceIn(0.0, 1.0)
-            val color = shading.shade(
+            val color = shading.shadeNormalized(
                 intrinsicLinearAlbedo = RgbSample(
                     buffers.albedoLinearRgba[albedoBase].toDouble(),
                     buffers.albedoLinearRgba[albedoBase + 1].toDouble(),
@@ -100,6 +101,9 @@ class ReferenceCpuProceduralMmsiRenderer(
                 val intersection =
                     (delta / kernel.coneRadius[step]).coerceIn(0.0, 1.0)
                 visibility = min(visibility, 1.0 - intersection)
+                if (visibility <= shadowFloor) {
+                    return shadowFloor
+                }
             }
         }
         return max(visibility, shadowFloor)

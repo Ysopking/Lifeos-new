@@ -8,7 +8,38 @@ import kotlin.math.pow
 class ProceduralMmsiReferenceShading(
     private val profile: ProceduralMmsiProfile = ProceduralMmsiProfile(),
 ) {
+    private val light = profile.sunDirection.normalized()
+    private val view = SolarVector(0.0, 0.0, 1.0)
+    private val halfVector: SolarVector = run {
+        val raw = SolarVector(
+            light.x + view.x,
+            light.y + view.y,
+            light.z + view.z,
+        )
+        val lengthSq = raw.x * raw.x + raw.y * raw.y + raw.z * raw.z
+        if (lengthSq <= 1e-10) view else raw.normalized()
+    }
+
     fun shade(
+        intrinsicLinearAlbedo: RgbSample,
+        normal: SurfaceNormal,
+        roughness: Double,
+        shadowVisibility: Double = 1.0,
+        ambientOcclusion: Double = 1.0,
+    ): RgbSample =
+        shadeNormalized(
+            intrinsicLinearAlbedo = intrinsicLinearAlbedo,
+            normal = normal.normalized(),
+            roughness = roughness,
+            shadowVisibility = shadowVisibility,
+            ambientOcclusion = ambientOcclusion,
+        )
+
+    /**
+     * Fast path for rasterizers that already guarantee unit-length normals.
+     * It retains the exact spectral/GGX contract while avoiding a second per-pixel normalization.
+     */
+    fun shadeNormalized(
         intrinsicLinearAlbedo: RgbSample,
         normal: SurfaceNormal,
         roughness: Double,
@@ -21,17 +52,16 @@ class ProceduralMmsiReferenceShading(
 
         val coefficients = profile.coefficientProjection.project(intrinsicLinearAlbedo)
         val baseColor = profile.rgbProjection.project(coefficients)
-        val n = normal.normalized()
-        val l = profile.sunDirection.normalized()
-        val v = SolarVector(0.0, 0.0, 1.0)
-        val hRaw = SolarVector(l.x + v.x, l.y + v.y, l.z + v.z)
-        val hLengthSq = hRaw.x * hRaw.x + hRaw.y * hRaw.y + hRaw.z * hRaw.z
-        val h = if (hLengthSq <= 1e-10) v else hRaw.normalized()
 
-        val nDotL = max(n.dot(l), 0.0)
-        val nDotV = max(n.dot(v), 0.001)
-        val nDotH = max(n.dot(h), 0.0)
-        val hDotV = max(h.x * v.x + h.y * v.y + h.z * v.z, 0.0)
+        val nDotL = max(normal.dot(light), 0.0)
+        val nDotV = max(normal.dot(view), 0.001)
+        val nDotH = max(normal.dot(halfVector), 0.0)
+        val hDotV = max(
+            halfVector.x * view.x +
+                halfVector.y * view.y +
+                halfVector.z * view.z,
+            0.0,
+        )
         val rough = roughness.coerceIn(0.04, 1.0)
         val a = rough * rough
         val a2 = a * a
@@ -42,17 +72,55 @@ class ProceduralMmsiReferenceShading(
         val specular = (d * g * f) / (4.0 * nDotV * max(nDotL, 0.001) + 1e-4)
         val kd = 1.0 - f
 
-        val base = doubleArrayOf(baseColor.r, baseColor.g, baseColor.b)
-        val sun = doubleArrayOf(profile.sunColorLinear.r, profile.sunColorLinear.g, profile.sunColorLinear.b)
-        val sky = doubleArrayOf(profile.skyAmbientLinear.r, profile.skyAmbientLinear.g, profile.skyAmbientLinear.b)
-        val output = DoubleArray(3)
-        for (channel in 0..2) {
-            val direct = (kd * base[channel] / PI + specular) * sun[channel] * nDotL * shadowVisibility
-            val ambient = base[channel] * sky[channel] * ambientOcclusion
-            val mapped = acesToneMap(max(direct + ambient, 0.0))
-            output[channel] = mapped.pow(1.0 / 2.2).coerceIn(0.0, 1.0)
-        }
-        return RgbSample(output[0], output[1], output[2])
+        return RgbSample(
+            shadeChannel(
+                base = baseColor.r,
+                sun = profile.sunColorLinear.r,
+                sky = profile.skyAmbientLinear.r,
+                kd = kd,
+                specular = specular,
+                nDotL = nDotL,
+                shadowVisibility = shadowVisibility,
+                ambientOcclusion = ambientOcclusion,
+            ),
+            shadeChannel(
+                base = baseColor.g,
+                sun = profile.sunColorLinear.g,
+                sky = profile.skyAmbientLinear.g,
+                kd = kd,
+                specular = specular,
+                nDotL = nDotL,
+                shadowVisibility = shadowVisibility,
+                ambientOcclusion = ambientOcclusion,
+            ),
+            shadeChannel(
+                base = baseColor.b,
+                sun = profile.sunColorLinear.b,
+                sky = profile.skyAmbientLinear.b,
+                kd = kd,
+                specular = specular,
+                nDotL = nDotL,
+                shadowVisibility = shadowVisibility,
+                ambientOcclusion = ambientOcclusion,
+            ),
+        )
+    }
+
+    private fun shadeChannel(
+        base: Double,
+        sun: Double,
+        sky: Double,
+        kd: Double,
+        specular: Double,
+        nDotL: Double,
+        shadowVisibility: Double,
+        ambientOcclusion: Double,
+    ): Double {
+        val direct =
+            (kd * base / PI + specular) * sun * nDotL * shadowVisibility
+        val ambient = base * sky * ambientOcclusion
+        val mapped = acesToneMap(max(direct + ambient, 0.0))
+        return mapped.pow(1.0 / 2.2).coerceIn(0.0, 1.0)
     }
 
     private fun fresnelSchlick(cosTheta: Double, f0: Double): Double =
