@@ -235,7 +235,7 @@ class ProductivePerceptionContextRuntimeTest {
             registry.state(bridge.descriptor.sensorId)?.health,
         )
         assertEquals(
-            SensorAttentionMode.PERIODIC,
+            SensorAttentionMode.SUSPENDED,
             bridge.descriptor.defaultMode,
         )
         assertTrue(
@@ -250,7 +250,7 @@ class ProductivePerceptionContextRuntimeTest {
             registry.state(bridge.descriptor.sensorId)?.health,
         )
         assertEquals(
-            SensorAttentionMode.PERIODIC,
+            SensorAttentionMode.SUSPENDED,
             registry.state(bridge.descriptor.sensorId)?.mode,
         )
 
