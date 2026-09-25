@@ -182,6 +182,11 @@ class ChatMainActivity : ComponentActivity() {
                         notificationAccess.launch(
                             Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
                         )
+
+                    PermissionSpecialAccess.ACCESSIBILITY_SERVICE ->
+                        notificationAccess.launch(
+                            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        )
                 }
             }
 
