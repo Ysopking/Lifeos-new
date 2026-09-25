@@ -57,6 +57,11 @@ fun interface BootCapabilityStateSource { suspend fun load(): List<CapabilityDes
 fun interface BootToolStateSource { suspend fun load(): List<GeneratedToolRecord> }
 fun interface BootFieldSnapshotSource { suspend fun load(): FieldSnapshotLoadReport }
 
+internal data class BootBootSourceRead<T>(
+    val value: T,
+    val failures: List<BootSnapshotReadFailure>,
+)
+
 class PhotonRepositoryBootSource(private val repository: PhotonRepository) : BootPhotonSource {
     override suspend fun load(): PhotonLoadReport = repository.loadReport()
 }
@@ -157,41 +162,47 @@ class BootSnapshotLoader(
     private val fieldSnapshots: BootFieldSnapshotSource,
     private val now: () -> Instant = Instant::now,
 ) {
+    internal suspend fun loadPhotonSource(): BootBootSourceRead<PhotonLoadReport> =
+        readSource(
+            BootSnapshotSource.PHOTON,
+            PhotonLoadReport(emptyList(), emptyList()),
+        ) { photons.load() }
+
+    internal suspend fun loadTaskSource(): BootBootSourceRead<TaskLoadReport> =
+        readSource(
+            BootSnapshotSource.TASK,
+            TaskLoadReport(emptyList(), emptyList()),
+        ) { tasks.load() }
+
+    internal suspend fun loadCheckpointSource(): BootBootSourceRead<CheckpointLoadReport> =
+        readSource(
+            BootSnapshotSource.CHECKPOINT,
+            CheckpointLoadReport(emptyList(), emptyList()),
+        ) { checkpoints.load() }
+
+    internal suspend fun loadCapabilitySource(): BootBootSourceRead<List<CapabilityDescriptor>> =
+        readSource(BootSnapshotSource.CAPABILITY, emptyList()) {
+            capabilities.load()
+        }
+
+    internal suspend fun loadToolSource(): BootBootSourceRead<List<GeneratedToolRecord>> =
+        readSource(BootSnapshotSource.TOOL, emptyList()) {
+            tools.load()
+        }
+
+    internal suspend fun loadFieldSource(): BootBootSourceRead<FieldSnapshotLoadReport> =
+        readSource(
+            BootSnapshotSource.FIELD,
+            FieldSnapshotLoadReport(emptyList(), emptyList()),
+        ) { fieldSnapshots.load() }
+
     suspend fun load(): DurableBootSnapshot = coroutineScope {
-        val photonRead = async {
-            readSource(
-                BootSnapshotSource.PHOTON,
-                PhotonLoadReport(emptyList(), emptyList()),
-            ) { photons.load() }
-        }
-        val taskRead = async {
-            readSource(
-                BootSnapshotSource.TASK,
-                TaskLoadReport(emptyList(), emptyList()),
-            ) { tasks.load() }
-        }
-        val checkpointRead = async {
-            readSource(
-                BootSnapshotSource.CHECKPOINT,
-                CheckpointLoadReport(emptyList(), emptyList()),
-            ) { checkpoints.load() }
-        }
-        val capabilityRead = async {
-            readSource(BootSnapshotSource.CAPABILITY, emptyList()) {
-                capabilities.load()
-            }
-        }
-        val toolRead = async {
-            readSource(BootSnapshotSource.TOOL, emptyList()) {
-                tools.load()
-            }
-        }
-        val fieldRead = async {
-            readSource(
-                BootSnapshotSource.FIELD,
-                FieldSnapshotLoadReport(emptyList(), emptyList()),
-            ) { fieldSnapshots.load() }
-        }
+        val photonRead = async { loadPhotonSource() }
+        val taskRead = async { loadTaskSource() }
+        val checkpointRead = async { loadCheckpointSource() }
+        val capabilityRead = async { loadCapabilitySource() }
+        val toolRead = async { loadToolSource() }
+        val fieldRead = async { loadFieldSource() }
 
         val photonResult = photonRead.await()
         val taskResult = taskRead.await()
@@ -278,12 +289,12 @@ class BootSnapshotLoader(
         source: BootSnapshotSource,
         fallback: T,
         read: suspend () -> T,
-    ): SourceRead<T> = try {
-        SourceRead(read(), emptyList())
+    ): BootSourceRead<T> = try {
+        BootSourceRead(read(), emptyList())
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
-        SourceRead(
+        BootSourceRead(
             value = fallback,
             failures = listOf(
                 BootSnapshotReadFailure(
@@ -294,10 +305,6 @@ class BootSnapshotLoader(
         )
     }
 
-    private data class SourceRead<T>(
-        val value: T,
-        val failures: List<BootSnapshotReadFailure>,
-    )
 }
 
 /**
@@ -349,8 +356,56 @@ class BootReadSession(
         return flight.await()
     }
 
+    suspend fun photonReport(): PhotonLoadReport =
+        photonSourceRead().value
+
     suspend fun readFailures(source: BootSnapshotSource): List<BootSnapshotReadFailure> =
-        snapshot().readFailures.filter { it.source == source }
+        when (source) {
+            BootSnapshotSource.PHOTON -> {
+                val result = photonSourceRead()
+                result.failures + result.value.unreadableFiles.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.PHOTON, it, "unreadable-entry")
+                }
+            }
+            BootSnapshotSource.TASK -> {
+                val result = taskSourceRead()
+                result.failures + result.value.unreadableEntries.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.TASK, it, "unreadable-entry")
+                }
+            }
+            BootSnapshotSource.CHECKPOINT -> {
+                val result = checkpointSourceRead()
+                result.failures + result.value.unreadableEntries.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.CHECKPOINT, it, "unreadable-entry")
+                }
+            }
+            BootSnapshotSource.CAPABILITY -> capabilitySourceRead().failures
+            BootSnapshotSource.TOOL -> toolSourceRead().failures
+            BootSnapshotSource.FIELD -> {
+                val result = fieldSourceRead()
+                result.failures + result.value.unreadableEntries.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.FIELD, it, "unreadable-entry")
+                }
+            }
+        }.distinct().sortedWith(readFailureComparator)
+
+    private suspend fun photonSourceRead(): BootSourceRead<PhotonLoadReport> =
+        readOnce(SOURCE_PHOTON) { loader.loadPhotonSource() }
+
+    private suspend fun taskSourceRead(): BootSourceRead<TaskLoadReport> =
+        readOnce(SOURCE_TASK) { loader.loadTaskSource() }
+
+    private suspend fun checkpointSourceRead(): BootSourceRead<CheckpointLoadReport> =
+        readOnce(SOURCE_CHECKPOINT) { loader.loadCheckpointSource() }
+
+    private suspend fun capabilitySourceRead(): BootSourceRead<List<CapabilityDescriptor>> =
+        readOnce(SOURCE_CAPABILITY) { loader.loadCapabilitySource() }
+
+    private suspend fun toolSourceRead(): BootSourceRead<List<GeneratedToolRecord>> =
+        readOnce(SOURCE_TOOL) { loader.loadToolSource() }
+
+    private suspend fun fieldSourceRead(): BootSourceRead<FieldSnapshotLoadReport> =
+        readOnce(SOURCE_FIELD) { loader.loadFieldSource() }
 
     @Suppress("UNCHECKED_CAST")
     suspend fun <T> readOnce(
@@ -388,6 +443,15 @@ class BootReadSession(
         snapshotFlight = null
         extraReads.values.forEach { it.cancel() }
         extraReads.clear()
+    }
+
+    private companion object {
+        const val SOURCE_PHOTON = "boot-source:photon"
+        const val SOURCE_TASK = "boot-source:task"
+        const val SOURCE_CHECKPOINT = "boot-source:checkpoint"
+        const val SOURCE_CAPABILITY = "boot-source:capability"
+        const val SOURCE_TOOL = "boot-source:tool"
+        const val SOURCE_FIELD = "boot-source:field"
     }
 }
 

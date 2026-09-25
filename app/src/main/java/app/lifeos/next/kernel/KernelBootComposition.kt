@@ -55,6 +55,32 @@ internal class KernelBootComposition(
             action = action,
         )
 
+        val storeProbes = KernelBootStoreProbes(
+            bootReadSession = world.bootReadSession,
+            goalPlanRepository = foundation.goalPlanRepository,
+            learningAdaptationRepository = foundation.learningAdaptationRepository,
+            learningWatermarks = cognition.learningWatermarks,
+            worldEquationHeads = world.worldEquationHeads,
+            worldEquationSpecs = world.worldEquationSpecs,
+            worldEquationEvidence = world.worldEquationEvidence,
+            thoughtMatrixStateRepository = foundation.thoughtMatrixStateRepository,
+            thoughtGraphDeltaRepository = foundation.thoughtGraphDeltaRepository,
+            fieldThoughtGraphProjectionOutbox = world.fieldThoughtGraphProjectionOutbox,
+            protectionRepository = foundation.protectionRepository,
+            worldFormulaSnapshotRepository = world.worldFormulaSnapshotRepository,
+            productiveWorldHeadRepository = world.productiveWorldHeadRepository,
+            bootEngineCycleRepository = world.bootEngineCycleRepository,
+            extensionRegistryRehydrator = world.extensionRegistryRehydrator,
+            worldModelRepository = world.worldModelRepository,
+            cognitiveModuleSnapshotRepository = foundation.cognitiveModuleSnapshotRepository,
+            evolutionStore = evolution.evolutionStore,
+            privateGeneratedToolRuntime = evolution.privateGeneratedToolRuntime,
+        ).create()
+        val criticalStoreProbes =
+            storeProbes.filter { it.criticality != BootCriticality.OPTIONAL_WARM }
+        val optionalStoreProbes =
+            storeProbes.filter { it.criticality == BootCriticality.OPTIONAL_WARM }
+
         val criticalRehydrationGraph = BootRehydrationGraph(
             listOf(
                 node("protection", criticality = BootCriticality.SECURE_REQUIRED) {
@@ -125,6 +151,17 @@ internal class KernelBootComposition(
 
         val warmRehydrationGraph = BootRehydrationGraph(
             listOf(
+                node(
+                    "optional-store-integrity",
+                    criticality = BootCriticality.OPTIONAL_WARM,
+                ) {
+                    val verification = CompositeStoreVerifier(optionalStoreProbes).verify()
+                    val failures = verification.stores.filter { it.state != app.lifeos.core.runtime.boot.StoreState.HEALTHY }
+                    check(failures.isEmpty()) {
+                        "Optional store verification failed: " +
+                            failures.joinToString(",") { "${it.storeId}:${it.state.name}" }
+                    }
+                },
                 node("goal-plans", criticality = BootCriticality.OPTIONAL_WARM) {
                     foundation.goalPlans.rehydrate()
                 },
@@ -187,27 +224,7 @@ internal class KernelBootComposition(
                 override suspend fun bootstrap() = Unit
             },
             storeVerifier = CompositeStoreVerifier(
-                probes = KernelBootStoreProbes(
-                    bootReadSession = world.bootReadSession,
-                    goalPlanRepository = foundation.goalPlanRepository,
-                    learningAdaptationRepository = foundation.learningAdaptationRepository,
-                    learningWatermarks = cognition.learningWatermarks,
-                    worldEquationHeads = world.worldEquationHeads,
-                    worldEquationSpecs = world.worldEquationSpecs,
-                    worldEquationEvidence = world.worldEquationEvidence,
-                    thoughtMatrixStateRepository = foundation.thoughtMatrixStateRepository,
-                    thoughtGraphDeltaRepository = foundation.thoughtGraphDeltaRepository,
-                    fieldThoughtGraphProjectionOutbox = world.fieldThoughtGraphProjectionOutbox,
-                    protectionRepository = foundation.protectionRepository,
-                    worldFormulaSnapshotRepository = world.worldFormulaSnapshotRepository,
-                    productiveWorldHeadRepository = world.productiveWorldHeadRepository,
-                    bootEngineCycleRepository = world.bootEngineCycleRepository,
-                    extensionRegistryRehydrator = world.extensionRegistryRehydrator,
-                    worldModelRepository = world.worldModelRepository,
-                    cognitiveModuleSnapshotRepository = foundation.cognitiveModuleSnapshotRepository,
-                    evolutionStore = evolution.evolutionStore,
-                    privateGeneratedToolRuntime = evolution.privateGeneratedToolRuntime,
-                ).create(),
+                probes = criticalStoreProbes,
             ),
             stateRehydrator = stateRehydrator,
             photonRehydrator = PhotonRehydrator(

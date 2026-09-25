@@ -262,6 +262,41 @@ class BootSnapshotLoaderTest {
     }
 
     @Test
+    fun sourceScopedPhotonReadDoesNotTouchOptionalToolOrFieldSources() = runTest {
+        var toolReads = 0
+        var fieldReads = 0
+        val session = BootReadSession(
+            BootSnapshotLoader(
+                photons = BootPhotonSource {
+                    PhotonLoadReport(listOf(photon("critical", "hot")), emptyList())
+                },
+                tasks = BootTaskSource { TaskLoadReport(emptyList(), emptyList()) },
+                checkpoints = BootCheckpointSource {
+                    CheckpointLoadReport(emptyList(), emptyList())
+                },
+                capabilities = BootCapabilityStateSource { emptyList() },
+                tools = BootToolStateSource {
+                    toolReads += 1
+                    emptyList()
+                },
+                fieldSnapshots = BootFieldSnapshotSource {
+                    fieldReads += 1
+                    FieldSnapshotLoadReport(emptyList(), emptyList())
+                },
+                now = { t0 },
+            )
+        )
+
+        val report = session.photonReport()
+        val failures = session.readFailures(BootSnapshotSource.PHOTON)
+
+        assertEquals(listOf("critical"), report.photons.map { it.id.value })
+        assertTrue(failures.isEmpty())
+        assertEquals(0, toolReads)
+        assertEquals(0, fieldReads)
+    }
+
+    @Test
     fun cancellationPropagatesInsteadOfBecomingPartialSnapshot() = runTest {
         val loader = BootSnapshotLoader(
             photons = BootPhotonSource { throw CancellationException("cancel") },

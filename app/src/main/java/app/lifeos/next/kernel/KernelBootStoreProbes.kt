@@ -154,7 +154,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "thought-matrix-state-store"
-        override val criticality = BootCriticality.OPTIONAL_WARM
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             bootReadSession.readOnce("thought-matrix-state-store") {
                 thoughtMatrixStateRepository.load()
@@ -282,7 +282,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "extension-registry-store"
-        override val criticality = BootCriticality.OPTIONAL_WARM
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus = try {
             extensionRegistryRehydrator.rehydrate()
             StoreStatus(storeId, StoreState.HEALTHY)
@@ -313,7 +313,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "cognitive-module-snapshot-store"
-        override val criticality = BootCriticality.OPTIONAL_WARM
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus = try {
             val head = cognitiveModuleSnapshotRepository.loadHead()
             if (head != null) {
@@ -344,7 +344,6 @@ internal class KernelBootStoreProbes(
         override val storeId: String = "generated-tool-state-store"
         override val criticality = BootCriticality.OPTIONAL_WARM
         override suspend fun probe(): StoreStatus {
-            bootReadSession.snapshot()
             val failures = bootReadSession.readFailures(BootSnapshotSource.TOOL)
             return StoreStatus(
                 storeId = storeId,
