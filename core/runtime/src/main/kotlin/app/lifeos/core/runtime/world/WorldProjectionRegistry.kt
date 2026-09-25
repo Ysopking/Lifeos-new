@@ -1217,3 +1217,254 @@ class LanguageStateSufficiencyCoordinator(
         )
     }
 }
+
+// ---- B480 World-Gap Sensor Attention Coupling ----
+
+enum class SensorStateDimensionSelectorType {
+    EXACT,
+    PREFIX,
+}
+
+data class SensorStateDimensionSelector(
+    val type: SensorStateDimensionSelectorType,
+    val value: String,
+) {
+    init {
+        require(value.isNotBlank()) { "Sensor state-dimension selector must not be blank" }
+    }
+
+    fun matches(dimension: StateDimensionId): Boolean = when (type) {
+        SensorStateDimensionSelectorType.EXACT -> dimension.value == value
+        SensorStateDimensionSelectorType.PREFIX -> dimension.value.startsWith(value)
+    }
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "sensor-state-dimension-selector/v1",
+        type.name,
+        value,
+    )
+}
+
+/**
+ * Declares which state gaps one already-registered sensor can help observe plus the fixed-point
+ * benefit/cost terms consumed by B459. This is scheduling metadata only; it is not an observation
+ * grant and cannot create effect authority.
+ */
+data class SensorAttentionCoverageProfile(
+    val sensorId: SensorId,
+    val stateDimensions: List<SensorStateDimensionSelector>,
+    val observationContracts: Set<String> = emptySet(),
+    val informationGainMicros: Long,
+    val goalRelevanceMicros: Long,
+    val verificationValueMicros: Long,
+    val energyCostMicros: Long,
+    val privacyCostMicros: Long,
+    val latencyCostMicros: Long,
+    val resourceCostMicros: Long,
+) {
+    init {
+        require(stateDimensions.isNotEmpty() || observationContracts.isNotEmpty()) {
+            "Sensor attention coverage must declare state dimensions or observation contracts"
+        }
+        require(stateDimensions == stateDimensions.distinct().sortedWith(
+            compareBy<SensorStateDimensionSelector>({ it.type.name }, { it.value })
+        )) {
+            "Sensor state-dimension selectors must be unique and canonical"
+        }
+        require(observationContracts.none { it.isBlank() })
+        listOf(
+            informationGainMicros,
+            goalRelevanceMicros,
+            verificationValueMicros,
+            energyCostMicros,
+            privacyCostMicros,
+            latencyCostMicros,
+            resourceCostMicros,
+        ).forEach { value ->
+            require(value in 0L..1_000_000L) {
+                "Sensor attention coverage values must use 0..1_000_000 micros"
+            }
+        }
+    }
+
+    fun covers(dimension: StateDimensionId): Boolean =
+        stateDimensions.any { it.matches(dimension) }
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "sensor-attention-coverage-profile/v1",
+        sensorId.value,
+        informationGainMicros.toString(),
+        goalRelevanceMicros.toString(),
+        verificationValueMicros.toString(),
+        energyCostMicros.toString(),
+        privacyCostMicros.toString(),
+        latencyCostMicros.toString(),
+        resourceCostMicros.toString(),
+        *stateDimensions.map { "dimension:${it.fingerprint}" }.toTypedArray(),
+        *observationContracts.sorted().map { "contract:$it" }.toTypedArray(),
+    )
+}
+
+data class SensorWorldGapAttentionPlan(
+    val sensorRegistryFingerprint: String,
+    val worldGapIds: List<String>,
+    val demands: List<SensorAttentionDemand>,
+    val matchedGapIdsBySensor: Map<SensorId, List<String>>,
+    val unmatchedObservationGapIds: List<String>,
+    val nonSensorGapIds: List<String>,
+) {
+    init {
+        require(sensorRegistryFingerprint.isNotBlank())
+        require(worldGapIds == worldGapIds.distinct().sorted())
+        require(demands == demands.sortedBy { it.sensorId.value })
+        require(demands.map { it.sensorId }.distinct().size == demands.size)
+        require(matchedGapIdsBySensor.keys == demands.map { it.sensorId }.toSet())
+        require(matchedGapIdsBySensor.values.all { it == it.distinct().sorted() })
+        require(unmatchedObservationGapIds == unmatchedObservationGapIds.distinct().sorted())
+        require(nonSensorGapIds == nonSensorGapIds.distinct().sorted())
+        require(
+            (unmatchedObservationGapIds + nonSensorGapIds)
+                .all { it in worldGapIds }
+        )
+    }
+
+    val observationGrantAuthority: Boolean
+        get() = false
+
+    val effectAuthority: Boolean
+        get() = false
+
+    val fingerprint: String = StableFieldIds.fingerprint(
+        "sensor-world-gap-attention-plan/v1",
+        sensorRegistryFingerprint,
+        *worldGapIds.map { "gap:$it" }.toTypedArray(),
+        *demands.map { "demand:${it.fingerprint}" }.toTypedArray(),
+        *matchedGapIdsBySensor.entries
+            .sortedBy { it.key.value }
+            .flatMap { (sensorId, gapIds) ->
+                listOf("sensor:${sensorId.value}") +
+                    gapIds.map { "sensor-gap:${sensorId.value}:$it" }
+            }
+            .toTypedArray(),
+        *unmatchedObservationGapIds.map { "unmatched:$it" }.toTypedArray(),
+        *nonSensorGapIds.map { "non-sensor:$it" }.toTypedArray(),
+    )
+}
+
+/**
+ * B480 pure bridge from explicit B456 WorldGap state into B459 sensor-attention demand.
+ *
+ * Only declared coverage can wake/focus a sensor. Capability gaps remain outside perception
+ * scheduling. Unmatched perception/consistency/verification gaps remain explicit in the plan
+ * instead of being silently treated as resolved.
+ */
+class SensorWorldGapAttentionCompiler {
+    fun compile(
+        sensors: AppSensorRegistrySnapshot,
+        gaps: Collection<WorldGap>,
+        coverage: Collection<SensorAttentionCoverageProfile>,
+    ): SensorWorldGapAttentionPlan {
+        require(gaps.map { it.id }.distinct().size == gaps.size) {
+            "World gaps must have unique ids"
+        }
+        require(coverage.map { it.sensorId }.distinct().size == coverage.size) {
+            "Sensor attention coverage must be unique per sensor"
+        }
+
+        val registeredSensorIds = sensors.sensors
+            .mapTo(linkedSetOf()) { it.descriptor.sensorId }
+        coverage.forEach { profile ->
+            require(profile.sensorId in registeredSensorIds) {
+                "Sensor attention coverage references an unregistered sensor: ${profile.sensorId}"
+            }
+        }
+
+        val canonicalGaps = gaps.sortedBy { it.id }
+        val matchedGapIds = linkedSetOf<String>()
+        val matchedBySensor = linkedMapOf<SensorId, List<String>>()
+        val demands = coverage
+            .sortedBy { it.sensorId.value }
+            .mapNotNull { profile ->
+                val relevant = canonicalGaps.filter { gap -> matches(profile, gap) }
+                if (relevant.isEmpty()) return@mapNotNull null
+
+                val relevantDimensions = relevant
+                    .flatMap { gap -> coveredDimensions(profile, gap) }
+                    .toSet()
+                val perceptionMatched = relevant.any { it is WorldGap.Perception }
+                val verificationMatched = relevant.any {
+                    it is WorldGap.Consistency || it is WorldGap.Verification
+                }
+                val ids = relevant.map { it.id }.sorted()
+                matchedGapIds += ids
+                matchedBySensor[profile.sensorId] = ids
+
+                SensorAttentionDemand(
+                    sensorId = profile.sensorId,
+                    informationGainMicros =
+                        if (perceptionMatched) profile.informationGainMicros else 0L,
+                    goalRelevanceMicros = profile.goalRelevanceMicros,
+                    verificationValueMicros =
+                        if (verificationMatched) profile.verificationValueMicros else 0L,
+                    energyCostMicros = profile.energyCostMicros,
+                    privacyCostMicros = profile.privacyCostMicros,
+                    latencyCostMicros = profile.latencyCostMicros,
+                    resourceCostMicros = profile.resourceCostMicros,
+                    blockingGapCount = relevant.count(::isBlocking),
+                    stateDimensions = relevantDimensions,
+                )
+            }
+
+        val observationGapIds = canonicalGaps
+            .filterNot { it is WorldGap.Capability }
+            .map { it.id }
+        val nonSensorGapIds = canonicalGaps
+            .filterIsInstance<WorldGap.Capability>()
+            .map { it.id }
+
+        return SensorWorldGapAttentionPlan(
+            sensorRegistryFingerprint = sensors.fingerprint(),
+            worldGapIds = canonicalGaps.map { it.id },
+            demands = demands,
+            matchedGapIdsBySensor = matchedBySensor,
+            unmatchedObservationGapIds =
+                (observationGapIds - matchedGapIds).sorted(),
+            nonSensorGapIds = nonSensorGapIds.sorted(),
+        )
+    }
+
+    private fun matches(
+        profile: SensorAttentionCoverageProfile,
+        gap: WorldGap,
+    ): Boolean = when (gap) {
+        is WorldGap.Perception ->
+            (gap.missingDimensions + gap.staleDimensions).any(profile::covers)
+
+        is WorldGap.Consistency ->
+            gap.conflictingDimensions.any(profile::covers)
+
+        is WorldGap.Verification ->
+            gap.missingObservationContract in profile.observationContracts
+
+        is WorldGap.Capability -> false
+    }
+
+    private fun coveredDimensions(
+        profile: SensorAttentionCoverageProfile,
+        gap: WorldGap,
+    ): List<StateDimensionId> = when (gap) {
+        is WorldGap.Perception ->
+            (gap.missingDimensions + gap.staleDimensions).filter(profile::covers)
+
+        is WorldGap.Consistency ->
+            gap.conflictingDimensions.filter(profile::covers)
+
+        is WorldGap.Verification,
+        is WorldGap.Capability,
+        -> emptyList()
+    }
+
+    private fun isBlocking(gap: WorldGap): Boolean =
+        gap.severity.name == "BLOCKING" || gap.severity.name == "CRITICAL"
+}
+
