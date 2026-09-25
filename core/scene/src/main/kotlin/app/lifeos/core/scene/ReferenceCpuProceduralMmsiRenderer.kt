@@ -2,9 +2,7 @@ package app.lifeos.core.scene
 
 import app.lifeos.core.image.ProceduralMmsiProfile
 import app.lifeos.core.image.ProceduralMmsiReferenceShading
-import app.lifeos.core.image.RgbSample
 import app.lifeos.core.image.Rgba8Image
-import app.lifeos.core.image.SurfaceNormal
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
@@ -43,6 +41,7 @@ class ReferenceCpuProceduralMmsiRenderer(
             lightZ = normalizedSunDirection.z,
             coneTangent = shadowConeTangent,
         )
+        val shadingScratch = shading.newScratch()
 
         for (pixel in 0 until pixels) {
             val out = pixel * 4
@@ -52,28 +51,27 @@ class ReferenceCpuProceduralMmsiRenderer(
             val albedoBase = pixel * 4
             val normalBase = pixel * 3
             // ReferenceCpuSceneRasterizer writes normalized view-space normals.
-            val normal = SurfaceNormal(
-                buffers.normalsXyz[normalBase].toDouble(),
-                buffers.normalsXyz[normalBase + 1].toDouble(),
-                buffers.normalsXyz[normalBase + 2].toDouble(),
-            )
+            val normalX = buffers.normalsXyz[normalBase].toDouble()
+            val normalY = buffers.normalsXyz[normalBase + 1].toDouble()
+            val normalZ = buffers.normalsXyz[normalBase + 2].toDouble()
             val roughness = buffers.roughness[pixel].toDouble()
             val shadow = softShadow(pixel, buffers, shadowKernel)
-            val ambientOcclusion = (0.35 + 0.65 * normal.z).coerceIn(0.0, 1.0)
-            val color = shading.shadeNormalized(
-                intrinsicLinearAlbedo = RgbSample(
-                    buffers.albedoLinearRgba[albedoBase].toDouble(),
-                    buffers.albedoLinearRgba[albedoBase + 1].toDouble(),
-                    buffers.albedoLinearRgba[albedoBase + 2].toDouble(),
-                ),
-                normal = normal,
+            val ambientOcclusion = (0.35 + 0.65 * normalZ).coerceIn(0.0, 1.0)
+            shading.shadeNormalizedInto(
+                albedoR = buffers.albedoLinearRgba[albedoBase].toDouble(),
+                albedoG = buffers.albedoLinearRgba[albedoBase + 1].toDouble(),
+                albedoB = buffers.albedoLinearRgba[albedoBase + 2].toDouble(),
+                normalX = normalX,
+                normalY = normalY,
+                normalZ = normalZ,
                 roughness = roughness,
                 shadowVisibility = shadow,
                 ambientOcclusion = ambientOcclusion,
+                scratch = shadingScratch,
             )
-            rgba[out] = quantize(color.r)
-            rgba[out + 1] = quantize(color.g)
-            rgba[out + 2] = quantize(color.b)
+            rgba[out] = quantize(shadingScratch.rgb[0])
+            rgba[out + 1] = quantize(shadingScratch.rgb[1])
+            rgba[out + 2] = quantize(shadingScratch.rgb[2])
         }
         return Rgba8Image(buffers.size.width, buffers.size.height, rgba)
     }
