@@ -87,15 +87,12 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         state = mutableState,
         scope = viewModelScope,
     )
-
     val state = mutableState.asStateFlow()
     val runtimeState = kernel.runtime.state
     val matrixState = kernel.matrix.state
-
     init {
         observeKernel()
     }
-
     fun editDraft(text: String) {
         val current = mutableState.value
         if (!current.saving && current.voicePhase != VoiceCapturePhase.PROCESSING) {
@@ -107,11 +104,9 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
     }
-
     fun retryLoad() {
         val current = mutableState.value
         if (!current.loadFailed || current.loading) return
-
         mutableState.update {
             it.copy(
                 loading = true,
@@ -175,13 +170,16 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             kernel.bootstrapState.collect { bootstrap ->
                 mutableState.update { current ->
-                    val loadError = bootstrap.status == KernelBootstrapStatus.FAILED
+                    val loadError =
+                        bootstrap.status == KernelBootstrapStatus.FAILED ||
+                            bootstrap.status == KernelBootstrapStatus.SAFE_MODE
                     current.copy(
                         photons = bootstrap.photons
                             .filter { it.isUserVisiblePhoton() }
                             .asReversed(),
                         loading = bootstrap.status == KernelBootstrapStatus.CREATED ||
-                            bootstrap.status == KernelBootstrapStatus.LOADING,
+                            bootstrap.status == KernelBootstrapStatus.LOADING ||
+                            bootstrap.status == KernelBootstrapStatus.RECOVERY,
                         loadFailed = loadError,
                         unreadable = bootstrap.unreadableFiles,
                         error = when {
@@ -193,7 +191,8 @@ class LifeOsViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 if (
                     bootstrap.status == KernelBootstrapStatus.READY ||
-                    bootstrap.status == KernelBootstrapStatus.DEGRADED
+                    bootstrap.status == KernelBootstrapStatus.DEGRADED ||
+                    bootstrap.status == KernelBootstrapStatus.READ_ONLY
                 ) {
                     toolCenter.loadStatus()
                 }

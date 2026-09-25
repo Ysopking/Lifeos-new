@@ -24,6 +24,42 @@ class LifeOsRuntimeStatusTest {
     }
 
     @Test
+    fun safeModeIsFailedWithoutClaimingNormalBootFailure() {
+        val model = buildRuntimeHealthUiModel(
+            KernelBootstrapStatus.SAFE_MODE,
+            healthyReadiness(),
+            healthyTopology(),
+        )
+        assertEquals(RuntimeHealthLevel.FAILED, model.level)
+        assertEquals("Sicherer Modus", model.bootLabel)
+        assertTrue(model.summary.contains("sicheren Modus"))
+    }
+
+    @Test
+    fun readOnlyBootIsDegradedEvenWithoutReadinessEvidence() {
+        val model = buildRuntimeHealthUiModel(
+            KernelBootstrapStatus.READ_ONLY,
+            null,
+            null,
+        )
+        assertEquals(RuntimeHealthLevel.DEGRADED, model.level)
+        assertEquals("Nur Lesen", model.bootLabel)
+        assertTrue(model.summary.contains("Nur-Lese-Modus"))
+    }
+
+    @Test
+    fun recoveryBootIsStarting() {
+        assertEquals(
+            RuntimeHealthLevel.STARTING,
+            buildRuntimeHealthUiModel(
+                KernelBootstrapStatus.RECOVERY,
+                healthyReadiness(),
+                healthyTopology(),
+            ).level,
+        )
+    }
+
+    @Test
     fun loadingBootIsStartingEvenWithStaleHealthyEvidence() {
         assertEquals(
             RuntimeHealthLevel.STARTING,
