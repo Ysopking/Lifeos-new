@@ -66,6 +66,8 @@ fun ChatComposer(
     val editorEnabled = cognitiveContext.contextReady && !processing.inFlight
     val contextNotice = LifeOsUxPolicy.contextNotice(cognitiveContext)
     val processingNotice = LifeOsUxPolicy.processingNotice(processing)
+    val activeProcessingStatus = ChatComposerPolicy.statusLabel(processing)
+        ?.takeIf { processing.inFlight }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -102,7 +104,7 @@ fun ChatComposer(
                     if (draft.isEmpty()) {
                         Text(
                             text = if (cognitiveContext.contextReady) {
-                                "Frag LIFEOS …"
+                                "Nachricht …"
                             } else {
                                 "Wird vorbereitet …"
                             },
@@ -208,6 +210,17 @@ fun ChatComposer(
             }
         }
 
+        activeProcessingStatus?.let { status ->
+            Text(
+                text = status,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics {
+                    contentDescription = status
+                },
+            )
+        }
+
         voice.stagedTranscript?.let { transcript ->
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -219,7 +232,7 @@ fun ChatComposer(
                     verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.xSmall),
                 ) {
                     Text(
-                        text = "Erkannter Sprachtext",
+                        text = "Sprachtext prüfen",
                         style = MaterialTheme.typography.labelLarge,
                     )
                     Text(
