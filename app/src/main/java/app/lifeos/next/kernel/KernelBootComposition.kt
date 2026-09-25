@@ -2,6 +2,7 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.model.health.ProtectionMode
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootCriticality
 import app.lifeos.core.runtime.boot.BootRehydrationGraph
 import app.lifeos.core.runtime.boot.BootRehydrationNode
 import app.lifeos.core.runtime.boot.BootRehydrationNodeId
@@ -43,31 +44,33 @@ internal class KernelBootComposition(
         fun node(
             id: String,
             dependsOn: Set<String> = emptySet(),
+            criticality: BootCriticality,
             action: suspend () -> Unit,
         ): BootRehydrationNode = BootRehydrationNode(
             id = BootRehydrationNodeId(id),
             dependsOn = dependsOn.mapTo(linkedSetOf(), ::BootRehydrationNodeId),
+            criticality = criticality,
             action = action,
         )
 
         val rehydrationGraph = BootRehydrationGraph(
             listOf(
-                node("protection") {
+                node("protection", criticality = BootCriticality.SECURE_REQUIRED) {
                     foundation.protectionCoordinator.rehydrate()
                 },
-                node("leases", setOf("protection")) {
+                node("leases", setOf("protection"), BootCriticality.REQUIRED_DEGRADED) {
                     recoverExpiredLeases(cognition.leaseRecovery)
                 },
-                node("extension-registry", setOf("leases")) {
+                node("extension-registry", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
                     world.extensionRegistryRehydrator.rehydrate()
                 },
-                node("world-equation-authority", setOf("extension-registry")) {
+                node("world-equation-authority", setOf("extension-registry"), BootCriticality.REQUIRED_DEGRADED) {
                     world.worldEquationAuthority.activeVersion()
                 },
-                node("world-equation-safety", setOf("world-equation-authority")) {
+                node("world-equation-safety", setOf("world-equation-authority"), BootCriticality.REQUIRED_DEGRADED) {
                     world.worldEquationSafetyMonitor.reconcile()
                 },
-                node("world-model", setOf("world-equation-authority")) {
+                node("world-model", setOf("world-equation-authority"), BootCriticality.REQUIRED_DEGRADED) {
                     val head = world.worldModelRepository.loadHead()
                     if (head != null) {
                         val snapshot = requireNotNull(
@@ -79,51 +82,61 @@ internal class KernelBootComposition(
                         require(snapshot.predecessorSnapshotId == head.predecessorSnapshotId)
                     }
                 },
-                node("goal-plans", setOf("leases")) {
+                node("goal-plans", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
                     foundation.goalPlans.rehydrate()
                 },
-                node("learning-adaptations", setOf("leases")) {
+                node("learning-adaptations", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
                     foundation.learningAdaptations.rehydrate()
                 },
-                node("language-runtime", setOf("learning-adaptations")) {
+                node("language-runtime", setOf("learning-adaptations"), BootCriticality.REQUIRED_DEGRADED) {
                     foundation.languageRuntimeState.rehydrate()
                 },
-                node("thought-graph", setOf("leases")) {
+                node("thought-graph", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
                     foundation.thoughtGraph.rehydrate()
                 },
-                node("field-thought-projection", setOf("thought-graph")) {
+                node("field-thought-projection", setOf("thought-graph"), BootCriticality.OPTIONAL_WARM) {
                     world.fieldThoughtGraphProjection.reconcile()
                 },
-                node("cognition-journal-index", setOf("leases")) {
+                node("cognition-journal-index", setOf("leases"), BootCriticality.REQUIRED_DEGRADED) {
                     foundation.cognitionJournalIndex.reconcile()
                 },
-                node("cognitive-snapshot", setOf("cognition-journal-index")) {
+                node("cognitive-snapshot", setOf("cognition-journal-index"), BootCriticality.REQUIRED_DEGRADED) {
                     cognition.cognitiveSnapshotManager.replay(cognition.cognitiveEventJournal)
                 },
                 node(
                     "cognition-reconciler",
                     setOf("cognitive-snapshot", "field-thought-projection"),
+                    BootCriticality.OPTIONAL_WARM,
                 ) {
                     cognition.cognitionReconciler.reconcile()
                 },
-                node("evolution-kill-switch", setOf("leases")) {
+                node("evolution-kill-switch", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
                     evolution.evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
                 },
-                node("generated-tool-state", setOf("evolution-kill-switch")) {
+                node("generated-tool-state", setOf("evolution-kill-switch"), BootCriticality.OPTIONAL_WARM) {
                     evolution.generatedToolStateRepository.loadAll()
                 },
-                node("generated-artifact-verify", setOf("generated-tool-state")) {
+                node("generated-artifact-verify", setOf("generated-tool-state"), BootCriticality.OPTIONAL_WARM) {
                     evolution.privateGeneratedToolRuntime.artifactBootVerifier.verify()
                 },
-                node("generated-tool-rehydrate", setOf("generated-artifact-verify")) {
+                node("generated-tool-rehydrate", setOf("generated-artifact-verify"), BootCriticality.OPTIONAL_WARM) {
                     evolution.generatedToolBootRehydrator.rehydrateOrVerify()
                 },
             )
         )
         val stateRehydrator = object : StateRehydrator {
             override suspend fun rehydrate(): RehydratedRuntimeState {
-                rehydrationGraph.rehydrate()
-                return RehydratedRuntimeState()
+                val report = rehydrationGraph.rehydrate()
+                return RehydratedRuntimeState(
+                    degradedBootNodeIds = report.requiredDegradedFailures
+                        .map { it.nodeId.value }
+                        .distinct()
+                        .sorted(),
+                    warmFailureNodeIds = report.optionalWarmFailures
+                        .map { it.nodeId.value }
+                        .distinct()
+                        .sorted(),
+                )
             }
         }
 

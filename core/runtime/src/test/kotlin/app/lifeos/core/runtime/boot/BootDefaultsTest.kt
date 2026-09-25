@@ -55,6 +55,42 @@ class BootDefaultsTest {
         assertEquals(setOf("unreadable-photons:1"), result.limitations)
     }
 
+    @Test
+    fun defaultValidatorDegradesForNonSecureRehydrationFailures() = runTest {
+        val context = BootContext(
+            stores = StoreVerificationResult(
+                stores = listOf(StoreStatus("photons", StoreState.HEALTHY)),
+                canBootNormally = true,
+                requiresRecovery = false,
+            ),
+            runtimeState = RehydratedRuntimeState(
+                degradedBootNodeIds = listOf("cognitive-snapshot"),
+                warmFailureNodeIds = listOf("generated-tool-rehydrate"),
+            ),
+            photons = PhotonRehydrationResult(
+                hot = emptyList<Photon>(),
+                warm = emptyList(),
+                cold = emptyList<PhotonId>(),
+                assessments = emptyList(),
+            ),
+            modules = ModuleRestoreSummary(restored = 1),
+            thoughtMatrix = ThoughtMatrixWarmupResult(),
+            capabilities = CapabilityWarmupResult(availableCapabilities = 1),
+        )
+
+        val result = assertIs<BootValidationResult.Degraded>(
+            DefaultBootValidator().validate(context)
+        )
+
+        assertEquals(
+            setOf(
+                "rehydration-degraded:cognitive-snapshot",
+                "warm-rehydration-failed:generated-tool-rehydrate",
+            ),
+            result.limitations,
+        )
+    }
+
     private fun probe(id: String, state: StoreState) = object : StoreProbe {
         override val storeId: String = id
         override suspend fun probe() = StoreStatus(storeId, state)

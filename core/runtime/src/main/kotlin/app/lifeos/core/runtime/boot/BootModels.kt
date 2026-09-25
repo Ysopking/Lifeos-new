@@ -58,9 +58,17 @@ data class RehydratedRuntimeState(
     val interruptedWorkerIds: List<String> = emptyList(),
     val expiredLeaseIds: List<String> = emptyList(),
     val previousEpoch: Long = 0,
+    val degradedBootNodeIds: List<String> = emptyList(),
+    val warmFailureNodeIds: List<String> = emptyList(),
 ) {
     init {
         require(previousEpoch >= 0) { "Previous runtime epoch must not be negative" }
+        require(degradedBootNodeIds == degradedBootNodeIds.distinct().sorted()) {
+            "Degraded boot node ids must be canonical"
+        }
+        require(warmFailureNodeIds == warmFailureNodeIds.distinct().sorted()) {
+            "Warm failure node ids must be canonical"
+        }
     }
 }
 

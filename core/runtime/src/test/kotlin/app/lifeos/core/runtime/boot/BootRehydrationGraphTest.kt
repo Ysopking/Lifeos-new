@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class BootRehydrationGraphTest {
@@ -63,11 +64,75 @@ class BootRehydrationGraphTest {
             graph.topologicalLayers().map { layer -> layer.map { it.value } },
         )
 
-        graph.rehydrate()
+        val report = graph.rehydrate()
 
+        assertFalse(report.degraded)
         assertEquals("protection", calls.first())
         assertTrue(calls.indexOf("leases") > calls.indexOf("protection"))
         assertTrue(calls.indexOf("projection") > calls.indexOf("thought-graph"))
+    }
+
+    @Test
+    fun `required degraded failure does not abort boot and blocks dependents safely`() = runTest {
+        var dependentRan = false
+        val graph = BootRehydrationGraph(
+            listOf(
+                node(
+                    id = "base",
+                    criticality = BootCriticality.REQUIRED_DEGRADED,
+                ) {
+                    error("base-failure")
+                },
+                node(
+                    id = "dependent",
+                    dependencies = setOf("base"),
+                    criticality = BootCriticality.OPTIONAL_WARM,
+                ) {
+                    dependentRan = true
+                },
+            )
+        )
+
+        val report = graph.rehydrate()
+
+        assertFalse(dependentRan)
+        assertEquals(
+            listOf(BootRehydrationNodeId("base")),
+            report.requiredDegradedFailures.map { it.nodeId },
+        )
+        assertEquals(
+            listOf(BootRehydrationNodeId("dependent")),
+            report.optionalWarmFailures.map { it.nodeId },
+        )
+        assertTrue(report.optionalWarmFailures.single().dependencyFailure)
+    }
+
+    @Test
+    fun `optional warm failure is isolated from successful sibling`() = runTest {
+        var requiredRan = false
+        val graph = BootRehydrationGraph(
+            listOf(
+                node(
+                    id = "warm",
+                    criticality = BootCriticality.OPTIONAL_WARM,
+                ) {
+                    error("warm-failure")
+                },
+                node(
+                    id = "required",
+                    criticality = BootCriticality.REQUIRED_DEGRADED,
+                ) {
+                    requiredRan = true
+                },
+            )
+        )
+
+        val report = graph.rehydrate()
+
+        assertTrue(requiredRan)
+        assertEquals(setOf(BootRehydrationNodeId("required")), report.completed)
+        assertTrue(report.requiredDegradedFailures.isEmpty())
+        assertEquals(BootRehydrationNodeId("warm"), report.optionalWarmFailures.single().nodeId)
     }
 
     @Test
@@ -94,7 +159,7 @@ class BootRehydrationGraphTest {
     }
 
     @Test
-    fun `parallel failures are attributed deterministically by node id`() = runTest {
+    fun `secure parallel failures are attributed deterministically by node id`() = runTest {
         val graph = BootRehydrationGraph(
             listOf(
                 node("zeta") { error("zeta-failure") },
@@ -107,16 +172,19 @@ class BootRehydrationGraphTest {
         }
 
         assertEquals(BootRehydrationNodeId("alpha"), failure.nodeId)
+        assertEquals(BootCriticality.SECURE_REQUIRED, failure.criticality)
         assertTrue(failure.cause?.message.orEmpty().contains("alpha-failure"))
     }
 
     private fun node(
         id: String,
         dependencies: Set<String> = emptySet(),
+        criticality: BootCriticality = BootCriticality.SECURE_REQUIRED,
         action: suspend () -> Unit,
     ): BootRehydrationNode = BootRehydrationNode(
         id = BootRehydrationNodeId(id),
         dependsOn = dependencies.mapTo(linkedSetOf(), ::BootRehydrationNodeId),
+        criticality = criticality,
         action = action,
     )
 }

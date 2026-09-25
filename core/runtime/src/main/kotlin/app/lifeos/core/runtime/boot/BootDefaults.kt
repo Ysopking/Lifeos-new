@@ -90,6 +90,18 @@ class DefaultBootValidator : BootValidator {
 
         val limitations = buildSet {
             if (context.stores.requiresRecovery) add("stores-degraded")
+            if (context.runtimeState.degradedBootNodeIds.isNotEmpty()) {
+                add(
+                    "rehydration-degraded:" +
+                        context.runtimeState.degradedBootNodeIds.joinToString(",")
+                )
+            }
+            if (context.runtimeState.warmFailureNodeIds.isNotEmpty()) {
+                add(
+                    "warm-rehydration-failed:" +
+                        context.runtimeState.warmFailureNodeIds.joinToString(",")
+                )
+            }
             if (context.modules.degraded > 0) add("modules-degraded:${context.modules.degraded}")
             if (context.thoughtMatrix.degraded) add("thought-matrix-degraded")
             if (context.capabilities.degradedCapabilities > 0) {

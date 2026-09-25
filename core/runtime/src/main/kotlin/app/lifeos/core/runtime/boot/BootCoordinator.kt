@@ -67,7 +67,12 @@ class BootCoordinator(
             val runtimeState = performance.measure(BootPhaseId.STATE_REHYDRATE) {
                 stateRehydrator.rehydrate()
             }
-            snapshot = snapshot.copy(lastCheckpointId = runtimeState.checkpointId)
+            snapshot = snapshot.copy(
+                lastCheckpointId = runtimeState.checkpointId,
+                warnings = snapshot.warnings +
+                    runtimeState.degradedBootNodeIds.map { "degraded-boot-node:$it" } +
+                    runtimeState.warmFailureNodeIds.map { "warm-boot-node-failed:$it" },
+            )
             if (stores.requiresRecovery) {
                 transition(BootState.RESTORING_RUNTIME)
             }
