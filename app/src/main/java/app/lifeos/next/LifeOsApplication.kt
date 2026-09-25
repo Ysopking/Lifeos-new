@@ -191,6 +191,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         goalDecisionTraceRecorder = installed.goalDecisionTraceRecorder
         lifePhotonRepository = installed.lifePhotonRepository
         lifeMemoryRuntime = installed.lifeMemoryRuntime
+        multimodalPerception = installed.multimodalPerception
         val applicationRuntime = LifeOsCriticalApplicationRuntimeFactory.create(
             context = this,
             installed = installed,
