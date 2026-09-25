@@ -93,7 +93,7 @@ class ChatMainActivity : ComponentActivity() {
 
         setContent {
             val startup by owner.startupState.collectAsStateWithLifecycle()
-            if (startup.ready && modelsReady) {
+            if (startup.uiReady && modelsReady) {
                 LifeOsRoot(
                     model = model,
                     memoryModel = memoryModel,
@@ -114,7 +114,7 @@ class ChatMainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             owner.startupState.collect { startup ->
-                if (startup.ready && !modelsReady) {
+                if (startup.uiReady && !modelsReady) {
                     initializeRuntimeUi(owner)
                 }
             }
@@ -124,7 +124,11 @@ class ChatMainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         val owner = application as? LifeOsApplication ?: return
-        if (modelsReady && ::accessConvergence.isInitialized) {
+        if (
+            modelsReady &&
+            ::accessConvergence.isInitialized &&
+            owner.startupState.value.ready
+        ) {
             continueAccessConvergence(owner)
         }
     }
@@ -145,7 +149,9 @@ class ChatMainActivity : ComponentActivity() {
         )
         observeInitialCognitiveContext(owner)
         modelsReady = true
-        continueAccessConvergence(owner)
+        if (owner.startupState.value.ready) {
+            continueAccessConvergence(owner)
+        }
     }
 
     private fun continueAccessConvergence(owner: LifeOsApplication) {

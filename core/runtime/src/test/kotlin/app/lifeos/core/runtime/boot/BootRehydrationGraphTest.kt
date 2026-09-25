@@ -136,6 +136,57 @@ class BootRehydrationGraphTest {
     }
 
     @Test
+    fun `critical phase excludes optional warm nodes until explicit warm restore`() = runTest {
+        val calls = mutableListOf<String>()
+        val graph = BootRehydrationGraph(
+            listOf(
+                node("secure") { calls += "secure" },
+                node(
+                    id = "required",
+                    dependencies = setOf("secure"),
+                    criticality = BootCriticality.REQUIRED_DEGRADED,
+                ) { calls += "required" },
+                node(
+                    id = "warm",
+                    dependencies = setOf("required"),
+                    criticality = BootCriticality.OPTIONAL_WARM,
+                ) { calls += "warm" },
+            )
+        )
+
+        val critical = graph.rehydrateCritical()
+        assertEquals(listOf("secure", "required"), calls)
+        val warm = graph.rehydrateWarm(critical)
+        assertEquals(listOf("secure", "required", "warm"), calls)
+        assertEquals(setOf(BootRehydrationNodeId("warm")), warm.completed)
+    }
+
+    @Test
+    fun `warm phase inherits failed critical dependency without rerun`() = runTest {
+        var warmRan = false
+        val graph = BootRehydrationGraph(
+            listOf(
+                node(
+                    id = "required",
+                    criticality = BootCriticality.REQUIRED_DEGRADED,
+                ) { error("required-failure") },
+                node(
+                    id = "warm",
+                    dependencies = setOf("required"),
+                    criticality = BootCriticality.OPTIONAL_WARM,
+                ) { warmRan = true },
+            )
+        )
+
+        val critical = graph.rehydrateCritical()
+        val warm = graph.rehydrateWarm(critical)
+
+        assertFalse(warmRan)
+        assertEquals(BootRehydrationNodeId("warm"), warm.optionalWarmFailures.single().nodeId)
+        assertTrue(warm.optionalWarmFailures.single().dependencyFailure)
+    }
+
+    @Test
     fun `unknown dependency fails graph construction`() {
         val failure = assertFailsWith<IllegalArgumentException> {
             BootRehydrationGraph(

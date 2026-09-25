@@ -54,6 +54,7 @@ import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
 import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
 import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
+import app.lifeos.next.kernel.KernelWarmBootRuntimeRegistry
 import app.lifeos.next.kernel.LifeOsKernelFactory
 import app.lifeos.next.kernel.MultimodalPerceptionRuntime
 import app.lifeos.next.kernel.PrivateEscalationRuntime
@@ -66,28 +67,6 @@ import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-
-internal data class ProcessRuntimeInstallResult(
-    val kernel: LifeOsKernel,
-    val photonIngress: CanonicalPhotonIngress,
-    val generatedToolStatusReader: GeneratedToolRuntimeStatusReader,
-    val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime,
-    val storageIntelligence: AndroidStorageIntelligenceRuntime,
-    val storageMaintenance: AndroidStorageMaintenanceRuntime,
-    val storageIntelligenceController: StorageIntelligenceProcessController,
-    val ownerPolicy: OwnerPolicyLedger,
-    val ownerObservationPolicy: OwnerObservationPolicyLedger,
-    val resourceBudgets: ResourceBudgetCoordinator,
-    val decisionTraces: DecisionTraceLedger,
-    val selfObservationDecisionTraceRecorder: SelfObservationDecisionTraceRecorder,
-    val goalDecisionTraceRecorder: GoalDecisionTraceRecorder,
-    val lifePhotonRepository: CanonicalLifePhotonRepository,
-    val lifeMemoryRuntime: DurableLifeMemoryRuntime,
-    val multimodalPerception: MultimodalPerceptionRuntime,
-    val selfHealingRuntime: PrivateSelfHealingRuntime,
-    val escalationRuntime: PrivateEscalationRuntime,
-)
-
 internal class ProcessRuntimeInstaller(
     context: Context,
     private val onSelfObservationRequested:
@@ -95,12 +74,12 @@ internal class ProcessRuntimeInstaller(
     private val canRunStorageIntelligence: () -> Boolean,
     private val onStorageSnapshot: (StorageIntelligenceSnapshot) -> Unit,
     private val onStorageFailure: (String?) -> Unit,
+    private val onCriticalReady: suspend (ProcessRuntimeCriticalInstallResult) -> Unit,
     private val onStartupEvent: (LifeOsStartupStageEvent) -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val selfHealingScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
     suspend fun install(): ProcessRuntimeInstallResult {
         val generatedToolStatusReader = GeneratedToolRuntimeStatusReader(
             EncryptedGeneratedToolStateRepository(appContext),
@@ -125,7 +104,6 @@ internal class ProcessRuntimeInstaller(
         LifeOsIntegratedCognitionSuiteRegistry.install(
             LifeOsIntegratedCognitionSuite()
         )
-
         lateinit var ownerPolicy: OwnerPolicyLedger
         lateinit var ownerObservationPolicy: OwnerObservationPolicyLedger
         lateinit var resourceBudgets: ResourceBudgetCoordinator
@@ -140,11 +118,10 @@ internal class ProcessRuntimeInstaller(
         lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
         lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
         lateinit var multimodalPerception: MultimodalPerceptionRuntime
-        lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
-        lateinit var escalationRuntime: PrivateEscalationRuntime
-
-        LifeOsStartupComposition.start(
-            LifeOsStartupHooks(
+        var selfHealingRuntime: PrivateSelfHealingRuntime? = null
+        var escalationRuntime: PrivateEscalationRuntime? = null
+        var kernelWarmLimitations: Set<String> = emptySet()
+        val hooks = LifeOsStartupHooks(
                 installSharedResourceRuntime = {
                     val shared = SharedAuthorityRuntimeComposition.install(
                         context = appContext,
@@ -184,7 +161,6 @@ internal class ProcessRuntimeInstaller(
                         personalContextBootBindingSource =
                             productivePerceptionContext,
                     ).create()
-
                     val perceptionBinding =
                         ProductivePerceptionComposition.bind(
                             context = appContext,
@@ -202,10 +178,8 @@ internal class ProcessRuntimeInstaller(
                     lifeMemoryRuntime =
                         DurableLifeMemoryRuntime(lifePhotonRepository)
                     DurableLifeMemoryRuntimeRegistry.install(lifeMemoryRuntime)
-
                     multimodalPerception = MultimodalPerceptionRuntime(kernel)
                     multimodalPerception.install()
-
                     val integratedCognition = requireNotNull(
                         LifeOsIntegratedCognitionSuiteRegistry.current()
                     ) {
@@ -239,7 +213,6 @@ internal class ProcessRuntimeInstaller(
                         delegate = domainPersistence,
                         planning = futurePlanning,
                     )
-
                     lifePhotonRepository.reconcilePersisted()
                     lifeMemoryRuntime.rebuild(Instant.now())
                     CognitiveSnapshotRuntimeRegistry.captureLatest()
@@ -249,7 +222,6 @@ internal class ProcessRuntimeInstaller(
                             PhotonIngressMode.DERIVED,
                         )
                     }
-
                     val frozenCognitiveModules =
                         kernel.freezeCognitiveModulesForCurrentCycle(
                             integratedCognition.domainModules
@@ -339,12 +311,10 @@ internal class ProcessRuntimeInstaller(
                                             PhotonIngressMode.DERIVED,
                                         )
                                     }
-
                                     override suspend fun load(
                                         id: PhotonId,
                                     ): Photon? =
                                         kernel.photonStore.load(id)
-
                                     override suspend fun findForMission(
                                         missionId: DeepSearchMissionId,
                                     ): Photon? {
@@ -385,7 +355,7 @@ internal class ProcessRuntimeInstaller(
                     ) {
                         "Kernel did not install its ProtectionCoordinator"
                     }
-                    selfHealingRuntime = PrivateSelfHealingRuntime.create(
+                    val installedSelfHealing = PrivateSelfHealingRuntime.create(
                         context = appContext,
                         scope = selfHealingScope,
                         graph = healthGraph,
@@ -394,15 +364,17 @@ internal class ProcessRuntimeInstaller(
                         runtime = kernel.runtime,
                         supervisor = supervisor,
                     )
-                    escalationRuntime = PrivateEscalationRuntime.create(
+                    val installedEscalation = PrivateEscalationRuntime.create(
                         context = appContext,
                         scope = selfHealingScope,
                         graph = healthGraph,
                         protection = protectionCoordinator,
-                        selfHealing = selfHealingRuntime,
+                        selfHealing = installedSelfHealing,
                     )
-                    selfHealingRuntime.verifyLedgerIntegrity()
-                    escalationRuntime.verifyLedgerIntegrity()
+                    installedSelfHealing.verifyLedgerIntegrity()
+                    installedEscalation.verifyLedgerIntegrity()
+                    selfHealingRuntime = installedSelfHealing
+                    escalationRuntime = installedEscalation
                     LifeOsHealthPhotonBridge.start(
                         scope = selfHealingScope,
                         graph = healthGraph,
@@ -414,7 +386,7 @@ internal class ProcessRuntimeInstaller(
                             Unit
                         },
                     )
-                    escalationRuntime.orchestrator.start()
+                    installedEscalation.orchestrator.start()
                 },
                 installDurableGoalPlanRuntime = {
                     DurableGoalPlanRuntimeRegistry.install(
@@ -439,10 +411,18 @@ internal class ProcessRuntimeInstaller(
                 },
                 startKernel = {
                     kernel.start().join()
-                    productivePerceptionContext.start()
+                    if (kernel.bootstrapState.value.actionable) {
+                        productivePerceptionContext.start()
+                    }
                 },
                 requireCognitiveStateReady = {
-                    kernel.requireCognitiveReady()
+                    require(kernel.bootstrapState.value.readable) {
+                        "Cognitive runtime is not readable: ${kernel.bootstrapState.value.status}"
+                    }
+                },
+                warmKernelRuntime = {
+                    val warm = KernelWarmBootRuntimeRegistry.requireCurrent().warm()
+                    kernelWarmLimitations = warm.limitations
                 },
                 stageObserver = { event ->
                     if (event is LifeOsStartupStageEvent.Completed) {
@@ -451,9 +431,8 @@ internal class ProcessRuntimeInstaller(
                     onStartupEvent(event)
                 },
             )
-        )
-
-        return ProcessRuntimeInstallResult(
+        LifeOsStartupComposition.startCritical(hooks)
+        val critical = ProcessRuntimeCriticalInstallResult(
             kernel = kernel,
             photonIngress = photonIngress,
             generatedToolStatusReader = generatedToolStatusReader,
@@ -465,14 +444,34 @@ internal class ProcessRuntimeInstaller(
             ownerObservationPolicy = ownerObservationPolicy,
             resourceBudgets = resourceBudgets,
             decisionTraces = decisionTraces,
-            selfObservationDecisionTraceRecorder =
-                selfObservationDecisionTraceRecorder,
+            selfObservationDecisionTraceRecorder = selfObservationDecisionTraceRecorder,
             goalDecisionTraceRecorder = goalDecisionTraceRecorder,
             lifePhotonRepository = lifePhotonRepository,
             lifeMemoryRuntime = lifeMemoryRuntime,
             multimodalPerception = multimodalPerception,
-            selfHealingRuntime = selfHealingRuntime,
-            escalationRuntime = escalationRuntime,
+        )
+        onCriticalReady(critical)
+        val warmReport = if (kernel.bootstrapState.value.actionable) {
+            LifeOsStartupComposition.startWarm(hooks)
+        } else {
+            LifeOsWarmStartupReport.skipped(
+                "kernel-availability:${kernel.bootstrapState.value.availability}"
+            )
+        }
+        val warmFailures = buildSet {
+            warmReport.failures.forEach { failure ->
+                add("${failure.stage.name}:${failure.diagnosticCode}:${failure.message}")
+            }
+            warmReport.skippedReason?.let { add("warm-skipped:$it") }
+            addAll(kernelWarmLimitations)
+        }
+        return ProcessRuntimeInstallResult(
+            critical = critical,
+            warm = ProcessRuntimeWarmInstallResult(
+                selfHealingRuntime = selfHealingRuntime,
+                escalationRuntime = escalationRuntime,
+                failures = warmFailures,
+            ),
         )
     }
 }

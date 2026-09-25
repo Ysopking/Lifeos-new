@@ -6,6 +6,7 @@ import app.lifeos.core.runtime.boot.BootCriticality
 import app.lifeos.core.runtime.boot.BootRehydrationGraph
 import app.lifeos.core.runtime.boot.BootRehydrationNode
 import app.lifeos.core.runtime.boot.BootRehydrationNodeId
+import app.lifeos.core.runtime.boot.BootRehydrationReport
 import app.lifeos.core.runtime.boot.CapabilityWarmup
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
 import app.lifeos.core.runtime.boot.CognitiveHeadConsistencyDeltaSource
@@ -25,8 +26,18 @@ import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 
+internal data class KernelWarmBootResult(
+    val rehydration: BootRehydrationReport,
+    val limitations: Set<String>,
+)
+
+internal fun interface KernelWarmBootRuntime {
+    suspend fun warm(): KernelWarmBootResult
+}
+
 internal data class KernelBootGraph(
     val bootCoordinator: BootCoordinator,
+    val warmBootRuntime: KernelWarmBootRuntime,
 )
 
 /**
@@ -61,7 +72,7 @@ internal class KernelBootComposition(
                 node("leases", setOf("protection"), BootCriticality.REQUIRED_DEGRADED) {
                     recoverExpiredLeases(cognition.leaseRecovery)
                 },
-                node("extension-registry", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
+                node("extension-registry", setOf("leases"), BootCriticality.REQUIRED_DEGRADED) {
                     world.extensionRegistryRehydrator.rehydrate()
                 },
                 node("world-equation-authority", setOf("extension-registry"), BootCriticality.REQUIRED_DEGRADED) {
@@ -85,7 +96,7 @@ internal class KernelBootComposition(
                 node("goal-plans", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
                     foundation.goalPlans.rehydrate()
                 },
-                node("learning-adaptations", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
+                node("learning-adaptations", setOf("leases"), BootCriticality.REQUIRED_DEGRADED) {
                     foundation.learningAdaptations.rehydrate()
                 },
                 node("language-runtime", setOf("learning-adaptations"), BootCriticality.REQUIRED_DEGRADED) {
@@ -124,20 +135,47 @@ internal class KernelBootComposition(
                 },
             )
         )
+        var criticalRehydrationReport: BootRehydrationReport? = null
         val stateRehydrator = object : StateRehydrator {
             override suspend fun rehydrate(): RehydratedRuntimeState {
-                val report = rehydrationGraph.rehydrate()
+                val report = rehydrationGraph.rehydrateCritical()
+                criticalRehydrationReport = report
                 return RehydratedRuntimeState(
                     degradedBootNodeIds = report.requiredDegradedFailures
                         .map { it.nodeId.value }
                         .distinct()
                         .sorted(),
-                    warmFailureNodeIds = report.optionalWarmFailures
-                        .map { it.nodeId.value }
-                        .distinct()
-                        .sorted(),
                 )
             }
+        }
+
+        fun capabilitySummary(requireGeneratedConsistency: Boolean): CapabilityWarmupResult {
+            val activeGeneratedToolIds = evolution.evolutionResources.generatedTools.snapshot()
+                .filter { it.state == GeneratedToolState.ACTIVE }
+                .map { it.manifest.toolId }
+                .toSet()
+            val providers = foundation.capabilityRegistry.all(includeUnavailable = true)
+            val generatedProviderIds = providers
+                .filter { it.providerType == ProviderType.GENERATED_TOOL }
+                .map { it.providerId }
+                .toSet()
+            if (requireGeneratedConsistency) {
+                require(generatedProviderIds == activeGeneratedToolIds) {
+                    "Generated-tool capability registry differs from rehydrated ACTIVE tool set"
+                }
+            }
+            val availableCapabilityIds = providers
+                .filter { it.state == ProviderState.ACTIVE || it.state == ProviderState.DEGRADED }
+                .map { it.capabilityId }
+                .toSet()
+            val degradedCapabilityIds = providers
+                .filter { it.state == ProviderState.DEGRADED }
+                .map { it.capabilityId }
+                .toSet()
+            return CapabilityWarmupResult(
+                availableCapabilities = availableCapabilityIds.size,
+                degradedCapabilities = degradedCapabilityIds.size,
+            )
         }
 
         val bootCoordinator = BootCoordinator(
@@ -185,35 +223,8 @@ internal class KernelBootComposition(
                 override suspend fun warmup() = ThoughtMatrixWarmupResult()
             },
             capabilityWarmup = object : CapabilityWarmup {
-                override suspend fun warmup(): CapabilityWarmupResult {
-                    val activeGeneratedToolIds = evolution.evolutionResources.generatedTools.snapshot()
-                        .filter { it.state == GeneratedToolState.ACTIVE }
-                        .map { it.manifest.toolId }
-                        .toSet()
-                    val providers = foundation.capabilityRegistry.all(includeUnavailable = true)
-                    val generatedProviderIds = providers
-                        .filter { it.providerType == ProviderType.GENERATED_TOOL }
-                        .map { it.providerId }
-                        .toSet()
-                    require(generatedProviderIds == activeGeneratedToolIds) {
-                        "Generated-tool capability registry differs from rehydrated ACTIVE tool set"
-                    }
-                    val availableCapabilityIds = providers
-                        .filter {
-                            it.state == ProviderState.ACTIVE ||
-                                it.state == ProviderState.DEGRADED
-                        }
-                        .map { it.capabilityId }
-                        .toSet()
-                    val degradedCapabilityIds = providers
-                        .filter { it.state == ProviderState.DEGRADED }
-                        .map { it.capabilityId }
-                        .toSet()
-                    return CapabilityWarmupResult(
-                        availableCapabilities = availableCapabilityIds.size,
-                        degradedCapabilities = degradedCapabilityIds.size,
-                    )
-                }
+                override suspend fun warmup(): CapabilityWarmupResult =
+                    capabilitySummary(requireGeneratedConsistency = false)
             },
             deltaDetector = CompositeBootDeltaDetector(
                 listOf(
@@ -228,8 +239,31 @@ internal class KernelBootComposition(
             validator = DefaultBootValidator(),
         )
 
+        val warmBootRuntime = KernelWarmBootRuntime {
+            val critical = requireNotNull(criticalRehydrationReport) {
+                "Kernel warm boot requires a completed critical rehydration"
+            }
+            val report = rehydrationGraph.rehydrateWarm(critical)
+            val limitations = buildSet {
+                report.optionalWarmFailures.forEach { failure ->
+                    add("warm-node:${failure.nodeId.value}:${failure.reason}")
+                }
+                runCatching {
+                    capabilitySummary(requireGeneratedConsistency = true)
+                }.exceptionOrNull()?.let { error ->
+                    add(
+                        "generated-capability-consistency:" +
+                            (error.message ?: error::class.simpleName.orEmpty())
+                    )
+                }
+            }
+            KernelWarmBootResult(report, limitations)
+        }
+
+        KernelWarmBootRuntimeRegistry.install(warmBootRuntime)
         return KernelBootGraph(
             bootCoordinator = bootCoordinator,
+            warmBootRuntime = warmBootRuntime,
         )
     }
 

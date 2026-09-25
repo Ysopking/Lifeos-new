@@ -30,8 +30,16 @@ data class LifeOsProcessStartupState(
         get() = phase == LifeOsProcessStartupPhase.READY &&
             availability in setOf(RuntimeAvailability.FULL, RuntimeAvailability.DEGRADED)
 
+    val uiReady: Boolean
+        get() = phase == LifeOsProcessStartupPhase.READY &&
+            availability in setOf(
+                RuntimeAvailability.FULL,
+                RuntimeAvailability.DEGRADED,
+                RuntimeAvailability.READ_ONLY,
+            )
+
     val usable: Boolean
-        get() = availability != RuntimeAvailability.RECOVERY
+        get() = uiReady || availability == RuntimeAvailability.SAFE_MODE
 
     companion object {
         fun starting(stage: String = "LIFEOS wird gestartet") = LifeOsProcessStartupState(
@@ -93,21 +101,21 @@ data class LifeOsProcessStartupState(
             )
         }
 
+        fun readOnly(message: String) = LifeOsProcessStartupState(
+            phase = LifeOsProcessStartupPhase.READY,
+            stage = "Nur-Lese-Modus",
+            availability = RuntimeAvailability.READ_ONLY,
+            failure = message.ifBlank { "Runtime ist nur lesend verfügbar" },
+        )
+
         fun restricted(
             availability: RuntimeAvailability,
             message: String,
         ): LifeOsProcessStartupState {
-            require(
-                availability == RuntimeAvailability.READ_ONLY ||
-                    availability == RuntimeAvailability.SAFE_MODE
-            )
+            require(availability == RuntimeAvailability.SAFE_MODE)
             return LifeOsProcessStartupState(
                 phase = LifeOsProcessStartupPhase.FAILED,
-                stage = if (availability == RuntimeAvailability.READ_ONLY) {
-                    "Nur-Lese-Modus"
-                } else {
-                    "Sicherer Modus"
-                },
+                stage = "Sicherer Modus",
                 availability = availability,
                 failure = message.ifBlank { "Runtime ist nur eingeschränkt verfügbar" },
             )

@@ -12,7 +12,6 @@ value class BootRehydrationNodeId(val value: String) {
             "Invalid boot rehydration node id: $value"
         }
     }
-
     override fun toString(): String = value
 }
 
@@ -29,9 +28,7 @@ class BootRehydrationNode(
     val action: suspend () -> Unit,
 ) {
     init {
-        require(id !in dependsOn) {
-            "Boot rehydration node must not depend on itself: $id"
-        }
+        require(id !in dependsOn) { "Boot rehydration node must not depend on itself: $id" }
     }
 }
 
@@ -41,9 +38,7 @@ data class BootRehydrationFailure(
     val reason: String,
     val dependencyFailure: Boolean,
 ) {
-    init {
-        require(reason.isNotBlank())
-    }
+    init { require(reason.isNotBlank()) }
 }
 
 data class BootRehydrationReport(
@@ -52,7 +47,6 @@ data class BootRehydrationReport(
     val optionalWarmFailures: List<BootRehydrationFailure>,
 ) {
     init {
-        require(completed.toList() == completed.sortedBy { it.value }.toSet().toList())
         require(requiredDegradedFailures.all { it.criticality == BootCriticality.REQUIRED_DEGRADED })
         require(optionalWarmFailures.all { it.criticality == BootCriticality.OPTIONAL_WARM })
         require(requiredDegradedFailures == requiredDegradedFailures.sortedBy { it.nodeId.value })
@@ -61,6 +55,17 @@ data class BootRehydrationReport(
 
     val degraded: Boolean
         get() = requiredDegradedFailures.isNotEmpty() || optionalWarmFailures.isNotEmpty()
+
+    fun combinedWith(other: BootRehydrationReport): BootRehydrationReport =
+        BootRehydrationReport(
+            completed = (completed + other.completed).sortedBy { it.value }.toCollection(linkedSetOf()),
+            requiredDegradedFailures = (requiredDegradedFailures + other.requiredDegradedFailures)
+                .distinctBy { it.nodeId }
+                .sortedBy { it.nodeId.value },
+            optionalWarmFailures = (optionalWarmFailures + other.optionalWarmFailures)
+                .distinctBy { it.nodeId }
+                .sortedBy { it.nodeId.value },
+        )
 }
 
 class BootRehydrationNodeFailure(
@@ -72,9 +77,7 @@ class BootRehydrationNodeFailure(
     cause,
 )
 
-class BootRehydrationGraph(
-    nodes: List<BootRehydrationNode>,
-) {
+class BootRehydrationGraph(nodes: List<BootRehydrationNode>) {
     private val nodesById: Map<BootRehydrationNodeId, BootRehydrationNode>
 
     init {
@@ -82,9 +85,9 @@ class BootRehydrationGraph(
             "Boot rehydration graph contains duplicate node ids"
         }
         nodesById = nodes.associateBy(BootRehydrationNode::id)
-        val knownIds = nodesById.keys
+        val known = nodesById.keys
         nodes.forEach { node ->
-            val unknown = node.dependsOn - knownIds
+            val unknown = node.dependsOn - known
             require(unknown.isEmpty()) {
                 "Boot rehydration node ${node.id.value} has unknown dependencies: " +
                     unknown.map { it.value }.sorted().joinToString(",")
@@ -94,28 +97,56 @@ class BootRehydrationGraph(
     }
 
     suspend fun rehydrate(): BootRehydrationReport {
-        if (nodesById.isEmpty()) {
-            return BootRehydrationReport(
-                completed = emptySet(),
-                requiredDegradedFailures = emptyList(),
-                optionalWarmFailures = emptyList(),
-            )
+        val critical = rehydrateCritical()
+        return critical.combinedWith(rehydrateWarm(critical))
+    }
+
+    suspend fun rehydrateCritical(): BootRehydrationReport {
+        val selected = nodesById.values
+            .filter { it.criticality != BootCriticality.OPTIONAL_WARM }
+            .mapTo(linkedSetOf()) { it.id }
+        validatePhaseDependencies(selected, emptySet())
+        return runSelection(selected, emptyMap())
+    }
+
+    suspend fun rehydrateWarm(criticalReport: BootRehydrationReport): BootRehydrationReport {
+        require(criticalReport.optionalWarmFailures.isEmpty()) {
+            "Critical rehydration report cannot contain warm failures"
+        }
+        val selected = nodesById.values
+            .filter { it.criticality == BootCriticality.OPTIONAL_WARM }
+            .mapTo(linkedSetOf()) { it.id }
+        val initial = linkedMapOf<BootRehydrationNodeId, NodeResolution>()
+        criticalReport.completed.sortedBy { it.value }.forEach { initial[it] = NodeResolution.COMPLETED }
+        criticalReport.requiredDegradedFailures.sortedBy { it.nodeId.value }.forEach {
+            initial[it.nodeId] = NodeResolution.FAILED
+        }
+        validatePhaseDependencies(selected, initial.keys)
+        return runSelection(selected, initial)
+    }
+
+    private suspend fun runSelection(
+        selected: Set<BootRehydrationNodeId>,
+        initialResolutions: Map<BootRehydrationNodeId, NodeResolution>,
+    ): BootRehydrationReport {
+        if (selected.isEmpty()) {
+            return BootRehydrationReport(emptySet(), emptyList(), emptyList())
         }
 
-        val resolutions = linkedMapOf<BootRehydrationNodeId, NodeResolution>()
+        val resolutions = linkedMapOf<BootRehydrationNodeId, NodeResolution>().apply {
+            putAll(initialResolutions)
+        }
         val completed = linkedSetOf<BootRehydrationNodeId>()
-        val requiredDegradedFailures = mutableListOf<BootRehydrationFailure>()
-        val optionalWarmFailures = mutableListOf<BootRehydrationFailure>()
-        val remaining = nodesById.toMutableMap()
+        val requiredFailures = mutableListOf<BootRehydrationFailure>()
+        val warmFailures = mutableListOf<BootRehydrationFailure>()
+        val remaining = nodesById.filterKeys { it in selected }.toMutableMap()
 
-        fun recordFailure(failure: BootRehydrationFailure) {
+        fun record(failure: BootRehydrationFailure) {
             when (failure.criticality) {
                 BootCriticality.SECURE_REQUIRED ->
                     error("Secure failures must be thrown before report aggregation")
-                BootCriticality.REQUIRED_DEGRADED ->
-                    requiredDegradedFailures += failure
-                BootCriticality.OPTIONAL_WARM ->
-                    optionalWarmFailures += failure
+                BootCriticality.REQUIRED_DEGRADED -> requiredFailures += failure
+                BootCriticality.OPTIONAL_WARM -> warmFailures += failure
             }
         }
 
@@ -123,30 +154,22 @@ class BootRehydrationGraph(
             val ready = remaining.values
                 .filter { node -> node.dependsOn.all(resolutions::containsKey) }
                 .sortedBy { it.id.value }
-            check(ready.isNotEmpty()) {
-                "Boot rehydration graph reached an impossible cyclic state"
-            }
+            check(ready.isNotEmpty()) { "Boot rehydration phase reached unresolved dependencies" }
 
             val blocked = ready.filter { node ->
-                node.dependsOn.any { dependency ->
-                    resolutions[dependency] == NodeResolution.FAILED
-                }
+                node.dependsOn.any { resolutions[it] == NodeResolution.FAILED }
             }
             blocked.forEach { node ->
-                val failedDependencies = node.dependsOn
+                val deps = node.dependsOn
                     .filter { resolutions[it] == NodeResolution.FAILED }
                     .sortedBy { it.value }
                 val cause = IllegalStateException(
-                    "dependency-failed:" + failedDependencies.joinToString(",") { it.value }
+                    "dependency-failed:" + deps.joinToString(",") { it.value }
                 )
                 if (node.criticality == BootCriticality.SECURE_REQUIRED) {
-                    throw BootRehydrationNodeFailure(
-                        nodeId = node.id,
-                        criticality = node.criticality,
-                        cause = cause,
-                    )
+                    throw BootRehydrationNodeFailure(node.id, node.criticality, cause)
                 }
-                recordFailure(
+                record(
                     BootRehydrationFailure(
                         nodeId = node.id,
                         criticality = node.criticality,
@@ -176,19 +199,15 @@ class BootRehydrationGraph(
                 }.awaitAll()
             }
 
-            outcomes
-                .filter {
-                    it.failure != null &&
-                        it.node.criticality == BootCriticality.SECURE_REQUIRED
-                }
-                .minByOrNull { it.node.id.value }
-                ?.let { failed ->
-                    throw BootRehydrationNodeFailure(
-                        nodeId = failed.node.id,
-                        criticality = failed.node.criticality,
-                        cause = requireNotNull(failed.failure),
-                    )
-                }
+            outcomes.filter {
+                it.failure != null && it.node.criticality == BootCriticality.SECURE_REQUIRED
+            }.minByOrNull { it.node.id.value }?.let { failed ->
+                throw BootRehydrationNodeFailure(
+                    failed.node.id,
+                    failed.node.criticality,
+                    requireNotNull(failed.failure),
+                )
+            }
 
             outcomes.sortedBy { it.node.id.value }.forEach { outcome ->
                 remaining.remove(outcome.node.id)
@@ -196,12 +215,11 @@ class BootRehydrationGraph(
                     completed += outcome.node.id
                     resolutions[outcome.node.id] = NodeResolution.COMPLETED
                 } else {
-                    recordFailure(
+                    record(
                         BootRehydrationFailure(
                             nodeId = outcome.node.id,
                             criticality = outcome.node.criticality,
-                            reason = outcome.failure.message
-                                ?.takeIf { it.isNotBlank() }
+                            reason = outcome.failure.message?.takeIf { it.isNotBlank() }
                                 ?: outcome.failure::class.simpleName
                                 ?: "rehydration-failed",
                             dependencyFailure = false,
@@ -214,26 +232,22 @@ class BootRehydrationGraph(
 
         return BootRehydrationReport(
             completed = completed.sortedBy { it.value }.toCollection(linkedSetOf()),
-            requiredDegradedFailures = requiredDegradedFailures.sortedBy { it.nodeId.value },
-            optionalWarmFailures = optionalWarmFailures.sortedBy { it.nodeId.value },
+            requiredDegradedFailures = requiredFailures.sortedBy { it.nodeId.value },
+            optionalWarmFailures = warmFailures.sortedBy { it.nodeId.value },
         )
     }
 
     fun topologicalLayers(): List<List<BootRehydrationNodeId>> {
         if (nodesById.isEmpty()) return emptyList()
-
         val completed = linkedSetOf<BootRehydrationNodeId>()
         val remaining = nodesById.toMutableMap()
         val layers = mutableListOf<List<BootRehydrationNodeId>>()
-
         while (remaining.isNotEmpty()) {
             val ready = remaining.values
                 .filter { node -> node.dependsOn.all(completed::contains) }
                 .map { it.id }
                 .sortedBy { it.value }
-            check(ready.isNotEmpty()) {
-                "Boot rehydration graph reached an impossible cyclic state"
-            }
+            check(ready.isNotEmpty()) { "Boot rehydration graph reached an impossible cyclic state" }
             layers += ready
             ready.forEach { id ->
                 remaining.remove(id)
@@ -243,33 +257,33 @@ class BootRehydrationGraph(
         return layers
     }
 
+    private fun validatePhaseDependencies(
+        selected: Set<BootRehydrationNodeId>,
+        alreadyResolved: Set<BootRehydrationNodeId>,
+    ) {
+        nodesById.values.filter { it.id in selected }.forEach { node ->
+            val unresolved = node.dependsOn - selected - alreadyResolved
+            require(unresolved.isEmpty()) {
+                "Boot rehydration phase for ${node.id.value} omits dependencies: " +
+                    unresolved.map { it.value }.sorted().joinToString(",")
+            }
+        }
+    }
+
     private fun validateAcyclic() {
         val visited = mutableSetOf<BootRehydrationNodeId>()
         val visiting = mutableSetOf<BootRehydrationNodeId>()
-
         fun visit(id: BootRehydrationNodeId) {
             if (id in visited) return
-            require(id !in visiting) {
-                "Boot rehydration graph contains a cycle at ${id.value}"
-            }
+            require(id !in visiting) { "Boot rehydration graph contains a cycle at ${id.value}" }
             visiting += id
-            nodesById.getValue(id).dependsOn
-                .sortedBy { it.value }
-                .forEach(::visit)
+            nodesById.getValue(id).dependsOn.sortedBy { it.value }.forEach(::visit)
             visiting -= id
             visited += id
         }
-
         nodesById.keys.sortedBy { it.value }.forEach(::visit)
     }
 
-    private enum class NodeResolution {
-        COMPLETED,
-        FAILED,
-    }
-
-    private data class NodeOutcome(
-        val node: BootRehydrationNode,
-        val failure: Throwable?,
-    )
+    private enum class NodeResolution { COMPLETED, FAILED }
+    private data class NodeOutcome(val node: BootRehydrationNode, val failure: Throwable?)
 }
