@@ -71,17 +71,23 @@ fun ChatComposer(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
     ) {
-        contextNotice?.let { notice ->
-            Text(
-                text = notice.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (notice.priority == LifeOsUxPriority.BLOCKING) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-        }
+        contextNotice
+            ?.takeIf {
+                !cognitiveContext.contextReady ||
+                    it.priority == LifeOsUxPriority.BLOCKING ||
+                    it.priority == LifeOsUxPriority.ACTION_REQUIRED
+            }
+            ?.let { notice ->
+                Text(
+                    text = notice.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (notice.priority == LifeOsUxPriority.BLOCKING) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
 
         Surface(
             modifier = Modifier.fillMaxWidth(),
