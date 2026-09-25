@@ -3,6 +3,8 @@ package app.lifeos.next.kernel
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.life.AppSensorRegistry
 import app.lifeos.core.runtime.life.AppSensorRegistrySnapshot
+import app.lifeos.core.runtime.life.SensorAttentionMode
+import app.lifeos.core.runtime.life.SensorDescriptor
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import app.lifeos.core.runtime.thought.ThoughtGraphWorkingSet
 import app.lifeos.core.runtime.world.PersonalContextBootBinding
@@ -16,6 +18,13 @@ import app.lifeos.core.runtime.world.SensorWorldGapAttentionPlan
 import app.lifeos.core.runtime.world.WorldGap
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+internal interface ProductiveSensorAttentionTarget {
+    val descriptor: SensorDescriptor
+    val attentionCoverage: SensorAttentionCoverageProfile
+
+    fun applyAttention(mode: SensorAttentionMode): Int
+}
 
 fun interface ProductiveWorldGapAttentionSink {
     suspend fun update(gaps: Collection<WorldGap>)
@@ -73,47 +82,58 @@ internal class ProductivePerceptionContextRuntime(
     private val gapAttentionCompiler = SensorWorldGapAttentionCompiler()
     private val coverageMutex = Mutex()
     private val coverageProfiles = linkedMapOf<String, SensorAttentionCoverageProfile>()
-    private var hardwareBridge: AndroidHardwareSensorBridge? = null
+    private val targetMutex = Mutex()
+    private val attentionTargets = linkedMapOf<String, ProductiveSensorAttentionTarget>()
 
     /**
-     * Registers the concrete bridge contract without starting physical acquisition.
-     * Productive acquisition begins only after kernel readiness via [start].
+     * Registers one productive sensor target without starting acquisition. Every target joins the
+     * same AppSensorRegistry/B459 scheduler and publishes one explicit coverage profile.
      */
-    suspend fun attachHardwareBridge(
-        bridge: AndroidHardwareSensorBridge,
+    suspend fun attachSensorTarget(
+        target: ProductiveSensorAttentionTarget,
     ) {
-        val current = hardwareBridge
-        require(current == null || current === bridge) {
-            "Productive perception runtime cannot replace an attached hardware bridge"
+        targetMutex.withLock {
+            val existing = attentionTargets[target.descriptor.sensorId.value]
+            require(existing == null || existing === target) {
+                "Productive perception runtime cannot replace sensor target " +
+                    target.descriptor.sensorId.value
+            }
         }
-        sensorRegistry.register(bridge.descriptor)
-        registerCoverage(bridge.attentionCoverage)
-        hardwareBridge = bridge
+        sensorRegistry.register(target.descriptor)
+        registerCoverage(target.attentionCoverage)
+        targetMutex.withLock {
+            attentionTargets[target.descriptor.sensorId.value] = target
+        }
     }
 
+    suspend fun attachHardwareBridge(
+        bridge: AndroidHardwareSensorBridge,
+    ) = attachSensorTarget(bridge)
+
     /**
-     * Applies the registry's default attention policy after the kernel is ready.
+     * Applies every registered target's default attention policy after the kernel is ready.
      */
     suspend fun start(): List<SensorAttentionDecision> {
-        requireNotNull(hardwareBridge) {
-            "Productive perception runtime requires the hardware bridge before start"
+        require(targetMutex.withLock { attentionTargets.isNotEmpty() }) {
+            "Productive perception runtime requires at least one sensor target before start"
         }
         return applyAttention(emptyList())
     }
 
     /**
      * B459 is the only scheduler here. Decisions update process-local registry metadata first and
-     * are then applied to the physical Android bridge. They cannot create observation grants.
+     * are then applied to their concrete process-local acquisition targets. They cannot create
+     * observation grants.
      */
     suspend fun applyAttention(
         demands: Collection<SensorAttentionDemand>,
     ): List<SensorAttentionDecision> {
         val decisions = attentionRuntime.apply(demands)
-        val bridge = hardwareBridge
-        if (bridge != null) {
-            decisions
-                .firstOrNull { it.sensorId == bridge.descriptor.sensorId }
-                ?.let { decision -> bridge.applyAttention(decision.mode) }
+        val targets = targetMutex.withLock {
+            attentionTargets.toMap()
+        }
+        decisions.forEach { decision ->
+            targets[decision.sensorId.value]?.applyAttention(decision.mode)
         }
         return decisions
     }
