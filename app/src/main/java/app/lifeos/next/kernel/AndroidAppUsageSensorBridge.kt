@@ -502,3 +502,26 @@ internal class AndroidAppUsageSensorBridge(
         )
     }
 }
+
+
+/**
+ * Process-local hook used by owner special-access convergence to refresh the productive sensor
+ * after Android Usage Access changes. Platform access only changes sensor health; B467 still owns
+ * observation authorization and persistence.
+ */
+internal object ProductiveAppUsageSensorRuntimeRegistry {
+    @Volatile
+    private var bridge: AndroidAppUsageSensorBridge? = null
+
+    fun install(value: AndroidAppUsageSensorBridge) {
+        bridge = value
+    }
+
+    suspend fun refreshAvailability() {
+        bridge?.refreshAvailability()
+    }
+
+    internal fun clearForTests() {
+        bridge = null
+    }
+}
