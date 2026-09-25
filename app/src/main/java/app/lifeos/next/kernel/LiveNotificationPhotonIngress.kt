@@ -6,9 +6,10 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 
 /**
- * Process-local bridge from Android's NotificationListenerService into the canonical information
- * observation boundary. It owns no durable/shadow state: producers wait until productive ingress is
- * ready. B452 inserts Owner Observation Policy before the observation becomes a durable Photon.
+ * Process-local hand-off from Android's NotificationListenerService to the registered B482
+ * notification sensor bridge. It owns no durable/shadow state: producers wait until the productive
+ * sensor handler is ready. B467 then applies structural validation, Owner Observation Policy and
+ * canonical ORIGIN Photon persistence before Continuous Cognition.
  */
 object LiveNotificationPhotonIngress {
     private val handler =
