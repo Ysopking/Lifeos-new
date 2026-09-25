@@ -1,50 +1,80 @@
 package app.lifeos.core.runtime.research
 
-import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.reasoning.RealizationComponentKind
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class PersonalRealizationStateAdapterTest {
+    private val t0 = Instant.parse("2026-09-25T13:00:00Z")
+
     @Test
-    fun `semantic identity excludes observation clock while representation preserves snapshot identity`() {
-        val first = snapshot(Instant.parse("2026-09-25T13:00:00Z"))
-        val second = snapshot(Instant.parse("2026-09-25T13:00:01Z"))
+    fun `adapter binds owner personal context without granting authority`() {
+        val snapshot = snapshot()
+        val component = PersonalRealizationStateAdapter.component(snapshot)
 
-        val a = PersonalRealizationStateAdapter.component(first)
-        val b = PersonalRealizationStateAdapter.component(second)
-
-        assertEquals(RealizationComponentKind.PERSONAL_CONTEXT, a.kind)
-        assertEquals(a.semanticFingerprint, b.semanticFingerprint)
-        assertNotEquals(a.representationId, b.representationId)
+        assertEquals(RealizationComponentKind.PERSONAL_CONTEXT, component.kind)
+        assertEquals(
+            "owner-personal-context:${snapshot.fingerprint}",
+            component.representationId,
+        )
+        assertEquals(snapshot.verifiedOutcomeFingerprints, component.provenanceFingerprints)
+        assertTrue(component.semanticFingerprint.isNotBlank())
     }
 
-    private fun snapshot(asOf: Instant): OwnerPersonalContextSnapshot {
-        val outcomes = emptyList<String>()
-        val fp = StableFieldIds.fingerprint(
-            "owner-personal-context-snapshot/v1",
-            "world",
-            "objective",
-            "agency",
-            "subjective",
-            asOf.toString(),
-            *outcomes.map { "verified-outcome:$it" }.toTypedArray(),
+    @Test
+    fun `adapting same frozen snapshot is deterministic`() {
+        val snapshot = snapshot()
+
+        assertEquals(
+            PersonalRealizationStateAdapter.component(snapshot),
+            PersonalRealizationStateAdapter.component(snapshot),
         )
-        val ctor = OwnerPersonalContextSnapshot::class.java
-            .declaredConstructors
-            .single()
-            .apply { isAccessible = true }
-        @Suppress("UNCHECKED_CAST")
-        return ctor.newInstance(
-            "world",
-            "objective",
-            "agency",
-            "subjective",
-            outcomes,
-            asOf,
-            fp,
-        ) as OwnerPersonalContextSnapshot
+    }
+
+    @Test
+    fun `source owner context remains non authoritative`() {
+        val snapshot = snapshot()
+
+        assertFalse(snapshot.factualWorldAuthority)
+        assertFalse(snapshot.policyAuthority)
+        assertFalse(snapshot.executionAuthority)
+    }
+
+    private fun snapshot(): OwnerPersonalContextSnapshot {
+        val world = PersonalWorldMaterializer().materialize(
+            semanticProjections = emptyList(),
+            temporalEpisodes = emptyList(),
+            asOf = t0,
+            revision = 1L,
+        )
+        val objective = OwnerObjectiveSnapshot.create(
+            activeGoalPlanIds = emptyList(),
+            objectiveFingerprints = emptyList(),
+            constraintFingerprints = emptyList(),
+            asOf = t0,
+        )
+        val agency = OwnerAgencySnapshot.create(
+            objective = objective,
+            personalWorld = world,
+            signals = emptyList(),
+            asOf = t0,
+        )
+        val subjective = SubjectiveStateHypothesis.create(
+            personalWorld = world,
+            ownerAgency = agency,
+            evidence = emptyList(),
+            asOf = t0,
+        )
+        return OwnerPersonalContextSnapshot.create(
+            personalWorld = world,
+            objective = objective,
+            agency = agency,
+            subjectiveState = subjective,
+            verifiedOutcomes = emptyList(),
+            asOf = t0,
+        )
     }
 }
