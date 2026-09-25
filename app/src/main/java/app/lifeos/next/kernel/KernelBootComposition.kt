@@ -27,6 +27,7 @@ import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 internal data class KernelBootGraph(
     val bootCoordinator: BootCoordinator,
     val warmRehydrator: suspend () -> BootRehydrationReport,
+    val warmPhotonRehydrator: suspend () -> app.lifeos.core.runtime.boot.PhotonRehydrationResult,
 )
 
 /**
@@ -55,6 +56,7 @@ internal class KernelBootComposition(
 
         val storeProbes = KernelBootStoreProbes(
             bootReadSession = world.bootReadSession,
+            photonIndexReport = foundation.store::indexReport,
             goalPlanRepository = foundation.goalPlanRepository,
             learningAdaptationRepository = foundation.learningAdaptationRepository,
             learningWatermarks = cognition.learningWatermarks,
@@ -217,6 +219,13 @@ internal class KernelBootComposition(
             }
         }
 
+        val photonRehydrator = PhotonRehydrator(
+            repository = foundation.store,
+            journalIndex = foundation.cognitionJournalIndex,
+            bootReadSession = world.bootReadSession,
+            criticalHydration = true,
+        )
+
         val bootCoordinator = BootCoordinator(
             runtimeBootstrapper = object : RuntimeBootstrapper {
                 override suspend fun bootstrap() = Unit
@@ -225,11 +234,7 @@ internal class KernelBootComposition(
                 probes = criticalStoreProbes,
             ),
             stateRehydrator = stateRehydrator,
-            photonRehydrator = PhotonRehydrator(
-                repository = foundation.store,
-                journalIndex = foundation.cognitionJournalIndex,
-                bootReadSession = world.bootReadSession,
-            ),
+            photonRehydrator = photonRehydrator,
             moduleRehydrator = object : ModuleRehydrator {
                 override suspend fun rehydrate(): ModuleRestoreSummary {
                     foundation.matrix.rehydrate()
@@ -261,6 +266,7 @@ internal class KernelBootComposition(
         return KernelBootGraph(
             bootCoordinator = bootCoordinator,
             warmRehydrator = warmRehydrationGraph::rehydrate,
+            warmPhotonRehydrator = photonRehydrator::rehydrateAll,
         )
     }
 

@@ -16,6 +16,7 @@ import app.lifeos.core.data.world.EncryptedWorldEquationHeadRepository
 import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.worldmodel.EncryptedWorldModelRepository
+import app.lifeos.core.model.PhotonIndexReport
 import app.lifeos.core.model.health.ProtectionStateLoadResult
 import app.lifeos.core.runtime.boot.BootCriticality
 import app.lifeos.core.runtime.boot.BootEngineCycleStoreHealth
@@ -30,6 +31,7 @@ import app.lifeos.core.runtime.learning.LearningWatermarkLoadResult
 /** Boot integrity probes kept outside the process composition root. */
 internal class KernelBootStoreProbes(
     private val bootReadSession: BootReadSession,
+    private val photonIndexReport: suspend () -> PhotonIndexReport,
     private val goalPlanRepository: EncryptedGoalPlanRepository,
     private val learningAdaptationRepository: EncryptedLearningAdaptationRepository,
     private val learningWatermarks: EncryptedLearningWatermarkRepository,
@@ -68,11 +70,14 @@ internal class KernelBootStoreProbes(
         override val storeId: String = "photon-store"
         override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
-            val failures = bootReadSession.readFailures(BootSnapshotSource.PHOTON)
+            val report = bootReadSession.readOnce("photon-index-report") {
+                photonIndexReport()
+            }
+            val unreadable = report.unreadableRevisionFiles
             return StoreStatus(
                 storeId = storeId,
-                state = if (failures.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
-                message = if (failures.isEmpty()) null else "unreadable:${failures.size}",
+                state = if (unreadable.isEmpty()) StoreState.HEALTHY else StoreState.PARTIALLY_RECOVERABLE,
+                message = if (unreadable.isEmpty()) null else "unreadable:${unreadable.size}",
             )
         }
     },

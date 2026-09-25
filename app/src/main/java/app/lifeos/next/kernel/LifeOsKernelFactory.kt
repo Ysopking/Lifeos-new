@@ -57,6 +57,7 @@ class LifeOsKernelFactory(
             scope = foundation.scope,
             bootCoordinator = boot.bootCoordinator,
             warmBootRehydrator = boot.warmRehydrator,
+            warmPhotonRehydrator = boot.warmPhotonRehydrator,
             bootEngineRuntime = world.bootEngineRuntime,
             continuousCognition = cognition.continuousCognition,
             cognitiveModuleSnapshotRepository = foundation.cognitiveModuleSnapshotRepository,

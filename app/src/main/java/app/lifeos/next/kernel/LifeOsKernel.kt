@@ -24,6 +24,7 @@ import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootRehydrationReport
+import app.lifeos.core.runtime.boot.PhotonRehydrationResult
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
@@ -115,6 +116,7 @@ class LifeOsKernel internal constructor(
     private val languageRuntime: VersionedLanguageRuntime? = null,
     private val personalLanguageLearning: ProductivePersonalLanguageLearningRuntime? = null,
     private val personalCorpusLanguage: PersonalCorpusLanguageRuntime? = null,
+    private val warmPhotonRehydrator: suspend () -> PhotonRehydrationResult? = { null },
 ) {
     private val revisionedPhotonStore: RevisionedPhotonRepository =
         requireNotNull(photonStore as? RevisionedPhotonRepository) {
@@ -137,6 +139,7 @@ class LifeOsKernel internal constructor(
         scope = scope,
         bootCoordinator = bootCoordinator,
         warmBootRehydrator = warmBootRehydrator,
+        warmPhotonRehydrator = warmPhotonRehydrator,
         bootEngineRuntime = bootEngineRuntime,
         bootReadyMaintenanceTrigger = bootReadyMaintenanceTrigger,
     )
@@ -156,7 +159,6 @@ class LifeOsKernel internal constructor(
         },
         onPhotonPersisted = bootLifecycle::onPhotonPersisted,
     )
-
     suspend fun freezeCognitiveModulesForCurrentCycle(
         builtIns: Collection<CognitiveModule>,
     ): CognitiveModuleRegistry {
@@ -286,7 +288,6 @@ class LifeOsKernel internal constructor(
 
     fun start(): Job = bootLifecycle.start()
     fun startWarmBoot(): Job = bootLifecycle.startWarmBoot()
-
     suspend fun startWorldEquationEvolution(
         candidate: WorldEquationSpec,
         protocol: WorldEquationEvaluationProtocol,

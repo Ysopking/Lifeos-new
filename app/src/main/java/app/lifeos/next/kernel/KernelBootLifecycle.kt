@@ -9,6 +9,7 @@ import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootEngineRecoveryResult
 import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootRehydrationReport
+import app.lifeos.core.runtime.boot.PhotonRehydrationResult
 import app.lifeos.core.runtime.boot.BootRunResult
 import app.lifeos.core.runtime.boot.RuntimeAvailability
 import kotlinx.coroutines.CancellationException
@@ -28,6 +29,7 @@ internal class KernelBootLifecycle(
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
     private val warmBootRehydrator: suspend () -> BootRehydrationReport,
+    private val warmPhotonRehydrator: suspend () -> PhotonRehydrationResult? = { null },
     private val bootEngineRuntime: BootEngineRuntime,
     private val bootReadyMaintenanceTrigger: () -> Unit,
 ) {
@@ -258,10 +260,28 @@ internal class KernelBootLifecycle(
     }
 
     private suspend fun warmBootstrap() {
-        if (!mutableBootstrapState.value.actionable) return
+        val initial = mutableBootstrapState.value
+        if (!initial.readable) return
+
+        if (!initial.actionable) {
+            val hydrated = try {
+                warmPhotonRehydrator()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            hydrated?.let(::applyWarmPhotonHydration)
+            return
+        }
+
         bootReadyMaintenanceTrigger()
         try {
             val report = warmBootRehydrator()
+            val hydrated = warmPhotonRehydrator()
+            if (hydrated != null) {
+                applyWarmPhotonHydration(hydrated)
+            }
             val limitations = buildList {
                 addAll(
                     report.degraded.map {
@@ -273,6 +293,14 @@ internal class KernelBootLifecycle(
                         "warm-optional-failed:${it.nodeId.value}:${it.message}"
                     }
                 )
+                hydrated?.let { photons ->
+                    if (photons.unreadableFiles.isNotEmpty()) {
+                        add("warm-unreadable-photons:${photons.unreadableFiles.size}")
+                    }
+                    if (photons.quarantined.isNotEmpty()) {
+                        add("warm-quarantined-photons:${photons.quarantined.size}")
+                    }
+                }
             }
             if (limitations.isNotEmpty()) {
                 mutableBootstrapState.update { current ->
@@ -315,4 +343,30 @@ internal class KernelBootLifecycle(
             }
         }
     }
+
+    private fun applyWarmPhotonHydration(hydrated: PhotonRehydrationResult) {
+        val current = mutableBootstrapState.value
+        val currentRevisionById = current.photons.associate { it.id to it.revision }
+        (hydrated.hot + hydrated.warm)
+            .filter { photon ->
+                (currentRevisionById[photon.id] ?: 0L) < photon.revision
+            }
+            .forEach { matrix.influence(it) }
+
+        val merged = (hydrated.allPhotons + current.photons)
+            .groupBy { it.id }
+            .values
+            .map { revisions -> revisions.maxBy { it.revision } }
+            .sortedBy { it.provenance.createdAt }
+        mutableBootstrapState.update { latest ->
+            latest.copy(
+                photons = merged,
+                unreadableFiles = maxOf(
+                    latest.unreadableFiles,
+                    hydrated.unreadableFiles.size,
+                ),
+            )
+        }
+    }
+
 }
