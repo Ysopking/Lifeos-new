@@ -140,7 +140,7 @@ internal class ProductivePerceptionContextRuntime(
             target = ProductiveSensorAttentionTarget(
                 descriptor = bridge.descriptor,
                 coverage = bridge.attentionCoverage,
-                applyAttention = bridge::applyAttention,
+                applyAttention = { mode -> bridge.applyAttention(mode) },
             ),
         )
         if (!attached) return
@@ -172,7 +172,7 @@ internal class ProductivePerceptionContextRuntime(
             target = ProductiveSensorAttentionTarget(
                 descriptor = bridge.descriptor,
                 coverage = bridge.attentionCoverage,
-                applyAttention = bridge::applyAttention,
+                applyAttention = { mode -> bridge.applyAttention(mode) },
                 start = { bridge.start() },
                 stop = { bridge.stop() },
             ),
@@ -210,7 +210,7 @@ internal class ProductivePerceptionContextRuntime(
             target = ProductiveSensorAttentionTarget(
                 descriptor = bridge.descriptor,
                 coverage = bridge.attentionCoverage,
-                applyAttention = bridge::applyAttention,
+                applyAttention = { mode -> bridge.applyAttention(mode) },
             ),
         )
         if (!attached) return
