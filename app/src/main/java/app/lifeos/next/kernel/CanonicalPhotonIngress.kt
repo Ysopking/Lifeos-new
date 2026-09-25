@@ -15,12 +15,8 @@ import app.lifeos.core.runtime.life.AppSensorCursor
 import app.lifeos.core.runtime.life.AuthorizedObservationPhotonCommitReceipt
 import app.lifeos.core.runtime.life.AuthorizedObservationPhotonCommitter
 import app.lifeos.core.runtime.life.OwnerAuthorizedAppObservationIngress
-import app.lifeos.core.runtime.life.PerceptionFusionEngine
 import app.lifeos.core.runtime.life.SensorDescriptor
-import app.lifeos.core.runtime.policy.OwnerObservationDecision
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
-import app.lifeos.core.runtime.policy.OwnerObservationRequest
-import app.lifeos.core.runtime.policy.OwnerObservationType
 
 /**
  * Single productive Android ingress for Photons that must become immediately visible to the live
@@ -38,7 +34,6 @@ class CanonicalPhotonIngress(
     ownerAssetReviews: OwnerAssetReviewRepository? = null,
     private val ownerObservationPolicy: OwnerObservationPolicyLedger? = null,
 ) {
-    private val informationObservationFusion = PerceptionFusionEngine()
     private val authorizedObservationCommitter by lazy {
         AuthorizedObservationPhotonCommitter(
             persistOrigin = { photon ->
@@ -111,43 +106,6 @@ class CanonicalPhotonIngress(
                 photon
             },
         )
-        LiveNotificationPhotonIngress.install { observation ->
-            val policy = ownerObservationPolicy
-            val authorized = if (policy == null) {
-                null
-            } else {
-                when (
-                    val decision = policy.evaluate(
-                        OwnerObservationRequest(
-                            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
-                            observationType = OwnerObservationType.NOTIFICATION,
-                            resource = observation.sourceResource,
-                            scope = PrivateOwnerObservationPolicyBaseline.NOTIFICATION_SCOPE,
-                            sensorId = observation.sourceId,
-                        )
-                    )
-                ) {
-                    is OwnerObservationDecision.Allowed ->
-                        observation.authorizedBy(decision.grantId.value)
-                    is OwnerObservationDecision.Blocked ->
-                        null
-                }
-            }
-
-            if (authorized != null) {
-                val photon = informationObservationFusion
-                    .fuse(
-                        listOf(
-                            authorized.toPerceptionSignal(
-                                salience = 0.6,
-                            )
-                        )
-                    )
-                    .photons
-                    .single()
-                ingest(photon, PhotonIngressMode.ORIGIN)
-            }
-        }
     }
 
     suspend fun ingest(
