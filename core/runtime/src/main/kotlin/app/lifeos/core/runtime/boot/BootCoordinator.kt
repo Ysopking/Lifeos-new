@@ -29,10 +29,12 @@ class BootCoordinator(
 
         suspend fun transition(
             state: BootState,
+            availability: RuntimeAvailability = defaultAvailability(state),
             mutate: (BootSnapshot) -> BootSnapshot = { it },
         ) {
             snapshot = mutate(snapshot).copy(
                 state = state,
+                availability = availability,
                 phaseTimings = performance.snapshot().timings,
             )
             stateSink.record(snapshot)
@@ -135,7 +137,10 @@ class BootCoordinator(
                 }
 
                 is BootValidationResult.RecoveryRequired -> {
-                    transition(BootState.RECOVERING) {
+                    transition(
+                        state = BootState.RECOVERING,
+                        availability = RuntimeAvailability.READ_ONLY,
+                    ) {
                         it.copy(failures = it.failures + validation.failures)
                     }
                     BootRunResult.RecoveryRequired(snapshot, context)
@@ -160,4 +165,21 @@ class BootCoordinator(
             BootRunResult.Failed(snapshot, error)
         }
     }
+
+    private fun defaultAvailability(state: BootState): RuntimeAvailability =
+        when (state) {
+            BootState.READY -> RuntimeAvailability.FULL
+            BootState.DEGRADED -> RuntimeAvailability.DEGRADED
+            BootState.FAILED -> RuntimeAvailability.SAFE_MODE
+            BootState.NOT_STARTED,
+            BootState.INITIALIZING,
+            BootState.VERIFYING_STORES,
+            BootState.RESTORING_RUNTIME,
+            BootState.RESTORING_PHOTONS,
+            BootState.RESTORING_MODULES,
+            BootState.ANALYZING_DELTAS,
+            BootState.WARMING_COGNITION,
+            BootState.VALIDATING,
+            BootState.RECOVERING -> RuntimeAvailability.RECOVERY
+        }
 }

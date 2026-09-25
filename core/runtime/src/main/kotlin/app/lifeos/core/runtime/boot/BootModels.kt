@@ -18,6 +18,14 @@ enum class BootState {
     FAILED,
 }
 
+enum class RuntimeAvailability {
+    FULL,
+    DEGRADED,
+    READ_ONLY,
+    RECOVERY,
+    SAFE_MODE,
+}
+
 enum class StoreState {
     HEALTHY,
     STALE,
@@ -93,6 +101,7 @@ data class BootSnapshot(
     val bootId: String,
     val startedAt: Instant,
     val state: BootState,
+    val availability: RuntimeAvailability = RuntimeAvailability.RECOVERY,
     val previousShutdownId: String? = null,
     val lastCheckpointId: String? = null,
     val restoredPhotonCount: Long = 0,

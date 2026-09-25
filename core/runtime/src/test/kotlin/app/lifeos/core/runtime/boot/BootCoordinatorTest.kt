@@ -56,6 +56,7 @@ class BootCoordinatorTest {
         val result = assertIs<BootRunResult.Ready>(coordinator.boot())
 
         assertEquals(BootState.READY, result.snapshot.state)
+        assertEquals(RuntimeAvailability.FULL, result.snapshot.availability)
         assertEquals("cp-1", result.snapshot.lastCheckpointId)
         assertEquals(4, result.snapshot.restoredModuleCount)
         assertEquals(2, result.snapshot.detectedDeltaCount)
@@ -76,6 +77,49 @@ class BootCoordinatorTest {
             result.snapshot.phaseTimings.map { it.phase },
         )
         assertEquals(List(9) { 1L }, result.snapshot.phaseTimings.map { it.elapsedMillis })
+    }
+
+    @Test
+    fun recoveryRequiredBootExposesReadOnlyAvailability() = runTest {
+        val coordinator = BootCoordinator(
+            runtimeBootstrapper = object : RuntimeBootstrapper {
+                override suspend fun bootstrap() = Unit
+            },
+            storeVerifier = object : StoreVerifier {
+                override suspend fun verify() = StoreVerificationResult(
+                    stores = listOf(StoreStatus("photons", StoreState.PARTIALLY_RECOVERABLE)),
+                    canBootNormally = false,
+                    requiresRecovery = true,
+                )
+            },
+            stateRehydrator = object : StateRehydrator {
+                override suspend fun rehydrate() = RehydratedRuntimeState()
+            },
+            photonRehydrator = PhotonRehydrator(EmptyPhotonRepository()),
+            moduleRehydrator = object : ModuleRehydrator {
+                override suspend fun rehydrate() = ModuleRestoreSummary()
+            },
+            thoughtMatrixWarmup = object : ThoughtMatrixWarmup {
+                override suspend fun warmup() = ThoughtMatrixWarmupResult()
+            },
+            capabilityWarmup = object : CapabilityWarmup {
+                override suspend fun warmup() = CapabilityWarmupResult()
+            },
+            deltaDetector = object : BootDeltaDetector {
+                override suspend fun detect(context: BootContext) = 0L
+            },
+            validator = object : BootValidator {
+                override suspend fun validate(context: BootContext) =
+                    BootValidationResult.RecoveryRequired(listOf("repair-required"))
+            },
+            newBootId = { "boot-read-only" },
+        )
+
+        val result = assertIs<BootRunResult.RecoveryRequired>(coordinator.boot())
+
+        assertEquals(BootState.RECOVERING, result.snapshot.state)
+        assertEquals(RuntimeAvailability.READ_ONLY, result.snapshot.availability)
+        assertEquals(listOf("repair-required"), result.snapshot.failures)
     }
 
     private class EmptyPhotonRepository : PhotonRepository {
