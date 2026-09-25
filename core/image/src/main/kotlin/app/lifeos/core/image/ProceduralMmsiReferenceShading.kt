@@ -20,6 +20,17 @@ class ProceduralMmsiReferenceShading(
         if (lengthSq <= 1e-10) view else raw.normalized()
     }
 
+    class Scratch internal constructor(
+        internal val coefficients: DoubleArray,
+        val rgb: DoubleArray,
+    )
+
+    fun newScratch(): Scratch =
+        Scratch(
+            coefficients = DoubleArray(profile.coefficientProjection.componentCount),
+            rgb = DoubleArray(3),
+        )
+
     fun shade(
         intrinsicLinearAlbedo: RgbSample,
         normal: SurfaceNormal,
@@ -46,16 +57,78 @@ class ProceduralMmsiReferenceShading(
         shadowVisibility: Double = 1.0,
         ambientOcclusion: Double = 1.0,
     ): RgbSample {
+        val scratch = newScratch()
+        shadeNormalizedInto(
+            albedoR = intrinsicLinearAlbedo.r,
+            albedoG = intrinsicLinearAlbedo.g,
+            albedoB = intrinsicLinearAlbedo.b,
+            normalX = normal.x,
+            normalY = normal.y,
+            normalZ = normal.z,
+            roughness = roughness,
+            shadowVisibility = shadowVisibility,
+            ambientOcclusion = ambientOcclusion,
+            scratch = scratch,
+        )
+        return RgbSample(
+            scratch.rgb[0],
+            scratch.rgb[1],
+            scratch.rgb[2],
+        )
+    }
+
+    fun shadeNormalizedInto(
+        albedoR: Double,
+        albedoG: Double,
+        albedoB: Double,
+        normalX: Double,
+        normalY: Double,
+        normalZ: Double,
+        roughness: Double,
+        shadowVisibility: Double,
+        ambientOcclusion: Double,
+        scratch: Scratch,
+    ) {
         require(roughness in 0.0..1.0)
         require(shadowVisibility in 0.0..1.0)
         require(ambientOcclusion in 0.0..1.0)
 
-        val coefficients = profile.coefficientProjection.project(intrinsicLinearAlbedo)
-        val baseColor = profile.rgbProjection.project(coefficients)
+        val coefficientProjection = profile.coefficientProjection
+        val coefficients = scratch.coefficients
+        for (component in coefficients.indices) {
+            val row = coefficientProjection.rgbToCoefficients[component]
+            coefficients[component] =
+                coefficientProjection.bias[component] +
+                    row[0] * albedoR +
+                    row[1] * albedoG +
+                    row[2] * albedoB
+        }
 
-        val nDotL = max(normal.dot(light), 0.0)
-        val nDotV = max(normal.dot(view), 0.001)
-        val nDotH = max(normal.dot(halfVector), 0.0)
+        val rgbProjection = profile.rgbProjection
+        val base = scratch.rgb
+        for (channel in 0..2) {
+            var value = rgbProjection.meanRgb[channel]
+            val row = rgbProjection.coefficientsToRgb[channel]
+            for (component in coefficients.indices) {
+                value += row[component] * coefficients[component]
+            }
+            base[channel] = value.coerceIn(0.0, 1.0)
+        }
+
+        val nDotL = max(
+            normalX * light.x + normalY * light.y + normalZ * light.z,
+            0.0,
+        )
+        val nDotV = max(
+            normalX * view.x + normalY * view.y + normalZ * view.z,
+            0.001,
+        )
+        val nDotH = max(
+            normalX * halfVector.x +
+                normalY * halfVector.y +
+                normalZ * halfVector.z,
+            0.0,
+        )
         val hDotV = max(
             halfVector.x * view.x +
                 halfVector.y * view.y +
@@ -72,37 +145,35 @@ class ProceduralMmsiReferenceShading(
         val specular = (d * g * f) / (4.0 * nDotV * max(nDotL, 0.001) + 1e-4)
         val kd = 1.0 - f
 
-        return RgbSample(
-            shadeChannel(
-                base = baseColor.r,
-                sun = profile.sunColorLinear.r,
-                sky = profile.skyAmbientLinear.r,
-                kd = kd,
-                specular = specular,
-                nDotL = nDotL,
-                shadowVisibility = shadowVisibility,
-                ambientOcclusion = ambientOcclusion,
-            ),
-            shadeChannel(
-                base = baseColor.g,
-                sun = profile.sunColorLinear.g,
-                sky = profile.skyAmbientLinear.g,
-                kd = kd,
-                specular = specular,
-                nDotL = nDotL,
-                shadowVisibility = shadowVisibility,
-                ambientOcclusion = ambientOcclusion,
-            ),
-            shadeChannel(
-                base = baseColor.b,
-                sun = profile.sunColorLinear.b,
-                sky = profile.skyAmbientLinear.b,
-                kd = kd,
-                specular = specular,
-                nDotL = nDotL,
-                shadowVisibility = shadowVisibility,
-                ambientOcclusion = ambientOcclusion,
-            ),
+        base[0] = shadeChannel(
+            base = base[0],
+            sun = profile.sunColorLinear.r,
+            sky = profile.skyAmbientLinear.r,
+            kd = kd,
+            specular = specular,
+            nDotL = nDotL,
+            shadowVisibility = shadowVisibility,
+            ambientOcclusion = ambientOcclusion,
+        )
+        base[1] = shadeChannel(
+            base = base[1],
+            sun = profile.sunColorLinear.g,
+            sky = profile.skyAmbientLinear.g,
+            kd = kd,
+            specular = specular,
+            nDotL = nDotL,
+            shadowVisibility = shadowVisibility,
+            ambientOcclusion = ambientOcclusion,
+        )
+        base[2] = shadeChannel(
+            base = base[2],
+            sun = profile.sunColorLinear.b,
+            sky = profile.skyAmbientLinear.b,
+            kd = kd,
+            specular = specular,
+            nDotL = nDotL,
+            shadowVisibility = shadowVisibility,
+            ambientOcclusion = ambientOcclusion,
         )
     }
 
