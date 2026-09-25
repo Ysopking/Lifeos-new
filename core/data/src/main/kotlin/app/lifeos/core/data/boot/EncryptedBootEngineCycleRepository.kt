@@ -5,6 +5,7 @@ import app.lifeos.core.data.security.EncryptedLedgerVaultSupport
 import app.lifeos.core.runtime.boot.BootEngineCycle
 import app.lifeos.core.runtime.boot.BootEngineCycleLoadReport
 import app.lifeos.core.runtime.boot.BootEngineCycleRepository
+import app.lifeos.core.runtime.boot.BootEngineCycleStoreHealth
 import app.lifeos.core.runtime.boot.BootEngineCycleState
 import app.lifeos.core.runtime.world.CognitiveCycleId
 import app.lifeos.core.runtime.world.PersonalContextBootBinding
@@ -26,6 +27,7 @@ class EncryptedBootEngineCycleRepository(
 ) : BootEngineCycleRepository {
     private val root = context.filesDir.resolve(ROOT_DIRECTORY)
     private val records = root.resolve(RECORDS_DIRECTORY)
+    private val quarantine = root.resolve(QUARANTINE_DIRECTORY)
     private val activePointer = root.resolve(ACTIVE_POINTER)
     private val committedPointer = root.resolve(COMMITTED_POINTER)
     private val key: SecretKey by lazy {
@@ -36,9 +38,12 @@ class EncryptedBootEngineCycleRepository(
         withContext(Dispatchers.IO) {
             processMutex.withLock {
                 ensureDirectories()
-                reconcilePointersLocked()
+                val report = loadReportLocked()
+                require(report.health != BootEngineCycleStoreHealth.UNRECOVERABLE) {
+                    "BootEngine cycle store is unrecoverable: ${report.message}"
+                }
                 if (exists(recordFile(cycle.cycleId))) return@withLock false
-                if (readPointerIfPresent(activePointer) != null) return@withLock false
+                if (report.activeCycle != null) return@withLock false
                 writeCycle(cycle)
                 writePointer(activePointer, CyclePointer(cycle.cycleId, cycle.fingerprint))
                 true
@@ -59,11 +64,11 @@ class EncryptedBootEngineCycleRepository(
         withContext(Dispatchers.IO) {
             processMutex.withLock {
                 ensureDirectories()
-                reconcilePointersLocked()
-                val pointer = readPointerIfPresent(activePointer) ?: return@withLock null
-                loadPointerTarget(pointer, requireCommitted = false).also {
-                    require(!it.terminal) { "Active BootEngine pointer resolved to terminal cycle" }
+                val report = loadReportLocked()
+                require(report.health != BootEngineCycleStoreHealth.UNRECOVERABLE) {
+                    "BootEngine cycle store is unrecoverable: ${report.message}"
                 }
+                report.activeCycle
             }
         }
 
@@ -71,9 +76,11 @@ class EncryptedBootEngineCycleRepository(
         withContext(Dispatchers.IO) {
             processMutex.withLock {
                 ensureDirectories()
-                reconcilePointersLocked()
-                val pointer = readPointerIfPresent(committedPointer) ?: return@withLock null
-                loadPointerTarget(pointer, requireCommitted = true)
+                val report = loadReportLocked()
+                require(report.health != BootEngineCycleStoreHealth.UNRECOVERABLE) {
+                    "BootEngine cycle store is unrecoverable: ${report.message}"
+                }
+                report.latestCommitted
             }
         }
 
@@ -83,6 +90,10 @@ class EncryptedBootEngineCycleRepository(
     ): Boolean = withContext(Dispatchers.IO) {
         processMutex.withLock {
             ensureDirectories()
+            val report = loadReportLocked()
+            require(report.health != BootEngineCycleStoreHealth.UNRECOVERABLE) {
+                "BootEngine cycle store is unrecoverable: ${report.message}"
+            }
             require(expectedFingerprint.isNotBlank())
             val file = recordFile(next.cycleId)
             if (!exists(file)) return@withLock false
@@ -99,8 +110,7 @@ class EncryptedBootEngineCycleRepository(
             if (next.terminal) {
                 deleteAtomic(activePointer)
                 if (next.state == BootEngineCycleState.COMMITTED) {
-                    val existingCommitted = readPointerIfPresent(committedPointer)
-                        ?.let { loadPointerTarget(it, requireCommitted = true) }
+                    val existingCommitted = report.latestCommitted
                     require(
                         existingCommitted == null ||
                             next.productiveHeadRevision!! >= existingCommitted.productiveHeadRevision!!
@@ -122,29 +132,183 @@ class EncryptedBootEngineCycleRepository(
     override suspend fun loadReport(): BootEngineCycleLoadReport =
         withContext(Dispatchers.IO) {
             processMutex.withLock {
-                ensureDirectories()
                 runCatching {
-                    reconcilePointersLocked()
-                    val active = readPointerIfPresent(activePointer)
-                        ?.let { loadPointerTarget(it, requireCommitted = false) }
-                    val committed = readPointerIfPresent(committedPointer)
-                        ?.let { loadPointerTarget(it, requireCommitted = true) }
-                    BootEngineCycleLoadReport(
-                        activeCycle = active,
-                        latestCommitted = committed,
-                        corrupted = false,
-                        message = null,
-                    )
-                }.getOrElse {
+                    ensureDirectories()
+                    loadReportLocked()
+                }.getOrElse { error ->
                     BootEngineCycleLoadReport(
                         activeCycle = null,
                         latestCommitted = null,
                         corrupted = true,
-                        message = it.message ?: "boot-engine-cycle-corrupt",
+                        message = error.message ?: "boot-engine-cycle-unrecoverable",
+                        health = BootEngineCycleStoreHealth.UNRECOVERABLE,
                     )
                 }
             }
         }
+
+    private fun loadReportLocked(): BootEngineCycleLoadReport {
+        val repairActions = mutableListOf<String>()
+        val diagnostics = mutableListOf<String>()
+
+        repairPointerIfNeededLocked(
+            file = activePointer,
+            requireCommitted = false,
+            repairActions = repairActions,
+            diagnostics = diagnostics,
+        )
+        repairPointerIfNeededLocked(
+            file = committedPointer,
+            requireCommitted = true,
+            repairActions = repairActions,
+            diagnostics = diagnostics,
+        )
+
+        reconcilePointersLocked()
+
+        val active = readPointerIfPresent(activePointer)
+            ?.let { loadPointerTarget(it, requireCommitted = false) }
+            ?.also {
+                require(!it.terminal) {
+                    "Active BootEngine pointer resolved to terminal cycle after reconciliation"
+                }
+            }
+        val committed = readPointerIfPresent(committedPointer)
+            ?.let { loadPointerTarget(it, requireCommitted = true) }
+
+        val health = when {
+            diagnostics.isNotEmpty() -> BootEngineCycleStoreHealth.DEGRADED
+            repairActions.isNotEmpty() -> BootEngineCycleStoreHealth.REPAIRED
+            else -> BootEngineCycleStoreHealth.HEALTHY
+        }
+        val message = (diagnostics + repairActions)
+            .takeIf { it.isNotEmpty() }
+            ?.joinToString(";")
+
+        return BootEngineCycleLoadReport(
+            activeCycle = active,
+            latestCommitted = committed,
+            corrupted = false,
+            message = message,
+            health = health,
+            repairActions = repairActions.toList(),
+        )
+    }
+
+    private fun repairPointerIfNeededLocked(
+        file: File,
+        requireCommitted: Boolean,
+        repairActions: MutableList<String>,
+        diagnostics: MutableList<String>,
+    ) {
+        if (!exists(file)) return
+
+        try {
+            val pointer = requireNotNull(readPointerIfPresent(file))
+            loadPointerTarget(pointer, requireCommitted)
+            return
+        } catch (error: Exception) {
+            val pointerName = if (file == activePointer) "active" else "committed"
+            quarantinePointerLocked(file)
+            repairActions += "${pointerName}-pointer-quarantined"
+
+            val scan = scanCycleRecordsLocked()
+            diagnostics += scan.failures.map { "${pointerName}-scan:$it" }
+            val candidate = if (requireCommitted) {
+                selectCommittedCandidate(scan.cycles, diagnostics)
+            } else {
+                selectActiveCandidate(scan.cycles, diagnostics)
+            }
+
+            if (candidate != null) {
+                writePointer(file, CyclePointer(candidate.cycleId, candidate.fingerprint))
+                repairActions += "${pointerName}-pointer-reconstructed"
+            } else {
+                diagnostics +=
+                    "${pointerName}-pointer-cleared:${error.message ?: error::class.simpleName}"
+            }
+        }
+    }
+
+    private fun selectActiveCandidate(
+        cycles: List<BootEngineCycle>,
+        diagnostics: MutableList<String>,
+    ): BootEngineCycle? {
+        val candidates = cycles.filterNot { it.terminal }
+        return when (candidates.size) {
+            0 -> null
+            1 -> candidates.single()
+            else -> {
+                diagnostics += "active-cycle-ambiguous:${candidates.size}"
+                null
+            }
+        }
+    }
+
+    private fun selectCommittedCandidate(
+        cycles: List<BootEngineCycle>,
+        diagnostics: MutableList<String>,
+    ): BootEngineCycle? {
+        val committed = cycles.filter { it.state == BootEngineCycleState.COMMITTED }
+        if (committed.isEmpty()) return null
+        val highestRevision = committed.maxOf { requireNotNull(it.productiveHeadRevision) }
+        val newest = committed.filter { it.productiveHeadRevision == highestRevision }
+        return when (newest.size) {
+            1 -> newest.single()
+            else -> {
+                diagnostics += "committed-cycle-ambiguous:${newest.size}:revision-$highestRevision"
+                null
+            }
+        }
+    }
+
+    private fun scanCycleRecordsLocked(): CycleRecordScan {
+        val failures = mutableListOf<String>()
+        val cycles = cycleRecordFilesLocked().mapNotNull { file ->
+            try {
+                readCycleFromRecordFile(file)
+            } catch (error: Exception) {
+                failures += "${file.name}:${error.message ?: error::class.simpleName}"
+                null
+            }
+        }
+        return CycleRecordScan(
+            cycles = cycles.sortedBy { it.cycleId.value },
+            failures = failures.sorted(),
+        )
+    }
+
+    private fun cycleRecordFilesLocked(): List<File> =
+        records.listFiles().orEmpty()
+            .asSequence()
+            .filter { it.isFile }
+            .mapNotNull { file ->
+                when {
+                    file.name.endsWith(RECORD_SUFFIX) -> file
+                    file.name.endsWith(RECORD_SUFFIX + BACKUP_SUFFIX) ->
+                        File(file.path.removeSuffix(BACKUP_SUFFIX))
+                    else -> null
+                }
+            }
+            .distinctBy { it.path }
+            .sortedBy { it.name }
+            .toList()
+
+    private fun quarantinePointerLocked(file: File) {
+        listOf(file, File(file.path + BACKUP_SUFFIX))
+            .filter { it.exists() }
+            .forEach { source ->
+                var index = 0
+                var target = quarantine.resolve("${source.name}.corrupt")
+                while (target.exists()) {
+                    index += 1
+                    target = quarantine.resolve("${source.name}.corrupt.$index")
+                }
+                check(source.renameTo(target)) {
+                    "Could not quarantine BootEngine pointer ${source.name}"
+                }
+            }
+    }
 
     private fun reconcilePointersLocked() {
         val active = readPointerIfPresent(activePointer) ?: return
@@ -191,6 +355,17 @@ class EncryptedBootEngineCycleRepository(
         require(file == recordFile(expectedId)) {
             "BootEngine cycle physical path does not match expected id"
         }
+        val cycle = readCycleFromRecordFile(file)
+        require(cycle.cycleId == expectedId) {
+            "BootEngine cycle payload id does not match physical record path"
+        }
+        return cycle
+    }
+
+    private fun readCycleFromRecordFile(file: File): BootEngineCycle {
+        require(file.parentFile == records) {
+            "BootEngine cycle record must live in the records directory"
+        }
         val plaintext = EncryptedLedgerVaultSupport.decrypt(
             container = EncryptedLedgerVaultSupport.readAtomic(file, MAX_CYCLE_BYTES),
             key = key,
@@ -198,9 +373,6 @@ class EncryptedBootEngineCycleRepository(
             associatedData = recordAssociatedData(file),
         )
         val cycle = BootEngineCycleCodec.decode(plaintext)
-        require(cycle.cycleId == expectedId) {
-            "BootEngine cycle payload id does not match physical record path"
-        }
         require(file == recordFile(cycle.cycleId)) {
             "BootEngine cycle payload/path binding mismatch"
         }
@@ -250,6 +422,9 @@ class EncryptedBootEngineCycleRepository(
         check(records.isDirectory || records.mkdirs()) {
             "BootEngine cycle record directory unavailable"
         }
+        check(quarantine.isDirectory || quarantine.mkdirs()) {
+            "BootEngine cycle quarantine directory unavailable"
+        }
     }
 
     private fun deleteAtomic(file: File) {
@@ -264,6 +439,11 @@ class EncryptedBootEngineCycleRepository(
         MessageDigest.getInstance("SHA-256")
             .digest(value.encodeToByteArray())
             .joinToString("") { "%02x".format(it) }
+
+    private data class CycleRecordScan(
+        val cycles: List<BootEngineCycle>,
+        val failures: List<String>,
+    )
 
     private data class CyclePointer(
         val cycleId: CognitiveCycleId,
@@ -393,9 +573,11 @@ class EncryptedBootEngineCycleRepository(
     private companion object {
         const val ROOT_DIRECTORY = "boot-engine-cycle-vault"
         const val RECORDS_DIRECTORY = "records"
+        const val QUARANTINE_DIRECTORY = "quarantine"
         const val ACTIVE_POINTER = "active.bcycle"
         const val COMMITTED_POINTER = "latest-committed.bcycle"
         const val RECORD_SUFFIX = ".bcycle"
+        const val BACKUP_SUFFIX = ".bak"
         const val KEY_ALIAS = "lifeos.boot.engine.cycle.v1"
         const val MAX_CYCLE_BYTES = 64 * 1024
         const val MAX_POINTER_BYTES = 8 * 1024

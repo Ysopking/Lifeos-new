@@ -238,16 +238,32 @@ data class BootEngineCycle private constructor(
     }
 }
 
+enum class BootEngineCycleStoreHealth {
+    HEALTHY,
+    REPAIRED,
+    DEGRADED,
+    UNRECOVERABLE,
+}
+
 data class BootEngineCycleLoadReport(
     val activeCycle: BootEngineCycle?,
     val latestCommitted: BootEngineCycle?,
     val corrupted: Boolean,
     val message: String?,
+    val health: BootEngineCycleStoreHealth =
+        if (corrupted) BootEngineCycleStoreHealth.UNRECOVERABLE else BootEngineCycleStoreHealth.HEALTHY,
+    val repairActions: List<String> = emptyList(),
 ) {
     init {
         require(message == null || message.isNotBlank())
+        require(corrupted == (health == BootEngineCycleStoreHealth.UNRECOVERABLE)) {
+            "BootEngine cycle corruption flag must match UNRECOVERABLE health"
+        }
         require(!corrupted || message != null) {
             "Corrupted BootEngine cycle report requires a message"
+        }
+        require(repairActions.none { it.isBlank() }) {
+            "BootEngine cycle repair actions must not be blank"
         }
         require(activeCycle == null || !activeCycle.terminal) {
             "Active BootEngine cycle report cannot expose a terminal cycle"
@@ -256,6 +272,11 @@ data class BootEngineCycleLoadReport(
             "Latest committed BootEngine cycle must be COMMITTED"
         }
     }
+
+    val degraded: Boolean
+        get() =
+            health == BootEngineCycleStoreHealth.REPAIRED ||
+                health == BootEngineCycleStoreHealth.DEGRADED
 }
 
 interface BootEngineCycleRepository {
@@ -335,8 +356,8 @@ class BootEngineRuntime(
 
     suspend fun activeCycle(): BootEngineCycle? = mutex.withLock {
         val report = cycles.loadReport()
-        require(!report.corrupted) {
-            "BootEngine cycle recovery required: ${report.message}"
+        require(report.health != BootEngineCycleStoreHealth.UNRECOVERABLE) {
+            "BootEngine cycle store is unrecoverable: ${report.message}"
         }
         report.activeCycle
     }
@@ -508,8 +529,8 @@ class BootEngineRuntime(
             "Productive world head recovery required: ${worldReport.message}"
         }
         val cycleReport = cycles.loadReport()
-        require(!cycleReport.corrupted) {
-            "BootEngine cycle recovery required: ${cycleReport.message}"
+        require(cycleReport.health != BootEngineCycleStoreHealth.UNRECOVERABLE) {
+            "BootEngine cycle store is unrecoverable: ${cycleReport.message}"
         }
         val cycle = cycleReport.activeCycle
             ?: return@withLock BootEngineRecoveryResult.NoActiveCycle

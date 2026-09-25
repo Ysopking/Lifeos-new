@@ -27,6 +27,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class BootEngineRuntimeTest {
     private val observedAt = Instant.parse("2026-09-18T12:00:00Z")
@@ -294,6 +295,53 @@ class BootEngineRuntimeTest {
     }
 
     @Test
+    fun repairedCycleStoreRemainsRecoverable() = runTest {
+        val fixture = fixture()
+        val cycle = fixture.runtime().startCycle(frozenInputs())
+        val repairedRepository = object : BootEngineCycleRepository by fixture.cycles {
+            override suspend fun loadReport(): BootEngineCycleLoadReport =
+                BootEngineCycleLoadReport(
+                    activeCycle = fixture.cycles.loadActive(),
+                    latestCommitted = null,
+                    corrupted = false,
+                    message = "active-pointer-quarantined;active-pointer-reconstructed",
+                    health = BootEngineCycleStoreHealth.REPAIRED,
+                    repairActions = listOf(
+                        "active-pointer-quarantined",
+                        "active-pointer-reconstructed",
+                    ),
+                )
+        }
+
+        val recovered = assertIs<BootEngineRecoveryResult.ResumePrepared>(
+            fixture.runtime(cycleRepository = repairedRepository).recover()
+        )
+
+        assertEquals(cycle.cycleId, recovered.cycle.cycleId)
+    }
+
+    @Test
+    fun unrecoverableCycleStoreFailsClosedBeforeRecovery() = runTest {
+        val fixture = fixture()
+        val unavailableRepository = object : BootEngineCycleRepository by fixture.cycles {
+            override suspend fun loadReport(): BootEngineCycleLoadReport =
+                BootEngineCycleLoadReport(
+                    activeCycle = null,
+                    latestCommitted = null,
+                    corrupted = true,
+                    message = "boot-engine-cycle-unrecoverable",
+                    health = BootEngineCycleStoreHealth.UNRECOVERABLE,
+                )
+        }
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            fixture.runtime(cycleRepository = unavailableRepository).recover()
+        }
+
+        assertTrue(failure.message.orEmpty().contains("unrecoverable"))
+    }
+
+    @Test
     fun changedFrozenContextIsRejectedInsideActiveCycle() = runTest {
         val fixture = fixture()
         val runtime = fixture.runtime()
@@ -425,8 +473,9 @@ class BootEngineRuntimeTest {
 
         fun runtime(
             perceptionBindingValidator: BootEnginePerceptionBindingValidator? = null,
+            cycleRepository: BootEngineCycleRepository = cycles,
         ): BootEngineRuntime = BootEngineRuntime(
-            cycles = cycles,
+            cycles = cycleRepository,
             worldHeads = heads,
             worldCoordinator = coordinator,
             worldCommitter = ProductiveWorldHeadCommitter(snapshots, heads),
