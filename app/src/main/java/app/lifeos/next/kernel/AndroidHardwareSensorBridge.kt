@@ -16,6 +16,9 @@ import app.lifeos.core.runtime.life.SensorDescriptor
 import app.lifeos.core.runtime.life.SensorId
 import app.lifeos.core.runtime.life.SensorAttentionMode
 import app.lifeos.core.runtime.policy.OwnerObservationType
+import app.lifeos.core.runtime.world.SensorAttentionCoverageProfile
+import app.lifeos.core.runtime.world.SensorStateDimensionSelector
+import app.lifeos.core.runtime.world.SensorStateDimensionSelectorType
 import java.time.Clock
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -58,6 +61,41 @@ internal class AndroidHardwareSensorBridge(
         supportedSurfaces = setOf(ObservationSurfaceKind.SENSOR),
         defaultMode = SensorAttentionMode.EVENT_DRIVEN,
     )
+    internal val attentionCoverage = SensorAttentionCoverageProfile(
+        sensorId = descriptor.sensorId,
+        stateDimensions = listOf(
+            SensorStateDimensionSelector(
+                SensorStateDimensionSelectorType.PREFIX,
+                "device.motion.",
+            ),
+            SensorStateDimensionSelector(
+                SensorStateDimensionSelectorType.PREFIX,
+                "device.orientation.",
+            ),
+            SensorStateDimensionSelector(
+                SensorStateDimensionSelectorType.PREFIX,
+                "device.proximity.",
+            ),
+            SensorStateDimensionSelector(
+                SensorStateDimensionSelectorType.PREFIX,
+                "device.environment.",
+            ),
+        ).sortedWith(compareBy({ it.type.name }, { it.value })),
+        observationContracts = setOf(
+            "device.motion.readback",
+            "device.orientation.readback",
+            "device.proximity.readback",
+            "device.environment.readback",
+        ),
+        informationGainMicros = 650_000L,
+        goalRelevanceMicros = 500_000L,
+        verificationValueMicros = 700_000L,
+        energyCostMicros = 350_000L,
+        privacyCostMicros = 250_000L,
+        latencyCostMicros = 150_000L,
+        resourceCostMicros = 250_000L,
+    )
+
     private val observationFactory =
         HardwareSensorObservationFactory(descriptor.sensorId)
     private val started = AtomicBoolean(false)
