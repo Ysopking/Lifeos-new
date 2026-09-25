@@ -13,6 +13,7 @@ internal enum class PermissionSpecialAccess {
     BROAD_FILE_ACCESS,
     NOTIFICATION_LISTENER,
     APP_USAGE_STATS,
+    ACCESSIBILITY_SERVICE,
 }
 
 internal data class PermissionProfile(
@@ -164,6 +165,7 @@ internal object PrivatePermissionProfiles {
 
     fun assistantAccess(
         usageStatsPermission: String? = null,
+        semanticAppContentAccess: Boolean = false,
     ): PermissionProfile =
         PermissionProfile(
             id = PermissionProfileId.ASSISTANT_ACCESS,
@@ -171,6 +173,9 @@ internal object PrivatePermissionProfiles {
                 add(PermissionSpecialAccess.NOTIFICATION_LISTENER)
                 usageStatsPermission?.let {
                     add(PermissionSpecialAccess.APP_USAGE_STATS)
+                }
+                if (semanticAppContentAccess) {
+                    add(PermissionSpecialAccess.ACCESSIBILITY_SERVICE)
                 }
             },
             manifestPermissions =
@@ -180,6 +185,9 @@ internal object PrivatePermissionProfiles {
                 add("owner-authorized-notification-observation")
                 usageStatsPermission?.let {
                     add("owner-authorized-app-usage-observation")
+                }
+                if (semanticAppContentAccess) {
+                    add("owner-authorized-semantic-app-content-observation")
                 }
             },
         )
