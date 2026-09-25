@@ -6,6 +6,8 @@ import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.health.SelfHealingIncidentSnapshot
 import app.lifeos.core.runtime.life.InitialDataBootstrapRuntime
 import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
+import app.lifeos.core.runtime.reasoning.MetaRealizationShadowRuntime
+import app.lifeos.core.runtime.reasoning.MetaRealizationShadowRuntimeRegistry
 import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
 import app.lifeos.core.runtime.self.SelfObservationCapture
 import app.lifeos.core.runtime.self.SelfObservationCoordinator
@@ -18,6 +20,7 @@ internal data class LifeOsCriticalApplicationRuntime(
     val selfObservationRuntime: SelfObservationRuntime,
     val selfObservationCoordinator: SelfObservationCoordinator,
     val selfObservationController: SelfObservationProcessController,
+    val metaRealizationShadowRuntime: MetaRealizationShadowRuntime,
     val initialDataSources: AndroidInitialDataSourceCatalog,
     val initialDataBootstrap: InitialDataBootstrapRuntime,
     val initialDataController: InitialDataProcessController,
@@ -54,6 +57,8 @@ internal object LifeOsCriticalApplicationRuntimeFactory {
             },
             onFailure = onLiveSourceFailure,
         )
+        val metaRealizationShadowRuntime = MetaRealizationShadowRuntime()
+        MetaRealizationShadowRuntimeRegistry.install(metaRealizationShadowRuntime)
         val selfObservation = SelfObservationRuntime(
             photonIndex = installed.kernel.photonStore::indexReport,
             memorySnapshot = installed.lifeMemoryRuntime::current,
@@ -93,6 +98,7 @@ internal object LifeOsCriticalApplicationRuntimeFactory {
             selfObservationRuntime = selfObservation,
             selfObservationCoordinator = selfCoordinator,
             selfObservationController = selfController,
+            metaRealizationShadowRuntime = metaRealizationShadowRuntime,
             initialDataSources = dataSources,
             initialDataBootstrap = dataBootstrap,
             initialDataController = dataController,

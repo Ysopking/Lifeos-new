@@ -8,6 +8,7 @@ import app.lifeos.core.runtime.life.InitialDataBootstrapRuntime
 import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
+import app.lifeos.core.runtime.reasoning.MetaRealizationShadowRuntime
 import app.lifeos.core.runtime.self.SelfObservationCoordinator
 import app.lifeos.core.runtime.self.SelfObservationDecisionTraceRecorder
 import app.lifeos.core.runtime.self.SelfObservationTrigger
@@ -68,6 +69,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
 
     private lateinit var selfObservationDecisionTraceRecorder: SelfObservationDecisionTraceRecorder
     private lateinit var selfObservationController: SelfObservationProcessController
+    internal lateinit var metaRealizationShadowRuntime: MetaRealizationShadowRuntime
+        private set
 
     lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
         private set
@@ -216,6 +219,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         selfObservationRuntime = applicationRuntime.selfObservationRuntime
         selfObservationCoordinator = applicationRuntime.selfObservationCoordinator
         selfObservationController = applicationRuntime.selfObservationController
+        metaRealizationShadowRuntime = applicationRuntime.metaRealizationShadowRuntime
         initialDataSources = applicationRuntime.initialDataSources
         initialDataBootstrap = applicationRuntime.initialDataBootstrap
         initialDataController = applicationRuntime.initialDataController
