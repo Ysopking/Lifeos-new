@@ -3,11 +3,13 @@ package app.lifeos.next
 import android.Manifest
 import android.app.AppOpsManager
 import android.app.Application
+import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.os.Process
+import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 
 internal class PrivatePermissionController(
@@ -126,6 +128,7 @@ internal class PrivatePermissionController(
     private fun assistantAccessProfile(): PermissionProfile =
         PrivatePermissionProfiles.assistantAccess(
             usageStatsPermission = Manifest.permission.PACKAGE_USAGE_STATS,
+            semanticAppContentAccess = true,
         )
 
     private fun evaluate(profile: PermissionProfile): PermissionProfileEvaluation =
@@ -139,6 +142,7 @@ internal class PrivatePermissionController(
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     PermissionSpecialAccess.NOTIFICATION_LISTENER -> true
                     PermissionSpecialAccess.APP_USAGE_STATS -> true
+                    PermissionSpecialAccess.ACCESSIBILITY_SERVICE -> true
                 }
             },
             specialAccessGranted = { special ->
@@ -162,7 +166,25 @@ internal class PrivatePermissionController(
                         } catch (_: RuntimeException) {
                             false
                         }
+                    PermissionSpecialAccess.ACCESSIBILITY_SERVICE ->
+                        semanticAccessibilityServiceEnabled()
                 }
             },
         ).evaluate(profile)
+
+    private fun semanticAccessibilityServiceEnabled(): Boolean {
+        val expected = ComponentName(
+            application,
+            LifeOsSemanticAccessibilityService::class.java,
+        )
+        val enabled = Settings.Secure.getString(
+            application.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        ).orEmpty()
+        return enabled
+            .split(':')
+            .asSequence()
+            .mapNotNull(ComponentName::unflattenFromString)
+            .any { it == expected }
+    }
 }
