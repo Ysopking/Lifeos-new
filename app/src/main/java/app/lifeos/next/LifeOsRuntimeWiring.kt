@@ -103,7 +103,9 @@ internal object LifeOsRuntimeWiring {
         LifeOsStartupStage.GOAL_EXECUTION,
         LifeOsStartupStage.KERNEL_BOOT,
         LifeOsStartupStage.COGNITIVE_STATE_READY,
-        LifeOsStartupStage.RUNTIME_STARTED -> error("Stage $stage does not own subsystem manifests")
+        LifeOsStartupStage.RUNTIME_STARTED,
+        LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP ->
+            error("Stage $stage does not own subsystem manifests")
     }
 
     internal fun clearForTests() = synchronized(lock) {
