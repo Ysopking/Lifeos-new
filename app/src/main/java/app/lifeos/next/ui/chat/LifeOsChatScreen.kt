@@ -104,7 +104,10 @@ fun LifeOsChatScreen(
 
         ChatClarificationReplies(
             options = state.clarificationOptions,
-            onReply = model::answerClarification,
+            onReply = { option ->
+                model.editDraft(option)
+                model.sendMessage()
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = LifeOsTokens.Spacing.xSmall),
