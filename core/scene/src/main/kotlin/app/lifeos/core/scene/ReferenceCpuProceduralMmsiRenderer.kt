@@ -50,7 +50,9 @@ class ReferenceCpuProceduralMmsiRenderer(
             for (pixel in rowStart until rowEnd) {
                 val out = pixel * 4
                 rgba[out + 3] = 0xff.toByte()
-                if (!buffers.isCovered(pixel)) continue
+                // Pixel loop already bounds the index; avoid MmsiSceneRasterBuffers.isCovered()'s
+                // per-pixel defensive range check on this Product Gold hot path.
+                if (buffers.depth[pixel] >= 1f) continue
 
                 val albedoBase = pixel * 4
                 val normalBase = pixel * 3
