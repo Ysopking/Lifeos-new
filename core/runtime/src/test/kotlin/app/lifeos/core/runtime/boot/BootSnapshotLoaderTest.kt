@@ -22,7 +22,10 @@ import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.capability.TrustLevel
 import java.time.Instant
 import java.util.concurrent.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -158,6 +161,104 @@ class BootSnapshotLoaderTest {
 
         assertEquals("checkpoint-1", first.checkpoints.single().id.value)
         assertNotEquals(first.generationId, second.generationId)
+    }
+
+    @Test
+    fun independentSnapshotSourcesMayLoadConcurrentlyWithoutChangingCanonicalResult() = runTest {
+        val secondStarted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val concurrentLoader = BootSnapshotLoader(
+            photons = BootPhotonSource {
+                withTimeout(1_000) { secondStarted.await() }
+                release.await()
+                PhotonLoadReport(listOf(photon("p", "parallel")), emptyList())
+            },
+            tasks = BootTaskSource {
+                secondStarted.complete(Unit)
+                release.await()
+                TaskLoadReport(listOf(task("task-parallel")), emptyList())
+            },
+            checkpoints = BootCheckpointSource {
+                release.await()
+                CheckpointLoadReport(emptyList(), emptyList())
+            },
+            capabilities = BootCapabilityStateSource {
+                release.await()
+                emptyList()
+            },
+            tools = BootToolStateSource {
+                release.await()
+                emptyList()
+            },
+            fieldSnapshots = BootFieldSnapshotSource {
+                release.await()
+                FieldSnapshotLoadReport(emptyList(), emptyList())
+            },
+            now = { t0 },
+        )
+
+        val loading = async { concurrentLoader.load() }
+        withTimeout(1_000) { secondStarted.await() }
+        release.complete(Unit)
+        val snapshot = loading.await()
+
+        assertEquals("p", snapshot.photons.single().id.value)
+        assertEquals("task-parallel", snapshot.tasks.single().id.value)
+    }
+
+    @Test
+    fun readOnceUsesPerKeySingleFlightInsteadOfSerializingIndependentReads() = runTest {
+        val session = BootReadSession(loader())
+        val secondStarted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+
+        val first = async {
+            session.readOnce("first") {
+                withTimeout(1_000) { secondStarted.await() }
+                release.await()
+                "one"
+            }
+        }
+        val second = async {
+            session.readOnce("second") {
+                secondStarted.complete(Unit)
+                release.await()
+                "two"
+            }
+        }
+
+        withTimeout(1_000) { secondStarted.await() }
+        release.complete(Unit)
+
+        assertEquals("one", first.await())
+        assertEquals("two", second.await())
+    }
+
+    @Test
+    fun sameReadOnceKeyExecutesUnderlyingReadOnlyOnce() = runTest {
+        val session = BootReadSession(loader())
+        var reads = 0
+        val release = CompletableDeferred<Unit>()
+
+        val first = async {
+            session.readOnce("shared") {
+                reads += 1
+                release.await()
+                "value"
+            }
+        }
+        val second = async {
+            session.readOnce("shared") {
+                reads += 1
+                "unexpected"
+            }
+        }
+
+        release.complete(Unit)
+
+        assertEquals("value", first.await())
+        assertEquals("value", second.await())
+        assertEquals(1, reads)
     }
 
     @Test

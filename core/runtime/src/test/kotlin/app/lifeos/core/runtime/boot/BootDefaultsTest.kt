@@ -2,7 +2,9 @@ package app.lifeos.core.runtime.boot
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -28,6 +30,43 @@ class BootDefaultsTest {
         ).verify()
         assertFalse(fatal.canBootNormally)
         assertFalse(fatal.requiresRecovery)
+    }
+
+    @Test
+    fun compositeStoreVerifierRunsIndependentProbesConcurrentlyAndSortsResults() = runTest {
+        val secondStarted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val verifier = CompositeStoreVerifier(
+            probes = listOf(
+                object : StoreProbe {
+                    override val storeId = "z-first"
+                    override suspend fun probe(): StoreStatus {
+                        withTimeout(1_000) { secondStarted.await() }
+                        release.await()
+                        return StoreStatus(storeId, StoreState.HEALTHY)
+                    }
+                },
+                object : StoreProbe {
+                    override val storeId = "a-second"
+                    override suspend fun probe(): StoreStatus {
+                        secondStarted.complete(Unit)
+                        release.await()
+                        return StoreStatus(storeId, StoreState.HEALTHY)
+                    }
+                },
+            ),
+            maxConcurrentProbes = 2,
+        )
+
+        val verification = kotlinx.coroutines.async {
+            verifier.verify()
+        }
+        withTimeout(1_000) { secondStarted.await() }
+        release.complete(Unit)
+        val result = verification.await()
+
+        assertEquals(listOf("a-second", "z-first"), result.stores.map { it.storeId })
+        assertTrue(result.canBootNormally)
     }
 
     @Test

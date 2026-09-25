@@ -1,6 +1,11 @@
 package app.lifeos.core.runtime.boot
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 interface StoreProbe {
     val storeId: String
@@ -9,29 +14,36 @@ interface StoreProbe {
 
 class CompositeStoreVerifier(
     private val probes: List<StoreProbe>,
+    private val maxConcurrentProbes: Int = DEFAULT_MAX_CONCURRENT_PROBES,
 ) : StoreVerifier {
     init {
         require(probes.map { it.storeId }.distinct().size == probes.size) {
             "Store probe ids must be unique"
         }
+        require(maxConcurrentProbes in 1..MAX_CONCURRENT_PROBES) {
+            "Store verifier concurrency must be bounded"
+        }
     }
 
-    override suspend fun verify(): StoreVerificationResult {
-        val statuses = mutableListOf<StoreStatus>()
-        for (probe in probes) {
-            val status = try {
-                probe.probe()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                StoreStatus(
-                    storeId = probe.storeId,
-                    state = StoreState.UNAVAILABLE,
-                    message = error.message ?: error::class.simpleName,
-                )
+    override suspend fun verify(): StoreVerificationResult = coroutineScope {
+        val semaphore = Semaphore(maxConcurrentProbes)
+        val statuses = probes.map { probe ->
+            async {
+                semaphore.withPermit {
+                    try {
+                        probe.probe()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        StoreStatus(
+                            storeId = probe.storeId,
+                            state = StoreState.UNAVAILABLE,
+                            message = error.message ?: error::class.simpleName,
+                        )
+                    }
+                }
             }
-            statuses += status
-        }
+        }.awaitAll().sortedBy { it.storeId }
 
         val fatal = statuses.any { it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH }
         val recoverable = statuses.any {
@@ -40,11 +52,16 @@ class CompositeStoreVerifier(
                 it.state == StoreState.LOCKED ||
                 it.state == StoreState.UNAVAILABLE
         }
-        return StoreVerificationResult(
+        StoreVerificationResult(
             stores = statuses,
             canBootNormally = !fatal && !recoverable,
             requiresRecovery = !fatal && recoverable,
         )
+    }
+
+    private companion object {
+        const val DEFAULT_MAX_CONCURRENT_PROBES = 4
+        const val MAX_CONCURRENT_PROBES = 16
     }
 }
 
