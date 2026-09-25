@@ -2,6 +2,7 @@ package app.lifeos.next
 
 import android.app.Application
 import app.lifeos.core.data.LiveSourceSyncSnapshot
+import app.lifeos.core.runtime.boot.RuntimeAvailability
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
 import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.life.DurableLifeMemoryRuntime
@@ -132,7 +133,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         PrivatePermissionController(
             application = this,
             initialDataSources = { initialDataSources },
-            startupReady = { startupState.value.ready },
+            startupReady = { startupState.value.actionable },
         )
     }
 
@@ -141,10 +142,15 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         startupScope.launch {
             try {
                 initializeRuntime()
-                mutableStartupState.value = LifeOsProcessStartupState.ready()
-                refreshInitialDataBootstrap()
-                refreshLiveSources()
-                refreshStorageIntelligence()
+                val availability = kernel.bootstrapState.value.availability
+                mutableStartupState.value = LifeOsProcessStartupState.ready(availability)
+                if (availability == RuntimeAvailability.FULL ||
+                    availability == RuntimeAvailability.DEGRADED
+                ) {
+                    refreshInitialDataBootstrap()
+                    refreshLiveSources()
+                    refreshStorageIntelligence()
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -244,8 +250,10 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                 mutableSelfObservationAnalysis.value = analysis
             },
         )
-        selfObservationController.start()
-        liveSourceController.startContinuousRefresh()
+        if (kernel.bootstrapState.value.actionable) {
+            selfObservationController.start()
+            liveSourceController.startContinuousRefresh()
+        }
 
         initialDataSources = AndroidInitialDataSourceCatalog(this)
         initialDataBootstrap = InitialDataBootstrapRuntime(
@@ -255,7 +263,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         )
         initialDataController = InitialDataProcessController(
             bootstrap = { initialDataBootstrap },
-            startupReady = { startupState.value.ready },
+            startupReady = { startupState.value.actionable },
             onSnapshot = { snapshot ->
                 latestInitialDataBootstrap = snapshot
             },
@@ -266,21 +274,25 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     fun refreshSelfObservation() {
+        if (!startupState.value.actionable) return
         if (!::selfObservationController.isInitialized) return
         selfObservationController.refresh()
     }
 
     internal fun requestSelfObservation(trigger: SelfObservationTrigger) {
+        if (!startupState.value.actionable) return
         if (!::selfObservationController.isInitialized) return
         selfObservationController.request(trigger)
     }
 
     fun refreshStorageIntelligence() {
+        if (!startupState.value.actionable) return
         if (!::storageIntelligenceController.isInitialized) return
         storageIntelligenceController.refresh()
     }
 
     fun refreshLiveSources() {
+        if (!startupState.value.actionable) return
         if (::liveSourceController.isInitialized) {
             liveSourceController.refresh()
         }
@@ -302,6 +314,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         permissionController.hasBroadFileAccess()
 
     fun refreshInitialDataBootstrap() {
+        if (!startupState.value.actionable) return
         if (!::initialDataController.isInitialized) return
         initialDataController.refresh()
     }

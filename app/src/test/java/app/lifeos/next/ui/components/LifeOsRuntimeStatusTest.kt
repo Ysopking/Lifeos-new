@@ -158,6 +158,29 @@ class LifeOsRuntimeStatusTest {
     }
 
     @Test
+    fun readOnlyBootIsVisibleAsDegradedNotFailed() {
+        val model = buildRuntimeHealthUiModel(
+            KernelBootstrapStatus.READ_ONLY,
+            healthyReadiness(),
+            healthyTopology(),
+        )
+        assertEquals(RuntimeHealthLevel.DEGRADED, model.level)
+        assertEquals("Nur Lesen", model.bootLabel)
+        assertTrue(model.summary.contains("lesbar"))
+    }
+
+    @Test
+    fun safeModeNeverMapsReady() {
+        val model = buildRuntimeHealthUiModel(
+            KernelBootstrapStatus.SAFE_MODE,
+            healthyReadiness(),
+            healthyTopology(),
+        )
+        assertEquals(RuntimeHealthLevel.DEGRADED, model.level)
+        assertFalse(model.level == RuntimeHealthLevel.READY)
+    }
+
+    @Test
     fun fullyHealthyEvidenceMapsReady() {
         val model = buildRuntimeHealthUiModel(
             KernelBootstrapStatus.READY,

@@ -303,18 +303,27 @@ class LifeOsKernel internal constructor(
 
     fun stop(): Job = bootLifecycle.stop()
 
+    fun requireReadable() = bootLifecycle.requireReadable()
+
     fun requireCognitiveReady() = bootLifecycle.requireCognitiveReady()
 
+    fun requireEffectReady(action: String = "Owner effect") =
+        bootLifecycle.requireEffectReady(action)
+
     /** Single kernel-owned conversation entrypoint. */
-    suspend fun submitConversationTurn(photon: Photon): ConversationTurnResult =
-        conversationTurns.submitConversationTurn(photon)
+    suspend fun submitConversationTurn(photon: Photon): ConversationTurnResult {
+        requireEffectReady("Conversation submission")
+        return conversationTurns.submitConversationTurn(photon)
+    }
 
     /**
      * Persists the exact utterance and executes the existing semantic/action path through the
      * extracted conversation coordinator.
      */
-    suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult =
-        conversationTurns.persistUserUtterance(photon)
+    suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
+        requireEffectReady("User utterance persistence")
+        return conversationTurns.persistUserUtterance(photon)
+    }
 
     suspend fun generateExplicitlyApprovedTool(gap: CapabilityGap): GeneratedToolUserActionResult {
         bootLifecycle.requireCompletedBoot("Generated-tool action")

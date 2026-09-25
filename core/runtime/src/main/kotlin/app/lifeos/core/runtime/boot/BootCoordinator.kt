@@ -25,6 +25,7 @@ class BootCoordinator(
             bootId = newBootId(),
             startedAt = now(),
             state = BootState.NOT_STARTED,
+            availability = RuntimeAvailability.RECOVERY,
         )
 
         suspend fun transition(
@@ -52,7 +53,12 @@ class BootCoordinator(
                 val failures = stores.stores
                     .filter { it.state != StoreState.HEALTHY }
                     .map { "${it.storeId}:${it.state}" }
-                transition(BootState.FAILED) { it.copy(failures = it.failures + failures) }
+                transition(BootState.FAILED) {
+                    it.copy(
+                        availability = RuntimeAvailability.SAFE_MODE,
+                        failures = it.failures + failures,
+                    )
+                }
                 return BootRunResult.Failed(
                     snapshot,
                     IllegalStateException("Store verification prevents boot"),
@@ -123,27 +129,38 @@ class BootCoordinator(
                 }
             ) {
                 BootValidationResult.Ready -> {
-                    transition(BootState.READY)
+                    transition(BootState.READY) {
+                        it.copy(availability = RuntimeAvailability.FULL)
+                    }
                     BootRunResult.Ready(snapshot, context)
                 }
 
                 is BootValidationResult.Degraded -> {
                     transition(BootState.DEGRADED) {
-                        it.copy(warnings = it.warnings + validation.limitations.sorted())
+                        it.copy(
+                            availability = RuntimeAvailability.DEGRADED,
+                            warnings = it.warnings + validation.limitations.sorted(),
+                        )
                     }
                     BootRunResult.Degraded(snapshot, context)
                 }
 
                 is BootValidationResult.RecoveryRequired -> {
                     transition(BootState.RECOVERING) {
-                        it.copy(failures = it.failures + validation.failures)
+                        it.copy(
+                            availability = RuntimeAvailability.READ_ONLY,
+                            failures = it.failures + validation.failures,
+                        )
                     }
                     BootRunResult.RecoveryRequired(snapshot, context)
                 }
 
                 is BootValidationResult.Fatal -> {
                     transition(BootState.FAILED) {
-                        it.copy(failures = it.failures + validation.reason)
+                        it.copy(
+                            availability = RuntimeAvailability.SAFE_MODE,
+                            failures = it.failures + validation.reason,
+                        )
                     }
                     BootRunResult.Failed(
                         snapshot,
@@ -155,7 +172,10 @@ class BootCoordinator(
             throw cancelled
         } catch (error: Throwable) {
             transition(BootState.FAILED) {
-                it.copy(failures = it.failures + (error.message ?: error::class.simpleName.orEmpty()))
+                it.copy(
+                    availability = RuntimeAvailability.SAFE_MODE,
+                    failures = it.failures + (error.message ?: error::class.simpleName.orEmpty()),
+                )
             }
             BootRunResult.Failed(snapshot, error)
         }

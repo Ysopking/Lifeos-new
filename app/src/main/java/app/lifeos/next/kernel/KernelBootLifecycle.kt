@@ -43,10 +43,13 @@ internal class KernelBootLifecycle(
 
     fun retryBootstrap(): Job = synchronized(startLock) {
         val existing = bootstrapJob
-        if (
-            mutableBootstrapState.value.status != KernelBootstrapStatus.FAILED &&
-            existing != null
-        ) {
+        val retryable = mutableBootstrapState.value.status in setOf(
+            KernelBootstrapStatus.READ_ONLY,
+            KernelBootstrapStatus.RECOVERY,
+            KernelBootstrapStatus.SAFE_MODE,
+            KernelBootstrapStatus.FAILED,
+        )
+        if (!retryable && existing != null) {
             existing
         } else {
             scope.launch {
@@ -60,8 +63,26 @@ internal class KernelBootLifecycle(
             bootstrapJob?.cancel()
             bootstrapJob = null
         }
-        bootEngineRuntime.recover()
+        if (mutableBootstrapState.value.actionable) {
+            bootEngineRuntime.recover()
+        }
         supervisor.stop()
+    }
+
+    fun requireReadable() {
+        val bootstrap = mutableBootstrapState.value
+        require(bootstrap.readable) {
+            buildString {
+                append("Runtime state is not readable: ")
+                append(bootstrap.status)
+                bootstrap.failureMessage
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let {
+                        append(" · ")
+                        append(it)
+                    }
+            }
+        }
     }
 
     fun requireCognitiveReady() {
@@ -84,13 +105,14 @@ internal class KernelBootLifecycle(
         }
     }
 
-    fun requireCompletedBoot(action: String) {
-        require(
-            mutableBootstrapState.value.status == KernelBootstrapStatus.READY ||
-                mutableBootstrapState.value.status == KernelBootstrapStatus.DEGRADED
-        ) {
-            "$action requires a completed kernel boot"
+    fun requireEffectReady(action: String = "Owner effect") {
+        require(mutableBootstrapState.value.actionable) {
+            "$action requires writable runtime availability"
         }
+    }
+
+    fun requireCompletedBoot(action: String) {
+        requireEffectReady(action)
     }
 
     fun onPhotonPersisted(photon: Photon) {
@@ -135,20 +157,17 @@ internal class KernelBootLifecycle(
                     degraded = true,
                 )
 
-                is BootRunResult.RecoveryRequired -> {
-                    mutableBootstrapState.value = KernelBootstrapState(
-                        status = KernelBootstrapStatus.FAILED,
-                        unreadableFiles = result.context.photons.unreadableFiles.size,
-                        warnings = result.snapshot.warnings,
-                        failureMessage = result.snapshot.failures
-                            .joinToString("; ")
-                            .ifBlank { "Runtime recovery is required" },
-                    )
-                }
+                is BootRunResult.RecoveryRequired -> completeReadOnlyBoot(
+                    context = result.context,
+                    warnings = result.snapshot.warnings,
+                    failureMessage = result.snapshot.failures
+                        .joinToString("; ")
+                        .ifBlank { "Runtime recovery is required" },
+                )
 
                 is BootRunResult.Failed -> {
                     mutableBootstrapState.value = KernelBootstrapState(
-                        status = KernelBootstrapStatus.FAILED,
+                        status = KernelBootstrapStatus.SAFE_MODE,
                         warnings = result.snapshot.warnings,
                         failureMessage =
                             result.cause.message ?: result.cause::class.simpleName,
@@ -168,11 +187,28 @@ internal class KernelBootLifecycle(
             runCatching { supervisor.stop() }
             mutableBootstrapState.update {
                 it.copy(
-                    status = KernelBootstrapStatus.FAILED,
+                    status = KernelBootstrapStatus.SAFE_MODE,
                     failureMessage = error.message ?: error::class.simpleName,
                 )
             }
         }
+    }
+
+    private fun completeReadOnlyBoot(
+        context: BootContext,
+        warnings: List<String>,
+        failureMessage: String,
+    ) {
+        val runtimePhotons = context.photons.hot + context.photons.warm
+        runtimePhotons.forEach { matrix.influence(it) }
+
+        mutableBootstrapState.value = KernelBootstrapState(
+            status = KernelBootstrapStatus.READ_ONLY,
+            photons = context.photons.allPhotons,
+            unreadableFiles = context.photons.unreadableFiles.size,
+            warnings = warnings,
+            failureMessage = failureMessage,
+        )
     }
 
     private suspend fun completeBoot(

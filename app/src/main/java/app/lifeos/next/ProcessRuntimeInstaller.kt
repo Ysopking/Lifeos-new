@@ -403,18 +403,20 @@ internal class ProcessRuntimeInstaller(
                     )
                     selfHealingRuntime.verifyLedgerIntegrity()
                     escalationRuntime.verifyLedgerIntegrity()
-                    LifeOsHealthPhotonBridge.start(
-                        scope = selfHealingScope,
-                        graph = healthGraph,
-                        persist = { photon ->
-                            photonIngress.ingest(
-                                photon,
-                                PhotonIngressMode.ORIGIN,
-                            )
-                            Unit
-                        },
-                    )
-                    escalationRuntime.orchestrator.start()
+                    if (kernel.bootstrapState.value.actionable) {
+                        LifeOsHealthPhotonBridge.start(
+                            scope = selfHealingScope,
+                            graph = healthGraph,
+                            persist = { photon ->
+                                photonIngress.ingest(
+                                    photon,
+                                    PhotonIngressMode.ORIGIN,
+                                )
+                                Unit
+                            },
+                        )
+                        escalationRuntime.orchestrator.start()
+                    }
                 },
                 installDurableGoalPlanRuntime = {
                     DurableGoalPlanRuntimeRegistry.install(
@@ -439,10 +441,12 @@ internal class ProcessRuntimeInstaller(
                 },
                 startKernel = {
                     kernel.start().join()
-                    productivePerceptionContext.start()
+                    if (kernel.bootstrapState.value.actionable) {
+                        productivePerceptionContext.start()
+                    }
                 },
                 requireCognitiveStateReady = {
-                    kernel.requireCognitiveReady()
+                    kernel.requireReadable()
                 },
                 stageObserver = { event ->
                     if (event is LifeOsStartupStageEvent.Completed) {
