@@ -1,6 +1,9 @@
 package app.lifeos.core.data.boot
 
 import android.content.Context
+import app.lifeos.core.data.security.DurableSchemaDescriptor
+import app.lifeos.core.data.security.DurableSchemaGenerationStore
+import app.lifeos.core.data.security.DurableSchemaSource
 import app.lifeos.core.data.security.EncryptedLedgerVaultSupport
 import app.lifeos.core.runtime.boot.BootEngineCycle
 import app.lifeos.core.runtime.boot.BootEngineCycleLoadReport
@@ -26,10 +29,17 @@ class EncryptedBootEngineCycleRepository(
     context: Context,
 ) : BootEngineCycleRepository {
     private val root = context.filesDir.resolve(ROOT_DIRECTORY)
-    private val records = root.resolve(RECORDS_DIRECTORY)
-    private val quarantine = root.resolve(QUARANTINE_DIRECTORY)
-    private val activePointer = root.resolve(ACTIVE_POINTER)
-    private val committedPointer = root.resolve(COMMITTED_POINTER)
+    private val schemaStore = DurableSchemaGenerationStore(
+        root = root,
+        descriptor = SCHEMA_DESCRIPTOR,
+    )
+    @Volatile
+    private var layoutPrepared: Boolean = false
+    private lateinit var dataRoot: File
+    private lateinit var records: File
+    private lateinit var quarantine: File
+    private lateinit var activePointer: File
+    private lateinit var committedPointer: File
     private val key: SecretKey by lazy {
         EncryptedLedgerVaultSupport.loadOrCreateKey(KEY_ALIAS)
     }
@@ -279,7 +289,10 @@ class EncryptedBootEngineCycleRepository(
     }
 
     private fun cycleRecordFilesLocked(): List<File> =
-        records.listFiles().orEmpty()
+        cycleRecordFiles(records)
+
+    private fun cycleRecordFiles(recordsRoot: File): List<File> =
+        recordsRoot.listFiles().orEmpty()
             .asSequence()
             .filter { it.isFile }
             .mapNotNull { file ->
@@ -336,14 +349,21 @@ class EncryptedBootEngineCycleRepository(
         return cycle
     }
 
-    private fun writeCycle(cycle: BootEngineCycle) {
-        val file = recordFile(cycle.cycleId)
+    private fun writeCycle(cycle: BootEngineCycle) =
+        writeCycle(cycle, currentLayout(), legacy = false)
+
+    private fun writeCycle(
+        cycle: BootEngineCycle,
+        layout: StoreLayout,
+        legacy: Boolean,
+    ) {
+        val file = recordFile(cycle.cycleId, layout)
         val plaintext = BootEngineCycleCodec.encode(cycle)
         val encrypted = EncryptedLedgerVaultSupport.encrypt(
             plaintext = plaintext,
             key = key,
             maxPlaintextBytes = MAX_CYCLE_BYTES,
-            associatedData = recordAssociatedData(file),
+            associatedData = recordAssociatedData(file, layout, legacy),
         )
         EncryptedLedgerVaultSupport.atomicWrite(file, encrypted)
     }
@@ -362,18 +382,25 @@ class EncryptedBootEngineCycleRepository(
         return cycle
     }
 
-    private fun readCycleFromRecordFile(file: File): BootEngineCycle {
-        require(file.parentFile == records) {
+    private fun readCycleFromRecordFile(file: File): BootEngineCycle =
+        readCycleFromRecordFile(file, currentLayout(), legacy = false)
+
+    private fun readCycleFromRecordFile(
+        file: File,
+        layout: StoreLayout,
+        legacy: Boolean,
+    ): BootEngineCycle {
+        require(file.parentFile == layout.records) {
             "BootEngine cycle record must live in the records directory"
         }
         val plaintext = EncryptedLedgerVaultSupport.decrypt(
             container = EncryptedLedgerVaultSupport.readAtomic(file, MAX_CYCLE_BYTES),
             key = key,
             maxPlaintextBytes = MAX_CYCLE_BYTES,
-            associatedData = recordAssociatedData(file),
+            associatedData = recordAssociatedData(file, layout, legacy),
         )
         val cycle = BootEngineCycleCodec.decode(plaintext)
-        require(file == recordFile(cycle.cycleId)) {
+        require(file == recordFile(cycle.cycleId, layout)) {
             "BootEngine cycle payload/path binding mismatch"
         }
         return cycle
@@ -382,49 +409,274 @@ class EncryptedBootEngineCycleRepository(
     private fun writePointer(
         file: File,
         pointer: CyclePointer,
+    ) = writePointer(file, pointer, currentLayout(), legacy = false)
+
+    private fun writePointer(
+        file: File,
+        pointer: CyclePointer,
+        layout: StoreLayout,
+        legacy: Boolean,
     ) {
         val plaintext = CyclePointerCodec.encode(pointer)
         val encrypted = EncryptedLedgerVaultSupport.encrypt(
             plaintext = plaintext,
             key = key,
             maxPlaintextBytes = MAX_POINTER_BYTES,
-            associatedData = pointerAssociatedData(file),
+            associatedData = pointerAssociatedData(file, layout, legacy),
         )
         EncryptedLedgerVaultSupport.atomicWrite(file, encrypted)
     }
 
-    private fun readPointerIfPresent(file: File): CyclePointer? {
+    private fun readPointerIfPresent(file: File): CyclePointer? =
+        readPointerIfPresent(file, currentLayout(), legacy = false)
+
+    private fun readPointerIfPresent(
+        file: File,
+        layout: StoreLayout,
+        legacy: Boolean,
+    ): CyclePointer? {
         if (!exists(file)) return null
         val plaintext = EncryptedLedgerVaultSupport.decrypt(
             container = EncryptedLedgerVaultSupport.readAtomic(file, MAX_POINTER_BYTES),
             key = key,
             maxPlaintextBytes = MAX_POINTER_BYTES,
-            associatedData = pointerAssociatedData(file),
+            associatedData = pointerAssociatedData(file, layout, legacy),
         )
         return CyclePointerCodec.decode(plaintext)
     }
 
     private fun recordFile(cycleId: CognitiveCycleId): File =
-        records.resolve(sha256(cycleId.value) + RECORD_SUFFIX)
+        recordFile(cycleId, currentLayout())
 
-    private fun recordAssociatedData(file: File): ByteArray {
-        require(file.parentFile == records)
-        return "$ROOT_DIRECTORY/$RECORDS_DIRECTORY/${file.name}".encodeToByteArray()
+    private fun recordFile(
+        cycleId: CognitiveCycleId,
+        layout: StoreLayout,
+    ): File =
+        layout.records.resolve(sha256(cycleId.value) + RECORD_SUFFIX)
+
+    private fun recordAssociatedData(
+        file: File,
+        layout: StoreLayout,
+        legacy: Boolean,
+    ): ByteArray {
+        require(file.parentFile == layout.records)
+        return if (legacy) {
+            "$ROOT_DIRECTORY/$RECORDS_DIRECTORY/${file.name}".encodeToByteArray()
+        } else {
+            (
+                "$ROOT_DIRECTORY/$SCHEMA_DIRECTORY/$GENERATIONS_DIRECTORY/" +
+                    "${layout.dataRoot.name}/$RECORDS_DIRECTORY/${file.name}"
+                ).encodeToByteArray()
+        }
     }
 
-    private fun pointerAssociatedData(file: File): ByteArray {
-        require(file == activePointer || file == committedPointer)
-        return "$ROOT_DIRECTORY/${file.name}".encodeToByteArray()
+    private fun pointerAssociatedData(
+        file: File,
+        layout: StoreLayout,
+        legacy: Boolean,
+    ): ByteArray {
+        require(file == layout.activePointer || file == layout.committedPointer)
+        return if (legacy) {
+            "$ROOT_DIRECTORY/${file.name}".encodeToByteArray()
+        } else {
+            (
+                "$ROOT_DIRECTORY/$SCHEMA_DIRECTORY/$GENERATIONS_DIRECTORY/" +
+                    "${layout.dataRoot.name}/${file.name}"
+                ).encodeToByteArray()
+        }
     }
 
     private fun ensureDirectories() {
+        if (layoutPrepared) return
         check(root.isDirectory || root.mkdirs()) { "BootEngine cycle vault unavailable" }
-        check(records.isDirectory || records.mkdirs()) {
+        val legacyLayout = layoutFor(root)
+        val prepared = schemaStore.prepare(
+            legacyExists = { legacyDataExists(legacyLayout) },
+            migrate = ::migrateGeneration,
+            validate = ::validateGeneration,
+        )
+        bindLayout(prepared.activeRoot)
+        ensureDataDirectories(currentLayout())
+        layoutPrepared = true
+    }
+
+    private fun migrateGeneration(
+        source: DurableSchemaSource,
+        targetRoot: File,
+    ) {
+        val sourceLayout = layoutFor(source.root)
+        val sourceLegacy = source is DurableSchemaSource.Legacy
+        val targetLayout = layoutFor(targetRoot)
+        ensureDataDirectories(targetLayout)
+
+        val cycles = cycleRecordFiles(sourceLayout.records).map { file ->
+            readCycleFromRecordFile(file, sourceLayout, sourceLegacy)
+        }
+        cycles.forEach { cycle ->
+            writeCycle(cycle, targetLayout, legacy = false)
+        }
+
+        resolveMigratedActiveCycle(
+            sourceLayout = sourceLayout,
+            sourceLegacy = sourceLegacy,
+            cycles = cycles,
+        )?.let { cycle ->
+            writePointer(
+                targetLayout.activePointer,
+                CyclePointer(cycle.cycleId, cycle.fingerprint),
+                targetLayout,
+                legacy = false,
+            )
+        }
+
+        resolveMigratedCommittedCycle(
+            sourceLayout = sourceLayout,
+            sourceLegacy = sourceLegacy,
+            cycles = cycles,
+        )?.let { cycle ->
+            writePointer(
+                targetLayout.committedPointer,
+                CyclePointer(cycle.cycleId, cycle.fingerprint),
+                targetLayout,
+                legacy = false,
+            )
+        }
+    }
+
+    private fun resolveMigratedActiveCycle(
+        sourceLayout: StoreLayout,
+        sourceLegacy: Boolean,
+        cycles: List<BootEngineCycle>,
+    ): BootEngineCycle? {
+        val pointer = runCatching {
+            readPointerIfPresent(
+                sourceLayout.activePointer,
+                sourceLayout,
+                sourceLegacy,
+            )
+        }.getOrNull()
+        if (pointer != null) {
+            cycles.singleOrNull { it.cycleId == pointer.cycleId }
+                ?.takeIf { it.fingerprint == pointer.fingerprint && !it.terminal }
+                ?.let { return it }
+        }
+        return cycles.filterNot { it.terminal }.singleOrNull()
+    }
+
+    private fun resolveMigratedCommittedCycle(
+        sourceLayout: StoreLayout,
+        sourceLegacy: Boolean,
+        cycles: List<BootEngineCycle>,
+    ): BootEngineCycle? {
+        val pointer = runCatching {
+            readPointerIfPresent(
+                sourceLayout.committedPointer,
+                sourceLayout,
+                sourceLegacy,
+            )
+        }.getOrNull()
+        if (pointer != null) {
+            cycles.singleOrNull { it.cycleId == pointer.cycleId }
+                ?.takeIf {
+                    it.fingerprint == pointer.fingerprint &&
+                        it.state == BootEngineCycleState.COMMITTED
+                }
+                ?.let { return it }
+        }
+
+        val committed = cycles.filter { it.state == BootEngineCycleState.COMMITTED }
+        if (committed.isEmpty()) return null
+        val highestRevision = committed.maxOf { requireNotNull(it.productiveHeadRevision) }
+        return committed
+            .filter { it.productiveHeadRevision == highestRevision }
+            .singleOrNull()
+    }
+
+    private fun validateGeneration(targetRoot: File) {
+        val layout = layoutFor(targetRoot)
+        ensureDataDirectories(layout)
+        val cycles = cycleRecordFiles(layout.records).map { file ->
+            readCycleFromRecordFile(file, layout, legacy = false)
+        }
+        readPointerIfPresent(layout.activePointer, layout, legacy = false)?.let { pointer ->
+            val cycle = cycles.singleOrNull { it.cycleId == pointer.cycleId }
+            require(cycle != null && cycle.fingerprint == pointer.fingerprint && !cycle.terminal) {
+                "BootEngine generation active pointer is inconsistent"
+            }
+        }
+        readPointerIfPresent(layout.committedPointer, layout, legacy = false)?.let { pointer ->
+            val cycle = cycles.singleOrNull { it.cycleId == pointer.cycleId }
+            require(
+                cycle != null &&
+                    cycle.fingerprint == pointer.fingerprint &&
+                    cycle.state == BootEngineCycleState.COMMITTED
+            ) {
+                "BootEngine generation committed pointer is inconsistent"
+            }
+        }
+    }
+
+    private fun legacyDataExists(layout: StoreLayout): Boolean =
+        exists(layout.activePointer) ||
+            exists(layout.committedPointer) ||
+            layout.records.listFiles().orEmpty().isNotEmpty()
+
+    private fun ensureDataDirectories(layout: StoreLayout) {
+        check(layout.dataRoot.isDirectory || layout.dataRoot.mkdirs()) {
+            "BootEngine cycle data root unavailable"
+        }
+        check(layout.records.isDirectory || layout.records.mkdirs()) {
             "BootEngine cycle record directory unavailable"
         }
-        check(quarantine.isDirectory || quarantine.mkdirs()) {
+        check(layout.quarantine.isDirectory || layout.quarantine.mkdirs()) {
             "BootEngine cycle quarantine directory unavailable"
         }
+    }
+
+    private fun bindLayout(activeRoot: File) {
+        val layout = layoutFor(activeRoot)
+        dataRoot = layout.dataRoot
+        records = layout.records
+        quarantine = layout.quarantine
+        activePointer = layout.activePointer
+        committedPointer = layout.committedPointer
+    }
+
+    private fun currentLayout(): StoreLayout {
+        check(::dataRoot.isInitialized) {
+            "BootEngine cycle schema layout is not prepared"
+        }
+        return StoreLayout(
+            dataRoot = dataRoot,
+            records = records,
+            quarantine = quarantine,
+            activePointer = activePointer,
+            committedPointer = committedPointer,
+        )
+    }
+
+    private fun layoutFor(dataRoot: File): StoreLayout {
+        if (dataRoot != root) {
+            require(dataRoot.name.matches(Regex("g[0-9]{8,}"))) {
+                "BootEngine schema generation name mismatch"
+            }
+            require(dataRoot.parentFile?.parentFile?.name == SCHEMA_DIRECTORY) {
+                "BootEngine schema generation root mismatch"
+            }
+            require(
+                dataRoot.parentFile?.name == GENERATIONS_DIRECTORY ||
+                    dataRoot.parentFile?.name == STAGING_DIRECTORY
+            ) {
+                "BootEngine schema generation parent mismatch"
+            }
+        }
+        return StoreLayout(
+            dataRoot = dataRoot,
+            records = dataRoot.resolve(RECORDS_DIRECTORY),
+            quarantine = dataRoot.resolve(QUARANTINE_DIRECTORY),
+            activePointer = dataRoot.resolve(ACTIVE_POINTER),
+            committedPointer = dataRoot.resolve(COMMITTED_POINTER),
+        )
     }
 
     private fun deleteAtomic(file: File) {
@@ -439,6 +691,14 @@ class EncryptedBootEngineCycleRepository(
         MessageDigest.getInstance("SHA-256")
             .digest(value.encodeToByteArray())
             .joinToString("") { "%02x".format(it) }
+
+    private data class StoreLayout(
+        val dataRoot: File,
+        val records: File,
+        val quarantine: File,
+        val activePointer: File,
+        val committedPointer: File,
+    )
 
     private data class CycleRecordScan(
         val cycles: List<BootEngineCycle>,
@@ -572,6 +832,9 @@ class EncryptedBootEngineCycleRepository(
 
     private companion object {
         const val ROOT_DIRECTORY = "boot-engine-cycle-vault"
+        const val SCHEMA_DIRECTORY = ".schema"
+        const val GENERATIONS_DIRECTORY = "generations"
+        const val STAGING_DIRECTORY = ".migrating"
         const val RECORDS_DIRECTORY = "records"
         const val QUARANTINE_DIRECTORY = "quarantine"
         const val ACTIVE_POINTER = "active.bcycle"
@@ -581,6 +844,15 @@ class EncryptedBootEngineCycleRepository(
         const val KEY_ALIAS = "lifeos.boot.engine.cycle.v1"
         const val MAX_CYCLE_BYTES = 64 * 1024
         const val MAX_POINTER_BYTES = 8 * 1024
+        val SCHEMA_DESCRIPTOR = DurableSchemaDescriptor(
+            storeId = "boot-engine-cycle",
+            currentVersion = 2,
+            minimumReadableVersion = 1,
+            schemaFingerprint = DurableSchemaDescriptor.fingerprintOf(
+                "boot-engine-cycle|generation-layout-v2|cycle-codec-v2|" +
+                    "pointer-codec-v1|aes-gcm|generation-bound-aad"
+            ),
+        )
         val processMutex = Mutex()
     }
 }
