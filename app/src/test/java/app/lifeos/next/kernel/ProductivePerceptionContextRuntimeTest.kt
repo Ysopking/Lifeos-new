@@ -6,6 +6,7 @@ import app.lifeos.core.runtime.life.ObservationSurfaceKind
 import app.lifeos.core.runtime.life.SensorAttentionMode
 import app.lifeos.core.runtime.life.SensorClass
 import app.lifeos.core.runtime.life.SensorDescriptor
+import app.lifeos.core.runtime.life.SensorHealthState
 import app.lifeos.core.runtime.life.SensorId
 import app.lifeos.core.runtime.life.SensorRuntimeState
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyEvent
@@ -194,6 +195,64 @@ class ProductivePerceptionContextRuntimeTest {
         } finally {
             ProductiveWorldGapAttentionRuntimeRegistry.clearForTests()
         }
+    }
+
+    @Test
+    fun notificationLifecycleReplansRegisteredAttentionWithoutMintingAuthority() = runTest {
+        val registry = AppSensorRegistry()
+        val runtime = ProductivePerceptionContextRuntime(
+            ownerObservationPolicy = OwnerObservationPolicyLedger(EmptyPolicyRepository()),
+            sensorRegistry = registry,
+        )
+        val bridge = LiveNotificationSensorBridge(
+            LiveNotificationBatchCommitter { _, _, _, _ -> Unit }
+        )
+
+        runtime.attachNotificationBridge(bridge)
+
+        assertEquals(
+            SensorHealthState.UNAVAILABLE,
+            registry.state(bridge.descriptor.sensorId)?.health,
+        )
+        assertTrue(
+            runtime.coverageSnapshot().any { it.sensorId == bridge.descriptor.sensorId }
+        )
+
+        bridge.connected()
+
+        assertEquals(
+            SensorHealthState.HEALTHY,
+            registry.state(bridge.descriptor.sensorId)?.health,
+        )
+        assertEquals(
+            SensorAttentionMode.EVENT_DRIVEN,
+            registry.state(bridge.descriptor.sensorId)?.mode,
+        )
+
+        val gap = WorldGap.Perception(
+            domain = FieldDomainId("app"),
+            missingDimensions = setOf(StateDimensionId("app.notification.current")),
+            reason = "notification-state-missing",
+        )
+        val update = runtime.applyWorldGaps(listOf(gap))
+
+        assertEquals(
+            SensorAttentionMode.FOCUSED,
+            registry.state(bridge.descriptor.sensorId)?.mode,
+        )
+        assertEquals(false, update.observationGrantAuthority)
+        assertEquals(false, update.effectAuthority)
+
+        bridge.disconnected()
+
+        assertEquals(
+            SensorHealthState.UNAVAILABLE,
+            registry.state(bridge.descriptor.sensorId)?.health,
+        )
+        assertEquals(
+            SensorAttentionMode.SUSPENDED,
+            registry.state(bridge.descriptor.sensorId)?.mode,
+        )
     }
 
     private fun workingSet() = ThoughtGraphWorkingSet(
