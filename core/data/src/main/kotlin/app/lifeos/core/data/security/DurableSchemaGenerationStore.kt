@@ -76,6 +76,7 @@ class DurableSchemaGenerationStore(
 ) {
     private val schemaRoot = root.resolve(SCHEMA_DIRECTORY)
     private val generationsRoot = schemaRoot.resolve(GENERATIONS_DIRECTORY)
+    private val stagingRoot = schemaRoot.resolve(STAGING_DIRECTORY)
     private val activePointer = schemaRoot.resolve(ACTIVE_POINTER)
 
     fun prepare(
@@ -293,19 +294,21 @@ class DurableSchemaGenerationStore(
         check(generationsRoot.isDirectory || generationsRoot.mkdirs()) {
             "Durable schema generations root unavailable: ${descriptor.storeId}"
         }
+        check(stagingRoot.isDirectory || stagingRoot.mkdirs()) {
+            "Durable schema staging root unavailable: ${descriptor.storeId}"
+        }
     }
 
     private fun cleanupMigratingDirectories() {
-        generationsRoot.listFiles().orEmpty()
-            .filter { it.isDirectory && it.name.endsWith(MIGRATING_SUFFIX) }
-            .forEach(File::deleteRecursively)
+        stagingRoot.listFiles().orEmpty()
+            .forEach { it.deleteRecursively() }
     }
 
     private fun generationRoot(generation: Long): File =
         generationsRoot.resolve(generationName(generation))
 
     private fun stagingRoot(generation: Long): File =
-        generationsRoot.resolve(generationName(generation) + MIGRATING_SUFFIX)
+        stagingRoot.resolve(generationName(generation))
 
     private fun generationName(generation: Long): String {
         require(generation > 0)
@@ -428,9 +431,9 @@ class DurableSchemaGenerationStore(
     private companion object {
         const val SCHEMA_DIRECTORY = ".schema"
         const val GENERATIONS_DIRECTORY = "generations"
+        const val STAGING_DIRECTORY = ".migrating"
         const val ACTIVE_POINTER = "active.schema"
         const val MANIFEST_FILE = "manifest.schema"
-        const val MIGRATING_SUFFIX = ".migrating"
         const val TEMP_SUFFIX = ".tmp"
     }
 }

@@ -184,10 +184,16 @@ class EncryptedProductiveWorldHeadRepository(
     }
 
     private fun associatedData(dataRoot: File): ByteArray {
+        require(dataRoot.name.matches(Regex("g[0-9]{8,}"))) {
+            "Productive world head generation name mismatch"
+        }
         require(dataRoot.parentFile?.parentFile?.name == SCHEMA_DIRECTORY) {
             "Productive world head must use a schema generation root"
         }
-        require(dataRoot.parentFile?.name == GENERATIONS_DIRECTORY) {
+        require(
+            dataRoot.parentFile?.name == GENERATIONS_DIRECTORY ||
+                dataRoot.parentFile?.name == STAGING_DIRECTORY
+        ) {
             "Productive world head generation path mismatch"
         }
         return (
@@ -265,6 +271,7 @@ class EncryptedProductiveWorldHeadRepository(
         const val ROOT_DIRECTORY = "productive-world-head-vault"
         const val SCHEMA_DIRECTORY = ".schema"
         const val GENERATIONS_DIRECTORY = "generations"
+        const val STAGING_DIRECTORY = ".migrating"
         const val HEAD_FILE = "head.pworld"
         const val KEY_ALIAS = "lifeos.productive.world.head.v1"
         const val MAX_PLAINTEXT_BYTES = 32 * 1024
