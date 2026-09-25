@@ -63,6 +63,7 @@ import app.lifeos.next.kernel.PrivateEscalationRuntime
 import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
+import app.lifeos.next.kernel.ProductiveAppUsageSensorRuntimeRegistry
 import app.lifeos.next.kernel.ProductivePerceptionContextRuntime
 import app.lifeos.next.kernel.ProductiveWorldGapAttentionRuntimeRegistry
 import java.time.Instant
@@ -207,8 +208,13 @@ internal class ProcessRuntimeInstaller(
                     productivePerceptionContext.attachNotificationBridge(
                         LiveNotificationSensorBridge(photonIngress)
                     )
-                    productivePerceptionContext.attachAppUsageBridge(
+                    val appUsageSensorBridge =
                         AndroidAppUsageSensorBridge(appContext, photonIngress)
+                    productivePerceptionContext.attachAppUsageBridge(
+                        appUsageSensorBridge
+                    )
+                    ProductiveAppUsageSensorRuntimeRegistry.install(
+                        appUsageSensorBridge
                     )
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
