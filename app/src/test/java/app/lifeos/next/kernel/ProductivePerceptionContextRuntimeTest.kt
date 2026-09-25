@@ -265,7 +265,7 @@ class ProductivePerceptionContextRuntimeTest {
         )
 
         assertEquals(
-            SensorAttentionMode.EVENT_DRIVEN,
+            SensorAttentionMode.FOCUSED,
             registry.state(bridge.descriptor.sensorId)?.mode,
         )
         assertEquals(false, update.observationGrantAuthority)
