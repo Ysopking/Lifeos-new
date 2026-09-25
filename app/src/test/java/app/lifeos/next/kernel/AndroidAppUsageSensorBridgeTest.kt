@@ -11,7 +11,6 @@ import java.time.ZoneOffset
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AndroidAppUsageSensorBridgeTest {
@@ -97,7 +96,6 @@ class AndroidAppUsageSensorBridgeTest {
         assertEquals(0, commits)
         assertEquals("usage-access-not-granted", failure)
         assertEquals(SensorHealthState.UNAVAILABLE, bridge.currentHealth())
-        assertNull(null)
     }
 
     private class FakeUsageSource(
