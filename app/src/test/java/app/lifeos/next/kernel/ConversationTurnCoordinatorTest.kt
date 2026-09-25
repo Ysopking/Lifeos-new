@@ -216,6 +216,12 @@ class ConversationTurnCoordinatorTest {
                     maxNetworkCalls = 0,
                 ),
             )
+            var observedWorldGapIds: List<String>? = null
+            ProductiveWorldGapAttentionRuntimeRegistry.install(
+                ProductiveWorldGapAttentionSink { gaps ->
+                    observedWorldGapIds = gaps.map { it.id }.sorted()
+                }
+            )
             val source = Photon(
                 id = PhotonId("worldformula-language-source"),
                 content = utterance,
@@ -248,6 +254,8 @@ class ConversationTurnCoordinatorTest {
             assertNull(result.externalEffect)
             assertTrue(!trace.executionAuthority)
             assertTrue(!trace.directWorldStateMutationAllowed)
+            assertEquals(emptyList(), observedWorldGapIds)
+            ProductiveWorldGapAttentionRuntimeRegistry.clearForTests()
         }
 
     private class InMemoryRevisionedPhotonRepository : RevisionedPhotonRepository {
