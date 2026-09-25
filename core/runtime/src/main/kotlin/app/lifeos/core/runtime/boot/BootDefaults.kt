@@ -1,5 +1,8 @@
 package app.lifeos.core.runtime.boot
 
+import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.ProviderState
+import app.lifeos.core.runtime.capability.ProviderType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -97,6 +100,31 @@ class CompositeBootDeltaDetector(
             total = Math.addExact(total, count)
         }
         return total
+    }
+}
+
+class RegistryCapabilityWarmup(
+    private val registry: CapabilityRegistry,
+    private val excludedProviderTypes: Set<ProviderType> = emptySet(),
+) : CapabilityWarmup {
+    override suspend fun warmup(): CapabilityWarmupResult {
+        val providers = registry.all(includeUnavailable = true)
+            .filterNot { it.providerType in excludedProviderTypes }
+        val availableCapabilityIds = providers
+            .filter {
+                it.state == ProviderState.ACTIVE ||
+                    it.state == ProviderState.DEGRADED
+            }
+            .map { it.capabilityId }
+            .toSet()
+        val degradedCapabilityIds = providers
+            .filter { it.state == ProviderState.DEGRADED }
+            .map { it.capabilityId }
+            .toSet()
+        return CapabilityWarmupResult(
+            availableCapabilities = availableCapabilityIds.size,
+            degradedCapabilities = degradedCapabilityIds.size,
+        )
     }
 }
 

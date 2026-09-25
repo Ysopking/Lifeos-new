@@ -7,7 +7,6 @@ import app.lifeos.core.runtime.boot.BootRehydrationGraph
 import app.lifeos.core.runtime.boot.BootRehydrationNode
 import app.lifeos.core.runtime.boot.BootRehydrationNodeId
 import app.lifeos.core.runtime.boot.BootRehydrationReport
-import app.lifeos.core.runtime.boot.CapabilityWarmup
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
 import app.lifeos.core.runtime.boot.CognitiveHeadConsistencyDeltaSource
 import app.lifeos.core.runtime.boot.CompositeBootDeltaDetector
@@ -17,12 +16,11 @@ import app.lifeos.core.runtime.boot.ModuleRehydrator
 import app.lifeos.core.runtime.boot.ModuleRestoreSummary
 import app.lifeos.core.runtime.boot.PhotonRehydrator
 import app.lifeos.core.runtime.boot.RehydratedRuntimeState
+import app.lifeos.core.runtime.boot.RegistryCapabilityWarmup
 import app.lifeos.core.runtime.boot.RuntimeBootstrapper
 import app.lifeos.core.runtime.boot.StateRehydrator
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmup
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
-import app.lifeos.core.runtime.capability.GeneratedToolState
-import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 
@@ -243,37 +241,10 @@ internal class KernelBootComposition(
             thoughtMatrixWarmup = object : ThoughtMatrixWarmup {
                 override suspend fun warmup() = ThoughtMatrixWarmupResult()
             },
-            capabilityWarmup = object : CapabilityWarmup {
-                override suspend fun warmup(): CapabilityWarmupResult {
-                    val activeGeneratedToolIds = evolution.evolutionResources.generatedTools.snapshot()
-                        .filter { it.state == GeneratedToolState.ACTIVE }
-                        .map { it.manifest.toolId }
-                        .toSet()
-                    val providers = foundation.capabilityRegistry.all(includeUnavailable = true)
-                    val generatedProviderIds = providers
-                        .filter { it.providerType == ProviderType.GENERATED_TOOL }
-                        .map { it.providerId }
-                        .toSet()
-                    require(generatedProviderIds == activeGeneratedToolIds) {
-                        "Generated-tool capability registry differs from rehydrated ACTIVE tool set"
-                    }
-                    val availableCapabilityIds = providers
-                        .filter {
-                            it.state == ProviderState.ACTIVE ||
-                                it.state == ProviderState.DEGRADED
-                        }
-                        .map { it.capabilityId }
-                        .toSet()
-                    val degradedCapabilityIds = providers
-                        .filter { it.state == ProviderState.DEGRADED }
-                        .map { it.capabilityId }
-                        .toSet()
-                    return CapabilityWarmupResult(
-                        availableCapabilities = availableCapabilityIds.size,
-                        degradedCapabilities = degradedCapabilityIds.size,
-                    )
-                }
-            },
+            capabilityWarmup = RegistryCapabilityWarmup(
+                registry = foundation.capabilityRegistry,
+                excludedProviderTypes = setOf(ProviderType.GENERATED_TOOL),
+            ),
             deltaDetector = CompositeBootDeltaDetector(
                 listOf(
                     CognitiveHeadConsistencyDeltaSource(

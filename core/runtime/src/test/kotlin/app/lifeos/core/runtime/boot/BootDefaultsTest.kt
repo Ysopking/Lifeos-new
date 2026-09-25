@@ -2,6 +2,11 @@ package app.lifeos.core.runtime.boot
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.runtime.capability.CapabilityDescriptor
+import app.lifeos.core.runtime.capability.CapabilityId
+import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.ProviderState
+import app.lifeos.core.runtime.capability.ProviderType
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
@@ -129,6 +134,37 @@ class BootDefaultsTest {
             setOf("optional-store-degraded:generated-tools:corrupted"),
             validation.limitations,
         )
+    }
+
+    @Test
+    fun registryCapabilityWarmupCanExcludeProvidersOwnedByWarmBoot() = runTest {
+        val registry = CapabilityRegistry(
+            listOf(
+                CapabilityDescriptor(
+                    capabilityId = CapabilityId("baseline"),
+                    providerId = "module-baseline",
+                    providerType = ProviderType.MODULE,
+                    state = ProviderState.ACTIVE,
+                ),
+                CapabilityDescriptor(
+                    capabilityId = CapabilityId("warm-owned"),
+                    providerId = "worker-warm",
+                    providerType = ProviderType.WORKER,
+                    state = ProviderState.DEGRADED,
+                ),
+            )
+        )
+
+        val critical = RegistryCapabilityWarmup(
+            registry = registry,
+            excludedProviderTypes = setOf(ProviderType.WORKER),
+        ).warmup()
+        val full = RegistryCapabilityWarmup(registry).warmup()
+
+        assertEquals(1, critical.availableCapabilities)
+        assertEquals(0, critical.degradedCapabilities)
+        assertEquals(2, full.availableCapabilities)
+        assertEquals(1, full.degradedCapabilities)
     }
 
     @Test
