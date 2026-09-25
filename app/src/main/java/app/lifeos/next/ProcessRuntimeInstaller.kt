@@ -56,6 +56,7 @@ import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
 import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
+import app.lifeos.next.kernel.LiveNotificationSensorBridge
 import app.lifeos.next.kernel.MultimodalPerceptionRuntime
 import app.lifeos.next.kernel.PrivateEscalationRuntime
 import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
@@ -201,6 +202,9 @@ internal class ProcessRuntimeInstaller(
                     )
                     productivePerceptionContext.attachHardwareBridge(
                         hardwareSensorBridge
+                    )
+                    productivePerceptionContext.attachNotificationBridge(
+                        LiveNotificationSensorBridge(photonIngress)
                     )
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
