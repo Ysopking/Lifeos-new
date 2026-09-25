@@ -104,7 +104,8 @@ internal class ProductivePerceptionContextRuntime(
         bridge: LiveNotificationSensorBridge,
     ) {
         val current = notificationBridge
-        require(current == null || current === bridge) {
+        if (current === bridge) return
+        require(current == null) {
             "Productive perception runtime cannot replace an attached notification bridge"
         }
         sensorRegistry.register(bridge.descriptor)
@@ -133,7 +134,14 @@ internal class ProductivePerceptionContextRuntime(
         requireNotNull(hardwareBridge) {
             "Productive perception runtime requires the hardware bridge before start"
         }
-        return applyAttention(emptyList())
+        val snapshot = coverageMutex.withLock {
+            latestWorldGaps.toList() to
+                coverageProfiles.values.sortedBy { it.sensorId.value }
+        }
+        return applyWorldGaps(
+            gaps = snapshot.first,
+            coverage = snapshot.second,
+        ).decisions
     }
 
     /**
