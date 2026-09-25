@@ -1,5 +1,6 @@
 package app.lifeos.next.kernel
 
+import app.lifeos.core.field.FieldDomainId
 import app.lifeos.core.runtime.life.AppSensorRegistry
 import app.lifeos.core.runtime.life.ObservationSurfaceKind
 import app.lifeos.core.runtime.life.SensorAttentionMode
@@ -14,8 +15,12 @@ import app.lifeos.core.runtime.policy.OwnerObservationPolicyRepositoryLoadReport
 import app.lifeos.core.runtime.policy.OwnerObservationType
 import app.lifeos.core.runtime.thought.ThoughtGraphAttentionPolicy
 import app.lifeos.core.runtime.thought.ThoughtGraphWorkingSet
+import app.lifeos.core.runtime.world.SensorAttentionCoverageProfile
 import app.lifeos.core.runtime.world.SensorAttentionDemand
+import app.lifeos.core.runtime.world.SensorStateDimensionSelector
+import app.lifeos.core.runtime.world.SensorStateDimensionSelectorType
 import app.lifeos.core.runtime.world.StateDimensionId
+import app.lifeos.core.runtime.world.WorldGap
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -88,6 +93,48 @@ class ProductivePerceptionContextRuntimeTest {
         assertEquals(SensorAttentionMode.FOCUSED, registry.state(sensorId)?.mode)
         assertEquals(false, decision.observationGrantAuthority)
         assertEquals(false, decision.effectAuthority)
+    }
+
+    @Test
+    fun worldGapsFlowThroughCompilerIntoExistingAttentionRuntime() = runTest {
+        val registry = AppSensorRegistry(listOf(SensorRuntimeState(descriptor)))
+        val runtime = ProductivePerceptionContextRuntime(
+            ownerObservationPolicy = OwnerObservationPolicyLedger(EmptyPolicyRepository()),
+            sensorRegistry = registry,
+        )
+        val gap = WorldGap.Perception(
+            domain = FieldDomainId("device"),
+            missingDimensions = setOf(StateDimensionId("device.motion.current")),
+            reason = "motion-state-missing",
+        )
+
+        val update = runtime.applyWorldGaps(
+            gaps = listOf(gap),
+            coverage = listOf(
+                SensorAttentionCoverageProfile(
+                    sensorId = sensorId,
+                    stateDimensions = listOf(
+                        SensorStateDimensionSelector(
+                            SensorStateDimensionSelectorType.PREFIX,
+                            "device.motion.",
+                        )
+                    ),
+                    informationGainMicros = 700_000L,
+                    goalRelevanceMicros = 800_000L,
+                    verificationValueMicros = 800_000L,
+                    energyCostMicros = 100_000L,
+                    privacyCostMicros = 100_000L,
+                    latencyCostMicros = 100_000L,
+                    resourceCostMicros = 100_000L,
+                )
+            ),
+        )
+
+        assertEquals(listOf(gap.id), update.plan.worldGapIds)
+        assertEquals(SensorAttentionMode.FOCUSED, update.decisions.single().mode)
+        assertEquals(SensorAttentionMode.FOCUSED, registry.state(sensorId)?.mode)
+        assertEquals(false, update.observationGrantAuthority)
+        assertEquals(false, update.effectAuthority)
     }
 
     private fun workingSet() = ThoughtGraphWorkingSet(
