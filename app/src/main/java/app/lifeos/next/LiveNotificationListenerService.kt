@@ -34,6 +34,9 @@ class LiveNotificationListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        scope.launch {
+            LiveNotificationPhotonIngress.connected()
+        }
         LiveNotificationActionRegistry.clear()
         activeNotifications
             ?.sortedWith(compareBy<StatusBarNotification> { it.postTime }.thenBy { it.key })
@@ -41,6 +44,9 @@ class LiveNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onListenerDisconnected() {
+        scope.launch {
+            LiveNotificationPhotonIngress.disconnected()
+        }
         LiveNotificationActionRegistry.clear()
         super.onListenerDisconnected()
     }

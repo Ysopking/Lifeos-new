@@ -3,6 +3,8 @@ package app.lifeos.next.kernel
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.life.AppSensorRegistry
 import app.lifeos.core.runtime.life.AppSensorRegistrySnapshot
+import app.lifeos.core.runtime.life.SensorHealthState
+import app.lifeos.core.runtime.life.SensorId
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import app.lifeos.core.runtime.thought.ThoughtGraphWorkingSet
 import app.lifeos.core.runtime.world.PersonalContextBootBinding
@@ -50,10 +52,11 @@ data class ProductiveSensorAttentionUpdate(
 }
 
 /**
- * B480 process-local productive perception composition.
+ * Productive process-local perception composition.
  *
- * It owns only sensor scheduling metadata and the exact PersonalContext boot binding. Observation
- * permission remains in OwnerObservationPolicyLedger; effect authority remains outside this runtime.
+ * It owns only sensor scheduling/lifecycle metadata and the exact PersonalContext boot binding.
+ * Observation permission remains in OwnerObservationPolicyLedger; effect authority remains outside
+ * this runtime.
  */
 fun interface PersonalContextBootBindingSource {
     suspend fun freeze(
@@ -73,10 +76,12 @@ internal class ProductivePerceptionContextRuntime(
     private val gapAttentionCompiler = SensorWorldGapAttentionCompiler()
     private val coverageMutex = Mutex()
     private val coverageProfiles = linkedMapOf<String, SensorAttentionCoverageProfile>()
+    private var latestWorldGaps: List<WorldGap> = emptyList()
     private var hardwareBridge: AndroidHardwareSensorBridge? = null
+    private var notificationBridge: LiveNotificationSensorBridge? = null
 
     /**
-     * Registers the concrete bridge contract without starting physical acquisition.
+     * Registers the concrete hardware bridge contract without starting physical acquisition.
      * Productive acquisition begins only after kernel readiness via [start].
      */
     suspend fun attachHardwareBridge(
@@ -92,25 +97,68 @@ internal class ProductivePerceptionContextRuntime(
     }
 
     /**
-     * Applies the registry's default attention policy after the kernel is ready.
+     * B483 registers notifications as an ordinary event-driven sensor. The listener starts as
+     * UNAVAILABLE until Android reports a connected NotificationListenerService lifecycle.
+     */
+    suspend fun attachNotificationBridge(
+        bridge: LiveNotificationSensorBridge,
+    ) {
+        val current = notificationBridge
+        if (current === bridge) return
+        require(current == null) {
+            "Productive perception runtime cannot replace an attached notification bridge"
+        }
+        sensorRegistry.register(bridge.descriptor)
+        registerCoverage(bridge.attentionCoverage)
+        sensorRegistry.updateHealth(
+            bridge.descriptor.sensorId,
+            SensorHealthState.UNAVAILABLE,
+            "notification-listener-not-connected",
+        )
+        bridge.bindHealthReporter { health, failure ->
+            updateSensorHealth(
+                sensorId = bridge.descriptor.sensorId,
+                health = health,
+                failure = failure,
+            )
+        }
+        notificationBridge = bridge
+        LiveNotificationPhotonIngress.install(bridge)
+    }
+
+    /**
+     * Applies registry defaults after the kernel is ready. Unavailable sensors fail closed to
+     * SUSPENDED until their lifecycle reports HEALTHY.
      */
     suspend fun start(): List<SensorAttentionDecision> {
         requireNotNull(hardwareBridge) {
             "Productive perception runtime requires the hardware bridge before start"
         }
-        return applyAttention(emptyList())
+        val snapshot = coverageMutex.withLock {
+            latestWorldGaps.toList() to
+                coverageProfiles.values.sortedBy { it.sensorId.value }
+        }
+        return applyWorldGaps(
+            gaps = snapshot.first,
+            coverage = snapshot.second,
+        ).decisions
     }
 
     /**
-     * B459 is the only scheduler here. Decisions update process-local registry metadata first and
-     * are then applied to the physical Android bridge. They cannot create observation grants.
+     * B459 remains the only scheduler. Decisions update process-local registry metadata first and
+     * are then applied to concrete bridges. They cannot create observation grants.
      */
     suspend fun applyAttention(
         demands: Collection<SensorAttentionDemand>,
     ): List<SensorAttentionDecision> {
         val decisions = attentionRuntime.apply(demands)
-        val bridge = hardwareBridge
-        if (bridge != null) {
+
+        hardwareBridge?.let { bridge ->
+            decisions
+                .firstOrNull { it.sensorId == bridge.descriptor.sensorId }
+                ?.let { decision -> bridge.applyAttention(decision.mode) }
+        }
+        notificationBridge?.let { bridge ->
             decisions
                 .firstOrNull { it.sensorId == bridge.descriptor.sensorId }
                 ?.let { decision -> bridge.applyAttention(decision.mode) }
@@ -155,14 +203,40 @@ internal class ProductivePerceptionContextRuntime(
 
     suspend fun applyWorldGaps(
         gaps: Collection<WorldGap>,
-    ): ProductiveSensorAttentionUpdate =
-        applyWorldGaps(
-            gaps = gaps,
-            coverage = coverageSnapshot(),
+    ): ProductiveSensorAttentionUpdate {
+        val canonicalGaps = gaps.sortedBy { it.id }
+        val coverage = coverageMutex.withLock {
+            latestWorldGaps = canonicalGaps
+            coverageProfiles.values.sortedBy { it.sensorId.value }
+        }
+        return applyWorldGaps(
+            gaps = canonicalGaps,
+            coverage = coverage,
         )
+    }
 
     override suspend fun update(gaps: Collection<WorldGap>) {
         applyWorldGaps(gaps)
+    }
+
+    /**
+     * Sensor lifecycle changes are perception-context changes. Re-running the last final WorldGap
+     * plan restores the correct attention mode when an unavailable event source becomes healthy.
+     */
+    internal suspend fun updateSensorHealth(
+        sensorId: SensorId,
+        health: SensorHealthState,
+        failure: String? = null,
+    ) {
+        sensorRegistry.updateHealth(sensorId, health, failure)
+        val snapshot = coverageMutex.withLock {
+            latestWorldGaps.toList() to
+                coverageProfiles.values.sortedBy { it.sensorId.value }
+        }
+        applyWorldGaps(
+            gaps = snapshot.first,
+            coverage = snapshot.second,
+        )
     }
 
     suspend fun sensorRegistrySnapshot(): AppSensorRegistrySnapshot =
