@@ -175,7 +175,7 @@ class ProductGoldenChatDeviceTest {
         if (processStartup.phase == LifeOsProcessStartupPhase.FAILED) {
             error("Process startup failed during Product-Gold chat recovery: ${processStartup.failure ?: "unknown"}")
         }
-        app.kernel.bootstrapState.first { state ->
+        val boot = app.kernel.bootstrapState.first { state ->
             state.status == KernelBootstrapStatus.READY ||
                 state.status == KernelBootstrapStatus.DEGRADED ||
                 state.status == KernelBootstrapStatus.FAILED
@@ -184,6 +184,16 @@ class ProductGoldenChatDeviceTest {
                 error("Kernel boot failed during Product-Gold chat recovery: ${state.failureMessage ?: "unknown"}")
             }
         }
+        val warm = checkNotNull(app.warmStartupReport.first { it != null })
+        if (warm.failures.isNotEmpty()) {
+            error(
+                "Product-Gold warm startup failed: " +
+                    warm.failures.joinToString(";") {
+                        "${it.diagnosticCode}:${it.stage.name}:${it.message}"
+                    }
+            )
+        }
+        boot
     }
 
     companion object {
