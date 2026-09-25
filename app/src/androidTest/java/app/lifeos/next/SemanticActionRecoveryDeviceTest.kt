@@ -125,7 +125,7 @@ class SemanticActionRecoveryDeviceTest {
                     (processStartup.failure ?: "unknown")
             )
         }
-        app.kernel.bootstrapState.first { state ->
+        val kernelState = app.kernel.bootstrapState.first { state ->
             state.status == KernelBootstrapStatus.READY ||
                 state.status == KernelBootstrapStatus.DEGRADED ||
                 state.status == KernelBootstrapStatus.FAILED
@@ -137,6 +137,15 @@ class SemanticActionRecoveryDeviceTest {
                 )
             }
         }
+        val warm = app.warmStartupReport.first { it != null }
+        checkNotNull(warm)
+        check(LifeOsStartupStage.DURABLE_GOALS in warm.completedStages) {
+            "Durable-goal warm recovery did not complete before semantic recovery proof: " +
+                warm.failures.joinToString(";") { failure ->
+                    "${failure.diagnosticCode}:${failure.stage.displayName}"
+                }
+        }
+        kernelState
     }
 
     companion object {
