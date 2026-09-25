@@ -12,13 +12,16 @@ import app.lifeos.core.runtime.self.SelfStateProjectionResult
 import app.lifeos.core.runtime.self.SelfToolState
 import app.lifeos.core.runtime.self.SelfWorldState
 import java.time.Instant
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 class MetaRealizationShadowRuntimeTest {
     @AfterTest
@@ -41,6 +44,26 @@ class MetaRealizationShadowRuntimeTest {
         assertFalse(ready.snapshot.truthAuthority)
         assertFalse(ready.snapshot.executionAuthority)
         assertFalse(ready.snapshot.cycle.executionAuthority)
+    }
+
+    @Test
+    fun `submit hands shadow work off without awaiting realization processing`() = runTest {
+        val runtime = MetaRealizationShadowRuntime(
+            processingScope = backgroundScope,
+        )
+
+        assertTrue(runtime.submit(snapshot(T0, "world:queued")))
+
+        val ready = withTimeout(1_000) {
+            runtime.status.first { it is MetaRealizationShadowStatus.Ready }
+        } as MetaRealizationShadowStatus.Ready
+
+        assertEquals("world:queued", ready.snapshot.realization.components
+            .single { it.kind == RealizationComponentKind.PRODUCTIVE_WORLD }
+            .provenanceFingerprints
+            .first())
+        assertEquals(0L, runtime.rejectedSubmissionCount())
+        runtime.close()
     }
 
     @Test

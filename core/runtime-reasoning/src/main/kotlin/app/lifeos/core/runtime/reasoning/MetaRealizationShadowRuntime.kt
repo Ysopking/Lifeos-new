@@ -3,11 +3,17 @@ package app.lifeos.core.runtime.reasoning
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.self.SelfStateProjectionResult
 import java.util.ArrayDeque
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -71,17 +77,43 @@ data class MetaRealizationShadowSnapshot(
 class MetaRealizationShadowRuntime(
     val profile: RealizationTransferProfile = SelfObservationRealizationAdapter.profile(),
     private val historyCapacity: Int = 32,
+    submissionCapacity: Int = 16,
+    processingScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
     init {
         require(historyCapacity in 2..512)
+        require(submissionCapacity in 1..256)
     }
 
     private val mutex = Mutex()
+    private val submissions = Channel<SelfStateProjectionResult>(capacity = submissionCapacity)
+    private val rejectedSubmissions = AtomicLong(0L)
     private val history = ArrayDeque<MetaRealizationShadowSnapshot>()
     private val mutableStatus =
         MutableStateFlow<MetaRealizationShadowStatus>(MetaRealizationShadowStatus.Idle)
 
     val status: StateFlow<MetaRealizationShadowStatus> = mutableStatus.asStateFlow()
+
+    private val worker = processingScope.launch {
+        for (result in submissions) {
+            observe(result)
+        }
+    }
+
+    /**
+     * Non-blocking productive-path handoff. Queue saturation never blocks SelfObservation;
+     * the shadow sample is rejected and counted instead.
+     */
+    fun submit(result: SelfStateProjectionResult): Boolean {
+        val accepted = submissions.trySend(result).isSuccess
+        if (!accepted) {
+            rejectedSubmissions.incrementAndGet()
+        }
+        return accepted
+    }
+
+    fun rejectedSubmissionCount(): Long = rejectedSubmissions.get()
 
     suspend fun observe(
         result: SelfStateProjectionResult,
@@ -147,13 +179,20 @@ class MetaRealizationShadowRuntime(
 
     suspend fun history(): List<MetaRealizationShadowSnapshot> =
         mutex.withLock { history.toList() }
+
+    fun close() {
+        submissions.close()
+        worker.cancel()
+    }
 }
 
 object MetaRealizationShadowRuntimeRegistry {
     private val current = AtomicReference<MetaRealizationShadowRuntime?>(null)
 
     fun install(runtime: MetaRealizationShadowRuntime) {
-        current.set(runtime)
+        current.getAndSet(runtime)
+            ?.takeIf { it !== runtime }
+            ?.close()
     }
 
     fun currentOrNull(): MetaRealizationShadowRuntime? = current.get()
@@ -164,6 +203,6 @@ object MetaRealizationShadowRuntimeRegistry {
         }
 
     fun clearForTestOnly() {
-        current.set(null)
+        current.getAndSet(null)?.close()
     }
 }

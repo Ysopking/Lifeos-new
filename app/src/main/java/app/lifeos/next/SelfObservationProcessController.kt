@@ -101,7 +101,7 @@ internal class SelfObservationProcessController(
                 SelfStateWorldFormulaRuntimeRegistry.requireCurrent().evaluate(cycle.result)
             onAnalysis(SelfObservationAnalysisState(cycle, assessment))
             MetaRealizationShadowRuntimeRegistry.currentOrNull()
-                ?.observe(cycle.result)
+                ?.submit(cycle.result)
 
             val traceIdentity =
                 cycle.snapshot.authorityFingerprint + ":" + assessment.band.name
