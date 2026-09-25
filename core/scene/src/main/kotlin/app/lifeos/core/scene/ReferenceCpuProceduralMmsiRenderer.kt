@@ -1,5 +1,6 @@
 package app.lifeos.core.scene
 
+import java.util.stream.IntStream
 import app.lifeos.core.image.ProceduralMmsiProfile
 import app.lifeos.core.image.ProceduralMmsiReferenceShading
 import app.lifeos.core.image.Rgba8Image
@@ -41,37 +42,41 @@ class ReferenceCpuProceduralMmsiRenderer(
             lightZ = normalizedSunDirection.z,
             coneTangent = shadowConeTangent,
         )
-        val shadingScratch = shading.newScratch()
+        IntStream.range(0, buffers.size.height).parallel().forEach { y ->
+            val shadingScratch = shading.newScratch()
+            val rowStart = y * buffers.size.width
+            val rowEnd = rowStart + buffers.size.width
 
-        for (pixel in 0 until pixels) {
-            val out = pixel * 4
-            rgba[out + 3] = 0xff.toByte()
-            if (!buffers.isCovered(pixel)) continue
+            for (pixel in rowStart until rowEnd) {
+                val out = pixel * 4
+                rgba[out + 3] = 0xff.toByte()
+                if (!buffers.isCovered(pixel)) continue
 
-            val albedoBase = pixel * 4
-            val normalBase = pixel * 3
-            // ReferenceCpuSceneRasterizer writes normalized view-space normals.
-            val normalX = buffers.normalsXyz[normalBase].toDouble()
-            val normalY = buffers.normalsXyz[normalBase + 1].toDouble()
-            val normalZ = buffers.normalsXyz[normalBase + 2].toDouble()
-            val roughness = buffers.roughness[pixel].toDouble()
-            val shadow = softShadow(pixel, buffers, shadowKernel)
-            val ambientOcclusion = (0.35 + 0.65 * normalZ).coerceIn(0.0, 1.0)
-            shading.shadeNormalizedInto(
-                albedoR = buffers.albedoLinearRgba[albedoBase].toDouble(),
-                albedoG = buffers.albedoLinearRgba[albedoBase + 1].toDouble(),
-                albedoB = buffers.albedoLinearRgba[albedoBase + 2].toDouble(),
-                normalX = normalX,
-                normalY = normalY,
-                normalZ = normalZ,
-                roughness = roughness,
-                shadowVisibility = shadow,
-                ambientOcclusion = ambientOcclusion,
-                scratch = shadingScratch,
-            )
-            rgba[out] = quantize(shadingScratch.rgb[0])
-            rgba[out + 1] = quantize(shadingScratch.rgb[1])
-            rgba[out + 2] = quantize(shadingScratch.rgb[2])
+                val albedoBase = pixel * 4
+                val normalBase = pixel * 3
+                // ReferenceCpuSceneRasterizer writes normalized view-space normals.
+                val normalX = buffers.normalsXyz[normalBase].toDouble()
+                val normalY = buffers.normalsXyz[normalBase + 1].toDouble()
+                val normalZ = buffers.normalsXyz[normalBase + 2].toDouble()
+                val roughness = buffers.roughness[pixel].toDouble()
+                val shadow = softShadow(pixel, buffers, shadowKernel)
+                val ambientOcclusion = (0.35 + 0.65 * normalZ).coerceIn(0.0, 1.0)
+                shading.shadeNormalizedInto(
+                    albedoR = buffers.albedoLinearRgba[albedoBase].toDouble(),
+                    albedoG = buffers.albedoLinearRgba[albedoBase + 1].toDouble(),
+                    albedoB = buffers.albedoLinearRgba[albedoBase + 2].toDouble(),
+                    normalX = normalX,
+                    normalY = normalY,
+                    normalZ = normalZ,
+                    roughness = roughness,
+                    shadowVisibility = shadow,
+                    ambientOcclusion = ambientOcclusion,
+                    scratch = shadingScratch,
+                )
+                rgba[out] = quantize(shadingScratch.rgb[0])
+                rgba[out + 1] = quantize(shadingScratch.rgb[1])
+                rgba[out + 2] = quantize(shadingScratch.rgb[2])
+            }
         }
         return Rgba8Image(buffers.size.width, buffers.size.height, rgba)
     }
