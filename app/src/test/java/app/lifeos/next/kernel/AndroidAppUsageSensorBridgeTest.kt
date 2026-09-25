@@ -9,6 +9,7 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -67,6 +68,35 @@ class AndroidAppUsageSensorBridgeTest {
         bridge.applyAttention(SensorAttentionMode.SUSPENDED)
         assertEquals(0, bridge.pollOnce())
         assertEquals(listOf(0L to 1L), revisions)
+    }
+
+    @Test
+    fun `suspended runtime owns no idle app usage polling job`() = runTest {
+        val source = FakeUsageSource(
+            granted = true,
+            events = emptyList(),
+        )
+        val bridge = AndroidAppUsageSensorBridge(
+            source = source,
+            commitBatch = AppUsageBatchCommitter { _, _, _, _ -> Unit },
+            clock = Clock.fixed(
+                Instant.parse("2026-09-25T01:00:30Z"),
+                ZoneOffset.UTC,
+            ),
+            scope = this,
+        )
+        bridge.bindHealthReporter { _, _ -> Unit }
+
+        bridge.start()
+        runCurrent()
+        assertEquals(0, source.queryCount)
+
+        bridge.applyAttention(SensorAttentionMode.PERIODIC)
+        runCurrent()
+        assertEquals(1, source.queryCount)
+
+        bridge.applyAttention(SensorAttentionMode.SUSPENDED)
+        bridge.stop()
     }
 
     @Test
