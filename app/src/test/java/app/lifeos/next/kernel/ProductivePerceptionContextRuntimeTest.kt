@@ -2,13 +2,21 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.field.FieldDomainId
 import app.lifeos.core.runtime.life.AppSensorRegistry
+import app.lifeos.core.runtime.life.ControlStatus
+import app.lifeos.core.runtime.life.EpistemicStatus
+import app.lifeos.core.runtime.life.InformationObservation
+import app.lifeos.core.runtime.life.ObservationAuthorityClass
+import app.lifeos.core.runtime.life.ObservationPrivacyClass
 import app.lifeos.core.runtime.life.ObservationSurfaceKind
+import app.lifeos.core.runtime.life.RealizationDescriptor
+import app.lifeos.core.runtime.life.RepresentationLevel
 import app.lifeos.core.runtime.life.SensorAttentionMode
 import app.lifeos.core.runtime.life.SensorClass
 import app.lifeos.core.runtime.life.SensorDescriptor
 import app.lifeos.core.runtime.life.SensorHealthState
 import app.lifeos.core.runtime.life.SensorId
 import app.lifeos.core.runtime.life.SensorRuntimeState
+import app.lifeos.core.runtime.life.TemporalStatus
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyEvent
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import app.lifeos.core.runtime.policy.OwnerObservationPolicyRepository
@@ -198,6 +206,39 @@ class ProductivePerceptionContextRuntimeTest {
     }
 
     @Test
+    fun notificationBridgeBuildsCanonicalSensorBatchAndHonorsSuspension() = runTest {
+        val revisions = mutableListOf<Pair<Long, Long>>()
+        val committed = mutableListOf<InformationObservation>()
+        val bridge = LiveNotificationSensorBridge(
+            LiveNotificationBatchCommitter { descriptor, cursor, _, batch ->
+                assertEquals(
+                    PrivateOwnerObservationPolicyBaseline.NOTIFICATION_SENSOR_ID,
+                    descriptor.sensorId.value,
+                )
+                revisions += cursor.revision to batch.nextCursor.revision
+                committed += batch.observations.single()
+            }
+        )
+
+        val first = notificationObservation(
+            revision = "notification-revision-1",
+            observedAt = Instant.parse("2026-09-25T00:01:00Z"),
+        )
+        bridge.ingest(first)
+        bridge.applyAttention(SensorAttentionMode.SUSPENDED)
+        bridge.ingest(
+            notificationObservation(
+                revision = "notification-revision-2",
+                observedAt = Instant.parse("2026-09-25T00:02:00Z"),
+            )
+        )
+
+        assertEquals(listOf(0L to 1L), revisions)
+        assertEquals(listOf(first), committed)
+        assertEquals(null, committed.single().observationGrantId)
+    }
+
+    @Test
     fun notificationLifecycleReplansRegisteredAttentionWithoutMintingAuthority() = runTest {
         val registry = AppSensorRegistry()
         val runtime = ProductivePerceptionContextRuntime(
@@ -254,6 +295,31 @@ class ProductivePerceptionContextRuntimeTest {
             registry.state(bridge.descriptor.sensorId)?.mode,
         )
     }
+
+    private fun notificationObservation(
+        revision: String,
+        observedAt: Instant,
+    ) = InformationObservation(
+        sourceId = PrivateOwnerObservationPolicyBaseline.NOTIFICATION_SENSOR_ID,
+        sourceResource =
+            PrivateOwnerObservationPolicyBaseline.NOTIFICATION_RESOURCE_PREFIX +
+                "example.app:key",
+        surface = ObservationSurfaceKind.NOTIFICATION,
+        observedAt = observedAt,
+        sourceTimestamp = observedAt,
+        sourceRevision = revision,
+        mimeType = "application/vnd.lifeos.android-notification+text",
+        payload = "title=example",
+        realization = RealizationDescriptor(
+            representation = RepresentationLevel.PROJECTED,
+            epistemicStatus = EpistemicStatus.OBSERVED,
+            temporalStatus = TemporalStatus.CURRENT,
+            controlStatus = ControlStatus.PASSIVE,
+        ),
+        authority = ObservationAuthorityClass.PLATFORM_NOTIFICATION,
+        privacy = ObservationPrivacyClass.PERSONAL,
+        confidence = 1.0,
+    )
 
     private fun workingSet() = ThoughtGraphWorkingSet(
         sourceSnapshotId = "goal-thought-snapshot:test",
