@@ -164,6 +164,7 @@ class BootDefaultsTest {
             warm = emptyList(),
             cold = emptyList(),
             assessments = emptyList(),
+            unreadableFiles = emptyList(),
         ),
         modules = ModuleRestoreSummary(restored = 1),
         thoughtMatrix = ThoughtMatrixWarmupResult(),
