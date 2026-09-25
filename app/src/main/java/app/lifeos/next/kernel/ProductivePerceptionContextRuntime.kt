@@ -7,12 +7,27 @@ import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 import app.lifeos.core.runtime.thought.ThoughtGraphWorkingSet
 import app.lifeos.core.runtime.world.PersonalContextBootBinding
 import app.lifeos.core.runtime.world.PersonalContextSnapshot
+import app.lifeos.core.runtime.world.SensorAttentionCoverageProfile
 import app.lifeos.core.runtime.world.SensorAttentionDecision
 import app.lifeos.core.runtime.world.SensorAttentionDemand
 import app.lifeos.core.runtime.world.SensorAttentionRuntime
+import app.lifeos.core.runtime.world.SensorWorldGapAttentionCompiler
+import app.lifeos.core.runtime.world.SensorWorldGapAttentionPlan
+import app.lifeos.core.runtime.world.WorldGap
+
+data class ProductiveSensorAttentionUpdate(
+    val plan: SensorWorldGapAttentionPlan,
+    val decisions: List<SensorAttentionDecision>,
+) {
+    val observationGrantAuthority: Boolean
+        get() = false
+
+    val effectAuthority: Boolean
+        get() = false
+}
 
 /**
- * B469 process-local productive perception composition.
+ * B480 process-local productive perception composition.
  *
  * It owns only sensor scheduling metadata and the exact PersonalContext boot binding. Observation
  * permission remains in OwnerObservationPolicyLedger; effect authority remains outside this runtime.
@@ -28,6 +43,7 @@ internal class ProductivePerceptionContextRuntime(
     private val sensorRegistry: AppSensorRegistry = AppSensorRegistry(),
 ) : PersonalContextBootBindingSource {
     private val attentionRuntime = SensorAttentionRuntime(sensorRegistry)
+    private val gapAttentionCompiler = SensorWorldGapAttentionCompiler()
     private var hardwareBridge: AndroidHardwareSensorBridge? = null
 
     /**
@@ -70,6 +86,25 @@ internal class ProductivePerceptionContextRuntime(
                 ?.let { decision -> bridge.applyAttention(decision.mode) }
         }
         return decisions
+    }
+
+    /**
+     * Converts explicit world-state gaps through B480's pure compiler and immediately applies the
+     * resulting B459 attention plan. Unmatched observation gaps remain visible in the returned plan.
+     */
+    suspend fun applyWorldGaps(
+        gaps: Collection<WorldGap>,
+        coverage: Collection<SensorAttentionCoverageProfile>,
+    ): ProductiveSensorAttentionUpdate {
+        val plan = gapAttentionCompiler.compile(
+            sensors = sensorRegistry.snapshot(),
+            gaps = gaps,
+            coverage = coverage,
+        )
+        return ProductiveSensorAttentionUpdate(
+            plan = plan,
+            decisions = applyAttention(plan.demands),
+        )
     }
 
     suspend fun sensorRegistrySnapshot(): AppSensorRegistrySnapshot =
