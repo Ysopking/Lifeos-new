@@ -231,7 +231,7 @@ internal object LifeOsStartupStageGraph {
         ),
         LifeOsStartupStageSpec(
             LifeOsStartupStage.DURABLE_GOALS,
-            setOf(LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP),
+            setOf(LifeOsStartupStage.RUNTIME_STARTED),
             parallelSafe = true,
             lane = LifeOsStartupLane.WARM,
         ),
