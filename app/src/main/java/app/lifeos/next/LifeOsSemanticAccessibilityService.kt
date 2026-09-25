@@ -43,6 +43,7 @@ class LifeOsSemanticAccessibilityService : AccessibilityService() {
         val packageName =
             current.packageName?.toString()?.takeIf { it.isNotBlank() } ?: return
         if (packageName == applicationContext.packageName) return
+        if (!ProductiveSemanticAppContentIngress.shouldObserve(packageName)) return
 
         val root = rootInActiveWindow ?: current.source ?: return
         val capturedAt = current.eventTime

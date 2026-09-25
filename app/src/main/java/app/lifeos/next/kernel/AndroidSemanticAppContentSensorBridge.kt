@@ -10,10 +10,14 @@ import app.lifeos.core.runtime.life.SensorClass
 import app.lifeos.core.runtime.life.SensorDescriptor
 import app.lifeos.core.runtime.life.SensorHealthState
 import app.lifeos.core.runtime.life.SensorId
+import app.lifeos.core.runtime.android.RelevantAppAttentionPlan
+import app.lifeos.core.runtime.android.RelevantAppAttentionResolver
+import app.lifeos.core.runtime.android.RelevantAppSurfaceProfile
 import app.lifeos.core.runtime.policy.OwnerObservationType
 import app.lifeos.core.runtime.world.SensorAttentionCoverageProfile
 import app.lifeos.core.runtime.world.SensorStateDimensionSelector
 import app.lifeos.core.runtime.world.SensorStateDimensionSelectorType
+import app.lifeos.core.runtime.world.WorldGap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -99,9 +103,16 @@ internal class AndroidSemanticAppContentSensorBridge(
     )
 
     private val mutex = Mutex()
+    private val relevanceLock = Any()
+    private val relevanceResolver = RelevantAppAttentionResolver()
+    private val relevantSurfaces =
+        linkedMapOf<String, RelevantAppSurfaceProfile>()
 
     @Volatile
     private var attentionMode: SensorAttentionMode = descriptor.defaultMode
+
+    @Volatile
+    private var focusedPackages: Set<String> = emptySet()
 
     @Volatile
     private var healthReporter:
@@ -129,6 +140,33 @@ internal class AndroidSemanticAppContentSensorBridge(
     internal fun isActive(): Boolean =
         attentionMode != SensorAttentionMode.SUSPENDED
 
+    internal fun registerRelevantSurface(
+        profile: RelevantAppSurfaceProfile,
+    ) {
+        synchronized(relevanceLock) {
+            val key = profile.packageName + ":" + profile.surfaceKey
+            val existing = relevantSurfaces[key]
+            require(existing == null || existing == profile) {
+                "Relevant app surface key was reused with different evidence: $key"
+            }
+            relevantSurfaces[key] = profile
+        }
+    }
+
+    internal fun updateWorldGaps(
+        gaps: Collection<WorldGap>,
+    ): RelevantAppAttentionPlan {
+        val surfaces = synchronized(relevanceLock) {
+            relevantSurfaces.values.toList()
+        }
+        val plan = relevanceResolver.resolve(gaps, surfaces)
+        focusedPackages = plan.focusedPackages.toSet()
+        return plan
+    }
+
+    internal fun shouldObserve(packageName: String): Boolean =
+        isActive() && packageName in focusedPackages
+
     override suspend fun connected() {
         requireNotNull(healthReporter) {
             "Semantic app-content sensor must be attached before Accessibility connection"
@@ -145,10 +183,11 @@ internal class AndroidSemanticAppContentSensorBridge(
     }
 
     override suspend fun ingest(observation: InformationObservation) {
-        if (!isActive()) return
+        val packageName = observation.metadata["package"] ?: return
+        if (!shouldObserve(packageName)) return
 
         mutex.withLock {
-            if (!isActive()) return@withLock
+            if (!shouldObserve(packageName)) return@withLock
 
             val current = cursor
             val next = AppSensorCursor(
@@ -197,6 +236,17 @@ object ProductiveSemanticAppContentIngress {
     }
 
     fun active(): Boolean = handler.value?.isActive() == true
+
+    fun shouldObserve(packageName: String): Boolean =
+        handler.value?.shouldObserve(packageName) == true
+
+    internal fun registerRelevantSurface(
+        profile: RelevantAppSurfaceProfile,
+    ) {
+        requireNotNull(handler.value) {
+            "Semantic app-content sensor must be installed before relevant surface registration"
+        }.registerRelevantSurface(profile)
+    }
 
     suspend fun connected() {
         handler.filterNotNull().first().connected()

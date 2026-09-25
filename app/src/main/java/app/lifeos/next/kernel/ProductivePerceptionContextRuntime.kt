@@ -211,6 +211,7 @@ internal class ProductivePerceptionContextRuntime(
                 descriptor = bridge.descriptor,
                 coverage = bridge.attentionCoverage,
                 applyAttention = { mode -> bridge.applyAttention(mode) },
+                updateWorldGaps = { gaps -> bridge.updateWorldGaps(gaps) },
             ),
         )
         if (!attached) return
@@ -298,9 +299,14 @@ internal class ProductivePerceptionContextRuntime(
         gaps: Collection<WorldGap>,
         coverage: Collection<SensorAttentionCoverageProfile>,
     ): ProductiveSensorAttentionUpdate {
+        val canonicalGaps = gaps.sortedBy { it.id }
+        sensorTargets.values
+            .sortedBy { it.descriptor.sensorId.value }
+            .forEach { target -> target.updateWorldGaps(canonicalGaps) }
+
         val plan = gapAttentionCompiler.compile(
             sensors = sensorRegistry.snapshot(),
-            gaps = gaps,
+            gaps = canonicalGaps,
             coverage = coverage,
         )
         return ProductiveSensorAttentionUpdate(
