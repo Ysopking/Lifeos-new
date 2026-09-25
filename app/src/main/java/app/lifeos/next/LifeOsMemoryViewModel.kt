@@ -43,6 +43,7 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
 
     init {
         observeKernel()
+        observePersonalRuntimeWarmup()
     }
 
     fun editQuery(query: String) {
@@ -87,30 +88,49 @@ class LifeOsMemoryViewModel(application: Application) : AndroidViewModel(applica
     private fun observeKernel() {
         viewModelScope.launch {
             kernel.bootstrapState.collect { boot ->
-                latestPhotons = boot.photons
-                searchIndex = MemorySearchIndex.reuseOrBuild(searchIndex, latestPhotons)
-                latestSnapshot = owner.lifeMemoryRuntime.current()
-                mutableState.update { current ->
-                    val selected = current.selectedSourceId?.let { id ->
-                        MemoryWorkspaceProjector.resolveSource(
-                            photonId = id,
-                            searchIndex = searchIndex,
-                            snapshot = latestSnapshot,
-                        )
-                    }
-                    current.copy(
-                        workspace = MemoryWorkspaceProjector.project(
-                            snapshot = latestSnapshot,
-                            searchIndex = searchIndex,
-                            query = current.query,
-                        ),
-                        loading = boot.status == KernelBootstrapStatus.CREATED ||
-                            boot.status == KernelBootstrapStatus.LOADING,
-                        selectedSource = selected,
-                        error = boot.failureMessage ?: current.error,
-                    )
+                refreshFromRuntime(boot)
+            }
+        }
+    }
+
+    private fun observePersonalRuntimeWarmup() {
+        viewModelScope.launch {
+            owner.warmStartupReport.collect { report ->
+                if (
+                    report != null &&
+                    LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP in report.completedStages
+                ) {
+                    refreshFromRuntime(kernel.bootstrapState.value)
                 }
             }
+        }
+    }
+
+    private fun refreshFromRuntime(
+        boot: app.lifeos.next.kernel.KernelBootstrapState,
+    ) {
+        latestPhotons = boot.photons
+        searchIndex = MemorySearchIndex.reuseOrBuild(searchIndex, latestPhotons)
+        latestSnapshot = owner.lifeMemoryRuntime.current()
+        mutableState.update { current ->
+            val selected = current.selectedSourceId?.let { id ->
+                MemoryWorkspaceProjector.resolveSource(
+                    photonId = id,
+                    searchIndex = searchIndex,
+                    snapshot = latestSnapshot,
+                )
+            }
+            current.copy(
+                workspace = MemoryWorkspaceProjector.project(
+                    snapshot = latestSnapshot,
+                    searchIndex = searchIndex,
+                    query = current.query,
+                ),
+                loading = boot.status == KernelBootstrapStatus.CREATED ||
+                    boot.status == KernelBootstrapStatus.LOADING,
+                selectedSource = selected,
+                error = boot.failureMessage ?: current.error,
+            )
         }
     }
 

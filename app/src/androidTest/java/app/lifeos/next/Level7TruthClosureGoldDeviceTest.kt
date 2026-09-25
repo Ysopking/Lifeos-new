@@ -86,11 +86,31 @@ class Level7TruthClosureGoldDeviceTest {
             evaluator = promotionEvaluator,
         )
         val protocol = WorldEquationEvaluationProtocol(
-            version = "b200-truth-closure-protocol-v1",
+            version = "b200-truth-closure-protocol-v2",
             primaryMetric = WorldEquationPrimaryMetric.STABILIZATION_ITERATIONS,
             minimumIndependentRuns = 2,
             minimumDistinctWorkloads = 1,
             minimumActiveObservationsPerChangedCoefficient = 1,
+            realizationProfileFingerprint = StableFieldIds.fingerprint(
+                "b200-truth-closure-realization-profile/v1",
+                baselineSpec.fingerprint(),
+                candidateSpec.fingerprint(),
+            ),
+            stateSpaceFingerprint = StableFieldIds.fingerprint(
+                "b200-truth-closure-state-space/v1",
+                baselineSpec.schemaFingerprint(),
+            ),
+            observableContractFingerprint = StableFieldIds.fingerprint(
+                "b200-truth-closure-observable-contract/v1",
+                WorldEquationPrimaryMetric.STABILIZATION_ITERATIONS.name,
+            ),
+            failureCriteriaFingerprint = StableFieldIds.fingerprint(
+                "b200-truth-closure-failure-criteria/v1",
+                "invalid-equation",
+                "non-improving-shadow",
+                "non-improving-holdout",
+            ),
+            minimumExclusionRuns = 1,
         )
         evidenceCoordinator.beginShadow(candidateSpec, baselineSpec, protocol)
         evidenceCoordinator.recordObservation(
@@ -112,6 +132,17 @@ class Level7TruthClosureGoldDeviceTest {
                 activeCoefficientId = firstCoefficient.id,
                 runId = "b200-run-2",
                 partition = WorldEquationEvidencePartition.HOLDOUT,
+            ),
+        )
+        evidenceCoordinator.recordObservation(
+            candidateSpec,
+            baselineSpec,
+            goldObservation(
+                baselineSpec = baselineSpec,
+                candidateSpec = candidateSpec,
+                activeCoefficientId = firstCoefficient.id,
+                runId = "b200-exclusion-1",
+                partition = WorldEquationEvidencePartition.EXCLUSION,
             ),
         )
         val admissionGate = WorldEquationEvolutionAdmissionGate(
