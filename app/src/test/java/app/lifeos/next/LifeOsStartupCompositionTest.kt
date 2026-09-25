@@ -145,9 +145,9 @@ class LifeOsStartupCompositionTest {
                 listOf(LifeOsStartupStage.COGNITIVE_STATE_READY),
                 listOf(LifeOsStartupStage.RUNTIME_STARTED),
                 listOf(
-                    LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
                     LifeOsStartupStage.DEEP_SEARCH,
                     LifeOsStartupStage.SELF_HEALING,
+                    LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
                 ),
                 listOf(LifeOsStartupStage.DURABLE_GOALS),
             ),
