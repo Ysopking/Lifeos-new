@@ -71,6 +71,67 @@ class BootDefaultsTest {
     }
 
     @Test
+    fun secureRequiredCorruptionRemainsFatal() = runTest {
+        val result = CompositeStoreVerifier(
+            listOf(
+                probe(
+                    id = "protection",
+                    state = StoreState.CORRUPTED,
+                    criticality = BootCriticality.SECURE_REQUIRED,
+                )
+            )
+        ).verify()
+
+        assertFalse(result.canBootNormally)
+        assertFalse(result.requiresRecovery)
+        val validation = DefaultBootValidator().validate(contextWithStores(result))
+        assertIs<BootValidationResult.Fatal>(validation)
+    }
+
+    @Test
+    fun requiredDegradedCorruptionContinuesAsDegradedRecovery() = runTest {
+        val result = CompositeStoreVerifier(
+            listOf(
+                probe(
+                    id = "world-head",
+                    state = StoreState.CORRUPTED,
+                    criticality = BootCriticality.REQUIRED_DEGRADED,
+                )
+            )
+        ).verify()
+
+        assertFalse(result.canBootNormally)
+        assertTrue(result.requiresRecovery)
+        val validation = assertIs<BootValidationResult.Degraded>(
+            DefaultBootValidator().validate(contextWithStores(result))
+        )
+        assertTrue("stores-degraded" in validation.limitations)
+    }
+
+    @Test
+    fun optionalWarmCorruptionDoesNotBlockCriticalBootButIsReportedAsLimitation() = runTest {
+        val result = CompositeStoreVerifier(
+            listOf(
+                probe(
+                    id = "generated-tools",
+                    state = StoreState.CORRUPTED,
+                    criticality = BootCriticality.OPTIONAL_WARM,
+                )
+            )
+        ).verify()
+
+        assertTrue(result.canBootNormally)
+        assertFalse(result.requiresRecovery)
+        val validation = assertIs<BootValidationResult.Degraded>(
+            DefaultBootValidator().validate(contextWithStores(result))
+        )
+        assertEquals(
+            setOf("optional-store-degraded:generated-tools:corrupted"),
+            validation.limitations,
+        )
+    }
+
+    @Test
     fun defaultValidatorDegradesForUnreadablePhotonsWithoutDeclaringFatal() = runTest {
         val context = BootContext(
             stores = StoreVerificationResult(
@@ -95,8 +156,27 @@ class BootDefaultsTest {
         assertEquals(setOf("unreadable-photons:1"), result.limitations)
     }
 
-    private fun probe(id: String, state: StoreState) = object : StoreProbe {
+    private fun contextWithStores(stores: StoreVerificationResult) = BootContext(
+        stores = stores,
+        runtimeState = RehydratedRuntimeState(),
+        photons = PhotonRehydrationResult(
+            hot = emptyList(),
+            warm = emptyList(),
+            cold = emptyList(),
+            assessments = emptyList(),
+        ),
+        modules = ModuleRestoreSummary(restored = 1),
+        thoughtMatrix = ThoughtMatrixWarmupResult(),
+        capabilities = CapabilityWarmupResult(availableCapabilities = 1),
+    )
+
+    private fun probe(
+        id: String,
+        state: StoreState,
+        criticality: BootCriticality = BootCriticality.SECURE_REQUIRED,
+    ) = object : StoreProbe {
         override val storeId: String = id
+        override val criticality: BootCriticality = criticality
         override suspend fun probe() = StoreStatus(storeId, state)
     }
 }

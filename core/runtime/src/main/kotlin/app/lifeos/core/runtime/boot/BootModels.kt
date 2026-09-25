@@ -40,6 +40,7 @@ data class StoreStatus(
     val storeId: String,
     val state: StoreState,
     val message: String? = null,
+    val criticality: BootCriticality = BootCriticality.SECURE_REQUIRED,
 ) {
     init {
         require(storeId.isNotBlank()) { "Store id must not be blank" }

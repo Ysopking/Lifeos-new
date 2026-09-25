@@ -9,6 +9,9 @@ import kotlinx.coroutines.sync.withPermit
 
 interface StoreProbe {
     val storeId: String
+    val criticality: BootCriticality
+        get() = BootCriticality.SECURE_REQUIRED
+
     suspend fun probe(): StoreStatus
 }
 
@@ -31,7 +34,7 @@ class CompositeStoreVerifier(
             async {
                 semaphore.withPermit {
                     try {
-                        probe.probe()
+                        probe.probe().copy(criticality = probe.criticality)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Throwable) {
@@ -39,18 +42,32 @@ class CompositeStoreVerifier(
                             storeId = probe.storeId,
                             state = StoreState.UNAVAILABLE,
                             message = error.message ?: error::class.simpleName,
+                            criticality = probe.criticality,
                         )
                     }
                 }
             }
         }.awaitAll().sortedBy { it.storeId }
 
-        val fatal = statuses.any { it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH }
+        val fatal = statuses.any {
+            it.criticality == BootCriticality.SECURE_REQUIRED &&
+                (it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH)
+        }
         val recoverable = statuses.any {
-            it.state == StoreState.STALE ||
-                it.state == StoreState.PARTIALLY_RECOVERABLE ||
-                it.state == StoreState.LOCKED ||
-                it.state == StoreState.UNAVAILABLE
+            it.criticality != BootCriticality.OPTIONAL_WARM &&
+                (
+                    it.state == StoreState.STALE ||
+                        it.state == StoreState.PARTIALLY_RECOVERABLE ||
+                        it.state == StoreState.LOCKED ||
+                        it.state == StoreState.UNAVAILABLE ||
+                        (
+                            it.criticality == BootCriticality.REQUIRED_DEGRADED &&
+                                (
+                                    it.state == StoreState.CORRUPTED ||
+                                        it.state == StoreState.VERSION_MISMATCH
+                                    )
+                            )
+                    )
         }
         StoreVerificationResult(
             stores = statuses,
@@ -86,7 +103,8 @@ class CompositeBootDeltaDetector(
 class DefaultBootValidator : BootValidator {
     override suspend fun validate(context: BootContext): BootValidationResult {
         val fatalStores = context.stores.stores.filter {
-            it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH
+            it.criticality == BootCriticality.SECURE_REQUIRED &&
+                (it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH)
         }
         if (fatalStores.isNotEmpty()) {
             return BootValidationResult.Fatal(
@@ -107,6 +125,15 @@ class DefaultBootValidator : BootValidator {
 
         val limitations = buildSet {
             if (context.stores.requiresRecovery) add("stores-degraded")
+            context.stores.stores
+                .filter {
+                    it.criticality == BootCriticality.OPTIONAL_WARM &&
+                        it.state != StoreState.HEALTHY
+                }
+                .sortedBy { it.storeId }
+                .forEach {
+                    add("optional-store-degraded:${it.storeId}:${it.state.name.lowercase()}")
+                }
             if (context.runtimeState.degradedRehydrationNodeIds.isNotEmpty()) {
                 add(
                     "rehydration-degraded:" +
