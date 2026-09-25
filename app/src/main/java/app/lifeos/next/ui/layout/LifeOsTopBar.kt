@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -131,15 +129,20 @@ fun LifeOsTopBar(
                 }
             }
 
-            BadgedBox(
-                badge = {
-                    if (state.attentionCount > 0) {
-                        Badge(modifier = Modifier.clearAndSetSemantics { }) {
-                            Text(attentionBadgeLabel(state.attentionCount))
-                        }
-                    }
-                },
-            ) {
+            if (state.attentionCount > 0) {
+                TextButton(
+                    onClick = onOpenSystem,
+                    modifier = Modifier.semantics {
+                        contentDescription = systemActionDescription(state.attentionCount)
+                    },
+                ) {
+                    Text(
+                        text = ownerAttentionActionLabel(state.attentionCount),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            } else {
                 IconButton(
                     modifier = Modifier
                         .size(LifeOsTokens.Size.minimumTouchTarget)
@@ -152,11 +155,7 @@ fun LifeOsTopBar(
                         painter = painterResource(R.drawable.ic_system),
                         contentDescription = null,
                         modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
-                        tint = if (state.attentionCount > 0) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -173,8 +172,14 @@ internal fun destinationMenuLabel(destination: LifeOsDestination): String = when
 internal fun workspaceSwitcherDescription(selected: LifeOsDestination): String =
     "Bereich wechseln, aktuell ${destinationMenuLabel(selected)}"
 
-internal fun attentionBadgeLabel(attentionCount: Int): String =
-    if (attentionCount > MAX_BADGE_COUNT) "${MAX_BADGE_COUNT}+" else attentionCount.toString()
+internal fun ownerAttentionActionLabel(attentionCount: Int): String {
+    require(attentionCount > 0)
+    return if (attentionCount > MAX_BADGE_COUNT) {
+        "${MAX_BADGE_COUNT}+ offen"
+    } else {
+        "$attentionCount offen"
+    }
+}
 
 internal fun systemActionDescription(attentionCount: Int): String =
     if (attentionCount > 0) {
