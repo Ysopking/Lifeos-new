@@ -31,7 +31,11 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -131,26 +135,44 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
      * Historical revisions never appear here and therefore cannot look like duplicate Photon ids.
      */
     override suspend fun loadReport(): PhotonLoadReport = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            val index = ensureIndexLocked()
-            val failures = index.unreadableRevisionFiles.toMutableList()
-            val photons = mutableListOf<Photon>()
-            index.entries.values
-                .asSequence()
-                .filter { it.latest && !it.tombstoned }
-                .sortedBy { it.ref.photonId.value }
-                .forEach { entry ->
-                    try {
-                        photons += readRevisionInternal(entry.ref)
-                    } catch (error: Exception) {
-                        failures += revisionRelativePath(entry.ref)
+        val index = mutex.withLock { ensureIndexLocked() }
+        val entries = index.entries.values
+            .asSequence()
+            .filter { it.latest && !it.tombstoned }
+            .sortedBy { it.ref.photonId.value }
+            .toList()
+
+        val reads = mutableListOf<HeadReadResult>()
+        entries.chunked(MAX_PARALLEL_HEAD_READS).forEach { batch ->
+            reads += coroutineScope {
+                batch.map { entry ->
+                    async {
+                        try {
+                            HeadReadResult(
+                                photon = readRevisionInternal(entry.ref),
+                                failure = null,
+                            )
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            HeadReadResult(
+                                photon = null,
+                                failure = revisionRelativePath(entry.ref),
+                            )
+                        }
                     }
-                }
-            PhotonLoadReport(
-                photons = photons.sortedBy { it.provenance.createdAt },
-                unreadableFiles = failures.distinct().sorted(),
-            )
+                }.awaitAll()
+            }
         }
+
+        PhotonLoadReport(
+            photons = reads.mapNotNull(HeadReadResult::photon)
+                .sortedBy { it.provenance.createdAt },
+            unreadableFiles = (
+                index.unreadableRevisionFiles +
+                    reads.mapNotNull(HeadReadResult::failure)
+                ).distinct().sorted(),
+        )
     }
 
     override suspend fun loadAll(): List<Photon> {
@@ -801,6 +823,17 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
         }
     }
 
+    private data class HeadReadResult(
+        val photon: Photon?,
+        val failure: String?,
+    ) {
+        init {
+            require((photon == null) != (failure == null)) {
+                "Photon head read must contain exactly one outcome"
+            }
+        }
+    }
+
     private data class IndexState(
         val entries: Map<PhotonRevisionRef, PhotonIndexEntry>,
         val unreadableRevisionFiles: List<String> = emptyList(),
@@ -835,6 +868,7 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
         const val MAX_INDEX_ENTRIES = 250_000
         const val MAX_INDEX_TEXT_BYTES = 4 * 1024 * 1024
         const val MAX_TAGS = 10_000
+        const val MAX_PARALLEL_HEAD_READS = 8
         const val MAX_TOMBSTONE_BYTES = 8 * 1024
         const val MAX_TOMBSTONE_CONTAINER_BYTES = MAX_TOMBSTONE_BYTES + 1024
     }
