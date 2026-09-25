@@ -255,6 +255,7 @@ class LifeOsKernel internal constructor(
                 goalPhotonId = context.goalPhotonId, boundResultPhoton = context.boundResultPhoton,
             )
         },
+        durableRuntimeRequired = true,
     )
 
     private val semanticActionGraphRouter = SemanticActionGraphRouter(

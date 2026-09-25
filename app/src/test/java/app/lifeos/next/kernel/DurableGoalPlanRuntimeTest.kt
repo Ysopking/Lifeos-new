@@ -238,6 +238,38 @@ class DurableGoalPlanRuntimeTest {
     }
 
     @Test
+    fun `productive dispatcher blocks semantic action until durable runtime is installed`() = runTest {
+        val goal = goal(IntentType.COMMUNICATE, "Prepare this result for sharing")
+        val context = GoalActionContext(
+            goal = goal,
+            routing = routing(goal),
+            sourcePhoton = photon("source-durable-not-ready", tags = setOf("chat")),
+            goalPhotonId = PhotonId("goal-durable-not-ready"),
+        )
+        var communicationCalls = 0
+        val dispatcher = GoalActionDispatcher(
+            executeKnowledge = { error("unexpected knowledge") },
+            executeDeepSearch = { error("unexpected DeepSearch") },
+            executeImageGeneration = { error("unexpected image generation") },
+            executeImageTransform = { error("unexpected image transform") },
+            executeSchedule = { error("unexpected schedule") },
+            prepareCommunication = {
+                communicationCalls += 1
+                error("communication must not execute without durable runtime")
+            },
+            executionGuard = PassThroughGoalActionExecutionGuard,
+            durableRuntimeProvider = { null },
+            durableRuntimeRequired = true,
+        )
+
+        val result = dispatcher.execute(context)
+
+        val blocked = result.localCommunication as LocalCommunicationExecutionResult.Blocked
+        assertEquals("durable-goal-runtime-not-ready", blocked.reason)
+        assertEquals(0, communicationCalls)
+    }
+
+    @Test
     fun `communication completes on persisted preparation and never claims delivery`() = runTest {
         val goalRepository = MemoryGoalPlanRepository()
         val checkpointRepository = MemoryCheckpointRepository()

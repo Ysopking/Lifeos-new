@@ -55,6 +55,7 @@ class GoalActionDispatcher(
         ExternalEffectRuntimeRegistry.currentOrNull(),
     private val durableRuntimeProvider: () -> DurableGoalPlanRuntime? =
         DurableGoalPlanRuntimeRegistry::currentOrNull,
+    private val durableRuntimeRequired: Boolean = false,
     private val expandCapabilities: suspend (GoalActionContext) -> String =
         GenesisCapabilityExpansionRuntime::process,
 ) {
@@ -97,6 +98,12 @@ class GoalActionDispatcher(
         }
 
         val durableRuntime = durableRuntimeProvider()
+        if (durableRuntime == null && durableRuntimeRequired) {
+            return blocked(
+                context.goal.intent,
+                "durable-goal-runtime-not-ready",
+            )
+        }
         val durablePermit = when (val admission = durableRuntime?.prepare(context)) {
             null -> null
             is DurableGoalPlanAdmission.Ready -> admission.permit
