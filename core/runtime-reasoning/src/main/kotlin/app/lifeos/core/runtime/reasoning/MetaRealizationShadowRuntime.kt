@@ -89,6 +89,7 @@ class MetaRealizationShadowRuntime(
     private val mutex = Mutex()
     private val projectionHistoryAnalyzer =
         MetaRealizationProjectionHistoryAnalyzer()
+    private val shadowEvaluator = MetaRealizationShadowEvaluator()
     private val submissions = Channel<SelfStateProjectionResult>(capacity = submissionCapacity)
     private val rejectedSubmissions = AtomicLong(0L)
     private val history = ArrayDeque<MetaRealizationShadowSnapshot>()
@@ -196,6 +197,21 @@ class MetaRealizationShadowRuntime(
             componentKind = componentKind,
             projectionId = projectionId,
         )
+    }
+
+    /**
+     * Explicit on-demand predictive evaluation for one retained shadow snapshot.
+     * Evidence evaluation happens after the history lock is released.
+     */
+    suspend fun evaluateEvidence(
+        snapshotFingerprint: String,
+        evidence: MetaRealizationShadowEvidence,
+    ): MetaRealizationShadowAnalysis {
+        require(snapshotFingerprint.isNotBlank())
+        val snapshot = mutex.withLock {
+            history.singleOrNull { it.fingerprint == snapshotFingerprint }
+        } ?: error("Unknown meta-realization shadow snapshot: $snapshotFingerprint")
+        return shadowEvaluator.evaluate(snapshot, evidence)
     }
 
     fun close() {

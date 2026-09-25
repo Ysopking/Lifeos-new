@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.reasoning
 
+import app.lifeos.core.runtime.level7.EvidenceActionKind
 import app.lifeos.core.runtime.self.LifeOsSelfStateSnapshot
 import app.lifeos.core.runtime.self.SelfHealthState
 import app.lifeos.core.runtime.self.SelfLiveSourceState
@@ -135,6 +136,54 @@ class MetaRealizationShadowRuntimeTest {
 
         assertEquals(ProjectionClosureStatus.NOT_CLOSED, closure.status)
         assertFalse(closure.autonomousProjectionEstablished)
+        runtime.close()
+    }
+
+    @Test
+    fun `retained shadow snapshot can be evaluated explicitly without gaining authority`() = runTest {
+        val runtime = MetaRealizationShadowRuntime()
+        val ready = assertIs<MetaRealizationShadowStatus.Ready>(
+            runtime.observe(snapshot(T0, "world:evidence"))
+        ).snapshot
+        val law = DiscreteFutureLaw.create(
+            mapOf("continue" to 700_000L, "pause" to 300_000L)
+        )
+        val evidence = MetaRealizationShadowEvidence(
+            predictiveHistories = listOf(
+                PredictiveHistory(runtime.profile.fingerprint, "history:a", law),
+                PredictiveHistory(runtime.profile.fingerprint, "history:b", law),
+            ),
+            candidateSignatures = listOf(
+                PredictiveCandidateSignature.create(
+                    realizationProfileFingerprint = runtime.profile.fingerprint,
+                    candidateId = "candidate:a",
+                    observationalLawFingerprint = "observed:same",
+                    interventionalLawFingerprints = mapOf("ask-owner" to "law:a"),
+                ),
+                PredictiveCandidateSignature.create(
+                    realizationProfileFingerprint = runtime.profile.fingerprint,
+                    candidateId = "candidate:b",
+                    observationalLawFingerprint = "observed:same",
+                    interventionalLawFingerprints = mapOf("ask-owner" to "law:b"),
+                ),
+            ),
+            informationCandidates = listOf(
+                InformationActionCandidate.create(
+                    interventionId = "ask-owner",
+                    kind = EvidenceActionKind.ASK_USER,
+                    expectedInformationGainMicros = 800_000L,
+                    rationale = "Resolve shadow ambiguity",
+                )
+            ),
+            allowedActionKinds = setOf(EvidenceActionKind.ASK_USER),
+            budgetFingerprint = "budget:shadow",
+        )
+
+        val analysis = runtime.evaluateEvidence(ready.fingerprint, evidence)
+
+        assertEquals(MetaRealizationCycleState.AWAITING_OBSERVATION, analysis.cycle.state)
+        assertFalse(analysis.executionAuthority)
+        assertFalse(analysis.cycle.executionAuthority)
         runtime.close()
     }
 
