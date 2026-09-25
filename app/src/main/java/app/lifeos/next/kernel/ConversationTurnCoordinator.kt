@@ -36,6 +36,7 @@ import app.lifeos.core.runtime.personal.ProductivePersonalLanguageLearningRuntim
 import app.lifeos.core.runtime.world.StateDimensionEvidence
 import app.lifeos.core.runtime.world.LanguageStateSufficiencyPlan
 import app.lifeos.core.runtime.world.LanguageStateSufficiencyCoordinator
+import app.lifeos.core.runtime.world.WorldGap
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -213,6 +214,7 @@ internal class ConversationTurnCoordinator(
         )
 
         if (initialPlan.perceptionNeeds.isEmpty()) {
+            applyProductiveWorldGapAttention(initialAssessment.worldGaps)
             return RefinedLanguageTurn(
                 understanding = firstPass.understanding,
                 corpusDecision = firstPass.corpusDecision,
@@ -288,6 +290,7 @@ internal class ConversationTurnCoordinator(
             evidence = stateEvidence(targeted.context, finalPlan),
             at = photon.provenance.createdAt,
         )
+        applyProductiveWorldGapAttention(finalAssessment.worldGaps)
 
         return RefinedLanguageTurn(
             understanding = secondPass.understanding,
@@ -313,6 +316,23 @@ internal class ConversationTurnCoordinator(
                         .worldEvidenceFingerprint,
             ),
         )
+    }
+
+    /**
+     * B481 feeds only the final post-retrieval WorldGap state into productive sensor attention.
+     * Sensor scheduling is auxiliary: cancellation propagates, but sensor-attention failures cannot
+     * change language semantics, world truth, owner observation authority or effect authority.
+     */
+    private suspend fun applyProductiveWorldGapAttention(
+        gaps: Collection<WorldGap>,
+    ) {
+        try {
+            ProductiveWorldGapAttentionRuntimeRegistry.update(gaps)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // Keep interpretation/action authority independent from auxiliary sensor scheduling.
+        }
     }
 
     private suspend fun understandOnce(
