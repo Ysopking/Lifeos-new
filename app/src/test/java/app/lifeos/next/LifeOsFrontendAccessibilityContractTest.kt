@@ -3,6 +3,8 @@ package app.lifeos.next
 import app.lifeos.next.ui.LifeOsDestination
 import app.lifeos.next.ui.accessibility.LifeOsSemantics
 import app.lifeos.next.ui.components.LifeOsStateKind
+import app.lifeos.next.ui.layout.destinationMenuLabel
+import app.lifeos.next.ui.layout.workspaceSwitcherDescription
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -40,6 +42,14 @@ class LifeOsFrontendAccessibilityContractTest {
         assertEquals(
             "LIFEOS",
             LifeOsSemantics.navigationLabel(LifeOsDestination.CHAT.label),
+        )
+        assertEquals(LifeOsDestination.CHAT, LifeOsDestination.default)
+        assertEquals("Chat", destinationMenuLabel(LifeOsDestination.CHAT))
+        assertEquals("Heute", destinationMenuLabel(LifeOsDestination.GOALS))
+        assertEquals("Gedächtnis", destinationMenuLabel(LifeOsDestination.MEMORY))
+        assertEquals(
+            "Bereich wechseln, aktuell Chat",
+            workspaceSwitcherDescription(LifeOsDestination.CHAT),
         )
         assertTrue(LifeOsStateKind.entries.all { it.visibleLabel.isNotBlank() })
         assertEquals("Runtime: Bereit", LifeOsSemantics.stateText("Runtime", "Bereit"))
