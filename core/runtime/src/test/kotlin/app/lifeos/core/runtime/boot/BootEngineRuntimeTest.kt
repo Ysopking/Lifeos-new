@@ -294,6 +294,36 @@ class BootEngineRuntimeTest {
     }
 
     @Test
+    fun recoveryContinuesWhenCycleStoreWasRepaired() = runTest {
+        val fixture = fixture()
+        fixture.cycles.reportHealth = BootEngineCycleStoreHealth.REPAIRED
+
+        assertIs<BootEngineRecoveryResult.NoActiveCycle>(fixture.runtime().recover())
+    }
+
+    @Test
+    fun recoveryContinuesWhenCycleStoreIsDegradedWithoutActiveCycle() = runTest {
+        val fixture = fixture()
+        fixture.cycles.reportHealth = BootEngineCycleStoreHealth.DEGRADED
+
+        assertIs<BootEngineRecoveryResult.NoActiveCycle>(fixture.runtime().recover())
+    }
+
+    @Test
+    fun recoveryRejectsOnlyUnrecoverableCycleStore() = runTest {
+        val fixture = fixture()
+        fixture.cycles.reportHealth = BootEngineCycleStoreHealth.UNRECOVERABLE
+
+        val failure = assertFailsWith<IllegalArgumentException> {
+            fixture.runtime().recover()
+        }
+        assertEquals(
+            "BootEngine cycle store unavailable: forced-test-report",
+            failure.message,
+        )
+    }
+
+    @Test
     fun changedFrozenContextIsRejectedInsideActiveCycle() = runTest {
         val fixture = fixture()
         val runtime = fixture.runtime()
@@ -475,6 +505,7 @@ class BootEngineRuntimeTest {
 
     private class InMemoryCycles : BootEngineCycleRepository {
         private val values = linkedMapOf<CognitiveCycleId, BootEngineCycle>()
+        var reportHealth: BootEngineCycleStoreHealth = BootEngineCycleStoreHealth.HEALTHY
 
         override suspend fun create(cycle: BootEngineCycle): Boolean {
             if (cycle.cycleId in values) return false
@@ -488,6 +519,20 @@ class BootEngineRuntimeTest {
 
         override suspend fun loadActive(): BootEngineCycle? =
             values.values.firstOrNull { !it.terminal }
+
+        override suspend fun loadReport(): BootEngineCycleLoadReport =
+            BootEngineCycleLoadReport(
+                activeCycle = loadActive(),
+                latestCommitted = values.values
+                    .filter { it.state == BootEngineCycleState.COMMITTED }
+                    .maxByOrNull { requireNotNull(it.productiveHeadRevision) },
+                health = reportHealth,
+                message = if (reportHealth == BootEngineCycleStoreHealth.UNRECOVERABLE) {
+                    "forced-test-report"
+                } else {
+                    null
+                },
+            )
 
         override suspend fun compareAndSet(
             expectedFingerprint: String,

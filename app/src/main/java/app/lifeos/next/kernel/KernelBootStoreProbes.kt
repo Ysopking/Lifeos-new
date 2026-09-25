@@ -17,6 +17,7 @@ import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.worldmodel.EncryptedWorldModelRepository
 import app.lifeos.core.model.health.ProtectionStateLoadResult
+import app.lifeos.core.runtime.boot.BootEngineCycleStoreHealth
 import app.lifeos.core.runtime.boot.BootReadSession
 import app.lifeos.core.runtime.boot.BootSnapshotSource
 import app.lifeos.core.runtime.boot.StoreProbe
@@ -250,10 +251,11 @@ internal class KernelBootStoreProbes(
             }
             return StoreStatus(
                 storeId = storeId,
-                state = if (report.corrupted) {
-                    StoreState.PARTIALLY_RECOVERABLE
-                } else {
-                    StoreState.HEALTHY
+                state = when (report.health) {
+                    BootEngineCycleStoreHealth.HEALTHY -> StoreState.HEALTHY
+                    BootEngineCycleStoreHealth.REPAIRED,
+                    BootEngineCycleStoreHealth.DEGRADED -> StoreState.PARTIALLY_RECOVERABLE
+                    BootEngineCycleStoreHealth.UNRECOVERABLE -> StoreState.CORRUPTED
                 },
                 message = report.message,
             )
