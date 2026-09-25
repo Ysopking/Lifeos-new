@@ -79,6 +79,7 @@ internal class ProductivePerceptionContextRuntime(
     private var latestWorldGaps: List<WorldGap> = emptyList()
     private var hardwareBridge: AndroidHardwareSensorBridge? = null
     private var notificationBridge: LiveNotificationSensorBridge? = null
+    private var appUsageBridge: AndroidAppUsageSensorBridge? = null
 
     /**
      * Registers the concrete hardware bridge contract without starting physical acquisition.
@@ -127,6 +128,40 @@ internal class ProductivePerceptionContextRuntime(
     }
 
     /**
+     * B484 registers UsageStats as a bounded periodic context sensor. Android special access only
+     * controls source availability; Owner Observation Policy remains the persistence authority.
+     */
+    suspend fun attachAppUsageBridge(
+        bridge: AndroidAppUsageSensorBridge,
+    ) {
+        val current = appUsageBridge
+        if (current === bridge) return
+        require(current == null) {
+            "Productive perception runtime cannot replace an attached app-usage bridge"
+        }
+        sensorRegistry.register(bridge.descriptor)
+        registerCoverage(bridge.attentionCoverage)
+        bridge.bindHealthReporter { health, failure ->
+            updateSensorHealth(
+                sensorId = bridge.descriptor.sensorId,
+                health = health,
+                failure = failure,
+            )
+        }
+        val initialHealth = bridge.currentHealth()
+        sensorRegistry.updateHealth(
+            bridge.descriptor.sensorId,
+            initialHealth,
+            if (initialHealth == SensorHealthState.HEALTHY) {
+                null
+            } else {
+                "usage-access-not-granted"
+            },
+        )
+        appUsageBridge = bridge
+    }
+
+    /**
      * Applies registry defaults after the kernel is ready. Unavailable sensors fail closed to
      * SUSPENDED until their lifecycle reports HEALTHY.
      */
@@ -138,10 +173,12 @@ internal class ProductivePerceptionContextRuntime(
             latestWorldGaps.toList() to
                 coverageProfiles.values.sortedBy { it.sensorId.value }
         }
-        return applyWorldGaps(
+        val decisions = applyWorldGaps(
             gaps = snapshot.first,
             coverage = snapshot.second,
         ).decisions
+        appUsageBridge?.start()
+        return decisions
     }
 
     /**
@@ -159,6 +196,11 @@ internal class ProductivePerceptionContextRuntime(
                 ?.let { decision -> bridge.applyAttention(decision.mode) }
         }
         notificationBridge?.let { bridge ->
+            decisions
+                .firstOrNull { it.sensorId == bridge.descriptor.sensorId }
+                ?.let { decision -> bridge.applyAttention(decision.mode) }
+        }
+        appUsageBridge?.let { bridge ->
             decisions
                 .firstOrNull { it.sensorId == bridge.descriptor.sensorId }
                 ?.let { decision -> bridge.applyAttention(decision.mode) }
