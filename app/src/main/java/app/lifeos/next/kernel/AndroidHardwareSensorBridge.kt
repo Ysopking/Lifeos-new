@@ -44,7 +44,7 @@ internal class AndroidHardwareSensorBridge(
     private val clock: Clock = Clock.systemUTC(),
     private val scope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Default),
-) : SensorEventListener {
+) : SensorEventListener, ProductiveSensorAttentionTarget {
     private val sensorManager =
         requireNotNull(
             context.applicationContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
@@ -52,7 +52,7 @@ internal class AndroidHardwareSensorBridge(
             "Android SensorManager unavailable"
         }
 
-    internal val descriptor = SensorDescriptor(
+    override val descriptor = SensorDescriptor(
         sensorId = SensorId(SENSOR_ID),
         sensorClass = SensorClass.DEVICE,
         adapterVersion = ADAPTER_VERSION,
@@ -61,7 +61,7 @@ internal class AndroidHardwareSensorBridge(
         supportedSurfaces = setOf(ObservationSurfaceKind.SENSOR),
         defaultMode = SensorAttentionMode.EVENT_DRIVEN,
     )
-    internal val attentionCoverage = SensorAttentionCoverageProfile(
+    override val attentionCoverage = SensorAttentionCoverageProfile(
         sensorId = descriptor.sensorId,
         stateDimensions = listOf(
             SensorStateDimensionSelector(
@@ -118,7 +118,7 @@ internal class AndroidHardwareSensorBridge(
      * EVENT_DRIVEN subscribes only to Android on-change sensors. PERIODIC/FOCUSED may additionally
      * activate continuous sensors; SUSPENDED turns the bridge off.
      */
-    fun applyAttention(mode: SensorAttentionMode): Int {
+    override fun applyAttention(mode: SensorAttentionMode): Int {
         attentionMode = mode
         sensorManager.unregisterListener(this)
         lastAcceptedEventNanos.clear()
