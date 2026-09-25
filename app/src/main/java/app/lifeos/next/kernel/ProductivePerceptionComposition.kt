@@ -2,7 +2,7 @@ package app.lifeos.next.kernel
 
 import android.content.Context
 import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
-import app.lifeos.core.runtime.life.OwnerObservationPolicyLedger
+import app.lifeos.core.runtime.policy.OwnerObservationPolicyLedger
 
 internal data class ProductivePerceptionBinding(
     val contextRuntime: ProductivePerceptionContextRuntime,
