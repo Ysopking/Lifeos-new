@@ -181,7 +181,7 @@ internal class AndroidAppUsageSensorBridge(
         observationType = OwnerObservationType.APP_USAGE,
         resourcePrefix = PrivateOwnerObservationPolicyBaseline.APP_USAGE_RESOURCE_PREFIX,
         supportedSurfaces = setOf(ObservationSurfaceKind.APP_USAGE),
-        defaultMode = SensorAttentionMode.PERIODIC,
+        defaultMode = SensorAttentionMode.SUSPENDED,
     )
 
     internal val attentionCoverage = SensorAttentionCoverageProfile(
