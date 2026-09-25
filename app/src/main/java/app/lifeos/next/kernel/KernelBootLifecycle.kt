@@ -271,7 +271,9 @@ internal class KernelBootLifecycle(
             } catch (_: Exception) {
                 null
             }
-            hydrated?.let(::applyWarmPhotonHydration)
+            if (hydrated != null) {
+                applyWarmPhotonHydration(hydrated)
+            }
             return
         }
 
@@ -344,7 +346,7 @@ internal class KernelBootLifecycle(
         }
     }
 
-    private fun applyWarmPhotonHydration(hydrated: PhotonRehydrationResult) {
+    private suspend fun applyWarmPhotonHydration(hydrated: PhotonRehydrationResult) {
         val current = mutableBootstrapState.value
         val currentRevisionById = current.photons.associate { it.id to it.revision }
         (hydrated.hot + hydrated.warm)
