@@ -62,6 +62,7 @@ import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
 import app.lifeos.next.kernel.ProductivePerceptionContextRuntime
+import app.lifeos.next.kernel.ProductiveWorldGapAttentionRuntimeRegistry
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -173,6 +174,9 @@ internal class ProcessRuntimeInstaller(
                 createKernel = {
                     productivePerceptionContext =
                         ProductivePerceptionContextRuntime(ownerObservationPolicy)
+                    ProductiveWorldGapAttentionRuntimeRegistry.install(
+                        productivePerceptionContext
+                    )
                     kernel = LifeOsKernelFactory(
                         context = appContext,
                         hardwareResourceIntelligence =
