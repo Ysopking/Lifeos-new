@@ -78,31 +78,29 @@ class EncryptedProductiveWorldHeadRepository(
     override suspend fun loadReport(): ProductiveWorldHeadLoadReport =
         withContext(Dispatchers.IO) {
             processMutex.withLock {
-                val dataRoot = prepareDataRoot()
-                val headFile = dataRoot.resolve(HEAD_FILE)
-                if (!exists(headFile)) {
-                    return@withLock ProductiveWorldHeadLoadReport(
-                        head = null,
-                        corrupted = false,
-                        message = null,
-                    )
-                }
-                runCatching { readHead(headFile, dataRoot) }.fold(
-                    onSuccess = {
+                runCatching {
+                    val dataRoot = prepareDataRoot()
+                    val headFile = dataRoot.resolve(HEAD_FILE)
+                    if (!exists(headFile)) {
                         ProductiveWorldHeadLoadReport(
-                            head = it,
+                            head = null,
                             corrupted = false,
                             message = null,
                         )
-                    },
-                    onFailure = {
+                    } else {
                         ProductiveWorldHeadLoadReport(
-                            head = null,
-                            corrupted = true,
-                            message = it.message ?: "productive-world-head-corrupt",
+                            head = readHead(headFile, dataRoot),
+                            corrupted = false,
+                            message = null,
                         )
-                    },
-                )
+                    }
+                }.getOrElse { error ->
+                    ProductiveWorldHeadLoadReport(
+                        head = null,
+                        corrupted = true,
+                        message = error.message ?: "productive-world-head-corrupt",
+                    )
+                }
             }
         }
 
