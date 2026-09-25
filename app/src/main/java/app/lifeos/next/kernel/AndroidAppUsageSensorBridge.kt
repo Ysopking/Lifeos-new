@@ -303,11 +303,17 @@ internal class AndroidAppUsageSensorBridge(
 
             if (beginMillis > endMillis) return@withLock 0
 
-            val platformEvents = source.queryEvents(
+            val boundedRead = readBoundedWindow(
                 beginMillis = beginMillis,
                 endMillis = endMillis,
-                maxEvents = APP_USAGE_BUDGET.maxObservations,
-            )
+            ) ?: run {
+                reportHealth(
+                    SensorHealthState.DEGRADED,
+                    "app-usage-density-exceeds-batch-budget",
+                )
+                return@withLock 0
+            }
+            val platformEvents = boundedRead.events
             val candidateForeground = LinkedHashMap(openForegroundByPackage)
             val pollAt = Instant.ofEpochMilli(endMillis)
             val observations = buildList {
@@ -367,7 +373,7 @@ internal class AndroidAppUsageSensorBridge(
                     sensorId = descriptor.sensorId,
                     observations = observations,
                     nextCursor = next,
-                    exhausted = platformEvents.size < APP_USAGE_BUDGET.maxObservations,
+                    exhausted = boundedRead.consumedThroughMillis == endMillis,
                 )
                 commitBatch.commit(
                     descriptor = descriptor,
@@ -381,10 +387,43 @@ internal class AndroidAppUsageSensorBridge(
             openForegroundByPackage.clear()
             openForegroundByPackage.putAll(candidateForeground)
             pruneForegroundSessions(pollAt)
-            lastQueryEndMillis = endMillis
+            lastQueryEndMillis = boundedRead.consumedThroughMillis
             observations.size
         }
     }
+
+    /**
+     * UsageStats has no stable cursor token. Shrink an overloaded time window until the whole
+     * selected interval fits one sensor batch instead of silently advancing past unread events.
+     * More than one batch worth of events at a single millisecond fails closed as DEGRADED.
+     */
+    private fun readBoundedWindow(
+        beginMillis: Long,
+        endMillis: Long,
+    ): BoundedPlatformRead? {
+        var boundedEnd = endMillis
+        repeat(MAX_QUERY_WINDOW_SPLITS) {
+            val events = source.queryEvents(
+                beginMillis = beginMillis,
+                endMillis = boundedEnd,
+                maxEvents = APP_USAGE_BUDGET.maxObservations + 1,
+            )
+            if (events.size <= APP_USAGE_BUDGET.maxObservations) {
+                return BoundedPlatformRead(
+                    events = events,
+                    consumedThroughMillis = boundedEnd,
+                )
+            }
+            if (boundedEnd <= beginMillis) return null
+            boundedEnd = beginMillis + (boundedEnd - beginMillis) / 2L
+        }
+        return null
+    }
+
+    private data class BoundedPlatformRead(
+        val events: List<PlatformAppUsageEvent>,
+        val consumedThroughMillis: Long,
+    )
 
     private suspend fun reportHealth(
         health: SensorHealthState,
@@ -425,6 +464,7 @@ internal class AndroidAppUsageSensorBridge(
         const val APP_USAGE_SALIENCE = 0.45
         const val INITIAL_LOOKBACK_MILLIS = 60_000L
         const val MAX_OPEN_SESSION_MILLIS = 24L * 60L * 60L * 1_000L
+        const val MAX_QUERY_WINDOW_SPLITS = 64
 
         val APP_USAGE_BUDGET = AppSensorBudget(
             maxObservations = 64,
