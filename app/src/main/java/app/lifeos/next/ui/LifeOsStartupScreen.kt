@@ -33,13 +33,33 @@ fun LifeOsStartupScreen(
                 LifeOsProcessStartupPhase.STARTING -> {
                     CircularProgressIndicator(modifier = Modifier.padding(top = 24.dp, bottom = 16.dp))
                     Text(state.stage, style = MaterialTheme.typography.bodyLarge)
+                    state.durationMillis?.let { duration ->
+                        Text(
+                            "${duration} ms",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
                 }
                 LifeOsProcessStartupPhase.FAILED -> {
                     Text(
-                        state.failure ?: "BootEngine konnte nicht gestartet werden.",
+                        state.stage,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 20.dp),
+                    )
+                    state.diagnosticCode?.let { code ->
+                        Text(
+                            code,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                    Text(
+                        state.failure ?: "LIFEOS konnte nicht gestartet werden.",
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(top = 20.dp),
+                        modifier = Modifier.padding(top = 12.dp),
                     )
                 }
                 LifeOsProcessStartupPhase.READY -> {

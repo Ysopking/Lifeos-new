@@ -3,18 +3,14 @@ package app.lifeos.next
 import android.app.Application
 import app.lifeos.core.data.LiveSourceSyncSnapshot
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
-import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.life.DurableLifeMemoryRuntime
 import app.lifeos.core.runtime.life.InitialDataBootstrapRuntime
 import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
-import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
-import app.lifeos.core.runtime.self.SelfObservationCapture
 import app.lifeos.core.runtime.self.SelfObservationCoordinator
 import app.lifeos.core.runtime.self.SelfObservationDecisionTraceRecorder
 import app.lifeos.core.runtime.self.SelfObservationTrigger
-import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.next.kernel.CanonicalLifePhotonRepository
@@ -121,10 +117,13 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private lateinit var sharedFileEvidenceMigration: SharedFileEvidenceMigrationCoordinator
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
+    private val mutableWarmStartupReport = MutableStateFlow<LifeOsWarmStartupReport?>(null)
     private val mutableSelfObservationAnalysis =
         MutableStateFlow<SelfObservationAnalysisState?>(null)
 
     override val startupState: StateFlow<LifeOsProcessStartupState> = mutableStartupState.asStateFlow()
+    internal val warmStartupReport: StateFlow<LifeOsWarmStartupReport?> =
+        mutableWarmStartupReport.asStateFlow()
     val selfObservationAnalysis: StateFlow<SelfObservationAnalysisState?> =
         mutableSelfObservationAnalysis.asStateFlow()
 
@@ -132,7 +131,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         PrivatePermissionController(
             application = this,
             initialDataSources = { initialDataSources },
-            startupReady = { startupState.value.ready },
+            startupReady = { startupState.value.actionable },
         )
     }
 
@@ -141,18 +140,18 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         startupScope.launch {
             try {
                 initializeRuntime()
-                mutableStartupState.value = LifeOsProcessStartupState.ready()
-                refreshInitialDataBootstrap()
-                refreshLiveSources()
-                refreshStorageIntelligence()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                mutableStartupState.value = LifeOsProcessStartupState.failed(
-                    error.message ?: error::class.simpleName ?: "lifeos-startup-failed",
-                )
+                mutableStartupState.value =
+                    LifeOsStartupStateProjector.projectStartupFailure(mutableStartupState.value, error)
             }
         }
+    }
+
+    private fun onStartupEvent(event: LifeOsStartupStageEvent) {
+        mutableStartupState.value =
+            LifeOsStartupStateProjector.projectEvent(mutableStartupState.value, event)
     }
 
     private suspend fun initializeRuntime() {
@@ -162,21 +161,24 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             canRunStorageIntelligence = { hasBroadFileAccess() },
             onStorageSnapshot = { snapshot ->
                 latestStorageIntelligence = snapshot
-                if (::sharedFileEvidenceMigration.isInitialized) sharedFileEvidenceMigration.onStorageSnapshot(snapshot)
-                if (::liveSourceController.isInitialized) liveSourceController.refresh()
+                if (::sharedFileEvidenceMigration.isInitialized) {
+                    sharedFileEvidenceMigration.onStorageSnapshot(snapshot)
+                }
+                if (::liveSourceController.isInitialized) {
+                    liveSourceController.refresh()
+                }
             },
             onStorageFailure = { failure ->
                 storageIntelligenceFailure = failure
             },
-            onStageReady = { evidence ->
-                mutableStartupState.value = LifeOsProcessStartupState.starting(
-                    stage =
-                        "BootEngine · " +
-                            evidence.stage.name.lowercase().replace('_', ' '),
-                )
-            },
+            onStartupEvent = ::onStartupEvent,
+            onCriticalReady = ::applyCriticalInstall,
         ).install()
 
+        applyWarmInstall(installed.warm)
+    }
+
+    private suspend fun applyCriticalInstall(installed: ProcessRuntimeCriticalInstallResult) {
         kernel = installed.kernel
         photonIngress = installed.photonIngress
         generatedToolStatusReader = installed.generatedToolStatusReader
@@ -192,88 +194,75 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         goalDecisionTraceRecorder = installed.goalDecisionTraceRecorder
         lifePhotonRepository = installed.lifePhotonRepository
         lifeMemoryRuntime = installed.lifeMemoryRuntime
-        sharedFileEvidenceMigration = SharedFileEvidenceMigrationCoordinator(this, lifeMemoryRuntime)
         multimodalPerception = installed.multimodalPerception
-        selfHealingRuntime = installed.selfHealingRuntime
-        escalationRuntime = installed.escalationRuntime
-
-        val selfObservationHealthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
-            "Self observation requires the productive HealthGraph"
-        }
-        liveSourceController = LiveSourceProcessController(
+        val applicationRuntime = LifeOsCriticalApplicationRuntimeFactory.create(
             context = this,
-            photonIngress = photonIngress,
-            healthGraph = selfObservationHealthGraph,
-            onSnapshot = { snapshot ->
-                latestLiveSourceSync = snapshot
-                sharedFileEvidenceMigration.onLiveSnapshot(snapshot)
+            installed = installed,
+            startupActionable = { startupState.value.actionable },
+            activeRepairs = {
+                if (::selfHealingRuntime.isInitialized) selfHealingRuntime.ledger.active()
+                else emptyList()
             },
-            onFailure = { failure ->
-                liveSourceSyncFailure = failure
-            },
-        )
-        selfObservationRuntime = SelfObservationRuntime(
-            photonIndex = kernel.photonStore::indexReport,
-            memorySnapshot = lifeMemoryRuntime::current,
-            authorityReader = SelfObservationAuthorityRuntimeRegistry.requireCurrent(),
-            topologySnapshot = LifeOsProcessTopology::snapshot,
-            healthSnapshot = { selfObservationHealthGraph.snapshot() },
-            hardwareSnapshot = hardwareResourceIntelligence::currentHardwareSnapshot,
-            toolStatus = generatedToolStatusReader::snapshot,
-            activeRepairs = selfHealingRuntime.ledger::active,
-            liveSourceSnapshot = { latestLiveSourceSync },
+            latestLiveSourceSync = { latestLiveSourceSync },
             liveSourceFailure = { liveSourceSyncFailure },
+            onLiveSourceSnapshot = { latestLiveSourceSync = it },
+            onLiveSourceFailure = { liveSourceSyncFailure = it },
+            onSelfObservationAnalysis = { mutableSelfObservationAnalysis.value = it },
+            onInitialDataSnapshot = { latestInitialDataBootstrap = it },
+            onInitialDataFailure = { initialDataBootstrapFailure = it },
         )
-        selfObservationCoordinator = SelfObservationCoordinator(
-            capture = SelfObservationCapture {
-                selfObservationRuntime.capture()
-            }
-        )
-        selfObservationController = SelfObservationProcessController(
-            coordinator = selfObservationCoordinator,
-            healthGraph = selfObservationHealthGraph,
-            traceRecorder = selfObservationDecisionTraceRecorder,
-            onAnalysis = { analysis ->
-                mutableSelfObservationAnalysis.value = analysis
-            },
-        )
-        selfObservationController.start()
-        liveSourceController.startContinuousRefresh()
+        sharedFileEvidenceMigration = applicationRuntime.sharedFileEvidenceMigration
+        liveSourceController = applicationRuntime.liveSourceController
+        selfObservationRuntime = applicationRuntime.selfObservationRuntime
+        selfObservationCoordinator = applicationRuntime.selfObservationCoordinator
+        selfObservationController = applicationRuntime.selfObservationController
+        initialDataSources = applicationRuntime.initialDataSources
+        initialDataBootstrap = applicationRuntime.initialDataBootstrap
+        initialDataController = applicationRuntime.initialDataController
 
-        initialDataSources = AndroidInitialDataSourceCatalog(this)
-        initialDataBootstrap = InitialDataBootstrapRuntime(
-            photons = lifePhotonRepository,
-            memory = lifeMemoryRuntime,
-            sources = initialDataSources.sources,
+        val availability = kernel.bootstrapState.value.availability
+        mutableStartupState.value = LifeOsProcessStartupState.ready(availability)
+    }
+
+    private suspend fun applyWarmInstall(installed: ProcessRuntimeWarmInstallResult) {
+        mutableWarmStartupReport.value = installed.startupReport
+        installed.selfHealingRuntime?.let { selfHealingRuntime = it }
+        installed.escalationRuntime?.let { escalationRuntime = it }
+        mutableStartupState.value = LifeOsStartupStateProjector.projectWarmCompletion(
+            current = mutableStartupState.value,
+            kernelAvailability = kernel.bootstrapState.value.availability,
+            report = installed.startupReport,
         )
-        initialDataController = InitialDataProcessController(
-            bootstrap = { initialDataBootstrap },
-            startupReady = { startupState.value.ready },
-            onSnapshot = { snapshot ->
-                latestInitialDataBootstrap = snapshot
-            },
-            onFailure = { failure ->
-                initialDataBootstrapFailure = failure
-            },
-        )
+        if (startupState.value.actionable) {
+            selfObservationController.start()
+            liveSourceController.startContinuousRefresh()
+            refreshInitialDataBootstrap()
+            refreshLiveSources()
+            refreshStorageIntelligence()
+            refreshSelfObservation()
+        }
     }
 
     fun refreshSelfObservation() {
+        if (!startupState.value.actionable) return
         if (!::selfObservationController.isInitialized) return
         selfObservationController.refresh()
     }
 
     internal fun requestSelfObservation(trigger: SelfObservationTrigger) {
+        if (!startupState.value.actionable) return
         if (!::selfObservationController.isInitialized) return
         selfObservationController.request(trigger)
     }
 
     fun refreshStorageIntelligence() {
+        if (!startupState.value.actionable) return
         if (!::storageIntelligenceController.isInitialized) return
         storageIntelligenceController.refresh()
     }
 
     fun refreshLiveSources() {
+        if (!startupState.value.actionable) return
         if (::liveSourceController.isInitialized) {
             liveSourceController.refresh()
         }
@@ -295,6 +284,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         permissionController.hasBroadFileAccess()
 
     fun refreshInitialDataBootstrap() {
+        if (!startupState.value.actionable) return
         if (!::initialDataController.isInitialized) return
         initialDataController.refresh()
     }

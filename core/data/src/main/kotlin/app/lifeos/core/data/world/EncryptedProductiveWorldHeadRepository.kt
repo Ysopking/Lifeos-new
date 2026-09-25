@@ -1,6 +1,9 @@
 package app.lifeos.core.data.world
 
 import android.content.Context
+import app.lifeos.core.data.security.DurableSchemaDescriptor
+import app.lifeos.core.data.security.DurableSchemaGenerationStore
+import app.lifeos.core.data.security.DurableSchemaSource
 import app.lifeos.core.data.security.EncryptedLedgerVaultSupport
 import app.lifeos.core.runtime.world.CognitiveCycleId
 import app.lifeos.core.runtime.world.ProductiveWorldHead
@@ -23,16 +26,22 @@ class EncryptedProductiveWorldHeadRepository(
     context: Context,
 ) : ProductiveWorldHeadRepository {
     private val directory = context.filesDir.resolve(ROOT_DIRECTORY)
-    private val headFile = directory.resolve(HEAD_FILE)
+    private val schemaStore = DurableSchemaGenerationStore(
+        root = directory,
+        descriptor = SCHEMA_DESCRIPTOR,
+    )
+    @Volatile
+    private var preparedDataRoot: File? = null
     private val key: SecretKey by lazy {
         EncryptedLedgerVaultSupport.loadOrCreateKey(KEY_ALIAS)
     }
 
     override suspend fun load(): ProductiveWorldHead? = withContext(Dispatchers.IO) {
         processMutex.withLock {
-            ensureDirectory()
+            val dataRoot = prepareDataRoot()
+            val headFile = dataRoot.resolve(HEAD_FILE)
             if (!exists(headFile)) return@withLock null
-            readHead(headFile)
+            readHead(headFile, dataRoot)
         }
     }
 
@@ -41,8 +50,9 @@ class EncryptedProductiveWorldHeadRepository(
         next: ProductiveWorldHead,
     ): Boolean = withContext(Dispatchers.IO) {
         processMutex.withLock {
-            ensureDirectory()
-            val current = if (exists(headFile)) readHead(headFile) else null
+            val dataRoot = prepareDataRoot()
+            val headFile = dataRoot.resolve(HEAD_FILE)
+            val current = if (exists(headFile)) readHead(headFile, dataRoot) else null
             val currentRevision = current?.revision
             if (currentRevision != expectedRevision) return@withLock false
             require(next.revision == (expectedRevision ?: 0L) + 1L) {
@@ -53,12 +63,12 @@ class EncryptedProductiveWorldHeadRepository(
             }
             current?.let {
                 require(it.fingerprint.isNotBlank())
-                require(it == readHead(headFile)) {
+                require(it == readHead(headFile, dataRoot)) {
                     "Productive world head changed during CAS validation"
                 }
             }
-            writeHead(headFile, next)
-            val persisted = readHead(headFile)
+            writeHead(headFile, next, dataRoot)
+            val persisted = readHead(headFile, dataRoot)
             require(persisted.revision == next.revision)
             require(persisted.fingerprint == next.fingerprint)
             true
@@ -68,39 +78,44 @@ class EncryptedProductiveWorldHeadRepository(
     override suspend fun loadReport(): ProductiveWorldHeadLoadReport =
         withContext(Dispatchers.IO) {
             processMutex.withLock {
-                ensureDirectory()
-                if (!exists(headFile)) {
-                    return@withLock ProductiveWorldHeadLoadReport(
-                        head = null,
-                        corrupted = false,
-                        message = null,
-                    )
-                }
-                runCatching { readHead(headFile) }.fold(
-                    onSuccess = {
+                runCatching {
+                    val dataRoot = prepareDataRoot()
+                    val headFile = dataRoot.resolve(HEAD_FILE)
+                    if (!exists(headFile)) {
                         ProductiveWorldHeadLoadReport(
-                            head = it,
+                            head = null,
                             corrupted = false,
                             message = null,
                         )
-                    },
-                    onFailure = {
+                    } else {
                         ProductiveWorldHeadLoadReport(
-                            head = null,
-                            corrupted = true,
-                            message = it.message ?: "productive-world-head-corrupt",
+                            head = readHead(headFile, dataRoot),
+                            corrupted = false,
+                            message = null,
                         )
-                    },
-                )
+                    }
+                }.getOrElse { error ->
+                    ProductiveWorldHeadLoadReport(
+                        head = null,
+                        corrupted = true,
+                        message = error.message ?: "productive-world-head-corrupt",
+                    )
+                }
             }
         }
 
-    private fun readHead(file: File): ProductiveWorldHead {
+    private fun readHead(
+        file: File,
+        dataRoot: File,
+    ): ProductiveWorldHead {
+        require(file == dataRoot.resolve(HEAD_FILE)) {
+            "Unexpected productive world head path"
+        }
         val plaintext = EncryptedLedgerVaultSupport.decrypt(
             container = EncryptedLedgerVaultSupport.readAtomic(file, MAX_PLAINTEXT_BYTES),
             key = key,
             maxPlaintextBytes = MAX_PLAINTEXT_BYTES,
-            associatedData = associatedData(file),
+            associatedData = associatedData(dataRoot),
         )
         return ProductiveWorldHeadCodec.decode(plaintext)
     }
@@ -108,26 +123,81 @@ class EncryptedProductiveWorldHeadRepository(
     private fun writeHead(
         file: File,
         head: ProductiveWorldHead,
+        dataRoot: File,
     ) {
+        require(file == dataRoot.resolve(HEAD_FILE)) {
+            "Unexpected productive world head path"
+        }
         val plaintext = ProductiveWorldHeadCodec.encode(head)
         val encrypted = EncryptedLedgerVaultSupport.encrypt(
             plaintext = plaintext,
             key = key,
             maxPlaintextBytes = MAX_PLAINTEXT_BYTES,
-            associatedData = associatedData(file),
+            associatedData = associatedData(dataRoot),
         )
         EncryptedLedgerVaultSupport.atomicWrite(file, encrypted)
     }
 
-    private fun associatedData(file: File): ByteArray {
-        require(file == headFile) { "Unexpected productive world head path" }
-        return "$ROOT_DIRECTORY/$HEAD_FILE".encodeToByteArray()
-    }
-
-    private fun ensureDirectory() {
+    private fun prepareDataRoot(): File {
+        preparedDataRoot?.let { return it }
         check(directory.isDirectory || directory.mkdirs()) {
             "Productive world head vault unavailable"
         }
+        val legacyHead = directory.resolve(HEAD_FILE)
+        val prepared = schemaStore.prepare(
+            legacyExists = { exists(legacyHead) },
+            migrate = { source, target ->
+                val sourceHead = source.root.resolve(HEAD_FILE)
+                if (exists(sourceHead)) {
+                    val head = when (source) {
+                        is DurableSchemaSource.Legacy ->
+                            readLegacyHead(sourceHead)
+                        is DurableSchemaSource.Generation ->
+                            readHead(sourceHead, source.root)
+                    }
+                    writeHead(target.resolve(HEAD_FILE), head, target)
+                }
+            },
+            validate = { target ->
+                val targetHead = target.resolve(HEAD_FILE)
+                if (exists(targetHead)) {
+                    readHead(targetHead, target)
+                }
+            },
+        )
+        return prepared.activeRoot.also { preparedDataRoot = it }
+    }
+
+    private fun readLegacyHead(file: File): ProductiveWorldHead {
+        require(file == directory.resolve(HEAD_FILE)) {
+            "Unexpected legacy productive world head path"
+        }
+        val plaintext = EncryptedLedgerVaultSupport.decrypt(
+            container = EncryptedLedgerVaultSupport.readAtomic(file, MAX_PLAINTEXT_BYTES),
+            key = key,
+            maxPlaintextBytes = MAX_PLAINTEXT_BYTES,
+            associatedData = "$ROOT_DIRECTORY/$HEAD_FILE".encodeToByteArray(),
+        )
+        return ProductiveWorldHeadCodec.decode(plaintext)
+    }
+
+    private fun associatedData(dataRoot: File): ByteArray {
+        require(dataRoot.name.matches(Regex("g[0-9]{8,}"))) {
+            "Productive world head generation name mismatch"
+        }
+        require(dataRoot.parentFile?.parentFile?.name == SCHEMA_DIRECTORY) {
+            "Productive world head must use a schema generation root"
+        }
+        require(
+            dataRoot.parentFile?.name == GENERATIONS_DIRECTORY ||
+                dataRoot.parentFile?.name == STAGING_DIRECTORY
+        ) {
+            "Productive world head generation path mismatch"
+        }
+        return (
+            "$ROOT_DIRECTORY/$SCHEMA_DIRECTORY/$GENERATIONS_DIRECTORY/" +
+                "${dataRoot.name}/$HEAD_FILE"
+            ).encodeToByteArray()
     }
 
     private fun exists(file: File): Boolean =
@@ -197,9 +267,21 @@ class EncryptedProductiveWorldHeadRepository(
 
     private companion object {
         const val ROOT_DIRECTORY = "productive-world-head-vault"
+        const val SCHEMA_DIRECTORY = ".schema"
+        const val GENERATIONS_DIRECTORY = "generations"
+        const val STAGING_DIRECTORY = ".migrating"
         const val HEAD_FILE = "head.pworld"
         const val KEY_ALIAS = "lifeos.productive.world.head.v1"
         const val MAX_PLAINTEXT_BYTES = 32 * 1024
+        val SCHEMA_DESCRIPTOR = DurableSchemaDescriptor(
+            storeId = "productive-world-head",
+            currentVersion = 2,
+            minimumReadableVersion = 1,
+            schemaFingerprint = DurableSchemaDescriptor.fingerprintOf(
+                "productive-world-head|generation-layout-v2|head-codec-v1|" +
+                    "aes-gcm|generation-bound-aad"
+            ),
+        )
         val processMutex = Mutex()
     }
 }

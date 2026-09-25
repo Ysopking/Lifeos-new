@@ -56,6 +56,7 @@ class BootCoordinatorTest {
         val result = assertIs<BootRunResult.Ready>(coordinator.boot())
 
         assertEquals(BootState.READY, result.snapshot.state)
+        assertEquals(RuntimeAvailability.FULL, result.snapshot.availability)
         assertEquals("cp-1", result.snapshot.lastCheckpointId)
         assertEquals(4, result.snapshot.restoredModuleCount)
         assertEquals(2, result.snapshot.detectedDeltaCount)

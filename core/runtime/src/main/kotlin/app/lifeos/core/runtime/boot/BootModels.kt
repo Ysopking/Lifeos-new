@@ -18,6 +18,14 @@ enum class BootState {
     FAILED,
 }
 
+enum class RuntimeAvailability {
+    FULL,
+    DEGRADED,
+    READ_ONLY,
+    RECOVERY,
+    SAFE_MODE,
+}
+
 enum class StoreState {
     HEALTHY,
     STALE,
@@ -32,6 +40,7 @@ data class StoreStatus(
     val storeId: String,
     val state: StoreState,
     val message: String? = null,
+    val criticality: BootCriticality = BootCriticality.SECURE_REQUIRED,
 ) {
     init {
         require(storeId.isNotBlank()) { "Store id must not be blank" }
@@ -49,10 +58,20 @@ data class RehydratedRuntimeState(
     val recoverableTaskIds: List<String> = emptyList(),
     val interruptedWorkerIds: List<String> = emptyList(),
     val expiredLeaseIds: List<String> = emptyList(),
+    val degradedRehydrationNodeIds: List<String> = emptyList(),
+    val warmFailureNodeIds: List<String> = emptyList(),
     val previousEpoch: Long = 0,
 ) {
     init {
         require(previousEpoch >= 0) { "Previous runtime epoch must not be negative" }
+        require(degradedRehydrationNodeIds.none { it.isBlank() }) {
+            "Degraded rehydration node ids must not be blank"
+        }
+        require(warmFailureNodeIds.none { it.isBlank() }) {
+            "Warm rehydration node ids must not be blank"
+        }
+        require(degradedRehydrationNodeIds.distinct().size == degradedRehydrationNodeIds.size)
+        require(warmFailureNodeIds.distinct().size == warmFailureNodeIds.size)
     }
 }
 
@@ -93,6 +112,7 @@ data class BootSnapshot(
     val bootId: String,
     val startedAt: Instant,
     val state: BootState,
+    val availability: RuntimeAvailability = RuntimeAvailability.RECOVERY,
     val previousShutdownId: String? = null,
     val lastCheckpointId: String? = null,
     val restoredPhotonCount: Long = 0,

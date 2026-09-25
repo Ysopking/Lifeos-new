@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import app.lifeos.core.image.ImagePhotonFactory
 import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.capability.GeneratedToolState
@@ -33,16 +34,36 @@ import app.lifeos.core.runtime.goal.LocalReminderRecord
 import app.lifeos.core.runtime.goal.LocalScheduleGoalEngine
 import app.lifeos.core.runtime.policy.OwnerEffectExposureResult
 import app.lifeos.next.kernel.PrivateOwnerEffectAuthority
+import app.lifeos.next.ui.LifeOsStartupScreen
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var model: LifeOsViewModel
+    private var modelReady by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        model = ViewModelProvider(this)[LifeOsViewModel::class.java]
-        setContent { LifeOsApp(model) }
+        val owner = application as LifeOsApplication
+
+        setContent {
+            val startup by owner.startupState.collectAsStateWithLifecycle()
+            if (startup.usable && modelReady) {
+                LifeOsApp(model)
+            } else {
+                LifeOsStartupScreen(startup)
+            }
+        }
+
+        lifecycleScope.launch {
+            owner.startupState.collect { startup ->
+                if (startup.usable && !modelReady) {
+                    model = ViewModelProvider(this@MainActivity)[LifeOsViewModel::class.java]
+                    modelReady = true
+                }
+            }
+        }
     }
 
     override fun onStop() {

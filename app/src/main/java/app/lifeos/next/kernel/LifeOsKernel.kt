@@ -23,6 +23,7 @@ import app.lifeos.core.runtime.VersionedCognitiveModuleRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootEngineRuntime
+import app.lifeos.core.runtime.boot.BootRehydrationReport
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
@@ -91,6 +92,14 @@ class LifeOsKernel internal constructor(
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
+    private val warmBootRehydrator: suspend () -> BootRehydrationReport = {
+        BootRehydrationReport(
+            completed = emptySet(),
+            degraded = emptyList(),
+            warmFailures = emptyList(),
+            failedSecure = emptyList(),
+        )
+    },
     private val bootEngineRuntime: BootEngineRuntime,
     private val continuousCognition: ContinuousCognitionEngine,
     private val cognitiveModuleSnapshotRepository: CognitiveModuleSnapshotRepository? = null,
@@ -127,6 +136,7 @@ class LifeOsKernel internal constructor(
         supervisor = supervisor,
         scope = scope,
         bootCoordinator = bootCoordinator,
+        warmBootRehydrator = warmBootRehydrator,
         bootEngineRuntime = bootEngineRuntime,
         bootReadyMaintenanceTrigger = bootReadyMaintenanceTrigger,
     )
@@ -134,7 +144,7 @@ class LifeOsKernel internal constructor(
 
     private val photonIngress = PhotonIngressCoordinator(
         photonStore = photonStore,
-        liveSubmissionBudget = LIVE_SUBMISSION_BUDGET,
+        liveSubmissionBudget = LifeOsKernelDefaults.LIVE_SUBMISSION_BUDGET,
         submitCognition = { delta, priority, salience, targetModules, budget ->
             continuousCognition.submit(
                 delta = delta,
@@ -157,7 +167,7 @@ class LifeOsKernel internal constructor(
             "Versioned cognitive module repository is not installed"
         }
         val extensionSnapshotId =
-            activeExtensionSnapshotId() ?: BUILTIN_EXTENSION_SNAPSHOT_ID
+            activeExtensionSnapshotId() ?: LifeOsKernelDefaults.BUILTIN_EXTENSION_SNAPSHOT_ID
         return VersionedCognitiveModuleRegistry(
             builtIns = builtIns,
             snapshots = repository,
@@ -210,7 +220,7 @@ class LifeOsKernel internal constructor(
         imageAssets = imageAssets,
         imagePhotonFactory = imagePhotonFactory,
         sceneGraphPhotonFactory = sceneGraphPhotonFactory,
-        ownerReviewPending = OWNER_ASSET_REVIEW_PENDING,
+        ownerReviewPending = LifeOsKernelDefaults.OWNER_ASSET_REVIEW_PENDING,
     )
 
     private val goalActionDispatcher = GoalActionDispatcher(
@@ -271,10 +281,11 @@ class LifeOsKernel internal constructor(
         languageRuntime = languageRuntime,
         personalLanguageLearning = personalLanguageLearning,
         personalCorpusLanguage = personalCorpusLanguage,
-        fastBackgroundBudget = FAST_CHAT_BACKGROUND_BUDGET,
+        fastBackgroundBudget = LifeOsKernelDefaults.FAST_CHAT_BACKGROUND_BUDGET,
     )
 
     fun start(): Job = bootLifecycle.start()
+    fun startWarmBoot(): Job = bootLifecycle.startWarmBoot()
 
     suspend fun startWorldEquationEvolution(
         candidate: WorldEquationSpec,
@@ -298,23 +309,29 @@ class LifeOsKernel internal constructor(
         requireCognitiveReady()
         return worldEquationAutoEvolution.promoteIfEligible(candidate)
     }
-
     fun retryBootstrap(): Job = bootLifecycle.retryBootstrap()
-
     fun stop(): Job = bootLifecycle.stop()
+    fun requireReadable() = bootLifecycle.requireReadable()
 
     fun requireCognitiveReady() = bootLifecycle.requireCognitiveReady()
 
+    fun requireEffectReady(action: String = "Owner effect") =
+        bootLifecycle.requireEffectReady(action)
+
     /** Single kernel-owned conversation entrypoint. */
-    suspend fun submitConversationTurn(photon: Photon): ConversationTurnResult =
-        conversationTurns.submitConversationTurn(photon)
+    suspend fun submitConversationTurn(photon: Photon): ConversationTurnResult {
+        requireEffectReady("Conversation submission")
+        return conversationTurns.submitConversationTurn(photon)
+    }
 
     /**
      * Persists the exact utterance and executes the existing semantic/action path through the
      * extracted conversation coordinator.
      */
-    suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult =
-        conversationTurns.persistUserUtterance(photon)
+    suspend fun persistUserUtterance(photon: Photon): LanguageSubmissionResult {
+        requireEffectReady("User utterance persistence")
+        return conversationTurns.persistUserUtterance(photon)
+    }
 
     suspend fun generateExplicitlyApprovedTool(gap: CapabilityGap): GeneratedToolUserActionResult {
         bootLifecycle.requireCompletedBoot("Generated-tool action")
@@ -329,7 +346,7 @@ class LifeOsKernel internal constructor(
         bootLifecycle.requireCompletedBoot("Generated-tool review and activation")
         return evolutionRuntime.privateNovelActivation.reviewAndActivate(
             toolId = toolId,
-            ownerActorId = PRIVATE_OWNER_ACTOR_ID,
+            ownerActorId = LifeOsKernelDefaults.PRIVATE_OWNER_ACTOR_ID,
         )
     }
 
@@ -361,26 +378,7 @@ class LifeOsKernel internal constructor(
         photonIngress.persistAndIngest(photon, mode)
 
 
-
     /** Final process teardown hook; normal Activity/ViewModel destruction must not call this. */
     internal fun shutdown() = bootLifecycle.shutdown()
 
-    private companion object {
-        const val BUILTIN_EXTENSION_SNAPSHOT_ID = "extension-registry:builtin-baseline"
-
-        const val PRIVATE_OWNER_ACTOR_ID = "private-owner"
-        const val OWNER_ASSET_REVIEW_PENDING = "awaiting-owner-review"
-        val FAST_CHAT_BACKGROUND_BUDGET = CognitiveWorkBudget(
-            maxDurationMs = 5_000,
-            maxModuleInvocations = 4,
-            maxNewPhotons = 4,
-            maxNetworkCalls = 0,
-        )
-        val LIVE_SUBMISSION_BUDGET = CognitiveWorkBudget(
-            maxDurationMs = 30_000,
-            maxModuleInvocations = 16,
-            maxNewPhotons = 16,
-            maxNetworkCalls = 0,
-        )
-    }
 }

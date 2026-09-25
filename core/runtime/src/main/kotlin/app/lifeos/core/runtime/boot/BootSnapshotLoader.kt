@@ -23,6 +23,9 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
 import java.util.concurrent.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -53,6 +56,11 @@ fun interface BootCheckpointSource { suspend fun load(): CheckpointLoadReport }
 fun interface BootCapabilityStateSource { suspend fun load(): List<CapabilityDescriptor> }
 fun interface BootToolStateSource { suspend fun load(): List<GeneratedToolRecord> }
 fun interface BootFieldSnapshotSource { suspend fun load(): FieldSnapshotLoadReport }
+
+internal data class BootSourceRead<T>(
+    val value: T,
+    val failures: List<BootSnapshotReadFailure>,
+)
 
 class PhotonRepositoryBootSource(private val repository: PhotonRepository) : BootPhotonSource {
     override suspend fun load(): PhotonLoadReport = repository.loadReport()
@@ -154,46 +162,93 @@ class BootSnapshotLoader(
     private val fieldSnapshots: BootFieldSnapshotSource,
     private val now: () -> Instant = Instant::now,
 ) {
-    suspend fun load(): DurableBootSnapshot {
-        val failures = mutableListOf<BootSnapshotReadFailure>()
+    internal suspend fun loadPhotonSource(): BootSourceRead<PhotonLoadReport> =
+        readSource(
+            BootSnapshotSource.PHOTON,
+            PhotonLoadReport(emptyList(), emptyList()),
+        ) { photons.load() }
 
-        val photonReport = readSource(BootSnapshotSource.PHOTON, PhotonLoadReport(emptyList(), emptyList()), failures) {
-            photons.load()
-        }
-        failures += photonReport.unreadableFiles.map {
-            BootSnapshotReadFailure(BootSnapshotSource.PHOTON, it, "unreadable-entry")
-        }
+    internal suspend fun loadTaskSource(): BootSourceRead<TaskLoadReport> =
+        readSource(
+            BootSnapshotSource.TASK,
+            TaskLoadReport(emptyList(), emptyList()),
+        ) { tasks.load() }
 
-        val taskReport = readSource(BootSnapshotSource.TASK, TaskLoadReport(emptyList(), emptyList()), failures) {
-            tasks.load()
-        }
-        failures += taskReport.unreadableEntries.map {
-            BootSnapshotReadFailure(BootSnapshotSource.TASK, it, "unreadable-entry")
-        }
-
-        val checkpointReport = readSource(
+    internal suspend fun loadCheckpointSource(): BootSourceRead<CheckpointLoadReport> =
+        readSource(
             BootSnapshotSource.CHECKPOINT,
             CheckpointLoadReport(emptyList(), emptyList()),
-            failures,
         ) { checkpoints.load() }
-        failures += checkpointReport.unreadableEntries.map {
-            BootSnapshotReadFailure(BootSnapshotSource.CHECKPOINT, it, "unreadable-entry")
-        }
 
-        val capabilityState = readSource(BootSnapshotSource.CAPABILITY, emptyList(), failures) {
+    internal suspend fun loadCapabilitySource(): BootSourceRead<List<CapabilityDescriptor>> =
+        readSource(BootSnapshotSource.CAPABILITY, emptyList()) {
             capabilities.load()
         }
-        val toolState = readSource(BootSnapshotSource.TOOL, emptyList(), failures) { tools.load() }
-        val fieldReport = readSource(
-            BootSnapshotSource.FIELD,
-            FieldSnapshotLoadReport(emptyList(), emptyList()),
-            failures,
-        ) { fieldSnapshots.load() }
-        failures += fieldReport.unreadableEntries.map {
-            BootSnapshotReadFailure(BootSnapshotSource.FIELD, it, "unreadable-entry")
+
+    internal suspend fun loadToolSource(): BootSourceRead<List<GeneratedToolRecord>> =
+        readSource(BootSnapshotSource.TOOL, emptyList()) {
+            tools.load()
         }
 
-        val canonicalPhotons = photonReport.photons.sortedWith(compareBy<Photon>({ it.id.value }, { it.revision }))
+    internal suspend fun loadFieldSource(): BootSourceRead<FieldSnapshotLoadReport> =
+        readSource(
+            BootSnapshotSource.FIELD,
+            FieldSnapshotLoadReport(emptyList(), emptyList()),
+        ) { fieldSnapshots.load() }
+
+    suspend fun load(): DurableBootSnapshot = coroutineScope {
+        val photonRead = async { loadPhotonSource() }
+        val taskRead = async { loadTaskSource() }
+        val checkpointRead = async { loadCheckpointSource() }
+        val capabilityRead = async { loadCapabilitySource() }
+        val toolRead = async { loadToolSource() }
+        val fieldRead = async { loadFieldSource() }
+
+        val photonResult = photonRead.await()
+        val taskResult = taskRead.await()
+        val checkpointResult = checkpointRead.await()
+        val capabilityResult = capabilityRead.await()
+        val toolResult = toolRead.await()
+        val fieldResult = fieldRead.await()
+
+        val photonReport = photonResult.value
+        val taskReport = taskResult.value
+        val checkpointReport = checkpointResult.value
+        val capabilityState = capabilityResult.value
+        val toolState = toolResult.value
+        val fieldReport = fieldResult.value
+
+        val failures = buildList {
+            addAll(photonResult.failures)
+            addAll(taskResult.failures)
+            addAll(checkpointResult.failures)
+            addAll(capabilityResult.failures)
+            addAll(toolResult.failures)
+            addAll(fieldResult.failures)
+            addAll(
+                photonReport.unreadableFiles.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.PHOTON, it, "unreadable-entry")
+                }
+            )
+            addAll(
+                taskReport.unreadableEntries.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.TASK, it, "unreadable-entry")
+                }
+            )
+            addAll(
+                checkpointReport.unreadableEntries.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.CHECKPOINT, it, "unreadable-entry")
+                }
+            )
+            addAll(
+                fieldReport.unreadableEntries.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.FIELD, it, "unreadable-entry")
+                }
+            )
+        }
+
+        val canonicalPhotons =
+            photonReport.photons.sortedWith(compareBy<Photon>({ it.id.value }, { it.revision }))
         val canonicalTasks = taskReport.tasks.sortedBy { it.id.value }
         val canonicalCheckpoints = checkpointReport.checkpoints.sortedWith(
             compareBy<TaskCheckpoint>({ it.taskId.value }, { it.sequence }, { it.id.value })
@@ -205,7 +260,7 @@ class BootSnapshotLoader(
         val canonicalFields = fieldReport.snapshots.sortedWith(fieldSnapshotComparator)
         val canonicalFailures = failures.distinct().sortedWith(readFailureComparator)
 
-        return DurableBootSnapshot(
+        DurableBootSnapshot(
             generationId = fingerprintGeneration(
                 canonicalPhotons,
                 canonicalTasks,
@@ -233,19 +288,23 @@ class BootSnapshotLoader(
     private suspend fun <T> readSource(
         source: BootSnapshotSource,
         fallback: T,
-        failures: MutableList<BootSnapshotReadFailure>,
         read: suspend () -> T,
-    ): T = try {
-        read()
+    ): BootSourceRead<T> = try {
+        BootSourceRead(read(), emptyList())
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
-        failures += BootSnapshotReadFailure(
-            source = source,
-            reason = "source-exception:${error.javaClass.simpleName}",
+        BootSourceRead(
+            value = fallback,
+            failures = listOf(
+                BootSnapshotReadFailure(
+                    source = source,
+                    reason = "source-exception:${error.javaClass.simpleName}",
+                )
+            ),
         )
-        fallback
     }
+
 }
 
 /**
@@ -260,17 +319,93 @@ class BootReadSession(
     @Volatile
     private var cached: DurableBootSnapshot? = null
 
-    private val extraReads = mutableMapOf<String, Any?>()
+    private var snapshotFlight: CompletableDeferred<DurableBootSnapshot>? = null
+    private val extraReads = mutableMapOf<String, CompletableDeferred<Any?>>()
 
     suspend fun snapshot(): DurableBootSnapshot {
         cached?.let { return it }
-        return mutex.withLock {
-            cached ?: loader.load().also { cached = it }
+
+        val (flight, owner) = mutex.withLock {
+            cached?.let {
+                return@withLock CompletableDeferred(it) to false
+            }
+            snapshotFlight?.let {
+                return@withLock it to false
+            }
+            CompletableDeferred<DurableBootSnapshot>().also {
+                snapshotFlight = it
+            } to true
         }
+
+        if (owner) {
+            try {
+                val loaded = loader.load()
+                cached = loaded
+                flight.complete(loaded)
+            } catch (error: Throwable) {
+                flight.completeExceptionally(error)
+                mutex.withLock {
+                    if (snapshotFlight === flight) snapshotFlight = null
+                }
+                throw error
+            }
+            mutex.withLock {
+                if (snapshotFlight === flight) snapshotFlight = null
+            }
+        }
+        return flight.await()
     }
 
+    suspend fun photonReport(): PhotonLoadReport =
+        photonSourceRead().value
+
     suspend fun readFailures(source: BootSnapshotSource): List<BootSnapshotReadFailure> =
-        snapshot().readFailures.filter { it.source == source }
+        when (source) {
+            BootSnapshotSource.PHOTON -> {
+                val result = photonSourceRead()
+                result.failures + result.value.unreadableFiles.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.PHOTON, it, "unreadable-entry")
+                }
+            }
+            BootSnapshotSource.TASK -> {
+                val result = taskSourceRead()
+                result.failures + result.value.unreadableEntries.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.TASK, it, "unreadable-entry")
+                }
+            }
+            BootSnapshotSource.CHECKPOINT -> {
+                val result = checkpointSourceRead()
+                result.failures + result.value.unreadableEntries.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.CHECKPOINT, it, "unreadable-entry")
+                }
+            }
+            BootSnapshotSource.CAPABILITY -> capabilitySourceRead().failures
+            BootSnapshotSource.TOOL -> toolSourceRead().failures
+            BootSnapshotSource.FIELD -> {
+                val result = fieldSourceRead()
+                result.failures + result.value.unreadableEntries.map {
+                    BootSnapshotReadFailure(BootSnapshotSource.FIELD, it, "unreadable-entry")
+                }
+            }
+        }.distinct().sortedWith(readFailureComparator)
+
+    private suspend fun photonSourceRead(): BootSourceRead<PhotonLoadReport> =
+        readOnce(SOURCE_PHOTON) { loader.loadPhotonSource() }
+
+    private suspend fun taskSourceRead(): BootSourceRead<TaskLoadReport> =
+        readOnce(SOURCE_TASK) { loader.loadTaskSource() }
+
+    private suspend fun checkpointSourceRead(): BootSourceRead<CheckpointLoadReport> =
+        readOnce(SOURCE_CHECKPOINT) { loader.loadCheckpointSource() }
+
+    private suspend fun capabilitySourceRead(): BootSourceRead<List<CapabilityDescriptor>> =
+        readOnce(SOURCE_CAPABILITY) { loader.loadCapabilitySource() }
+
+    private suspend fun toolSourceRead(): BootSourceRead<List<GeneratedToolRecord>> =
+        readOnce(SOURCE_TOOL) { loader.loadToolSource() }
+
+    private suspend fun fieldSourceRead(): BootSourceRead<FieldSnapshotLoadReport> =
+        readOnce(SOURCE_FIELD) { loader.loadFieldSource() }
 
     @Suppress("UNCHECKED_CAST")
     suspend fun <T> readOnce(
@@ -278,15 +413,45 @@ class BootReadSession(
         read: suspend () -> T,
     ): T {
         require(key.isNotBlank())
-        return mutex.withLock {
-            if (key in extraReads) return@withLock extraReads.getValue(key) as T
-            read().also { extraReads[key] = it }
+
+        val (flight, owner) = mutex.withLock {
+            extraReads[key]?.let {
+                return@withLock it to false
+            }
+            CompletableDeferred<Any?>().also {
+                extraReads[key] = it
+            } to true
         }
+
+        if (owner) {
+            try {
+                flight.complete(read())
+            } catch (error: Throwable) {
+                flight.completeExceptionally(error)
+                mutex.withLock {
+                    if (extraReads[key] === flight) extraReads.remove(key)
+                }
+                throw error
+            }
+        }
+        return flight.await() as T
     }
 
     suspend fun invalidateForTestOnly() = mutex.withLock {
         cached = null
+        snapshotFlight?.cancel()
+        snapshotFlight = null
+        extraReads.values.forEach { it.cancel() }
         extraReads.clear()
+    }
+
+    private companion object {
+        const val SOURCE_PHOTON = "boot-source:photon"
+        const val SOURCE_TASK = "boot-source:task"
+        const val SOURCE_CHECKPOINT = "boot-source:checkpoint"
+        const val SOURCE_CAPABILITY = "boot-source:capability"
+        const val SOURCE_TOOL = "boot-source:tool"
+        const val SOURCE_FIELD = "boot-source:field"
     }
 }
 

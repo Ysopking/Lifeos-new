@@ -103,6 +103,9 @@ fun buildRuntimeHealthUiModel(
         KernelBootstrapStatus.LOADING -> "Gedächtnis wird geladen"
         KernelBootstrapStatus.READY -> "Bereit"
         KernelBootstrapStatus.DEGRADED -> "Eingeschränkt"
+        KernelBootstrapStatus.READ_ONLY -> "Nur Lesen"
+        KernelBootstrapStatus.RECOVERY -> "Wiederherstellung"
+        KernelBootstrapStatus.SAFE_MODE -> "Sicherheitsmodus"
         KernelBootstrapStatus.FAILED -> "Fehler"
     }
 
@@ -149,6 +152,9 @@ fun buildRuntimeHealthUiModel(
         bootStatus == KernelBootstrapStatus.FAILED -> RuntimeHealthLevel.FAILED
         bootStatus == KernelBootstrapStatus.CREATED || bootStatus == KernelBootstrapStatus.LOADING ->
             RuntimeHealthLevel.STARTING
+        bootStatus == KernelBootstrapStatus.RECOVERY -> RuntimeHealthLevel.VERIFYING
+        bootStatus == KernelBootstrapStatus.SAFE_MODE ||
+            bootStatus == KernelBootstrapStatus.READ_ONLY -> RuntimeHealthLevel.DEGRADED
         evidenceMissing -> RuntimeHealthLevel.VERIFYING
         bootStatus == KernelBootstrapStatus.DEGRADED || readinessDegraded || topologyDegraded ->
             RuntimeHealthLevel.DEGRADED
@@ -173,6 +179,10 @@ fun buildRuntimeHealthUiModel(
         RuntimeHealthLevel.VERIFYING -> "Boot ist verfügbar, aber Readiness oder Topologie ist noch nicht vollständig belegt."
         RuntimeHealthLevel.READY -> "Boot, A–P-Readiness und Runtime-Topologie sind vollständig bereit."
         RuntimeHealthLevel.DEGRADED -> when {
+            bootStatus == KernelBootstrapStatus.READ_ONLY ->
+                "Der konsistente Zustand ist lesbar; Änderungen und Aktionen sind gesperrt."
+            bootStatus == KernelBootstrapStatus.SAFE_MODE ->
+                "LIFEOS läuft im Sicherheitsmodus; produktive Änderungen sind gesperrt."
             bootStatus == KernelBootstrapStatus.DEGRADED -> "Der Kernel läuft eingeschränkt."
             readinessDegraded -> "Mindestens ein A–P-Block ist eingeschränkt oder blockiert."
             topologyDegraded -> "Mindestens ein Runtime-Subsystem ist eingeschränkt, ungebunden oder nicht verfügbar."

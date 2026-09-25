@@ -16,9 +16,16 @@ value class BootRehydrationNodeId(val value: String) {
     override fun toString(): String = value
 }
 
+enum class BootCriticality {
+    SECURE_REQUIRED,
+    REQUIRED_DEGRADED,
+    OPTIONAL_WARM,
+}
+
 class BootRehydrationNode(
     val id: BootRehydrationNodeId,
     val dependsOn: Set<BootRehydrationNodeId> = emptySet(),
+    val criticality: BootCriticality = BootCriticality.SECURE_REQUIRED,
     val action: suspend () -> Unit,
 ) {
     init {
@@ -26,6 +33,38 @@ class BootRehydrationNode(
             "Boot rehydration node must not depend on itself: $id"
         }
     }
+}
+
+data class BootRehydrationFailure(
+    val nodeId: BootRehydrationNodeId,
+    val criticality: BootCriticality,
+    val message: String,
+) {
+    init {
+        require(message.isNotBlank())
+    }
+}
+
+data class BootRehydrationReport(
+    val completed: Set<BootRehydrationNodeId>,
+    val degraded: List<BootRehydrationFailure>,
+    val warmFailures: List<BootRehydrationFailure>,
+    val failedSecure: List<BootRehydrationFailure>,
+) {
+    init {
+        require(degraded == degraded.sortedBy { it.nodeId.value })
+        require(warmFailures == warmFailures.sortedBy { it.nodeId.value })
+        require(failedSecure == failedSecure.sortedBy { it.nodeId.value })
+        require(degraded.all { it.criticality == BootCriticality.REQUIRED_DEGRADED })
+        require(warmFailures.all { it.criticality == BootCriticality.OPTIONAL_WARM })
+        require(failedSecure.all { it.criticality == BootCriticality.SECURE_REQUIRED })
+    }
+
+    val degradedNodeIds: List<BootRehydrationNodeId>
+        get() = degraded.map { it.nodeId }
+
+    val warmFailureNodeIds: List<BootRehydrationNodeId>
+        get() = warmFailures.map { it.nodeId }
 }
 
 class BootRehydrationNodeFailure(
@@ -57,50 +96,92 @@ class BootRehydrationGraph(
         validateAcyclic()
     }
 
-    suspend fun rehydrate() {
-        if (nodesById.isEmpty()) return
+    suspend fun rehydrate(): BootRehydrationReport {
+        if (nodesById.isEmpty()) {
+            return BootRehydrationReport(
+                completed = emptySet(),
+                degraded = emptyList(),
+                warmFailures = emptyList(),
+                failedSecure = emptyList(),
+            )
+        }
 
         val completed = linkedSetOf<BootRehydrationNodeId>()
-        val remaining = nodesById.toMutableMap()
+        val degraded = mutableListOf<BootRehydrationFailure>()
+        val warmFailures = mutableListOf<BootRehydrationFailure>()
+        val failedSecure = mutableListOf<BootRehydrationFailure>()
 
-        while (remaining.isNotEmpty()) {
-            val ready = remaining.values
-                .filter { node -> node.dependsOn.all(completed::contains) }
-                .sortedBy { it.id.value }
-            check(ready.isNotEmpty()) {
-                "Boot rehydration graph reached an impossible cyclic state"
+        fun recordFailure(node: BootRehydrationNode, message: String) {
+            val failure = BootRehydrationFailure(
+                nodeId = node.id,
+                criticality = node.criticality,
+                message = message,
+            )
+            when (node.criticality) {
+                BootCriticality.SECURE_REQUIRED -> failedSecure += failure
+                BootCriticality.REQUIRED_DEGRADED -> degraded += failure
+                BootCriticality.OPTIONAL_WARM -> warmFailures += failure
+            }
+        }
+
+        for (layer in topologicalLayers()) {
+            val nodes = layer.map(nodesById::getValue)
+            val runnable = mutableListOf<BootRehydrationNode>()
+
+            nodes.forEach { node ->
+                val blockedBy = node.dependsOn.filterNot(completed::contains).sortedBy { it.value }
+                if (blockedBy.isEmpty()) {
+                    runnable += node
+                } else {
+                    recordFailure(
+                        node,
+                        "blocked-by:" + blockedBy.joinToString(",") { it.value },
+                    )
+                }
             }
 
             val outcomes = coroutineScope {
-                ready.map { node ->
+                runnable.map { node ->
                     async {
                         try {
                             node.action()
-                            NodeOutcome(node.id, null)
+                            NodeOutcome(node, null)
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (error: Throwable) {
-                            NodeOutcome(node.id, error)
+                            NodeOutcome(node, error)
                         }
                     }
                 }.awaitAll()
             }
 
-            outcomes
-                .filter { it.failure != null }
-                .minByOrNull { it.id.value }
-                ?.let { failed ->
-                    throw BootRehydrationNodeFailure(
-                        failed.id,
-                        requireNotNull(failed.failure),
+            outcomes.sortedBy { it.node.id.value }.forEach { outcome ->
+                val error = outcome.failure
+                if (error == null) {
+                    completed += outcome.node.id
+                } else {
+                    recordFailure(
+                        outcome.node,
+                        error.message ?: error::class.simpleName ?: "rehydration-failed",
                     )
                 }
+            }
 
-            ready.forEach { node ->
-                remaining.remove(node.id)
-                completed += node.id
+            val secureFailure = failedSecure.minByOrNull { it.nodeId.value }
+            if (secureFailure != null) {
+                throw BootRehydrationNodeFailure(
+                    secureFailure.nodeId,
+                    IllegalStateException(secureFailure.message),
+                )
             }
         }
+
+        return BootRehydrationReport(
+            completed = completed.toSet(),
+            degraded = degraded.sortedBy { it.nodeId.value },
+            warmFailures = warmFailures.sortedBy { it.nodeId.value },
+            failedSecure = failedSecure.sortedBy { it.nodeId.value },
+        )
     }
 
     fun topologicalLayers(): List<List<BootRehydrationNodeId>> {
@@ -148,7 +229,7 @@ class BootRehydrationGraph(
     }
 
     private data class NodeOutcome(
-        val id: BootRehydrationNodeId,
+        val node: BootRehydrationNode,
         val failure: Throwable?,
     )
 }

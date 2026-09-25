@@ -17,6 +17,8 @@ import app.lifeos.core.data.world.EncryptedWorldEquationSpecRepository
 import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.worldmodel.EncryptedWorldModelRepository
 import app.lifeos.core.model.health.ProtectionStateLoadResult
+import app.lifeos.core.runtime.boot.BootCriticality
+import app.lifeos.core.runtime.boot.BootEngineCycleStoreHealth
 import app.lifeos.core.runtime.boot.BootReadSession
 import app.lifeos.core.runtime.boot.BootSnapshotSource
 import app.lifeos.core.runtime.boot.StoreProbe
@@ -50,6 +52,7 @@ internal class KernelBootStoreProbes(
     fun create(): List<StoreProbe> = listOf(
     object : StoreProbe {
         override val storeId: String = "goal-plan-ledger"
+        override val criticality = BootCriticality.OPTIONAL_WARM
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("goal-plan-ledger") {
                 goalPlanRepository.loadReport()
@@ -63,6 +66,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "photon-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             val failures = bootReadSession.readFailures(BootSnapshotSource.PHOTON)
             return StoreStatus(
@@ -74,6 +78,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "learning-adaptation-ledger"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("learning-adaptation-ledger") {
                 learningAdaptationRepository.loadReport()
@@ -87,6 +92,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "continuous-learning-watermarks"
+        override val criticality = BootCriticality.OPTIONAL_WARM
         override suspend fun probe(): StoreStatus =
             when (val loaded = learningWatermarks.load()) {
                 LearningWatermarkLoadResult.Missing,
@@ -102,6 +108,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "world-equation-head"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("world-equation-head") {
                 worldEquationHeads.loadReport()
@@ -115,6 +122,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "world-equation-spec-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("world-equation-spec-store") {
                 worldEquationSpecs.loadReport()
@@ -130,6 +138,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "world-equation-evidence-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("world-equation-evidence-store") {
                 worldEquationEvidence.loadReport()
@@ -145,6 +154,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "thought-matrix-state-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             bootReadSession.readOnce("thought-matrix-state-store") {
                 thoughtMatrixStateRepository.load()
@@ -154,6 +164,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "thought-graph-delta-store"
+        override val criticality = BootCriticality.OPTIONAL_WARM
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("thought-graph-delta-store") {
                 thoughtGraphDeltaRepository.loadReport()
@@ -167,6 +178,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "field-thought-graph-projection-outbox"
+        override val criticality = BootCriticality.OPTIONAL_WARM
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("field-thought-graph-projection-outbox") {
                 fieldThoughtGraphProjectionOutbox.loadReport()
@@ -180,6 +192,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "task-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             val failures = bootReadSession.readFailures(BootSnapshotSource.TASK)
             return StoreStatus(
@@ -191,6 +204,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "runtime-protection-store"
+        override val criticality = BootCriticality.SECURE_REQUIRED
         override suspend fun probe(): StoreStatus = when (
             val protection = bootReadSession.readOnce("runtime-protection-store") {
                 protectionRepository.load()
@@ -207,6 +221,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "field-snapshot-store"
+        override val criticality = BootCriticality.OPTIONAL_WARM
         override suspend fun probe(): StoreStatus {
             val failures = bootReadSession.readFailures(BootSnapshotSource.FIELD)
             return StoreStatus(
@@ -218,6 +233,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "world-formula-snapshot-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("world-formula-snapshot-store") {
                 worldFormulaSnapshotRepository.loadReport()
@@ -231,6 +247,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "productive-world-head-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("productive-world-head-store") {
                 productiveWorldHeadRepository.loadReport()
@@ -244,23 +261,28 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "bootengine-cycle-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus {
             val report = bootReadSession.readOnce("bootengine-cycle-store") {
                 bootEngineCycleRepository.loadReport()
             }
             return StoreStatus(
                 storeId = storeId,
-                state = if (report.corrupted) {
-                    StoreState.PARTIALLY_RECOVERABLE
-                } else {
-                    StoreState.HEALTHY
+                state = when (report.health) {
+                    BootEngineCycleStoreHealth.HEALTHY -> StoreState.HEALTHY
+                    BootEngineCycleStoreHealth.REPAIRED,
+                    BootEngineCycleStoreHealth.DEGRADED -> StoreState.PARTIALLY_RECOVERABLE
+                    BootEngineCycleStoreHealth.UNRECOVERABLE -> StoreState.CORRUPTED
                 },
-                message = report.message,
+                message = report.message ?: report.repairActions
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString(","),
             )
         }
     },
     object : StoreProbe {
         override val storeId: String = "extension-registry-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus = try {
             extensionRegistryRehydrator.rehydrate()
             StoreStatus(storeId, StoreState.HEALTHY)
@@ -274,6 +296,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "world-model-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus = try {
             val head = worldModelRepository.loadHead()
             if (head != null) {
@@ -290,6 +313,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "cognitive-module-snapshot-store"
+        override val criticality = BootCriticality.REQUIRED_DEGRADED
         override suspend fun probe(): StoreStatus = try {
             val head = cognitiveModuleSnapshotRepository.loadHead()
             if (head != null) {
@@ -308,6 +332,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "evolution-store"
+        override val criticality = BootCriticality.OPTIONAL_WARM
         override suspend fun probe(): StoreStatus {
             bootReadSession.readOnce("evolution-store") {
                 evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
@@ -317,8 +342,8 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "generated-tool-state-store"
+        override val criticality = BootCriticality.OPTIONAL_WARM
         override suspend fun probe(): StoreStatus {
-            bootReadSession.snapshot()
             val failures = bootReadSession.readFailures(BootSnapshotSource.TOOL)
             return StoreStatus(
                 storeId = storeId,
@@ -329,6 +354,7 @@ internal class KernelBootStoreProbes(
     },
     object : StoreProbe {
         override val storeId: String = "generated-tool-artifact-store"
+        override val criticality = BootCriticality.OPTIONAL_WARM
         override suspend fun probe(): StoreStatus {
             privateGeneratedToolRuntime.artifactBootVerifier.verify()
             return StoreStatus(storeId, StoreState.HEALTHY)

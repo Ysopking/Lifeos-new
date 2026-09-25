@@ -38,6 +38,7 @@ class ChatMainActivity : ComponentActivity() {
     private lateinit var accessConvergence: AccessConvergenceCoordinator
 
     private var modelsReady by mutableStateOf(false)
+    private var accessConvergenceStarted: Boolean = false
 
     @Volatile
     private var permissionRefreshBaseline: InitialDataBootstrapSnapshot? = null
@@ -93,7 +94,7 @@ class ChatMainActivity : ComponentActivity() {
 
         setContent {
             val startup by owner.startupState.collectAsStateWithLifecycle()
-            if (startup.ready && modelsReady) {
+            if (startup.usable && modelsReady) {
                 LifeOsRoot(
                     model = model,
                     memoryModel = memoryModel,
@@ -114,8 +115,17 @@ class ChatMainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             owner.startupState.collect { startup ->
-                if (startup.ready && !modelsReady) {
+                if (startup.usable && !modelsReady) {
                     initializeRuntimeUi(owner)
+                }
+                if (
+                    startup.actionable &&
+                    modelsReady &&
+                    ::accessConvergence.isInitialized &&
+                    !accessConvergenceStarted
+                ) {
+                    accessConvergenceStarted = true
+                    continueAccessConvergence(owner)
                 }
             }
         }
@@ -124,7 +134,11 @@ class ChatMainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         val owner = application as? LifeOsApplication ?: return
-        if (modelsReady && ::accessConvergence.isInitialized) {
+        if (
+            owner.startupState.value.actionable &&
+            modelsReady &&
+            ::accessConvergence.isInitialized
+        ) {
             continueAccessConvergence(owner)
         }
     }
@@ -145,10 +159,10 @@ class ChatMainActivity : ComponentActivity() {
         )
         observeInitialCognitiveContext(owner)
         modelsReady = true
-        continueAccessConvergence(owner)
     }
 
     private fun continueAccessConvergence(owner: LifeOsApplication) {
+        if (!owner.startupState.value.actionable) return
         when (val action = accessConvergence.next()) {
             is AccessConvergenceAction.RuntimePermissions -> {
                 accessConvergence.markLaunched(action)
@@ -196,6 +210,7 @@ class ChatMainActivity : ComponentActivity() {
     }
 
     private fun beginContextIngestion(owner: LifeOsApplication) {
+        if (!owner.startupState.value.actionable) return
         val access = owner.deviceAccessSnapshot()
         if (access == lastConvergedAccess) return
         lastConvergedAccess = access

@@ -1,7 +1,6 @@
 package app.lifeos.next
 
 import android.content.Context
-import app.lifeos.core.data.artifact.EncryptedOwnerAssetReviewRepository
 import app.lifeos.core.data.capability.EncryptedGeneratedToolStateRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchCheckpointRepository
 import app.lifeos.core.data.deepsearch.EncryptedDeepSearchMissionRepository
@@ -11,7 +10,6 @@ import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.CausalCognitionEngine
 import app.lifeos.core.runtime.CausalDerivedPhotonPersistence
-import app.lifeos.core.runtime.CognitiveSnapshotRuntimeRegistry
 import app.lifeos.core.runtime.PhotonBackedCausalLedgerStore
 import app.lifeos.core.runtime.PhotonIngressMode
 import app.lifeos.core.runtime.RecursiveCausalCognitionCoordinator
@@ -45,8 +43,6 @@ import app.lifeos.core.runtime.trace.DecisionTraceRuntimeRegistry
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserver
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserverRegistry
-import app.lifeos.next.kernel.AndroidAppUsageSensorBridge
-import app.lifeos.next.kernel.AndroidSemanticAppContentSensorBridge
 import app.lifeos.next.kernel.AndroidHardwareSensorBridge
 import app.lifeos.next.kernel.CanonicalLifePhotonRepository
 import app.lifeos.next.kernel.CanonicalPhotonIngress
@@ -58,40 +54,16 @@ import app.lifeos.next.kernel.LifeOsAutomationPhotonBridge
 import app.lifeos.next.kernel.LifeOsHealthPhotonBridge
 import app.lifeos.next.kernel.LifeOsKernel
 import app.lifeos.next.kernel.LifeOsKernelFactory
-import app.lifeos.next.kernel.LiveNotificationSensorBridge
 import app.lifeos.next.kernel.MultimodalPerceptionRuntime
 import app.lifeos.next.kernel.PrivateEscalationRuntime
 import app.lifeos.next.kernel.PrivateFuturePlanningAuthority
 import app.lifeos.next.kernel.PrivateGoalActionExecutionGuard
 import app.lifeos.next.kernel.PrivateSelfHealingRuntime
-import app.lifeos.next.kernel.ProductiveAppUsageSensorRuntimeRegistry
+import app.lifeos.next.kernel.ProductivePerceptionComposition
 import app.lifeos.next.kernel.ProductivePerceptionContextRuntime
-import app.lifeos.next.kernel.ProductiveWorldGapAttentionRuntimeRegistry
-import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-
-internal data class ProcessRuntimeInstallResult(
-    val kernel: LifeOsKernel,
-    val photonIngress: CanonicalPhotonIngress,
-    val generatedToolStatusReader: GeneratedToolRuntimeStatusReader,
-    val hardwareResourceIntelligence: HardwareResourceIntelligenceRuntime,
-    val storageIntelligence: AndroidStorageIntelligenceRuntime,
-    val storageMaintenance: AndroidStorageMaintenanceRuntime,
-    val storageIntelligenceController: StorageIntelligenceProcessController,
-    val ownerPolicy: OwnerPolicyLedger,
-    val ownerObservationPolicy: OwnerObservationPolicyLedger,
-    val resourceBudgets: ResourceBudgetCoordinator,
-    val decisionTraces: DecisionTraceLedger,
-    val selfObservationDecisionTraceRecorder: SelfObservationDecisionTraceRecorder,
-    val goalDecisionTraceRecorder: GoalDecisionTraceRecorder,
-    val lifePhotonRepository: CanonicalLifePhotonRepository,
-    val lifeMemoryRuntime: DurableLifeMemoryRuntime,
-    val multimodalPerception: MultimodalPerceptionRuntime,
-    val selfHealingRuntime: PrivateSelfHealingRuntime,
-    val escalationRuntime: PrivateEscalationRuntime,
-)
 
 internal class ProcessRuntimeInstaller(
     context: Context,
@@ -100,7 +72,8 @@ internal class ProcessRuntimeInstaller(
     private val canRunStorageIntelligence: () -> Boolean,
     private val onStorageSnapshot: (StorageIntelligenceSnapshot) -> Unit,
     private val onStorageFailure: (String?) -> Unit,
-    private val onStageReady: (LifeOsStartupStageEvidence) -> Unit,
+    private val onStartupEvent: (LifeOsStartupStageEvent) -> Unit,
+    private val onCriticalReady: suspend (ProcessRuntimeCriticalInstallResult) -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val selfHealingScope =
@@ -145,11 +118,11 @@ internal class ProcessRuntimeInstaller(
         lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
         lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
         lateinit var multimodalPerception: MultimodalPerceptionRuntime
-        lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
-        lateinit var escalationRuntime: PrivateEscalationRuntime
+        lateinit var personalRuntimeWarmup: PostReadyPersonalRuntimeWarmup
+        var selfHealingRuntime: PrivateSelfHealingRuntime? = null
+        var escalationRuntime: PrivateEscalationRuntime? = null
 
-        LifeOsStartupComposition.start(
-            LifeOsStartupHooks(
+        val startupHooks = LifeOsStartupHooks(
                 installSharedResourceRuntime = {
                     val shared = SharedAuthorityRuntimeComposition.install(
                         context = appContext,
@@ -177,10 +150,9 @@ internal class ProcessRuntimeInstaller(
                 },
                 createKernel = {
                     productivePerceptionContext =
-                        ProductivePerceptionContextRuntime(ownerObservationPolicy)
-                    ProductiveWorldGapAttentionRuntimeRegistry.install(
-                        productivePerceptionContext
-                    )
+                        ProductivePerceptionComposition.prepare(
+                            ownerObservationPolicy
+                        )
                     kernel = LifeOsKernelFactory(
                         context = appContext,
                         hardwareResourceIntelligence =
@@ -191,35 +163,16 @@ internal class ProcessRuntimeInstaller(
                             productivePerceptionContext,
                     ).create()
 
-                    val ownerAssetReviews =
-                        EncryptedOwnerAssetReviewRepository(appContext)
-                    photonIngress =
-                        CanonicalPhotonIngress(
+                    val perceptionBinding =
+                        ProductivePerceptionComposition.bind(
+                            context = appContext,
                             kernel = kernel,
-                            ownerAssetReviews = ownerAssetReviews,
                             ownerObservationPolicy = ownerObservationPolicy,
+                            perceptionContext = productivePerceptionContext,
                         )
-                    hardwareSensorBridge = AndroidHardwareSensorBridge(
-                        context = appContext,
-                        photonIngress = photonIngress,
-                    )
-                    productivePerceptionContext.attachHardwareBridge(
-                        hardwareSensorBridge
-                    )
-                    productivePerceptionContext.attachNotificationBridge(
-                        LiveNotificationSensorBridge(photonIngress)
-                    )
-                    val appUsageSensorBridge =
-                        AndroidAppUsageSensorBridge(appContext, photonIngress)
-                    productivePerceptionContext.attachAppUsageBridge(
-                        appUsageSensorBridge
-                    )
-                    ProductiveAppUsageSensorRuntimeRegistry.install(
-                        appUsageSensorBridge
-                    )
-                    productivePerceptionContext.attachAppContentBridge(
-                        AndroidSemanticAppContentSensorBridge(photonIngress)
-                    )
+                    photonIngress = perceptionBinding.photonIngress
+                    hardwareSensorBridge =
+                        perceptionBinding.hardwareSensorBridge
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
                         productiveIngress = photonIngress::ingest,
@@ -265,15 +218,12 @@ internal class ProcessRuntimeInstaller(
                         planning = futurePlanning,
                     )
 
-                    lifePhotonRepository.reconcilePersisted()
-                    lifeMemoryRuntime.rebuild(Instant.now())
-                    CognitiveSnapshotRuntimeRegistry.captureLatest()
-                    futurePlanning.reconsiderAll().forEach { planned ->
-                        photonIngress.ingest(
-                            planned,
-                            PhotonIngressMode.DERIVED,
-                        )
-                    }
+                    personalRuntimeWarmup = PostReadyPersonalRuntimeWarmup(
+                        photons = lifePhotonRepository,
+                        memory = lifeMemoryRuntime,
+                        futurePlanning = futurePlanning,
+                        ingress = photonIngress,
+                    )
 
                     val frozenCognitiveModules =
                         kernel.freezeCognitiveModulesForCurrentCycle(
@@ -335,6 +285,9 @@ internal class ProcessRuntimeInstaller(
                         )
                         Unit
                     }
+                },
+                warmPersonalRuntime = {
+                    personalRuntimeWarmup.run()
                 },
                 installDeepSearchRuntime = {
                     DeepSearchMissionRuntimeRegistry.install(
@@ -410,7 +363,7 @@ internal class ProcessRuntimeInstaller(
                     ) {
                         "Kernel did not install its ProtectionCoordinator"
                     }
-                    selfHealingRuntime = PrivateSelfHealingRuntime.create(
+                    val healing = PrivateSelfHealingRuntime.create(
                         context = appContext,
                         scope = selfHealingScope,
                         graph = healthGraph,
@@ -419,27 +372,31 @@ internal class ProcessRuntimeInstaller(
                         runtime = kernel.runtime,
                         supervisor = supervisor,
                     )
-                    escalationRuntime = PrivateEscalationRuntime.create(
+                    val escalation = PrivateEscalationRuntime.create(
                         context = appContext,
                         scope = selfHealingScope,
                         graph = healthGraph,
                         protection = protectionCoordinator,
-                        selfHealing = selfHealingRuntime,
+                        selfHealing = healing,
                     )
-                    selfHealingRuntime.verifyLedgerIntegrity()
-                    escalationRuntime.verifyLedgerIntegrity()
-                    LifeOsHealthPhotonBridge.start(
-                        scope = selfHealingScope,
-                        graph = healthGraph,
-                        persist = { photon ->
-                            photonIngress.ingest(
-                                photon,
-                                PhotonIngressMode.ORIGIN,
-                            )
-                            Unit
-                        },
-                    )
-                    escalationRuntime.orchestrator.start()
+                    healing.verifyLedgerIntegrity()
+                    escalation.verifyLedgerIntegrity()
+                    if (kernel.bootstrapState.value.actionable) {
+                        LifeOsHealthPhotonBridge.start(
+                            scope = selfHealingScope,
+                            graph = healthGraph,
+                            persist = { photon ->
+                                photonIngress.ingest(
+                                    photon,
+                                    PhotonIngressMode.ORIGIN,
+                                )
+                                Unit
+                            },
+                        )
+                        escalation.orchestrator.start()
+                    }
+                    selfHealingRuntime = healing
+                    escalationRuntime = escalation
                 },
                 installDurableGoalPlanRuntime = {
                     DurableGoalPlanRuntimeRegistry.install(
@@ -464,19 +421,20 @@ internal class ProcessRuntimeInstaller(
                 },
                 startKernel = {
                     kernel.start().join()
-                    productivePerceptionContext.start()
                 },
                 requireCognitiveStateReady = {
-                    kernel.requireCognitiveReady()
+                    kernel.requireReadable()
                 },
-                stageObserver = { evidence ->
-                    LifeOsRuntimeWiring.onStageReady(evidence)
-                    onStageReady(evidence)
-                },
-            )
+            stageObserver = { event ->
+                if (event is LifeOsStartupStageEvent.Completed) {
+                    LifeOsRuntimeWiring.onStageReady(event.evidence)
+                }
+                onStartupEvent(event)
+            },
         )
 
-        return ProcessRuntimeInstallResult(
+        LifeOsStartupComposition.startCritical(startupHooks)
+        val critical = ProcessRuntimeCriticalInstallResult(
             kernel = kernel,
             photonIngress = photonIngress,
             generatedToolStatusReader = generatedToolStatusReader,
@@ -494,8 +452,28 @@ internal class ProcessRuntimeInstaller(
             lifePhotonRepository = lifePhotonRepository,
             lifeMemoryRuntime = lifeMemoryRuntime,
             multimodalPerception = multimodalPerception,
-            selfHealingRuntime = selfHealingRuntime,
-            escalationRuntime = escalationRuntime,
+        )
+        onCriticalReady(critical)
+
+        kernel.startWarmBoot().join()
+        val warmReport = LifeOsStartupComposition.startWarm(startupHooks)
+        if (
+            kernel.bootstrapState.value.actionable &&
+            LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP in warmReport.completedStages
+        ) {
+            productivePerceptionContext.start()
+        }
+        return ProcessRuntimeInstallResult(
+            critical = critical,
+            warm = ProcessRuntimeWarmInstallResult(
+                selfHealingRuntime = selfHealingRuntime.takeIf {
+                    LifeOsStartupStage.SELF_HEALING in warmReport.completedStages
+                },
+                escalationRuntime = escalationRuntime.takeIf {
+                    LifeOsStartupStage.SELF_HEALING in warmReport.completedStages
+                },
+                startupReport = warmReport,
+            ),
         )
     }
 }

@@ -12,7 +12,7 @@
     "app/src/main/java/app/lifeos/next/LifeOsApplication.kt": 302,
     "app/src/main/java/app/lifeos/next/LifeOsViewModel.kt": 221,
     "app/src/main/java/app/lifeos/next/LifeOsChatViewModel.kt": 568,
-    "app/src/main/java/app/lifeos/next/ProcessRuntimeInstaller.kt": 506,
+    "app/src/main/java/app/lifeos/next/ProcessRuntimeInstaller.kt": 480,
     "core/runtime-deepsearch/src/main/kotlin/app/lifeos/core/runtime/deepsearch/DeepSearchPlannerV2.kt": 791,
     "host/buildstudio/src/main/kotlin/app/lifeos/host/buildstudio/JvmBuildStudioHost.kt": 472,
     "core/image-native/src/main/java/app/lifeos/core/image/nativebackend/NativeMmsiBridge.kt": 106,

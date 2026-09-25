@@ -2,10 +2,11 @@ package app.lifeos.next.kernel
 
 import app.lifeos.core.model.health.ProtectionMode
 import app.lifeos.core.runtime.boot.BootCoordinator
+import app.lifeos.core.runtime.boot.BootCriticality
 import app.lifeos.core.runtime.boot.BootRehydrationGraph
 import app.lifeos.core.runtime.boot.BootRehydrationNode
 import app.lifeos.core.runtime.boot.BootRehydrationNodeId
-import app.lifeos.core.runtime.boot.CapabilityWarmup
+import app.lifeos.core.runtime.boot.BootRehydrationReport
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
 import app.lifeos.core.runtime.boot.CognitiveHeadConsistencyDeltaSource
 import app.lifeos.core.runtime.boot.CompositeBootDeltaDetector
@@ -15,17 +16,17 @@ import app.lifeos.core.runtime.boot.ModuleRehydrator
 import app.lifeos.core.runtime.boot.ModuleRestoreSummary
 import app.lifeos.core.runtime.boot.PhotonRehydrator
 import app.lifeos.core.runtime.boot.RehydratedRuntimeState
+import app.lifeos.core.runtime.boot.RegistryCapabilityWarmup
 import app.lifeos.core.runtime.boot.RuntimeBootstrapper
 import app.lifeos.core.runtime.boot.StateRehydrator
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmup
 import app.lifeos.core.runtime.boot.ThoughtMatrixWarmupResult
-import app.lifeos.core.runtime.capability.GeneratedToolState
-import app.lifeos.core.runtime.capability.ProviderState
 import app.lifeos.core.runtime.capability.ProviderType
 import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 
 internal data class KernelBootGraph(
     val bootCoordinator: BootCoordinator,
+    val warmRehydrator: suspend () -> BootRehydrationReport,
 )
 
 /**
@@ -43,31 +44,71 @@ internal class KernelBootComposition(
         fun node(
             id: String,
             dependsOn: Set<String> = emptySet(),
+            criticality: BootCriticality,
             action: suspend () -> Unit,
         ): BootRehydrationNode = BootRehydrationNode(
             id = BootRehydrationNodeId(id),
             dependsOn = dependsOn.mapTo(linkedSetOf(), ::BootRehydrationNodeId),
+            criticality = criticality,
             action = action,
         )
 
-        val rehydrationGraph = BootRehydrationGraph(
+        val storeProbes = KernelBootStoreProbes(
+            bootReadSession = world.bootReadSession,
+            goalPlanRepository = foundation.goalPlanRepository,
+            learningAdaptationRepository = foundation.learningAdaptationRepository,
+            learningWatermarks = cognition.learningWatermarks,
+            worldEquationHeads = world.worldEquationHeads,
+            worldEquationSpecs = world.worldEquationSpecs,
+            worldEquationEvidence = world.worldEquationEvidence,
+            thoughtMatrixStateRepository = foundation.thoughtMatrixStateRepository,
+            thoughtGraphDeltaRepository = foundation.thoughtGraphDeltaRepository,
+            fieldThoughtGraphProjectionOutbox = world.fieldThoughtGraphProjectionOutbox,
+            protectionRepository = foundation.protectionRepository,
+            worldFormulaSnapshotRepository = world.worldFormulaSnapshotRepository,
+            productiveWorldHeadRepository = world.productiveWorldHeadRepository,
+            bootEngineCycleRepository = world.bootEngineCycleRepository,
+            extensionRegistryRehydrator = world.extensionRegistryRehydrator,
+            worldModelRepository = world.worldModelRepository,
+            cognitiveModuleSnapshotRepository = foundation.cognitiveModuleSnapshotRepository,
+            evolutionStore = evolution.evolutionStore,
+            privateGeneratedToolRuntime = evolution.privateGeneratedToolRuntime,
+        ).create()
+        val criticalStoreProbes =
+            storeProbes.filter { it.criticality != BootCriticality.OPTIONAL_WARM }
+        val optionalStoreProbes =
+            storeProbes.filter { it.criticality == BootCriticality.OPTIONAL_WARM }
+
+        val criticalRehydrationGraph = BootRehydrationGraph(
             listOf(
-                node("protection") {
+                node("protection", criticality = BootCriticality.SECURE_REQUIRED) {
                     foundation.protectionCoordinator.rehydrate()
                 },
-                node("leases", setOf("protection")) {
+                node("leases", setOf("protection"), BootCriticality.REQUIRED_DEGRADED) {
                     recoverExpiredLeases(cognition.leaseRecovery)
                 },
-                node("extension-registry", setOf("leases")) {
+                node("extension-registry", setOf("leases"), BootCriticality.REQUIRED_DEGRADED) {
                     world.extensionRegistryRehydrator.rehydrate()
                 },
-                node("world-equation-authority", setOf("extension-registry")) {
+                node(
+                    "world-equation-authority",
+                    setOf("extension-registry"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     world.worldEquationAuthority.activeVersion()
                 },
-                node("world-equation-safety", setOf("world-equation-authority")) {
+                node(
+                    "world-equation-safety",
+                    setOf("world-equation-authority"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     world.worldEquationSafetyMonitor.reconcile()
                 },
-                node("world-model", setOf("world-equation-authority")) {
+                node(
+                    "world-model",
+                    setOf("world-equation-authority"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     val head = world.worldModelRepository.loadHead()
                     if (head != null) {
                         val snapshot = requireNotNull(
@@ -79,51 +120,100 @@ internal class KernelBootComposition(
                         require(snapshot.predecessorSnapshotId == head.predecessorSnapshotId)
                     }
                 },
-                node("goal-plans", setOf("leases")) {
-                    foundation.goalPlans.rehydrate()
-                },
-                node("learning-adaptations", setOf("leases")) {
+                node("learning-adaptations", setOf("leases"), BootCriticality.REQUIRED_DEGRADED) {
                     foundation.learningAdaptations.rehydrate()
                 },
-                node("language-runtime", setOf("learning-adaptations")) {
+                node(
+                    "language-runtime",
+                    setOf("learning-adaptations"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     foundation.languageRuntimeState.rehydrate()
                 },
-                node("thought-graph", setOf("leases")) {
-                    foundation.thoughtGraph.rehydrate()
-                },
-                node("field-thought-projection", setOf("thought-graph")) {
-                    world.fieldThoughtGraphProjection.reconcile()
-                },
-                node("cognition-journal-index", setOf("leases")) {
+                node(
+                    "cognition-journal-index",
+                    setOf("leases"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     foundation.cognitionJournalIndex.reconcile()
                 },
-                node("cognitive-snapshot", setOf("cognition-journal-index")) {
+                node(
+                    "cognitive-snapshot",
+                    setOf("cognition-journal-index"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     cognition.cognitiveSnapshotManager.replay(cognition.cognitiveEventJournal)
+                },
+            )
+        )
+
+        val warmRehydrationGraph = BootRehydrationGraph(
+            listOf(
+                node(
+                    "optional-store-integrity",
+                    criticality = BootCriticality.OPTIONAL_WARM,
+                ) {
+                    val verification = CompositeStoreVerifier(optionalStoreProbes).verify()
+                    val failures = verification.stores.filter { it.state != app.lifeos.core.runtime.boot.StoreState.HEALTHY }
+                    check(failures.isEmpty()) {
+                        "Optional store verification failed: " +
+                            failures.joinToString(",") { "${it.storeId}:${it.state.name}" }
+                    }
+                },
+                node("goal-plans", criticality = BootCriticality.OPTIONAL_WARM) {
+                    foundation.goalPlans.rehydrate()
+                },
+                node("thought-graph", criticality = BootCriticality.OPTIONAL_WARM) {
+                    foundation.thoughtGraph.rehydrate()
+                },
+                node(
+                    "field-thought-projection",
+                    setOf("thought-graph"),
+                    BootCriticality.OPTIONAL_WARM,
+                ) {
+                    world.fieldThoughtGraphProjection.reconcile()
                 },
                 node(
                     "cognition-reconciler",
-                    setOf("cognitive-snapshot", "field-thought-projection"),
+                    setOf("field-thought-projection"),
+                    BootCriticality.OPTIONAL_WARM,
                 ) {
                     cognition.cognitionReconciler.reconcile()
                 },
-                node("evolution-kill-switch", setOf("leases")) {
+                node("evolution-kill-switch", criticality = BootCriticality.OPTIONAL_WARM) {
                     evolution.evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
                 },
-                node("generated-tool-state", setOf("evolution-kill-switch")) {
+                node(
+                    "generated-tool-state",
+                    setOf("evolution-kill-switch"),
+                    BootCriticality.OPTIONAL_WARM,
+                ) {
                     evolution.generatedToolStateRepository.loadAll()
                 },
-                node("generated-artifact-verify", setOf("generated-tool-state")) {
+                node(
+                    "generated-artifact-verify",
+                    setOf("generated-tool-state"),
+                    BootCriticality.OPTIONAL_WARM,
+                ) {
                     evolution.privateGeneratedToolRuntime.artifactBootVerifier.verify()
                 },
-                node("generated-tool-rehydrate", setOf("generated-artifact-verify")) {
+                node(
+                    "generated-tool-rehydrate",
+                    setOf("generated-artifact-verify"),
+                    BootCriticality.OPTIONAL_WARM,
+                ) {
                     evolution.generatedToolBootRehydrator.rehydrateOrVerify()
                 },
             )
         )
+
         val stateRehydrator = object : StateRehydrator {
             override suspend fun rehydrate(): RehydratedRuntimeState {
-                rehydrationGraph.rehydrate()
-                return RehydratedRuntimeState()
+                val report = criticalRehydrationGraph.rehydrate()
+                return RehydratedRuntimeState(
+                    degradedRehydrationNodeIds =
+                        report.degradedNodeIds.map { it.value },
+                )
             }
         }
 
@@ -132,27 +222,7 @@ internal class KernelBootComposition(
                 override suspend fun bootstrap() = Unit
             },
             storeVerifier = CompositeStoreVerifier(
-                probes = KernelBootStoreProbes(
-                    bootReadSession = world.bootReadSession,
-                    goalPlanRepository = foundation.goalPlanRepository,
-                    learningAdaptationRepository = foundation.learningAdaptationRepository,
-                    learningWatermarks = cognition.learningWatermarks,
-                    worldEquationHeads = world.worldEquationHeads,
-                    worldEquationSpecs = world.worldEquationSpecs,
-                    worldEquationEvidence = world.worldEquationEvidence,
-                    thoughtMatrixStateRepository = foundation.thoughtMatrixStateRepository,
-                    thoughtGraphDeltaRepository = foundation.thoughtGraphDeltaRepository,
-                    fieldThoughtGraphProjectionOutbox = world.fieldThoughtGraphProjectionOutbox,
-                    protectionRepository = foundation.protectionRepository,
-                    worldFormulaSnapshotRepository = world.worldFormulaSnapshotRepository,
-                    productiveWorldHeadRepository = world.productiveWorldHeadRepository,
-                    bootEngineCycleRepository = world.bootEngineCycleRepository,
-                    extensionRegistryRehydrator = world.extensionRegistryRehydrator,
-                    worldModelRepository = world.worldModelRepository,
-                    cognitiveModuleSnapshotRepository = foundation.cognitiveModuleSnapshotRepository,
-                    evolutionStore = evolution.evolutionStore,
-                    privateGeneratedToolRuntime = evolution.privateGeneratedToolRuntime,
-                ).create(),
+                probes = criticalStoreProbes,
             ),
             stateRehydrator = stateRehydrator,
             photonRehydrator = PhotonRehydrator(
@@ -171,37 +241,10 @@ internal class KernelBootComposition(
             thoughtMatrixWarmup = object : ThoughtMatrixWarmup {
                 override suspend fun warmup() = ThoughtMatrixWarmupResult()
             },
-            capabilityWarmup = object : CapabilityWarmup {
-                override suspend fun warmup(): CapabilityWarmupResult {
-                    val activeGeneratedToolIds = evolution.evolutionResources.generatedTools.snapshot()
-                        .filter { it.state == GeneratedToolState.ACTIVE }
-                        .map { it.manifest.toolId }
-                        .toSet()
-                    val providers = foundation.capabilityRegistry.all(includeUnavailable = true)
-                    val generatedProviderIds = providers
-                        .filter { it.providerType == ProviderType.GENERATED_TOOL }
-                        .map { it.providerId }
-                        .toSet()
-                    require(generatedProviderIds == activeGeneratedToolIds) {
-                        "Generated-tool capability registry differs from rehydrated ACTIVE tool set"
-                    }
-                    val availableCapabilityIds = providers
-                        .filter {
-                            it.state == ProviderState.ACTIVE ||
-                                it.state == ProviderState.DEGRADED
-                        }
-                        .map { it.capabilityId }
-                        .toSet()
-                    val degradedCapabilityIds = providers
-                        .filter { it.state == ProviderState.DEGRADED }
-                        .map { it.capabilityId }
-                        .toSet()
-                    return CapabilityWarmupResult(
-                        availableCapabilities = availableCapabilityIds.size,
-                        degradedCapabilities = degradedCapabilityIds.size,
-                    )
-                }
-            },
+            capabilityWarmup = RegistryCapabilityWarmup(
+                registry = foundation.capabilityRegistry,
+                excludedProviderTypes = setOf(ProviderType.GENERATED_TOOL),
+            ),
             deltaDetector = CompositeBootDeltaDetector(
                 listOf(
                     CognitiveHeadConsistencyDeltaSource(
@@ -217,6 +260,7 @@ internal class KernelBootComposition(
 
         return KernelBootGraph(
             bootCoordinator = bootCoordinator,
+            warmRehydrator = warmRehydrationGraph::rehydrate,
         )
     }
 

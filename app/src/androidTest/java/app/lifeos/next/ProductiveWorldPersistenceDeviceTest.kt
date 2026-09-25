@@ -55,7 +55,8 @@ class ProductiveWorldPersistenceDeviceTest {
             val repo = EncryptedBootEngineCycleRepository(context)
             val cycleA = preparedCycle("cycle-a")
             assertTrue(repo.create(cycleA))
-            val records = root.resolve("boot-engine-cycle-vault/records")
+            val records = activeGeneration(root, "boot-engine-cycle-vault")
+                .resolve("records")
             val source = records.resolve(sha256("cycle-a") + ".bcycle")
             assertTrue(source.isFile)
 
@@ -76,7 +77,8 @@ class ProductiveWorldPersistenceDeviceTest {
         withIsolatedFiles("corruption") { context, root ->
             val headRepo = EncryptedProductiveWorldHeadRepository(context)
             assertTrue(headRepo.compareAndSet(null, worldHead(1, "snapshot-a", null, "cycle-a")))
-            val headFile = root.resolve("productive-world-head-vault/head.pworld")
+            val headFile = activeGeneration(root, "productive-world-head-vault")
+                .resolve("head.pworld")
             assertTrue(headFile.isFile)
             headFile.writeBytes(byteArrayOf(1, 2, 3, 4))
             assertTrue(EncryptedProductiveWorldHeadRepository(context).loadReport().corrupted)
@@ -84,9 +86,8 @@ class ProductiveWorldPersistenceDeviceTest {
             val cycleRepo = EncryptedBootEngineCycleRepository(context)
             val cycle = preparedCycle("cycle-corrupt")
             assertTrue(cycleRepo.create(cycle))
-            val record = root.resolve(
-                "boot-engine-cycle-vault/records/" + sha256("cycle-corrupt") + ".bcycle"
-            )
+            val record = activeGeneration(root, "boot-engine-cycle-vault")
+                .resolve("records/" + sha256("cycle-corrupt") + ".bcycle")
             assertTrue(record.isFile)
             record.writeBytes(byteArrayOf(9, 8, 7))
             val report = EncryptedBootEngineCycleRepository(context).loadReport()
@@ -172,6 +173,40 @@ class ProductiveWorldPersistenceDeviceTest {
         } finally {
             root.deleteRecursively()
         }
+    }
+
+    private fun activeGeneration(
+        root: File,
+        vaultDirectory: String,
+    ): File {
+        val generations = root.resolve("$vaultDirectory/.schema/generations")
+            .listFiles()
+            .orEmpty()
+            .filter { it.isDirectory && it.name.matches(Regex("g[0-9]{8,}")) }
+            .sortedBy { it.name }
+        assertTrue("Expected at least one schema generation for $vaultDirectory", generations.isNotEmpty())
+        return generations.last()
+    }
+
+    private fun activeGenerationRoot(
+        filesRoot: File,
+        vaultDirectory: String,
+    ): File {
+        val generations = filesRoot
+            .resolve(vaultDirectory)
+            .resolve(".schema/generations")
+        assertTrue("Schema generations directory must exist", generations.isDirectory)
+        val candidates = generations.listFiles().orEmpty()
+            .filter { file ->
+                file.isDirectory && file.name.matches(Regex("g[0-9]{8,}"))
+            }
+            .sortedBy { it.name }
+        assertEquals(
+            "Isolated fixture must have exactly one active schema generation",
+            1,
+            candidates.size,
+        )
+        return candidates.single()
     }
 
     private fun sha256(value: String): String =

@@ -66,6 +66,8 @@ test -f core/language/src/test/kotlin/app/lifeos/core/language/LanguageUnderstan
 grep -Fq 'LANGUAGE_UNDERSTANDING_V2_CONTRACT_OK' .github/scripts/ci-language-semantic-contract.sh
 grep -Fq 'semantic-clarification-required:' core/language/src/main/kotlin/app/lifeos/core/language/SemanticExecutionGate.kt
 
+step "Product Gold 04b: B500 Debug Gold closure"
+bash .github/scripts/ci-debug-gold-closure.sh
 
 step "Product Gold 05: immutable candidate evidence"
 checkout_sha="$(git rev-parse HEAD)"

@@ -2,7 +2,15 @@ package app.lifeos.core.runtime.boot
 
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.runtime.capability.CapabilityDescriptor
+import app.lifeos.core.runtime.capability.CapabilityId
+import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.ProviderState
+import app.lifeos.core.runtime.capability.ProviderType
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -31,6 +39,135 @@ class BootDefaultsTest {
     }
 
     @Test
+    fun compositeStoreVerifierRunsIndependentProbesConcurrentlyAndSortsResults() = runTest {
+        val secondStarted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val verifier = CompositeStoreVerifier(
+            probes = listOf(
+                object : StoreProbe {
+                    override val storeId = "z-first"
+                    override suspend fun probe(): StoreStatus {
+                        withTimeout(1_000) { secondStarted.await() }
+                        release.await()
+                        return StoreStatus(storeId, StoreState.HEALTHY)
+                    }
+                },
+                object : StoreProbe {
+                    override val storeId = "a-second"
+                    override suspend fun probe(): StoreStatus {
+                        secondStarted.complete(Unit)
+                        release.await()
+                        return StoreStatus(storeId, StoreState.HEALTHY)
+                    }
+                },
+            ),
+            maxConcurrentProbes = 2,
+        )
+
+        val verification = async {
+            verifier.verify()
+        }
+        withTimeout(1_000) { secondStarted.await() }
+        release.complete(Unit)
+        val result = verification.await()
+
+        assertEquals(listOf("a-second", "z-first"), result.stores.map { it.storeId })
+        assertTrue(result.canBootNormally)
+    }
+
+    @Test
+    fun secureRequiredCorruptionRemainsFatal() = runTest {
+        val result = CompositeStoreVerifier(
+            listOf(
+                probe(
+                    id = "protection",
+                    state = StoreState.CORRUPTED,
+                    probeCriticality = BootCriticality.SECURE_REQUIRED,
+                )
+            )
+        ).verify()
+
+        assertFalse(result.canBootNormally)
+        assertFalse(result.requiresRecovery)
+        val validation = DefaultBootValidator().validate(contextWithStores(result))
+        assertIs<BootValidationResult.Fatal>(validation)
+    }
+
+    @Test
+    fun requiredDegradedCorruptionContinuesAsDegradedRecovery() = runTest {
+        val result = CompositeStoreVerifier(
+            listOf(
+                probe(
+                    id = "world-head",
+                    state = StoreState.CORRUPTED,
+                    probeCriticality = BootCriticality.REQUIRED_DEGRADED,
+                )
+            )
+        ).verify()
+
+        assertFalse(result.canBootNormally)
+        assertTrue(result.requiresRecovery)
+        val validation = assertIs<BootValidationResult.Degraded>(
+            DefaultBootValidator().validate(contextWithStores(result))
+        )
+        assertTrue("stores-degraded" in validation.limitations)
+    }
+
+    @Test
+    fun optionalWarmCorruptionDoesNotBlockCriticalBootButIsReportedAsLimitation() = runTest {
+        val result = CompositeStoreVerifier(
+            listOf(
+                probe(
+                    id = "generated-tools",
+                    state = StoreState.CORRUPTED,
+                    probeCriticality = BootCriticality.OPTIONAL_WARM,
+                )
+            )
+        ).verify()
+
+        assertTrue(result.canBootNormally)
+        assertFalse(result.requiresRecovery)
+        val validation = assertIs<BootValidationResult.Degraded>(
+            DefaultBootValidator().validate(contextWithStores(result))
+        )
+        assertEquals(
+            setOf("optional-store-degraded:generated-tools:corrupted"),
+            validation.limitations,
+        )
+    }
+
+    @Test
+    fun registryCapabilityWarmupCanExcludeProvidersOwnedByWarmBoot() = runTest {
+        val registry = CapabilityRegistry(
+            listOf(
+                CapabilityDescriptor(
+                    capabilityId = CapabilityId("baseline"),
+                    providerId = "module-baseline",
+                    providerType = ProviderType.MODULE,
+                    state = ProviderState.ACTIVE,
+                ),
+                CapabilityDescriptor(
+                    capabilityId = CapabilityId("warm-owned"),
+                    providerId = "worker-warm",
+                    providerType = ProviderType.WORKER,
+                    state = ProviderState.DEGRADED,
+                ),
+            )
+        )
+
+        val critical = RegistryCapabilityWarmup(
+            registry = registry,
+            excludedProviderTypes = setOf(ProviderType.WORKER),
+        ).warmup()
+        val full = RegistryCapabilityWarmup(registry).warmup()
+
+        assertEquals(1, critical.availableCapabilities)
+        assertEquals(0, critical.degradedCapabilities)
+        assertEquals(2, full.availableCapabilities)
+        assertEquals(1, full.degradedCapabilities)
+    }
+
+    @Test
     fun defaultValidatorDegradesForUnreadablePhotonsWithoutDeclaringFatal() = runTest {
         val context = BootContext(
             stores = StoreVerificationResult(
@@ -55,8 +192,28 @@ class BootDefaultsTest {
         assertEquals(setOf("unreadable-photons:1"), result.limitations)
     }
 
-    private fun probe(id: String, state: StoreState) = object : StoreProbe {
+    private fun contextWithStores(stores: StoreVerificationResult) = BootContext(
+        stores = stores,
+        runtimeState = RehydratedRuntimeState(),
+        photons = PhotonRehydrationResult(
+            hot = emptyList(),
+            warm = emptyList(),
+            cold = emptyList(),
+            assessments = emptyList(),
+            unreadableFiles = emptyList(),
+        ),
+        modules = ModuleRestoreSummary(restored = 1),
+        thoughtMatrix = ThoughtMatrixWarmupResult(),
+        capabilities = CapabilityWarmupResult(availableCapabilities = 1),
+    )
+
+    private fun probe(
+        id: String,
+        state: StoreState,
+        probeCriticality: BootCriticality = BootCriticality.SECURE_REQUIRED,
+    ) = object : StoreProbe {
         override val storeId: String = id
+        override val criticality: BootCriticality = probeCriticality
         override suspend fun probe() = StoreStatus(storeId, state)
     }
 }

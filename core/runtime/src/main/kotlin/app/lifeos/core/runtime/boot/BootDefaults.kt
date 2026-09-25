@@ -1,50 +1,87 @@
 package app.lifeos.core.runtime.boot
 
+import app.lifeos.core.runtime.capability.CapabilityRegistry
+import app.lifeos.core.runtime.capability.ProviderState
+import app.lifeos.core.runtime.capability.ProviderType
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 interface StoreProbe {
     val storeId: String
+    val criticality: BootCriticality
+        get() = BootCriticality.SECURE_REQUIRED
+
     suspend fun probe(): StoreStatus
 }
 
 class CompositeStoreVerifier(
     private val probes: List<StoreProbe>,
+    private val maxConcurrentProbes: Int = DEFAULT_MAX_CONCURRENT_PROBES,
 ) : StoreVerifier {
     init {
         require(probes.map { it.storeId }.distinct().size == probes.size) {
             "Store probe ids must be unique"
         }
+        require(maxConcurrentProbes in 1..MAX_CONCURRENT_PROBES) {
+            "Store verifier concurrency must be bounded"
+        }
     }
 
-    override suspend fun verify(): StoreVerificationResult {
-        val statuses = mutableListOf<StoreStatus>()
-        for (probe in probes) {
-            val status = try {
-                probe.probe()
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                StoreStatus(
-                    storeId = probe.storeId,
-                    state = StoreState.UNAVAILABLE,
-                    message = error.message ?: error::class.simpleName,
-                )
+    override suspend fun verify(): StoreVerificationResult = coroutineScope {
+        val semaphore = Semaphore(maxConcurrentProbes)
+        val statuses = probes.map { probe ->
+            async {
+                semaphore.withPermit {
+                    try {
+                        probe.probe().copy(criticality = probe.criticality)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        StoreStatus(
+                            storeId = probe.storeId,
+                            state = StoreState.UNAVAILABLE,
+                            message = error.message ?: error::class.simpleName,
+                            criticality = probe.criticality,
+                        )
+                    }
+                }
             }
-            statuses += status
-        }
+        }.awaitAll().sortedBy { it.storeId }
 
-        val fatal = statuses.any { it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH }
-        val recoverable = statuses.any {
-            it.state == StoreState.STALE ||
-                it.state == StoreState.PARTIALLY_RECOVERABLE ||
-                it.state == StoreState.LOCKED ||
-                it.state == StoreState.UNAVAILABLE
+        val fatal = statuses.any {
+            it.criticality == BootCriticality.SECURE_REQUIRED &&
+                (it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH)
         }
-        return StoreVerificationResult(
+        val recoverable = statuses.any {
+            it.criticality != BootCriticality.OPTIONAL_WARM &&
+                (
+                    it.state == StoreState.STALE ||
+                        it.state == StoreState.PARTIALLY_RECOVERABLE ||
+                        it.state == StoreState.LOCKED ||
+                        it.state == StoreState.UNAVAILABLE ||
+                        (
+                            it.criticality == BootCriticality.REQUIRED_DEGRADED &&
+                                (
+                                    it.state == StoreState.CORRUPTED ||
+                                        it.state == StoreState.VERSION_MISMATCH
+                                    )
+                            )
+                    )
+        }
+        StoreVerificationResult(
             stores = statuses,
             canBootNormally = !fatal && !recoverable,
             requiresRecovery = !fatal && recoverable,
         )
+    }
+
+    private companion object {
+        const val DEFAULT_MAX_CONCURRENT_PROBES = 4
+        const val MAX_CONCURRENT_PROBES = 16
     }
 }
 
@@ -66,10 +103,36 @@ class CompositeBootDeltaDetector(
     }
 }
 
+class RegistryCapabilityWarmup(
+    private val registry: CapabilityRegistry,
+    private val excludedProviderTypes: Set<ProviderType> = emptySet(),
+) : CapabilityWarmup {
+    override suspend fun warmup(): CapabilityWarmupResult {
+        val providers = registry.all(includeUnavailable = true)
+            .filterNot { it.providerType in excludedProviderTypes }
+        val availableCapabilityIds = providers
+            .filter {
+                it.state == ProviderState.ACTIVE ||
+                    it.state == ProviderState.DEGRADED
+            }
+            .map { it.capabilityId }
+            .toSet()
+        val degradedCapabilityIds = providers
+            .filter { it.state == ProviderState.DEGRADED }
+            .map { it.capabilityId }
+            .toSet()
+        return CapabilityWarmupResult(
+            availableCapabilities = availableCapabilityIds.size,
+            degradedCapabilities = degradedCapabilityIds.size,
+        )
+    }
+}
+
 class DefaultBootValidator : BootValidator {
     override suspend fun validate(context: BootContext): BootValidationResult {
         val fatalStores = context.stores.stores.filter {
-            it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH
+            it.criticality == BootCriticality.SECURE_REQUIRED &&
+                (it.state == StoreState.CORRUPTED || it.state == StoreState.VERSION_MISMATCH)
         }
         if (fatalStores.isNotEmpty()) {
             return BootValidationResult.Fatal(
@@ -90,6 +153,27 @@ class DefaultBootValidator : BootValidator {
 
         val limitations = buildSet {
             if (context.stores.requiresRecovery) add("stores-degraded")
+            context.stores.stores
+                .filter {
+                    it.criticality == BootCriticality.OPTIONAL_WARM &&
+                        it.state != StoreState.HEALTHY
+                }
+                .sortedBy { it.storeId }
+                .forEach {
+                    add("optional-store-degraded:${it.storeId}:${it.state.name.lowercase()}")
+                }
+            if (context.runtimeState.degradedRehydrationNodeIds.isNotEmpty()) {
+                add(
+                    "rehydration-degraded:" +
+                        context.runtimeState.degradedRehydrationNodeIds.sorted().joinToString(",")
+                )
+            }
+            if (context.runtimeState.warmFailureNodeIds.isNotEmpty()) {
+                add(
+                    "warm-rehydration-failed:" +
+                        context.runtimeState.warmFailureNodeIds.sorted().joinToString(",")
+                )
+            }
             if (context.modules.degraded > 0) add("modules-degraded:${context.modules.degraded}")
             if (context.thoughtMatrix.degraded) add("thought-matrix-degraded")
             if (context.capabilities.degradedCapabilities > 0) {
