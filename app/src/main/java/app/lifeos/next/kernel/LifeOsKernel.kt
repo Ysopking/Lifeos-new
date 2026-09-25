@@ -23,6 +23,7 @@ import app.lifeos.core.runtime.VersionedCognitiveModuleRegistry
 import app.lifeos.core.runtime.ThoughtMatrix
 import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootEngineRuntime
+import app.lifeos.core.runtime.boot.BootRehydrationReport
 import app.lifeos.core.runtime.capability.CapabilityGap
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionCoordinator
 import app.lifeos.core.runtime.capability.GeneratedToolUserActionResult
@@ -91,6 +92,14 @@ class LifeOsKernel internal constructor(
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
+    private val warmBootRehydrator: suspend () -> BootRehydrationReport = {
+        BootRehydrationReport(
+            completed = emptySet(),
+            degraded = emptyList(),
+            warmFailures = emptyList(),
+            failedSecure = emptyList(),
+        )
+    },
     private val bootEngineRuntime: BootEngineRuntime,
     private val continuousCognition: ContinuousCognitionEngine,
     private val cognitiveModuleSnapshotRepository: CognitiveModuleSnapshotRepository? = null,
@@ -127,6 +136,7 @@ class LifeOsKernel internal constructor(
         supervisor = supervisor,
         scope = scope,
         bootCoordinator = bootCoordinator,
+        warmBootRehydrator = warmBootRehydrator,
         bootEngineRuntime = bootEngineRuntime,
         bootReadyMaintenanceTrigger = bootReadyMaintenanceTrigger,
     )
@@ -275,6 +285,8 @@ class LifeOsKernel internal constructor(
     )
 
     fun start(): Job = bootLifecycle.start()
+
+    fun startWarmBoot(): Job = bootLifecycle.startWarmBoot()
 
     suspend fun startWorldEquationEvolution(
         candidate: WorldEquationSpec,

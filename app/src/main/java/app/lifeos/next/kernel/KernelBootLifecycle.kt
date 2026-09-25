@@ -8,7 +8,9 @@ import app.lifeos.core.runtime.boot.BootContext
 import app.lifeos.core.runtime.boot.BootCoordinator
 import app.lifeos.core.runtime.boot.BootEngineRecoveryResult
 import app.lifeos.core.runtime.boot.BootEngineRuntime
+import app.lifeos.core.runtime.boot.BootRehydrationReport
 import app.lifeos.core.runtime.boot.BootRunResult
+import app.lifeos.core.runtime.boot.RuntimeAvailability
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -25,11 +27,13 @@ internal class KernelBootLifecycle(
     private val supervisor: RuntimeSupervisor,
     private val scope: CoroutineScope,
     private val bootCoordinator: BootCoordinator,
+    private val warmBootRehydrator: suspend () -> BootRehydrationReport,
     private val bootEngineRuntime: BootEngineRuntime,
     private val bootReadyMaintenanceTrigger: () -> Unit,
 ) {
     private val startLock = Any()
     private var bootstrapJob: Job? = null
+    private var warmBootstrapJob: Job? = null
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
 
     val bootstrapState: StateFlow<KernelBootstrapState> =
@@ -39,6 +43,12 @@ internal class KernelBootLifecycle(
         bootstrapJob ?: scope.launch {
             bootstrap()
         }.also { bootstrapJob = it }
+    }
+
+    fun startWarmBoot(): Job = synchronized(startLock) {
+        warmBootstrapJob ?: scope.launch {
+            warmBootstrap()
+        }.also { warmBootstrapJob = it }
     }
 
     fun retryBootstrap(): Job = synchronized(startLock) {
@@ -62,6 +72,8 @@ internal class KernelBootLifecycle(
         synchronized(startLock) {
             bootstrapJob?.cancel()
             bootstrapJob = null
+            warmBootstrapJob?.cancel()
+            warmBootstrapJob = null
         }
         if (mutableBootstrapState.value.actionable) {
             bootEngineRuntime.recover()
@@ -129,6 +141,8 @@ internal class KernelBootLifecycle(
         synchronized(startLock) {
             bootstrapJob?.cancel()
             bootstrapJob = null
+            warmBootstrapJob?.cancel()
+            warmBootstrapJob = null
         }
         runtime.stop()
         scope.cancel()
@@ -225,7 +239,6 @@ internal class KernelBootLifecycle(
         }
 
         supervisor.start()
-        bootReadyMaintenanceTrigger()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
         // Restore the process-local read model without enqueuing a second task family.
@@ -242,5 +255,64 @@ internal class KernelBootLifecycle(
             unreadableFiles = context.photons.unreadableFiles.size,
             warnings = warnings,
         )
+        bootReadyMaintenanceTrigger()
+    }
+
+    private suspend fun warmBootstrap() {
+        if (!mutableBootstrapState.value.actionable) return
+        try {
+            val report = warmBootRehydrator()
+            val limitations = buildList {
+                addAll(
+                    report.degraded.map {
+                        "warm-required-degraded:${it.nodeId.value}:${it.message}"
+                    }
+                )
+                addAll(
+                    report.warmFailures.map {
+                        "warm-optional-failed:${it.nodeId.value}:${it.message}"
+                    }
+                )
+            }
+            if (limitations.isNotEmpty()) {
+                mutableBootstrapState.update { current ->
+                    current.copy(
+                        status = if (current.status == KernelBootstrapStatus.READY) {
+                            KernelBootstrapStatus.DEGRADED
+                        } else {
+                            current.status
+                        },
+                        availability = if (current.availability == RuntimeAvailability.FULL) {
+                            RuntimeAvailability.DEGRADED
+                        } else {
+                            current.availability
+                        },
+                        warnings = (current.warnings + limitations).distinct(),
+                    )
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            mutableBootstrapState.update { current ->
+                current.copy(
+                    status = if (current.status == KernelBootstrapStatus.READY) {
+                        KernelBootstrapStatus.DEGRADED
+                    } else {
+                        current.status
+                    },
+                    availability = if (current.availability == RuntimeAvailability.FULL) {
+                        RuntimeAvailability.DEGRADED
+                    } else {
+                        current.availability
+                    },
+                    warnings = (
+                        current.warnings +
+                            "warm-rehydration-failed:" +
+                            (error.message ?: error::class.simpleName.orEmpty())
+                        ).distinct(),
+                )
+            }
+        }
     }
 }

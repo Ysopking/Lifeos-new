@@ -6,6 +6,7 @@ import app.lifeos.core.runtime.boot.BootCriticality
 import app.lifeos.core.runtime.boot.BootRehydrationGraph
 import app.lifeos.core.runtime.boot.BootRehydrationNode
 import app.lifeos.core.runtime.boot.BootRehydrationNodeId
+import app.lifeos.core.runtime.boot.BootRehydrationReport
 import app.lifeos.core.runtime.boot.CapabilityWarmup
 import app.lifeos.core.runtime.boot.CapabilityWarmupResult
 import app.lifeos.core.runtime.boot.CognitiveHeadConsistencyDeltaSource
@@ -27,6 +28,7 @@ import app.lifeos.core.runtime.recovery.LeaseRecoveryService
 
 internal data class KernelBootGraph(
     val bootCoordinator: BootCoordinator,
+    val warmRehydrator: suspend () -> BootRehydrationReport,
 )
 
 /**
@@ -53,7 +55,7 @@ internal class KernelBootComposition(
             action = action,
         )
 
-        val rehydrationGraph = BootRehydrationGraph(
+        val criticalRehydrationGraph = BootRehydrationGraph(
             listOf(
                 node("protection", criticality = BootCriticality.SECURE_REQUIRED) {
                     foundation.protectionCoordinator.rehydrate()
@@ -61,16 +63,28 @@ internal class KernelBootComposition(
                 node("leases", setOf("protection"), BootCriticality.REQUIRED_DEGRADED) {
                     recoverExpiredLeases(cognition.leaseRecovery)
                 },
-                node("extension-registry", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
+                node("extension-registry", setOf("leases"), BootCriticality.REQUIRED_DEGRADED) {
                     world.extensionRegistryRehydrator.rehydrate()
                 },
-                node("world-equation-authority", setOf("extension-registry"), BootCriticality.REQUIRED_DEGRADED) {
+                node(
+                    "world-equation-authority",
+                    setOf("extension-registry"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     world.worldEquationAuthority.activeVersion()
                 },
-                node("world-equation-safety", setOf("world-equation-authority"), BootCriticality.REQUIRED_DEGRADED) {
+                node(
+                    "world-equation-safety",
+                    setOf("world-equation-authority"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     world.worldEquationSafetyMonitor.reconcile()
                 },
-                node("world-model", setOf("world-equation-authority"), BootCriticality.REQUIRED_DEGRADED) {
+                node(
+                    "world-model",
+                    setOf("world-equation-authority"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     val head = world.worldModelRepository.loadHead()
                     if (head != null) {
                         val snapshot = requireNotNull(
@@ -82,56 +96,88 @@ internal class KernelBootComposition(
                         require(snapshot.predecessorSnapshotId == head.predecessorSnapshotId)
                     }
                 },
-                node("goal-plans", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
-                    foundation.goalPlans.rehydrate()
-                },
-                node("learning-adaptations", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
+                node("learning-adaptations", setOf("leases"), BootCriticality.REQUIRED_DEGRADED) {
                     foundation.learningAdaptations.rehydrate()
                 },
-                node("language-runtime", setOf("learning-adaptations"), BootCriticality.REQUIRED_DEGRADED) {
+                node(
+                    "language-runtime",
+                    setOf("learning-adaptations"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     foundation.languageRuntimeState.rehydrate()
                 },
-                node("thought-graph", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
-                    foundation.thoughtGraph.rehydrate()
-                },
-                node("field-thought-projection", setOf("thought-graph"), BootCriticality.OPTIONAL_WARM) {
-                    world.fieldThoughtGraphProjection.reconcile()
-                },
-                node("cognition-journal-index", setOf("leases"), BootCriticality.REQUIRED_DEGRADED) {
+                node(
+                    "cognition-journal-index",
+                    setOf("leases"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     foundation.cognitionJournalIndex.reconcile()
                 },
-                node("cognitive-snapshot", setOf("cognition-journal-index"), BootCriticality.REQUIRED_DEGRADED) {
+                node(
+                    "cognitive-snapshot",
+                    setOf("cognition-journal-index"),
+                    BootCriticality.REQUIRED_DEGRADED,
+                ) {
                     cognition.cognitiveSnapshotManager.replay(cognition.cognitiveEventJournal)
+                },
+            )
+        )
+
+        val warmRehydrationGraph = BootRehydrationGraph(
+            listOf(
+                node("goal-plans", criticality = BootCriticality.OPTIONAL_WARM) {
+                    foundation.goalPlans.rehydrate()
+                },
+                node("thought-graph", criticality = BootCriticality.OPTIONAL_WARM) {
+                    foundation.thoughtGraph.rehydrate()
+                },
+                node(
+                    "field-thought-projection",
+                    setOf("thought-graph"),
+                    BootCriticality.OPTIONAL_WARM,
+                ) {
+                    world.fieldThoughtGraphProjection.reconcile()
                 },
                 node(
                     "cognition-reconciler",
-                    setOf("cognitive-snapshot", "field-thought-projection"),
+                    setOf("field-thought-projection"),
                     BootCriticality.OPTIONAL_WARM,
                 ) {
                     cognition.cognitionReconciler.reconcile()
                 },
-                node("evolution-kill-switch", setOf("leases"), BootCriticality.OPTIONAL_WARM) {
+                node("evolution-kill-switch", criticality = BootCriticality.OPTIONAL_WARM) {
                     evolution.evolutionStore.killSwitch(BOOT_PROBE_ADOPTION_ID)
                 },
-                node("generated-tool-state", setOf("evolution-kill-switch"), BootCriticality.OPTIONAL_WARM) {
+                node(
+                    "generated-tool-state",
+                    setOf("evolution-kill-switch"),
+                    BootCriticality.OPTIONAL_WARM,
+                ) {
                     evolution.generatedToolStateRepository.loadAll()
                 },
-                node("generated-artifact-verify", setOf("generated-tool-state"), BootCriticality.OPTIONAL_WARM) {
+                node(
+                    "generated-artifact-verify",
+                    setOf("generated-tool-state"),
+                    BootCriticality.OPTIONAL_WARM,
+                ) {
                     evolution.privateGeneratedToolRuntime.artifactBootVerifier.verify()
                 },
-                node("generated-tool-rehydrate", setOf("generated-artifact-verify"), BootCriticality.OPTIONAL_WARM) {
+                node(
+                    "generated-tool-rehydrate",
+                    setOf("generated-artifact-verify"),
+                    BootCriticality.OPTIONAL_WARM,
+                ) {
                     evolution.generatedToolBootRehydrator.rehydrateOrVerify()
                 },
             )
         )
+
         val stateRehydrator = object : StateRehydrator {
             override suspend fun rehydrate(): RehydratedRuntimeState {
-                val report = rehydrationGraph.rehydrate()
+                val report = criticalRehydrationGraph.rehydrate()
                 return RehydratedRuntimeState(
                     degradedRehydrationNodeIds =
                         report.degradedNodeIds.map { it.value },
-                    warmFailureNodeIds =
-                        report.warmFailureNodeIds.map { it.value },
                 )
             }
         }
@@ -226,6 +272,7 @@ internal class KernelBootComposition(
 
         return KernelBootGraph(
             bootCoordinator = bootCoordinator,
+            warmRehydrator = warmRehydrationGraph::rehydrate,
         )
     }
 
