@@ -13,8 +13,8 @@ import app.lifeos.next.ui.theme.LifeOsTokens
 
 private val Suggestions = listOf(
     "Was ist heute wichtig?",
-    "Finde alles zu …",
-    "Erstelle daraus …",
+    "Finde etwas in meinem Gedächtnis",
+    "Hilf mir, etwas zu erledigen",
 )
 
 @Composable
@@ -27,11 +27,11 @@ fun LifeOsEmptyConversation(
         modifier = modifier
             .fillMaxWidth()
             .padding(top = LifeOsTokens.Spacing.xxLarge),
-        verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.large),
+        verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.medium),
     ) {
         Text(
             text = if (contextReady) {
-                "Was kann ich für dich tun?"
+                "Was möchtest du erledigen?"
             } else {
                 "Einen Moment."
             },
@@ -39,7 +39,7 @@ fun LifeOsEmptyConversation(
         )
         Text(
             text = if (contextReady) {
-                "Frag, plane oder arbeite direkt mit deinem Gedächtnis."
+                "Schreib einfach, was du brauchst."
             } else {
                 "LIFEOS richtet deinen persönlichen Kontext ein."
             },
