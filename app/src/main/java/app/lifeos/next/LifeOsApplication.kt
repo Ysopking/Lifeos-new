@@ -148,10 +148,23 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                mutableStartupState.value = LifeOsProcessStartupState.failed(
-                    error.message ?: error::class.simpleName ?: "lifeos-startup-failed",
-                )
+                if (mutableStartupState.value.phase != LifeOsProcessStartupPhase.FAILED) {
+                    mutableStartupState.value = LifeOsProcessStartupState.failed(
+                        error.message ?: error::class.simpleName ?: "lifeos-startup-failed",
+                    )
+                }
             }
+        }
+    }
+
+    private fun onStartupEvent(event: LifeOsStartupStageEvent) {
+        mutableStartupState.value = when (event) {
+            is LifeOsStartupStageEvent.Started ->
+                LifeOsProcessStartupState.stageStarted(event.stage)
+            is LifeOsStartupStageEvent.Completed ->
+                LifeOsProcessStartupState.stageCompleted(event)
+            is LifeOsStartupStageEvent.Failed ->
+                LifeOsProcessStartupState.stageFailed(event)
         }
     }
 
@@ -168,13 +181,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             onStorageFailure = { failure ->
                 storageIntelligenceFailure = failure
             },
-            onStageReady = { evidence ->
-                mutableStartupState.value = LifeOsProcessStartupState.starting(
-                    stage =
-                        "BootEngine · " +
-                            evidence.stage.name.lowercase().replace('_', ' '),
-                )
-            },
+            onStartupEvent = ::onStartupEvent,
         ).install()
 
         kernel = installed.kernel

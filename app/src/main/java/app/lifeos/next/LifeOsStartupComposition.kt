@@ -2,23 +2,58 @@ package app.lifeos.next
 
 import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.topology.SubsystemStartupOwner
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 
 /** Ordered process lifecycle stages exposed to the unified LIFEOS runtime topology. */
 internal enum class LifeOsStartupStage(
+    val diagnosticCode: String,
+    val displayName: String,
     val subsystemOwner: SubsystemStartupOwner? = null,
 ) {
-    SHARED_RESOURCES(SubsystemStartupOwner.SHARED_RESOURCES),
-    GOAL_EXECUTION,
-    KERNEL_GRAPH(SubsystemStartupOwner.KERNEL_GRAPH),
-    KERNEL_BOOT,
-    COGNITIVE_STATE_READY,
-    DEEP_SEARCH(SubsystemStartupOwner.DEEP_SEARCH),
-    SELF_HEALING(SubsystemStartupOwner.SELF_HEALING),
-    DURABLE_GOALS(SubsystemStartupOwner.DURABLE_GOALS),
-    RUNTIME_STARTED,
+    SHARED_RESOURCES(
+        diagnosticCode = "BOOT-SR-001",
+        displayName = "Vault / Shared Resources",
+        subsystemOwner = SubsystemStartupOwner.SHARED_RESOURCES,
+    ),
+    GOAL_EXECUTION(
+        diagnosticCode = "BOOT-GE-001",
+        displayName = "Goal Execution",
+    ),
+    KERNEL_GRAPH(
+        diagnosticCode = "BOOT-KG-001",
+        displayName = "Kernel Graph",
+        subsystemOwner = SubsystemStartupOwner.KERNEL_GRAPH,
+    ),
+    KERNEL_BOOT(
+        diagnosticCode = "BOOT-KB-001",
+        displayName = "Kernel Boot",
+    ),
+    COGNITIVE_STATE_READY(
+        diagnosticCode = "BOOT-CS-003",
+        displayName = "Cognitive State",
+    ),
+    DEEP_SEARCH(
+        diagnosticCode = "BOOT-DS-001",
+        displayName = "Deep Search",
+        subsystemOwner = SubsystemStartupOwner.DEEP_SEARCH,
+    ),
+    SELF_HEALING(
+        diagnosticCode = "BOOT-SH-001",
+        displayName = "Self-Healing",
+        subsystemOwner = SubsystemStartupOwner.SELF_HEALING,
+    ),
+    DURABLE_GOALS(
+        diagnosticCode = "BOOT-DG-001",
+        displayName = "Durable Goals",
+        subsystemOwner = SubsystemStartupOwner.DURABLE_GOALS,
+    ),
+    RUNTIME_STARTED(
+        diagnosticCode = "BOOT-RT-001",
+        displayName = "Runtime",
+    ),
 }
 
 internal data class LifeOsStartupStageSpec(
@@ -38,6 +73,63 @@ internal data class LifeOsStartupStageEvidence(
         require(layerIndex >= 0)
         require(manifestGraphFingerprint.isNotBlank())
         require(ownedManifestFingerprints.none { it.isBlank() })
+    }
+}
+
+/**
+ * Lifecycle diagnostics emitted around each concrete startup action.
+ *
+ * Completed events remain canonical per startup layer. Failed identifies the exact stage that threw;
+ * sibling cancellation is not misreported as a second startup failure.
+ */
+internal sealed interface LifeOsStartupStageEvent {
+    val stage: LifeOsStartupStage
+    val layerIndex: Int
+
+    data class Started(
+        override val stage: LifeOsStartupStage,
+        override val layerIndex: Int,
+    ) : LifeOsStartupStageEvent {
+        init {
+            require(layerIndex >= 0)
+        }
+    }
+
+    data class Completed(
+        val evidence: LifeOsStartupStageEvidence,
+        val durationNanos: Long,
+    ) : LifeOsStartupStageEvent {
+        override val stage: LifeOsStartupStage
+            get() = evidence.stage
+        override val layerIndex: Int
+            get() = evidence.layerIndex
+
+        init {
+            require(durationNanos >= 0L)
+        }
+
+        val durationMillis: Long
+            get() = durationNanos / 1_000_000L
+    }
+
+    data class Failed(
+        override val stage: LifeOsStartupStage,
+        override val layerIndex: Int,
+        val diagnosticCode: String,
+        val durationNanos: Long,
+        val causeType: String,
+        val message: String,
+    ) : LifeOsStartupStageEvent {
+        init {
+            require(layerIndex >= 0)
+            require(diagnosticCode == stage.diagnosticCode)
+            require(durationNanos >= 0L)
+            require(causeType.isNotBlank())
+            require(message.isNotBlank())
+        }
+
+        val durationMillis: Long
+            get() = durationNanos / 1_000_000L
     }
 }
 
@@ -136,40 +228,84 @@ internal data class LifeOsStartupHooks(
     val installDeepSearchRuntime: suspend () -> Unit,
     val startSelfHealingRuntime: suspend () -> Unit,
     val installDurableGoalPlanRuntime: suspend () -> Unit,
-    val stageObserver: (LifeOsStartupStageEvidence) -> Unit = {},
+    val stageObserver: (LifeOsStartupStageEvent) -> Unit = {},
 )
 
 internal object LifeOsStartupComposition {
     suspend fun start(hooks: LifeOsStartupHooks) {
         LifeOsStartupStageGraph.layers.forEachIndexed { layerIndex, layer ->
-            val completed = executeLayer(layer, hooks)
-            completed.sortedBy { it.stage.ordinal }.forEach { spec ->
-                hooks.stageObserver(evidence(spec.stage, layerIndex))
+            val completed = executeLayer(layerIndex, layer, hooks)
+            completed.sortedBy { it.spec.stage.ordinal }.forEach { execution ->
+                hooks.stageObserver(
+                    LifeOsStartupStageEvent.Completed(
+                        evidence = evidence(execution.spec.stage, layerIndex),
+                        durationNanos = execution.durationNanos,
+                    )
+                )
             }
         }
     }
 
     private suspend fun executeLayer(
+        layerIndex: Int,
         layer: List<LifeOsStartupStageSpec>,
         hooks: LifeOsStartupHooks,
-    ): List<LifeOsStartupStageSpec> {
+    ): List<StageExecution> {
         val mayParallelize = layer.size > 1 && layer.all { it.parallelSafe }
         return if (mayParallelize) {
             coroutineScope {
                 layer.map { spec ->
                     async {
-                        actionFor(spec.stage, hooks).invoke()
-                        spec
+                        executeStage(spec, layerIndex, hooks)
                     }
                 }.awaitAll()
             }
         } else {
             layer.map { spec ->
-                actionFor(spec.stage, hooks).invoke()
-                spec
+                executeStage(spec, layerIndex, hooks)
             }
         }
     }
+
+    private suspend fun executeStage(
+        spec: LifeOsStartupStageSpec,
+        layerIndex: Int,
+        hooks: LifeOsStartupHooks,
+    ): StageExecution {
+        hooks.stageObserver(
+            LifeOsStartupStageEvent.Started(
+                stage = spec.stage,
+                layerIndex = layerIndex,
+            )
+        )
+        val startedNanos = System.nanoTime()
+        return try {
+            actionFor(spec.stage, hooks).invoke()
+            StageExecution(
+                spec = spec,
+                durationNanos = elapsedNanos(startedNanos),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            hooks.stageObserver(
+                LifeOsStartupStageEvent.Failed(
+                    stage = spec.stage,
+                    layerIndex = layerIndex,
+                    diagnosticCode = spec.stage.diagnosticCode,
+                    durationNanos = elapsedNanos(startedNanos),
+                    causeType = error::class.qualifiedName ?: error::class.simpleName ?: "Throwable",
+                    message = error.message?.takeIf { it.isNotBlank() }
+                        ?: error::class.simpleName
+                        ?: "startup-stage-failed",
+                )
+            )
+            throw error
+        }
+    }
+
+    private fun elapsedNanos(startedNanos: Long): Long =
+        (System.nanoTime() - startedNanos).coerceAtLeast(0L)
 
     private fun actionFor(
         stage: LifeOsStartupStage,
@@ -187,7 +323,9 @@ internal object LifeOsStartupComposition {
     }
 
     private fun evidence(stage: LifeOsStartupStage, layerIndex: Int): LifeOsStartupStageEvidence {
-        val manifests = stage.subsystemOwner?.let(LifeOsProcessTopology.canonicalManifestGraph::manifestsFor).orEmpty()
+        val manifests = stage.subsystemOwner
+            ?.let(LifeOsProcessTopology.canonicalManifestGraph::manifestsFor)
+            .orEmpty()
         return LifeOsStartupStageEvidence(
             stage = stage,
             layerIndex = layerIndex,
@@ -195,4 +333,9 @@ internal object LifeOsStartupComposition {
             ownedManifestFingerprints = manifests.map { it.fingerprint },
         )
     }
+
+    private data class StageExecution(
+        val spec: LifeOsStartupStageSpec,
+        val durationNanos: Long,
+    )
 }

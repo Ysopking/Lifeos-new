@@ -95,7 +95,7 @@ internal class ProcessRuntimeInstaller(
     private val canRunStorageIntelligence: () -> Boolean,
     private val onStorageSnapshot: (StorageIntelligenceSnapshot) -> Unit,
     private val onStorageFailure: (String?) -> Unit,
-    private val onStageReady: (LifeOsStartupStageEvidence) -> Unit,
+    private val onStartupEvent: (LifeOsStartupStageEvent) -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val selfHealingScope =
@@ -444,9 +444,11 @@ internal class ProcessRuntimeInstaller(
                 requireCognitiveStateReady = {
                     kernel.requireCognitiveReady()
                 },
-                stageObserver = { evidence ->
-                    LifeOsRuntimeWiring.onStageReady(evidence)
-                    onStageReady(evidence)
+                stageObserver = { event ->
+                    if (event is LifeOsStartupStageEvent.Completed) {
+                        LifeOsRuntimeWiring.onStageReady(event.evidence)
+                    }
+                    onStartupEvent(event)
                 },
             )
         )

@@ -14,7 +14,7 @@ class LifeOsStartupCompositionTest {
     @Test
     fun `startup DAG preserves prerequisites and deterministic completion evidence`() = runTest {
         val actions = mutableListOf<String>()
-        val evidence = mutableListOf<LifeOsStartupStageEvidence>()
+        val events = mutableListOf<LifeOsStartupStageEvent>()
         val arrivals = AtomicInteger(0)
         val parallelRelease = CompletableDeferred<Unit>()
 
@@ -36,7 +36,7 @@ class LifeOsStartupCompositionTest {
                 installDeepSearchRuntime = parallelAction("deepsearch"),
                 startSelfHealingRuntime = parallelAction("self-healing"),
                 installDurableGoalPlanRuntime = parallelAction("goal-plan"),
-                stageObserver = { evidence += it },
+                stageObserver = { events += it },
             )
         )
 
@@ -52,20 +52,34 @@ class LifeOsStartupCompositionTest {
             listOf("deepsearch", "self-healing", "goal-plan").toSet(),
             actions.subList(5, 8).toSet(),
         )
+
+        val completed = events.filterIsInstance<LifeOsStartupStageEvent.Completed>()
         assertEquals(
             LifeOsStartupStage.entries.toList(),
-            evidence.map { it.stage },
+            completed.map { it.stage },
         )
+        assertTrue(completed.all { it.durationNanos >= 0L })
         assertTrue(
-            evidence.all {
-                it.manifestGraphFingerprint == LifeOsProcessTopology.manifestFingerprint
+            completed.all {
+                it.evidence.manifestGraphFingerprint == LifeOsProcessTopology.manifestFingerprint
             }
         )
+
+        LifeOsStartupStage.entries.forEach { stage ->
+            val startedIndex = events.indexOfFirst {
+                it is LifeOsStartupStageEvent.Started && it.stage == stage
+            }
+            val completedIndex = events.indexOfFirst {
+                it is LifeOsStartupStageEvent.Completed && it.stage == stage
+            }
+            assertTrue(startedIndex >= 0, "missing STARTED event for $stage")
+            assertTrue(completedIndex > startedIndex, "COMPLETED must follow STARTED for $stage")
+        }
     }
 
     @Test
-    fun `parallel startup failure cancels siblings and blocks later evidence`() = runTest {
-        val evidence = mutableListOf<LifeOsStartupStageEvidence>()
+    fun `parallel startup failure cancels siblings and attributes exact stage`() = runTest {
+        val events = mutableListOf<LifeOsStartupStageEvent>()
         val siblingStarts = AtomicInteger(0)
         val siblingsReady = CompletableDeferred<Unit>()
         val cancelledSiblings = mutableListOf<String>()
@@ -95,7 +109,7 @@ class LifeOsStartupCompositionTest {
                         error("startup-failure")
                     },
                     installDurableGoalPlanRuntime = cancellableSibling("goal-plan"),
-                    stageObserver = { evidence += it },
+                    stageObserver = { events += it },
                 )
             )
             null
@@ -109,12 +123,29 @@ class LifeOsStartupCompositionTest {
             cancelledSiblings.toSet(),
         )
         assertFalse(
-            evidence.any { it.stage == LifeOsStartupStage.RUNTIME_STARTED }
+            events.filterIsInstance<LifeOsStartupStageEvent.Completed>()
+                .any { it.stage == LifeOsStartupStage.RUNTIME_STARTED }
         )
         assertEquals(
             LifeOsStartupStage.COGNITIVE_STATE_READY,
-            evidence.last().stage,
+            events.filterIsInstance<LifeOsStartupStageEvent.Completed>().last().stage,
         )
+
+        val failed = events.filterIsInstance<LifeOsStartupStageEvent.Failed>().single()
+        assertEquals(LifeOsStartupStage.SELF_HEALING, failed.stage)
+        assertEquals("BOOT-SH-001", failed.diagnosticCode)
+        assertEquals("startup-failure", failed.message)
+        assertTrue(failed.durationNanos >= 0L)
+    }
+
+    @Test
+    fun `startup stage diagnostic identities are stable and unique`() {
+        assertEquals(
+            LifeOsStartupStage.entries.size,
+            LifeOsStartupStage.entries.map { it.diagnosticCode }.distinct().size,
+        )
+        assertEquals("BOOT-CS-003", LifeOsStartupStage.COGNITIVE_STATE_READY.diagnosticCode)
+        assertTrue(LifeOsStartupStage.entries.all { it.displayName.isNotBlank() })
     }
 
     @Test
