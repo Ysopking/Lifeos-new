@@ -57,10 +57,20 @@ data class RehydratedRuntimeState(
     val recoverableTaskIds: List<String> = emptyList(),
     val interruptedWorkerIds: List<String> = emptyList(),
     val expiredLeaseIds: List<String> = emptyList(),
+    val degradedRehydrationNodeIds: List<String> = emptyList(),
+    val warmFailureNodeIds: List<String> = emptyList(),
     val previousEpoch: Long = 0,
 ) {
     init {
         require(previousEpoch >= 0) { "Previous runtime epoch must not be negative" }
+        require(degradedRehydrationNodeIds.none { it.isBlank() }) {
+            "Degraded rehydration node ids must not be blank"
+        }
+        require(warmFailureNodeIds.none { it.isBlank() }) {
+            "Warm rehydration node ids must not be blank"
+        }
+        require(degradedRehydrationNodeIds.distinct().size == degradedRehydrationNodeIds.size)
+        require(warmFailureNodeIds.distinct().size == warmFailureNodeIds.size)
     }
 }
 
