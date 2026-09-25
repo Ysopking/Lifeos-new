@@ -173,7 +173,8 @@ internal object PrivatePermissionProfiles {
                     add(PermissionSpecialAccess.APP_USAGE_STATS)
                 }
             },
-            manifestPermissions = usageStatsPermission?.let(::setOf).orEmpty(),
+            manifestPermissions =
+                if (usageStatsPermission == null) emptySet() else setOf(usageStatsPermission),
             rationaleTags = buildSet {
                 add("live-context")
                 add("owner-authorized-notification-observation")
