@@ -148,8 +148,8 @@ class LifeOsStartupCompositionTest {
                     LifeOsStartupStage.DEEP_SEARCH,
                     LifeOsStartupStage.SELF_HEALING,
                     LifeOsStartupStage.DURABLE_GOALS,
-                    LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP,
                 ),
+                listOf(LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP),
             ),
             LifeOsStartupStageGraph.layers.map { layer -> layer.map { it.stage } },
         )
@@ -165,6 +165,17 @@ class LifeOsStartupCompositionTest {
         assertTrue(
             LifeOsStartupStageGraph.specsFor(LifeOsStartupLane.WARM)
                 .all { LifeOsStartupStage.RUNTIME_STARTED in it.dependencies }
+        )
+        assertEquals(
+            setOf(
+                LifeOsStartupStage.RUNTIME_STARTED,
+                LifeOsStartupStage.DEEP_SEARCH,
+                LifeOsStartupStage.SELF_HEALING,
+                LifeOsStartupStage.DURABLE_GOALS,
+            ),
+            LifeOsStartupStageGraph.specs
+                .single { it.stage == LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP }
+                .dependencies,
         )
     }
 }
