@@ -42,6 +42,7 @@ fun LifeOsChatScreen(
         topologyEvidence = state.runtimeTopology,
         selfStateEvidence = state.selfState,
     )
+    val primaryTimeline = state.timeline.filter(ChatPrimaryTimelinePolicy::visible)
     val chatFailureNotice = if (state.turnProcessing.phase == ChatTurnPhase.FAILED) {
         null
     } else {
@@ -67,7 +68,7 @@ fun LifeOsChatScreen(
                 vertical = LifeOsTokens.Spacing.large,
             ),
         ) {
-            if (state.timeline.isEmpty()) {
+            if (primaryTimeline.isEmpty()) {
                 item {
                     LifeOsEmptyConversation(
                         contextReady = cognitiveContext.contextReady,
@@ -75,7 +76,7 @@ fun LifeOsChatScreen(
                     )
                 }
             }
-            items(state.timeline, key = { it.id }) { item ->
+            items(primaryTimeline, key = { it.id }) { item ->
                 when (item) {
                     is ChatTimelineItem.Message -> ChatMessageContent(item.event)
                     is ChatTimelineItem.Image -> Row(
@@ -100,6 +101,14 @@ fun LifeOsChatScreen(
                 modifier = Modifier.padding(bottom = LifeOsTokens.Spacing.small),
             )
         }
+
+        ChatClarificationReplies(
+            options = state.clarificationOptions,
+            onReply = model::answerClarification,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = LifeOsTokens.Spacing.xSmall),
+        )
 
         ChatComposer(
             draft = state.draft,
