@@ -145,6 +145,56 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
     median_ms = require_int(timing.get("median_ms"), "instrumentation-median")
     max_ms = require_int(timing.get("max_ms"), "instrumentation-max")
 
+    samples = timing.get("samples")
+    if not isinstance(samples, list):
+        fail("instrumentation-samples-not-list")
+    if len(samples) != sample_count:
+        fail(f"instrumentation-sample-count-mismatch:declared={sample_count}:actual={len(samples)}")
+
+    actual_files: set[str] = set()
+    normalized_samples: list[tuple[int, str]] = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            fail("instrumentation-sample-not-object")
+        filename = require_string(sample.get("file"), "instrumentation-sample-file")
+        elapsed_ms = require_int(
+            sample.get("elapsed_ms"),
+            f"instrumentation-sample-elapsed:{filename}",
+        )
+        if filename in actual_files:
+            fail(f"instrumentation-duplicate-file:{filename}")
+        actual_files.add(filename)
+        normalized_samples.append((elapsed_ms, filename))
+
+    slowest_elapsed_ms, slowest_file = max(
+        normalized_samples,
+        key=lambda item: (item[0], item[1]),
+    )
+    if slowest_elapsed_ms != max_ms:
+        fail(
+            "instrumentation-max-sample-mismatch:"
+            f"declared={max_ms}:actual={slowest_elapsed_ms}:file={slowest_file}"
+        )
+
+    declared_slowest = timing.get("slowest_sample")
+    if declared_slowest is not None:
+        if not isinstance(declared_slowest, dict):
+            fail("instrumentation-slowest-sample-not-object")
+        declared_file = require_string(
+            declared_slowest.get("file"),
+            "instrumentation-slowest-sample-file",
+        )
+        declared_elapsed = require_int(
+            declared_slowest.get("elapsed_ms"),
+            "instrumentation-slowest-sample-elapsed",
+        )
+        if (declared_elapsed, declared_file) != (slowest_elapsed_ms, slowest_file):
+            fail(
+                "instrumentation-slowest-sample-mismatch:"
+                f"declared={declared_file}:{declared_elapsed}:"
+                f"actual={slowest_file}:{slowest_elapsed_ms}"
+            )
+
     if total_ms > total_max:
         fail(f"cold-total:max={total_max}:actual={total_ms}")
     if wait_ms > wait_max:
@@ -154,23 +204,10 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
     if median_ms > median_max:
         fail(f"instrumentation-median:max={median_max}:actual={median_ms}")
     if max_ms > max_max:
-        fail(f"instrumentation-max:max={max_max}:actual={max_ms}")
-
-    samples = timing.get("samples")
-    if not isinstance(samples, list):
-        fail("instrumentation-samples-not-list")
-    if len(samples) != sample_count:
-        fail(f"instrumentation-sample-count-mismatch:declared={sample_count}:actual={len(samples)}")
-
-    actual_files: set[str] = set()
-    for sample in samples:
-        if not isinstance(sample, dict):
-            fail("instrumentation-sample-not-object")
-        filename = require_string(sample.get("file"), "instrumentation-sample-file")
-        require_int(sample.get("elapsed_ms"), f"instrumentation-sample-elapsed:{filename}")
-        if filename in actual_files:
-            fail(f"instrumentation-duplicate-file:{filename}")
-        actual_files.add(filename)
+        fail(
+            "instrumentation-max:"
+            f"max={max_max}:actual={max_ms}:file={slowest_file}"
+        )
 
     required_files = timing_budget.get("required_sample_files")
     if not isinstance(required_files, list) or not required_files:

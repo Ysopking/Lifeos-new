@@ -1,5 +1,6 @@
 package app.lifeos.core.scene
 
+import java.util.stream.IntStream
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -42,6 +43,8 @@ class ReferenceCpuSceneRasterizer(
         }
 
         val camera = CameraFrame.from(graph.camera, size)
+        val rayGrid = camera.prepareRayGrid(size)
+        val preparedNodes = graph.nodes.map(::prepareNode)
         val pixels = size.pixelCount
         val albedo = FloatArray(pixels * 4)
         val normals = FloatArray(pixels * 3)
@@ -54,16 +57,21 @@ class ReferenceCpuSceneRasterizer(
             normals[i * 3 + 2] = 1f
         }
 
-        var covered = 0
-        var actors = 0
-        var objects = 0
-        var ground = 0
+        val coveredByRow = IntArray(size.height)
+        val actorsByRow = IntArray(size.height)
+        val objectsByRow = IntArray(size.height)
+        val groundByRow = IntArray(size.height)
 
-        for (y in 0 until size.height) {
+        IntStream.range(0, size.height).parallel().forEach { y ->
+            var rowCovered = 0
+            var rowActors = 0
+            var rowObjects = 0
+            var rowGround = 0
+
             for (x in 0 until size.width) {
                 val pixel = y * size.width + x
-                val ray = camera.rayForPixel(x, y, size)
-                val hit = nearestHit(ray, graph.nodes) ?: continue
+                val ray = rayGrid.rayForPixel(x, y)
+                val hit = nearestHit(ray, preparedNodes) ?: continue
                 if (hit.distance !in nearMeters..farMeters) continue
 
                 val material = materials.material(hit.node, hit.humanoidPart)
@@ -81,15 +89,25 @@ class ReferenceCpuSceneRasterizer(
                 depth[pixel] = normalizeDepth(hit.distance).toFloat()
                 roughness[pixel] = material.roughness
 
-                covered++
+                rowCovered++
                 when (hit.node.role) {
-                    SceneNodeRole.ACTOR -> actors++
-                    SceneNodeRole.OBJECT -> objects++
-                    SceneNodeRole.GROUND -> ground++
+                    SceneNodeRole.ACTOR -> rowActors++
+                    SceneNodeRole.OBJECT -> rowObjects++
+                    SceneNodeRole.GROUND -> rowGround++
                     SceneNodeRole.ENVIRONMENT -> Unit
                 }
             }
+
+            coveredByRow[y] = rowCovered
+            actorsByRow[y] = rowActors
+            objectsByRow[y] = rowObjects
+            groundByRow[y] = rowGround
         }
+
+        val covered = coveredByRow.sum()
+        val actors = actorsByRow.sum()
+        val objects = objectsByRow.sum()
+        val ground = groundByRow.sum()
 
         return SceneRasterResult.Rasterized(
             buffers = MmsiSceneRasterBuffers(
@@ -111,48 +129,43 @@ class ReferenceCpuSceneRasterizer(
     private fun normalizeDepth(distance: Double): Double =
         ((distance - nearMeters) / (farMeters - nearMeters)).coerceIn(0.0, 1.0)
 
-    private fun nearestHit(ray: Ray, nodes: List<SceneNode>): Hit? {
+    private fun nearestHit(ray: Ray, nodes: List<PreparedNode>): Hit? {
         var nearest: Hit? = null
-        for (node in nodes) {
-            val hit = when (node.geometry.primitive) {
-                GeometryPrimitive.SPHERE -> intersectSphereNode(ray, node)
-                GeometryPrimitive.PLANE -> intersectPlaneNode(ray, node)
-                GeometryPrimitive.BOX -> intersectBoxNode(ray, node)
-                GeometryPrimitive.PARAMETRIC_HUMANOID -> intersectHumanoid(ray, node)
+        for (prepared in nodes) {
+            val hit = when (prepared.node.geometry.primitive) {
+                GeometryPrimitive.SPHERE -> intersectSphereNode(ray, prepared)
+                GeometryPrimitive.PLANE -> intersectPlaneNode(ray, prepared)
+                GeometryPrimitive.BOX -> intersectBoxNode(ray, prepared)
+                GeometryPrimitive.PARAMETRIC_HUMANOID -> intersectHumanoid(ray, prepared)
             } ?: continue
             if (hit.distance > EPSILON && (nearest == null || hit.distance < nearest.distance)) nearest = hit
         }
         return nearest
     }
 
-    private fun intersectSphereNode(ray: Ray, node: SceneNode): Hit? {
-        val dimensions = scaledDimensions(node)
-        val radii = Vec3(
-            dimensions.x * 0.5,
-            dimensions.y * 0.5,
-            dimensions.z * 0.5,
-        )
-        return intersectEllipsoid(ray, Vec3.from(node.transform.position), radii)?.let { intersection ->
-            Hit(node, intersection.distance, intersection.normal)
+    private fun intersectSphereNode(ray: Ray, prepared: PreparedNode): Hit? {
+        val radii = requireNotNull(prepared.sphereRadii)
+        return intersectEllipsoid(ray, prepared.center, radii)?.let { intersection ->
+            Hit(prepared.node, intersection.distance, intersection.normal)
         }
     }
 
-    private fun intersectPlaneNode(ray: Ray, node: SceneNode): Hit? {
-        val dimensions = scaledDimensions(node)
+    private fun intersectPlaneNode(ray: Ray, prepared: PreparedNode): Hit? {
         if (abs(ray.direction.z) < EPSILON) return null
-        val center = Vec3.from(node.transform.position)
-        val surfaceZ = center.z + dimensions.z * 0.5
+        val dimensions = prepared.dimensions
+        val center = prepared.center
+        val surfaceZ = requireNotNull(prepared.planeSurfaceZ)
         val t = (surfaceZ - ray.origin.z) / ray.direction.z
         if (t <= EPSILON) return null
         val p = ray.at(t)
         if (abs(p.x - center.x) > dimensions.x * 0.5 || abs(p.y - center.y) > dimensions.y * 0.5) return null
-        return Hit(node, t, Vec3(0.0, 0.0, 1.0))
+        return Hit(prepared.node, t, Vec3(0.0, 0.0, 1.0))
     }
 
-    private fun intersectBoxNode(ray: Ray, node: SceneNode): Hit? {
-        val dimensions = scaledDimensions(node)
-        val center = Vec3.from(node.transform.position)
-        val half = dimensions * 0.5
+    private fun intersectBoxNode(ray: Ray, prepared: PreparedNode): Hit? {
+        val node = prepared.node
+        val center = prepared.center
+        val half = requireNotNull(prepared.boxHalf)
         val minCorner = center - half
         val maxCorner = center + half
         var tMin = Double.NEGATIVE_INFINITY
@@ -182,26 +195,29 @@ class ReferenceCpuSceneRasterizer(
         if (t <= EPSILON) return null
         val p = ray.at(t)
         val local = p - center
-        val normalizedFaceDistance = listOf(
-            abs(abs(local.x) - half.x) to Vec3(if (local.x >= 0.0) 1.0 else -1.0, 0.0, 0.0),
-            abs(abs(local.y) - half.y) to Vec3(0.0, if (local.y >= 0.0) 1.0 else -1.0, 0.0),
-            abs(abs(local.z) - half.z) to Vec3(0.0, 0.0, if (local.z >= 0.0) 1.0 else -1.0),
-        )
-        val normal = normalizedFaceDistance.minBy { it.first }.second
+        val xFaceDistance = abs(abs(local.x) - half.x)
+        val yFaceDistance = abs(abs(local.y) - half.y)
+        val zFaceDistance = abs(abs(local.z) - half.z)
+        val normal = when {
+            xFaceDistance <= yFaceDistance && xFaceDistance <= zFaceDistance ->
+                Vec3(if (local.x >= 0.0) 1.0 else -1.0, 0.0, 0.0)
+            yFaceDistance <= zFaceDistance ->
+                Vec3(0.0, if (local.y >= 0.0) 1.0 else -1.0, 0.0)
+            else ->
+                Vec3(0.0, 0.0, if (local.z >= 0.0) 1.0 else -1.0)
+        }
         return Hit(node, t, normal)
     }
 
-    private fun intersectHumanoid(ray: Ray, node: SceneNode): Hit? {
-        val dimensions = scaledDimensions(node)
-        val center = Vec3.from(node.transform.position)
-        val width = dimensions.x
-        val depth = dimensions.y
-        val height = dimensions.z
-        val parts = humanoidParts(node, center, width, depth, height)
+    private fun intersectHumanoid(ray: Ray, prepared: PreparedNode): Hit? {
+        val boundsMin = requireNotNull(prepared.boundsMin)
+        val boundsMax = requireNotNull(prepared.boundsMax)
+        if (!rayIntersectsAabb(ray, boundsMin, boundsMax)) return null
+
         var nearest: Hit? = null
-        for (part in parts) {
+        for (part in prepared.humanoidParts) {
             val intersection = intersectEllipsoid(ray, part.center, part.radii) ?: continue
-            val hit = Hit(node, intersection.distance, intersection.normal, part.part)
+            val hit = Hit(prepared.node, intersection.distance, intersection.normal, part.part)
             if (nearest == null || hit.distance < nearest.distance) nearest = hit
         }
         return nearest
@@ -263,10 +279,103 @@ class ReferenceCpuSceneRasterizer(
         return parts
     }
 
+    private fun prepareNode(node: SceneNode): PreparedNode {
+        val dimensions = scaledDimensions(node)
+        val center = Vec3.from(node.transform.position)
+        return when (node.geometry.primitive) {
+            GeometryPrimitive.SPHERE ->
+                PreparedNode(
+                    node = node,
+                    center = center,
+                    dimensions = dimensions,
+                    sphereRadii = Vec3(
+                        dimensions.x * 0.5,
+                        dimensions.y * 0.5,
+                        dimensions.z * 0.5,
+                    ),
+                )
+
+            GeometryPrimitive.PLANE ->
+                PreparedNode(
+                    node = node,
+                    center = center,
+                    dimensions = dimensions,
+                    planeSurfaceZ = center.z + dimensions.z * 0.5,
+                )
+
+            GeometryPrimitive.BOX ->
+                PreparedNode(
+                    node = node,
+                    center = center,
+                    dimensions = dimensions,
+                    boxHalf = dimensions * 0.5,
+                )
+
+            GeometryPrimitive.PARAMETRIC_HUMANOID -> {
+                val parts = humanoidParts(
+                    node = node,
+                    center = center,
+                    width = dimensions.x,
+                    depth = dimensions.y,
+                    height = dimensions.z,
+                )
+                PreparedNode(
+                    node = node,
+                    center = center,
+                    dimensions = dimensions,
+                    humanoidParts = parts,
+                    boundsMin = Vec3(
+                        parts.minOf { it.center.x - it.radii.x },
+                        parts.minOf { it.center.y - it.radii.y },
+                        parts.minOf { it.center.z - it.radii.z },
+                    ),
+                    boundsMax = Vec3(
+                        parts.maxOf { it.center.x + it.radii.x },
+                        parts.maxOf { it.center.y + it.radii.y },
+                        parts.maxOf { it.center.z + it.radii.z },
+                    ),
+                )
+            }
+        }
+    }
+
     private fun scaledDimensions(node: SceneNode): Vec3 {
         val d = node.geometry.dimensionsMeters
         val s = node.transform.scale
         return Vec3(d.x * s.x, d.y * s.y, d.z * s.z)
+    }
+
+    private fun rayIntersectsAabb(
+        ray: Ray,
+        minCorner: Vec3,
+        maxCorner: Vec3,
+    ): Boolean {
+        var tMin = 0.0
+        var tMax = Double.POSITIVE_INFINITY
+        for (axis in 0..2) {
+            val origin = ray.origin.component(axis)
+            val direction = ray.direction.component(axis)
+            val low = minCorner.component(axis)
+            val high = maxCorner.component(axis)
+
+            if (abs(direction) < EPSILON) {
+                if (origin < low || origin > high) return false
+                continue
+            }
+
+            val inverse = 1.0 / direction
+            var near = (low - origin) * inverse
+            var far = (high - origin) * inverse
+            if (near > far) {
+                val swap = near
+                near = far
+                far = swap
+            }
+            tMin = max(tMin, near)
+            tMax = min(tMax, far)
+            if (tMin > tMax) return false
+        }
+        return tMax > EPSILON
     }
 
     private fun intersectEllipsoid(ray: Ray, center: Vec3, radii: Vec3): EllipsoidIntersection? {
@@ -300,6 +409,18 @@ class ReferenceCpuSceneRasterizer(
         return EllipsoidIntersection(t, normal)
     }
 
+    private data class PreparedNode(
+        val node: SceneNode,
+        val center: Vec3,
+        val dimensions: Vec3,
+        val sphereRadii: Vec3? = null,
+        val planeSurfaceZ: Double? = null,
+        val boxHalf: Vec3? = null,
+        val humanoidParts: List<HumanoidEllipsoid> = emptyList(),
+        val boundsMin: Vec3? = null,
+        val boundsMax: Vec3? = null,
+    )
+
     private data class HumanoidEllipsoid(
         val part: HumanoidPart,
         val center: Vec3,
@@ -329,16 +450,24 @@ class ReferenceCpuSceneRasterizer(
         val up: Vec3,
         val tanHalfVerticalFov: Double,
     ) {
-        fun rayForPixel(x: Int, y: Int, size: SceneRasterSize): Ray {
-            val ndcX = ((x + 0.5) / size.width.toDouble()) * 2.0 - 1.0
-            val ndcY = 1.0 - ((y + 0.5) / size.height.toDouble()) * 2.0
-            val aspect = size.width.toDouble() / size.height.toDouble()
-            val direction = (
-                forward +
-                    right * (ndcX * tanHalfVerticalFov * aspect) +
-                    up * (ndcY * tanHalfVerticalFov)
-                ).normalized()
-            return Ray(origin, direction)
+        fun prepareRayGrid(size: SceneRasterSize): PreparedRayGrid {
+            val width = size.width.toDouble()
+            val height = size.height.toDouble()
+            val aspect = width / height
+            val xOffsets = Array(size.width) { x ->
+                val ndcX = ((x + 0.5) / width) * 2.0 - 1.0
+                right * (ndcX * tanHalfVerticalFov * aspect)
+            }
+            val yOffsets = Array(size.height) { y ->
+                val ndcY = 1.0 - ((y + 0.5) / height) * 2.0
+                up * (ndcY * tanHalfVerticalFov)
+            }
+            return PreparedRayGrid(
+                origin = origin,
+                forward = forward,
+                xOffsets = xOffsets,
+                yOffsets = yOffsets,
+            )
         }
 
         /** View-space normal where +Z points from the surface toward the camera, matching MMSI's view vector. */
@@ -363,6 +492,19 @@ class ReferenceCpuSceneRasterizer(
                 return CameraFrame(origin, forward, right, up, tanHalfVerticalFov)
             }
         }
+    }
+
+    private data class PreparedRayGrid(
+        val origin: Vec3,
+        val forward: Vec3,
+        val xOffsets: Array<Vec3>,
+        val yOffsets: Array<Vec3>,
+    ) {
+        fun rayForPixel(x: Int, y: Int): Ray =
+            Ray(
+                origin = origin,
+                direction = (forward + xOffsets[x] + yOffsets[y]).normalized(),
+            )
     }
 
     private data class Vec3(val x: Double, val y: Double, val z: Double) {

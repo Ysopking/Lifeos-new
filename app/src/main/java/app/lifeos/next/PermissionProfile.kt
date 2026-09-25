@@ -12,6 +12,8 @@ internal enum class PermissionProfileId {
 internal enum class PermissionSpecialAccess {
     BROAD_FILE_ACCESS,
     NOTIFICATION_LISTENER,
+    APP_USAGE_STATS,
+    ACCESSIBILITY_SERVICE,
 }
 
 internal data class PermissionProfile(
@@ -161,14 +163,33 @@ internal object PrivatePermissionProfiles {
         rationaleTags = setOf("owner-confirmed-pim-write", "productive-calendar-contact"),
     )
 
-    fun assistantAccess(): PermissionProfile =
+    fun assistantAccess(
+        usageStatsPermission: String? = null,
+        semanticAppContentAccess: Boolean = false,
+    ): PermissionProfile =
         PermissionProfile(
             id = PermissionProfileId.ASSISTANT_ACCESS,
-            specialAccess = setOf(PermissionSpecialAccess.NOTIFICATION_LISTENER),
-            rationaleTags = setOf(
-                "live-context",
-                "owner-authorized-notification-observation",
-            ),
+            specialAccess = buildSet {
+                add(PermissionSpecialAccess.NOTIFICATION_LISTENER)
+                usageStatsPermission?.let {
+                    add(PermissionSpecialAccess.APP_USAGE_STATS)
+                }
+                if (semanticAppContentAccess) {
+                    add(PermissionSpecialAccess.ACCESSIBILITY_SERVICE)
+                }
+            },
+            manifestPermissions =
+                if (usageStatsPermission == null) emptySet() else setOf(usageStatsPermission),
+            rationaleTags = buildSet {
+                add("live-context")
+                add("owner-authorized-notification-observation")
+                usageStatsPermission?.let {
+                    add("owner-authorized-app-usage-observation")
+                }
+                if (semanticAppContentAccess) {
+                    add("owner-authorized-semantic-app-content-observation")
+                }
+            },
         )
 
     fun infrastructure(

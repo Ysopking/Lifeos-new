@@ -147,12 +147,15 @@ data class SemanticUiActionCandidate(
  * Owner Effect Policy plus postcondition observation.
  */
 class SemanticAccessibilityBoundary {
-    fun observe(
+    /**
+     * Projects semantic UI structure without owner authorization. Productive adapters must submit
+     * this observation through AppObservationIngress -> Owner Observation Policy; platform
+     * accessibility access is never treated as an observation grant.
+     */
+    fun project(
         snapshot: SemanticUiSnapshot,
-        observationGrantId: String,
-    ): InformationObservation {
-        require(observationGrantId.isNotBlank())
-        return InformationObservation(
+    ): InformationObservation =
+        InformationObservation(
             sourceId = "android-accessibility-semantic",
             sourceResource =
                 "android-ui:${snapshot.packageName}:${snapshot.windowRevision}",
@@ -175,7 +178,7 @@ class SemanticAccessibilityBoundary {
             ),
             authority = ObservationAuthorityClass.UI_OBSERVATION,
             privacy = ObservationPrivacyClass.SENSITIVE,
-            observationGrantId = observationGrantId,
+            observationGrantId = null,
             tags = setOf(
                 "accessibility",
                 "semantic-ui",
@@ -186,6 +189,19 @@ class SemanticAccessibilityBoundary {
                 "windowRevision" to snapshot.windowRevision,
                 "snapshotFingerprint" to snapshot.fingerprint,
             ),
+        )
+
+    /**
+     * Compatibility helper for already-authorized callers. New productive sensor ingress uses
+     * [project] and lets Owner Observation Policy attach the grant centrally.
+     */
+    fun observe(
+        snapshot: SemanticUiSnapshot,
+        observationGrantId: String,
+    ): InformationObservation {
+        require(observationGrantId.isNotBlank())
+        return project(snapshot).copy(
+            observationGrantId = observationGrantId,
         )
     }
 

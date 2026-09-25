@@ -27,6 +27,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result["instrumentation"]["min_ms"] == 250
     assert result["instrumentation"]["max_ms"] == 1500
     assert result["instrumentation"]["median_ms"] == 875
+    assert result["instrumentation"]["slowest_sample"] == {
+        "file": "seed-b.txt",
+        "elapsed_ms": 1500,
+    }
 
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)

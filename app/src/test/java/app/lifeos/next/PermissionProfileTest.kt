@@ -75,6 +75,56 @@ class PermissionProfileTest {
     }
 
     @Test
+    fun `app usage stats remains owner special access not runtime permission`() {
+        val profile = PrivatePermissionProfiles.assistantAccess(
+            usageStatsPermission = "android.permission.PACKAGE_USAGE_STATS",
+        )
+        val evaluator = PermissionProfileEvaluator(
+            runtimePermissionGranted = { true },
+            specialAccessSupported = { true },
+            specialAccessGranted = {
+                it == PermissionSpecialAccess.NOTIFICATION_LISTENER
+            },
+        )
+
+        val result = evaluator.evaluate(profile)
+
+        assertEquals(PermissionProfileState.OWNER_ACTION_REQUIRED, result.state)
+        assertEquals(
+            setOf(PermissionSpecialAccess.APP_USAGE_STATS),
+            result.missingSpecialAccess,
+        )
+        assertEquals(
+            setOf("android.permission.PACKAGE_USAGE_STATS"),
+            profile.manifestPermissions,
+        )
+        assertTrue(profile.runtimePermissions.isEmpty())
+    }
+
+    @Test
+    fun `semantic app content remains owner special access`() {
+        val profile = PrivatePermissionProfiles.assistantAccess(
+            semanticAppContentAccess = true,
+        )
+        val evaluator = PermissionProfileEvaluator(
+            runtimePermissionGranted = { true },
+            specialAccessSupported = { true },
+            specialAccessGranted = {
+                it == PermissionSpecialAccess.NOTIFICATION_LISTENER
+            },
+        )
+
+        val result = evaluator.evaluate(profile)
+
+        assertEquals(PermissionProfileState.OWNER_ACTION_REQUIRED, result.state)
+        assertEquals(
+            setOf(PermissionSpecialAccess.ACCESSIBILITY_SERVICE),
+            result.missingSpecialAccess,
+        )
+        assertTrue(profile.runtimePermissions.isEmpty())
+    }
+
+    @Test
     fun `special access request plan is deterministic`() {
         val plan = SpecialAccessRequestPlan(
             profileIds = setOf(
