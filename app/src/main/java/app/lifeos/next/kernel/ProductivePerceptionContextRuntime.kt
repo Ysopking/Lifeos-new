@@ -14,6 +14,29 @@ import app.lifeos.core.runtime.world.SensorAttentionRuntime
 import app.lifeos.core.runtime.world.SensorWorldGapAttentionCompiler
 import app.lifeos.core.runtime.world.SensorWorldGapAttentionPlan
 import app.lifeos.core.runtime.world.WorldGap
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+fun interface ProductiveWorldGapAttentionSink {
+    suspend fun update(gaps: Collection<WorldGap>)
+}
+
+internal object ProductiveWorldGapAttentionRuntimeRegistry {
+    @Volatile
+    private var sink: ProductiveWorldGapAttentionSink? = null
+
+    fun install(value: ProductiveWorldGapAttentionSink) {
+        sink = value
+    }
+
+    suspend fun update(gaps: Collection<WorldGap>) {
+        sink?.update(gaps)
+    }
+
+    internal fun clearForTests() {
+        sink = null
+    }
+}
 
 data class ProductiveSensorAttentionUpdate(
     val plan: SensorWorldGapAttentionPlan,
@@ -41,9 +64,11 @@ fun interface PersonalContextBootBindingSource {
 internal class ProductivePerceptionContextRuntime(
     private val ownerObservationPolicy: OwnerObservationPolicyLedger,
     private val sensorRegistry: AppSensorRegistry = AppSensorRegistry(),
-) : PersonalContextBootBindingSource {
+) : PersonalContextBootBindingSource, ProductiveWorldGapAttentionSink {
     private val attentionRuntime = SensorAttentionRuntime(sensorRegistry)
     private val gapAttentionCompiler = SensorWorldGapAttentionCompiler()
+    private val coverageMutex = Mutex()
+    private val coverageProfiles = linkedMapOf<String, SensorAttentionCoverageProfile>()
     private var hardwareBridge: AndroidHardwareSensorBridge? = null
 
     /**
@@ -58,6 +83,7 @@ internal class ProductivePerceptionContextRuntime(
             "Productive perception runtime cannot replace an attached hardware bridge"
         }
         sensorRegistry.register(bridge.descriptor)
+        registerCoverage(bridge.attentionCoverage)
         hardwareBridge = bridge
     }
 
@@ -88,6 +114,22 @@ internal class ProductivePerceptionContextRuntime(
         return decisions
     }
 
+    suspend fun registerCoverage(
+        profile: SensorAttentionCoverageProfile,
+    ) {
+        require(sensorRegistry.state(profile.sensorId) != null) {
+            "Sensor attention coverage requires a registered sensor: ${profile.sensorId}"
+        }
+        coverageMutex.withLock {
+            coverageProfiles[profile.sensorId.value] = profile
+        }
+    }
+
+    suspend fun coverageSnapshot(): List<SensorAttentionCoverageProfile> =
+        coverageMutex.withLock {
+            coverageProfiles.values.sortedBy { it.sensorId.value }
+        }
+
     /**
      * Converts explicit world-state gaps through B480's pure compiler and immediately applies the
      * resulting B459 attention plan. Unmatched observation gaps remain visible in the returned plan.
@@ -105,6 +147,18 @@ internal class ProductivePerceptionContextRuntime(
             plan = plan,
             decisions = applyAttention(plan.demands),
         )
+    }
+
+    suspend fun applyWorldGaps(
+        gaps: Collection<WorldGap>,
+    ): ProductiveSensorAttentionUpdate =
+        applyWorldGaps(
+            gaps = gaps,
+            coverage = coverageSnapshot(),
+        )
+
+    override suspend fun update(gaps: Collection<WorldGap>) {
+        applyWorldGaps(gaps)
     }
 
     suspend fun sensorRegistrySnapshot(): AppSensorRegistrySnapshot =
