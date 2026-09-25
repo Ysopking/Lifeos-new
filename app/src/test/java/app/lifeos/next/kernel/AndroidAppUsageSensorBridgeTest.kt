@@ -70,6 +70,44 @@ class AndroidAppUsageSensorBridgeTest {
     }
 
     @Test
+    fun `self usage is excluded to prevent recursive context churn`() = runTest {
+        val now = Instant.parse("2026-09-25T01:00:30Z")
+        val source = FakeUsageSource(
+            granted = true,
+            events = listOf(
+                PlatformAppUsageEvent(
+                    packageName = "app.lifeos.next",
+                    timestampMillis = Instant.parse("2026-09-25T01:00:05Z").toEpochMilli(),
+                    kind = PlatformAppUsageEventKind.FOREGROUND,
+                ),
+                PlatformAppUsageEvent(
+                    packageName = "com.example.external",
+                    timestampMillis = Instant.parse("2026-09-25T01:00:10Z").toEpochMilli(),
+                    kind = PlatformAppUsageEventKind.FOREGROUND,
+                ),
+            ),
+        )
+        val committed = mutableListOf<InformationObservation>()
+        val bridge = AndroidAppUsageSensorBridge(
+            source = source,
+            commitBatch = AppUsageBatchCommitter { _, _, _, batch ->
+                committed += batch.observations
+            },
+            excludedPackageNames = setOf("app.lifeos.next"),
+            clock = Clock.fixed(now, ZoneOffset.UTC),
+            scope = this,
+        )
+        bridge.bindHealthReporter { _, _ -> Unit }
+        bridge.applyAttention(SensorAttentionMode.PERIODIC)
+
+        assertEquals(1, bridge.pollOnce())
+        assertEquals(
+            listOf("android-usage:com.example.external"),
+            committed.map { it.sourceResource },
+        )
+    }
+
+    @Test
     fun `saturated usage window drains without skipping unread platform events`() = runTest {
         val now = Instant.parse("2026-09-25T01:01:00Z")
         val baseMillis = Instant.parse("2026-09-25T01:00:10Z").toEpochMilli()
