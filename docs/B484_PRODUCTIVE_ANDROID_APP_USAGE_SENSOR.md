@@ -56,8 +56,10 @@ The sensor declares only app-usage coverage:
 No app-content dimension is claimed. B484 therefore cannot satisfy a gap requiring message text,
 document content, application-internal state, or semantic UI state.
 
-B459 remains the scheduler. The UsageStats source is polled according to the selected attention mode,
-with bounded per-batch observation and payload budgets. `SUSPENDED` performs no usage query.
+B459 remains the scheduler. The UsageStats sensor defaults to `SUSPENDED`, so unrelated app usage
+does not create background cognitive load. A matching WorldGap can promote it to `PERIODIC`,
+`EVENT_DRIVEN`, or `FOCUSED`. The bridge keeps only a bounded availability check while suspended;
+actual usage queries use bounded per-batch observation and payload budgets.
 
 ## Replay and cursor semantics
 
