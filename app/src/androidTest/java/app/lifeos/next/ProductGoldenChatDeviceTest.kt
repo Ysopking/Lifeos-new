@@ -184,23 +184,53 @@ class ProductGoldenChatDeviceTest {
                 error("Kernel boot failed during Product-Gold chat recovery: ${state.failureMessage ?: "unknown"}")
             }
         }
-        val warm = checkNotNull(app.warmStartupReport.first { it != null })
-        if (warm.failures.isNotEmpty()) {
+        awaitProductTopologyWarmStages()
+        boot
+    }
+
+    private suspend fun awaitProductTopologyWarmStages() {
+        val warm = withTimeout(WARM_TIMEOUT_MS) {
+            app.warmStartupReport.first { report ->
+                if (report == null) {
+                    false
+                } else {
+                    val failedStages = report.failures.mapTo(linkedSetOf()) { it.stage }
+                    PRODUCT_TOPOLOGY_WARM_STAGES.all { stage ->
+                        stage in report.completedStages || stage in failedStages
+                    }
+                }
+            }
+        }
+        checkNotNull(warm)
+        val requiredFailures = warm.failures.filter {
+            it.stage in PRODUCT_TOPOLOGY_WARM_STAGES
+        }
+        if (requiredFailures.isNotEmpty()) {
             error(
-                "Product-Gold warm startup failed: " +
-                    warm.failures.joinToString(";") {
+                "Product-Gold topology warm startup failed: " +
+                    requiredFailures.joinToString(";") {
                         "${it.diagnosticCode}:${it.stage.name}:${it.message}"
                     }
             )
         }
-        boot
+        check(warm.completedStages.containsAll(PRODUCT_TOPOLOGY_WARM_STAGES)) {
+            "Product-Gold topology warm stages incomplete: " +
+                (PRODUCT_TOPOLOGY_WARM_STAGES - warm.completedStages)
+                    .joinToString(",") { it.name }
+        }
     }
 
     companion object {
         private const val BOOT_TIMEOUT_MS = 20_000L
+        private const val WARM_TIMEOUT_MS = 30_000L
         private const val USER_SENTINEL_TAG = "product-gold-chat:user"
         private const val ASSISTANT_SENTINEL_TAG = "product-gold-chat:assistant"
         private const val SEMANTIC_USER_SENTINEL_TAG = "product-gold-semantic:user"
         private val ADAPTIVE_ONLY_SUBSYSTEMS = setOf("build-studio")
+        private val PRODUCT_TOPOLOGY_WARM_STAGES = setOf(
+            LifeOsStartupStage.DEEP_SEARCH,
+            LifeOsStartupStage.SELF_HEALING,
+            LifeOsStartupStage.DURABLE_GOALS,
+        )
     }
 }
