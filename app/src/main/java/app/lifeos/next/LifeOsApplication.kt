@@ -121,6 +121,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
     private val mutableWarmStartupReport = MutableStateFlow<LifeOsWarmStartupReport?>(null)
+    private val warmStageReadiness = LifeOsWarmStageReadiness()
     private val mutableSelfObservationAnalysis =
         MutableStateFlow<SelfObservationAnalysisState?>(null)
 
@@ -129,6 +130,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         mutableWarmStartupReport.asStateFlow()
     val selfObservationAnalysis: StateFlow<SelfObservationAnalysisState?> =
         mutableSelfObservationAnalysis.asStateFlow()
+    internal suspend fun awaitWarmStage(stage: LifeOsStartupStage) = warmStageReadiness.await(stage)
 
     private val permissionController by lazy {
         PrivatePermissionController(
@@ -153,6 +155,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private fun onStartupEvent(event: LifeOsStartupStageEvent) {
+        warmStageReadiness.onEvent(event)
         mutableStartupState.value =
             LifeOsStartupStateProjector.projectEvent(mutableStartupState.value, event)
     }
