@@ -80,7 +80,7 @@ class ClosedActionVerificationRuntimeTest {
     ) = InformationObservation(
         sourceId = "provider",
         sourceResource = "account:primary",
-        surface = ObservationSurfaceKind.EXTERNAL_PROVIDER,
+        surface = ObservationSurfaceKind.API,
         observedAt = NOW.plusSeconds(30),
         sourceTimestamp = NOW.plusSeconds(30),
         sourceRevision = "rev-1",
