@@ -27,6 +27,7 @@ enum class WorldEquationPrimaryMetric {
 enum class WorldEquationEvidencePartition {
     SHADOW,
     HOLDOUT,
+    EXCLUSION,
 }
 
 enum class WorldEquationEvidenceGate {
@@ -38,6 +39,7 @@ enum class WorldEquationEvidenceGate {
     IDENTIFIABILITY,
     NON_DEGENERACY,
     BOUNDED_PARAMETER_CHANGE,
+    ANTI_VACUITY,
     SAFETY,
 }
 
@@ -55,6 +57,12 @@ data class WorldEquationEvaluationProtocol(
     val minimumActiveObservationsPerChangedCoefficient: Int,
     val minimumShadowRuns: Int = 1,
     val minimumHoldoutRuns: Int = 1,
+    val realizationProfileFingerprint: String = LEGACY_UNATTESTED,
+    val stateSpaceFingerprint: String = LEGACY_UNATTESTED,
+    val observableContractFingerprint: String = LEGACY_UNATTESTED,
+    val failureCriteriaFingerprint: String = LEGACY_UNATTESTED,
+    val minimumExclusionRuns: Int = 1,
+    val maximumExclusionAbsoluteImprovement: Double = 0.0,
 ) {
     init {
         require(version.isNotBlank())
@@ -68,18 +76,68 @@ data class WorldEquationEvaluationProtocol(
         require(minimumShadowRuns + minimumHoldoutRuns <= minimumIndependentRuns) {
             "WorldEquation protocol must reserve independent evidence for SHADOW and HOLDOUT"
         }
+        require(realizationProfileFingerprint.isNotBlank())
+        require(stateSpaceFingerprint.isNotBlank())
+        require(observableContractFingerprint.isNotBlank())
+        require(failureCriteriaFingerprint.isNotBlank())
+        require(minimumExclusionRuns >= 1)
+        require(
+            maximumExclusionAbsoluteImprovement.isFinite() &&
+                maximumExclusionAbsoluteImprovement >= 0.0
+        )
+
+        val attestationFlags = listOf(
+            realizationProfileFingerprint,
+            stateSpaceFingerprint,
+            observableContractFingerprint,
+            failureCriteriaFingerprint,
+        ).map { it != LEGACY_UNATTESTED }
+        require(attestationFlags.all { it } || attestationFlags.none { it }) {
+            "WorldEquation anti-vacuity attestation must be complete or legacy-unattested"
+        }
+        if (!antiVacuityAttested) {
+            require(minimumExclusionRuns == 1)
+            require(maximumExclusionAbsoluteImprovement == 0.0)
+        }
     }
 
-    fun fingerprint(): String = StableFieldIds.fingerprint(
-        "world-equation-evaluation-protocol/v2",
-        version,
-        primaryMetric.name,
-        minimumIndependentRuns.toString(),
-        minimumDistinctWorkloads.toString(),
-        minimumActiveObservationsPerChangedCoefficient.toString(),
-        minimumShadowRuns.toString(),
-        minimumHoldoutRuns.toString(),
-    )
+    val antiVacuityAttested: Boolean
+        get() = realizationProfileFingerprint != LEGACY_UNATTESTED
+
+    fun fingerprint(): String =
+        if (!antiVacuityAttested) {
+            StableFieldIds.fingerprint(
+                "world-equation-evaluation-protocol/v2",
+                version,
+                primaryMetric.name,
+                minimumIndependentRuns.toString(),
+                minimumDistinctWorkloads.toString(),
+                minimumActiveObservationsPerChangedCoefficient.toString(),
+                minimumShadowRuns.toString(),
+                minimumHoldoutRuns.toString(),
+            )
+        } else {
+            StableFieldIds.fingerprint(
+                "world-equation-evaluation-protocol/v3",
+                version,
+                primaryMetric.name,
+                minimumIndependentRuns.toString(),
+                minimumDistinctWorkloads.toString(),
+                minimumActiveObservationsPerChangedCoefficient.toString(),
+                minimumShadowRuns.toString(),
+                minimumHoldoutRuns.toString(),
+                realizationProfileFingerprint,
+                stateSpaceFingerprint,
+                observableContractFingerprint,
+                failureCriteriaFingerprint,
+                minimumExclusionRuns.toString(),
+                java.lang.Double.toHexString(maximumExclusionAbsoluteImprovement),
+            )
+        }
+
+    companion object {
+        const val LEGACY_UNATTESTED = "legacy-unattested"
+    }
 }
 
 data class WorldEquationRunMetrics(
@@ -185,7 +243,14 @@ data class WorldEquationEvidenceSet(
     }
 
     fun fingerprint(): String = StableFieldIds.fingerprint(
-        "world-equation-evidence-set/v2",
+        if (
+            protocol.antiVacuityAttested ||
+            observations.any { it.partition == WorldEquationEvidencePartition.EXCLUSION }
+        ) {
+            "world-equation-evidence-set/v3"
+        } else {
+            "world-equation-evidence-set/v2"
+        },
         candidateVersion,
         candidateEquationFingerprint,
         candidatePhysicsFingerprint,
