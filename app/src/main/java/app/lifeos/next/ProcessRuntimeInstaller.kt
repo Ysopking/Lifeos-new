@@ -216,6 +216,9 @@ internal class ProcessRuntimeInstaller(
                     ProductiveAppUsageSensorRuntimeRegistry.install(
                         appUsageSensorBridge
                     )
+                    productivePerceptionContext.attachAppContentBridge(
+                        AndroidSemanticAppContentSensorBridge(photonIngress)
+                    )
                     lifePhotonRepository = CanonicalLifePhotonRepository(
                         delegate = kernel.photonStore,
                         productiveIngress = photonIngress::ingest,
