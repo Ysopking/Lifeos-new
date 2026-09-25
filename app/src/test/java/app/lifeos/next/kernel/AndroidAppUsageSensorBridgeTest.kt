@@ -71,6 +71,41 @@ class AndroidAppUsageSensorBridgeTest {
     }
 
     @Test
+    fun `owner special access refresh updates productive app usage health`() = runTest {
+        val source = FakeUsageSource(
+            granted = false,
+            events = emptyList(),
+        )
+        val health = mutableListOf<SensorHealthState>()
+        val bridge = AndroidAppUsageSensorBridge(
+            source = source,
+            commitBatch = AppUsageBatchCommitter { _, _, _, _ -> Unit },
+            clock = Clock.fixed(
+                Instant.parse("2026-09-25T01:00:30Z"),
+                ZoneOffset.UTC,
+            ),
+            scope = this,
+        )
+        bridge.bindHealthReporter { state, _ -> health += state }
+        ProductiveAppUsageSensorRuntimeRegistry.install(bridge)
+        try {
+            ProductiveAppUsageSensorRuntimeRegistry.refreshAvailability()
+            source.granted = true
+            ProductiveAppUsageSensorRuntimeRegistry.refreshAvailability()
+
+            assertEquals(
+                listOf(
+                    SensorHealthState.UNAVAILABLE,
+                    SensorHealthState.HEALTHY,
+                ),
+                health,
+            )
+        } finally {
+            ProductiveAppUsageSensorRuntimeRegistry.clearForTests()
+        }
+    }
+
+    @Test
     fun `suspended runtime owns no idle app usage polling job`() = runTest {
         val source = FakeUsageSource(
             granted = true,
