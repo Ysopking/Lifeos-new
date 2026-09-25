@@ -67,7 +67,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 
-internal data class ProcessRuntimeInstallResult(
+internal data class ProcessRuntimeCriticalInstallResult(
     val kernel: LifeOsKernel,
     val photonIngress: CanonicalPhotonIngress,
     val generatedToolStatusReader: GeneratedToolRuntimeStatusReader,
@@ -84,8 +84,17 @@ internal data class ProcessRuntimeInstallResult(
     val lifePhotonRepository: CanonicalLifePhotonRepository,
     val lifeMemoryRuntime: DurableLifeMemoryRuntime,
     val multimodalPerception: MultimodalPerceptionRuntime,
-    val selfHealingRuntime: PrivateSelfHealingRuntime,
-    val escalationRuntime: PrivateEscalationRuntime,
+)
+
+internal data class ProcessRuntimeWarmInstallResult(
+    val selfHealingRuntime: PrivateSelfHealingRuntime?,
+    val escalationRuntime: PrivateEscalationRuntime?,
+    val startupReport: LifeOsWarmStartupReport,
+)
+
+internal data class ProcessRuntimeInstallResult(
+    val critical: ProcessRuntimeCriticalInstallResult,
+    val warm: ProcessRuntimeWarmInstallResult,
 )
 
 internal class ProcessRuntimeInstaller(
@@ -96,6 +105,7 @@ internal class ProcessRuntimeInstaller(
     private val onStorageSnapshot: (StorageIntelligenceSnapshot) -> Unit,
     private val onStorageFailure: (String?) -> Unit,
     private val onStartupEvent: (LifeOsStartupStageEvent) -> Unit,
+    private val onCriticalReady: (ProcessRuntimeCriticalInstallResult) -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val selfHealingScope =
@@ -140,11 +150,10 @@ internal class ProcessRuntimeInstaller(
         lateinit var lifePhotonRepository: CanonicalLifePhotonRepository
         lateinit var lifeMemoryRuntime: DurableLifeMemoryRuntime
         lateinit var multimodalPerception: MultimodalPerceptionRuntime
-        lateinit var selfHealingRuntime: PrivateSelfHealingRuntime
-        lateinit var escalationRuntime: PrivateEscalationRuntime
+        var selfHealingRuntime: PrivateSelfHealingRuntime? = null
+        var escalationRuntime: PrivateEscalationRuntime? = null
 
-        LifeOsStartupComposition.start(
-            LifeOsStartupHooks(
+        val startupHooks = LifeOsStartupHooks(
                 installSharedResourceRuntime = {
                     val shared = SharedAuthorityRuntimeComposition.install(
                         context = appContext,
@@ -385,7 +394,7 @@ internal class ProcessRuntimeInstaller(
                     ) {
                         "Kernel did not install its ProtectionCoordinator"
                     }
-                    selfHealingRuntime = PrivateSelfHealingRuntime.create(
+                    val healing = PrivateSelfHealingRuntime.create(
                         context = appContext,
                         scope = selfHealingScope,
                         graph = healthGraph,
@@ -394,15 +403,15 @@ internal class ProcessRuntimeInstaller(
                         runtime = kernel.runtime,
                         supervisor = supervisor,
                     )
-                    escalationRuntime = PrivateEscalationRuntime.create(
+                    val escalation = PrivateEscalationRuntime.create(
                         context = appContext,
                         scope = selfHealingScope,
                         graph = healthGraph,
                         protection = protectionCoordinator,
-                        selfHealing = selfHealingRuntime,
+                        selfHealing = healing,
                     )
-                    selfHealingRuntime.verifyLedgerIntegrity()
-                    escalationRuntime.verifyLedgerIntegrity()
+                    healing.verifyLedgerIntegrity()
+                    escalation.verifyLedgerIntegrity()
                     if (kernel.bootstrapState.value.actionable) {
                         LifeOsHealthPhotonBridge.start(
                             scope = selfHealingScope,
@@ -415,8 +424,10 @@ internal class ProcessRuntimeInstaller(
                                 Unit
                             },
                         )
-                        escalationRuntime.orchestrator.start()
+                        escalation.orchestrator.start()
                     }
+                    selfHealingRuntime = healing
+                    escalationRuntime = escalation
                 },
                 installDurableGoalPlanRuntime = {
                     DurableGoalPlanRuntimeRegistry.install(
@@ -448,16 +459,16 @@ internal class ProcessRuntimeInstaller(
                 requireCognitiveStateReady = {
                     kernel.requireReadable()
                 },
-                stageObserver = { event ->
-                    if (event is LifeOsStartupStageEvent.Completed) {
-                        LifeOsRuntimeWiring.onStageReady(event.evidence)
-                    }
-                    onStartupEvent(event)
-                },
-            )
+            stageObserver = { event ->
+                if (event is LifeOsStartupStageEvent.Completed) {
+                    LifeOsRuntimeWiring.onStageReady(event.evidence)
+                }
+                onStartupEvent(event)
+            },
         )
 
-        return ProcessRuntimeInstallResult(
+        LifeOsStartupComposition.startCritical(startupHooks)
+        val critical = ProcessRuntimeCriticalInstallResult(
             kernel = kernel,
             photonIngress = photonIngress,
             generatedToolStatusReader = generatedToolStatusReader,
@@ -475,8 +486,22 @@ internal class ProcessRuntimeInstaller(
             lifePhotonRepository = lifePhotonRepository,
             lifeMemoryRuntime = lifeMemoryRuntime,
             multimodalPerception = multimodalPerception,
-            selfHealingRuntime = selfHealingRuntime,
-            escalationRuntime = escalationRuntime,
+        )
+        onCriticalReady(critical)
+
+        kernel.startWarmBoot()
+        val warmReport = LifeOsStartupComposition.startWarm(startupHooks)
+        return ProcessRuntimeInstallResult(
+            critical = critical,
+            warm = ProcessRuntimeWarmInstallResult(
+                selfHealingRuntime = selfHealingRuntime.takeIf {
+                    LifeOsStartupStage.SELF_HEALING in warmReport.completedStages
+                },
+                escalationRuntime = escalationRuntime.takeIf {
+                    LifeOsStartupStage.SELF_HEALING in warmReport.completedStages
+                },
+                startupReport = warmReport,
+            ),
         )
     }
 }

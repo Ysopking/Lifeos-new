@@ -142,19 +142,22 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         startupScope.launch {
             try {
                 initializeRuntime()
-                val availability = kernel.bootstrapState.value.availability
-                mutableStartupState.value = LifeOsProcessStartupState.ready(availability)
-                if (availability == RuntimeAvailability.FULL ||
-                    availability == RuntimeAvailability.DEGRADED
-                ) {
-                    refreshInitialDataBootstrap()
-                    refreshLiveSources()
-                    refreshStorageIntelligence()
-                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                if (mutableStartupState.value.phase != LifeOsProcessStartupPhase.FAILED) {
+                val current = mutableStartupState.value
+                if (current.ready) {
+                    mutableStartupState.value = current.copy(
+                        availability = if (current.availability == RuntimeAvailability.FULL) {
+                            RuntimeAvailability.DEGRADED
+                        } else {
+                            current.availability
+                        },
+                        stage = "Runtime eingeschränkt",
+                        failure =
+                            error.message ?: error::class.simpleName ?: "lifeos-warm-startup-failed",
+                    )
+                } else if (current.phase != LifeOsProcessStartupPhase.FAILED) {
                     mutableStartupState.value = LifeOsProcessStartupState.failed(
                         error.message ?: error::class.simpleName ?: "lifeos-startup-failed",
                     )
@@ -164,6 +167,27 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private fun onStartupEvent(event: LifeOsStartupStageEvent) {
+        val current = mutableStartupState.value
+        if (
+            current.ready &&
+            LifeOsStartupStageGraph.laneFor(event.stage) == LifeOsStartupLane.WARM
+        ) {
+            if (event is LifeOsStartupStageEvent.Failed) {
+                mutableStartupState.value = current.copy(
+                    availability = if (current.availability == RuntimeAvailability.FULL) {
+                        RuntimeAvailability.DEGRADED
+                    } else {
+                        current.availability
+                    },
+                    stage = "Runtime eingeschränkt",
+                    diagnosticCode = event.diagnosticCode,
+                    durationMillis = event.durationMillis,
+                    failure = "Warm Boot · ${event.stage.displayName}: ${event.message}",
+                )
+            }
+            return
+        }
+
         mutableStartupState.value = when (event) {
             is LifeOsStartupStageEvent.Started ->
                 LifeOsProcessStartupState.stageStarted(event.stage)
@@ -181,15 +205,24 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             canRunStorageIntelligence = { hasBroadFileAccess() },
             onStorageSnapshot = { snapshot ->
                 latestStorageIntelligence = snapshot
-                if (::sharedFileEvidenceMigration.isInitialized) sharedFileEvidenceMigration.onStorageSnapshot(snapshot)
-                if (::liveSourceController.isInitialized) liveSourceController.refresh()
+                if (::sharedFileEvidenceMigration.isInitialized) {
+                    sharedFileEvidenceMigration.onStorageSnapshot(snapshot)
+                }
+                if (::liveSourceController.isInitialized) {
+                    liveSourceController.refresh()
+                }
             },
             onStorageFailure = { failure ->
                 storageIntelligenceFailure = failure
             },
             onStartupEvent = ::onStartupEvent,
+            onCriticalReady = ::applyCriticalInstall,
         ).install()
 
+        applyWarmInstall(installed.warm)
+    }
+
+    private fun applyCriticalInstall(installed: ProcessRuntimeCriticalInstallResult) {
         kernel = installed.kernel
         photonIngress = installed.photonIngress
         generatedToolStatusReader = installed.generatedToolStatusReader
@@ -205,10 +238,9 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         goalDecisionTraceRecorder = installed.goalDecisionTraceRecorder
         lifePhotonRepository = installed.lifePhotonRepository
         lifeMemoryRuntime = installed.lifeMemoryRuntime
-        sharedFileEvidenceMigration = SharedFileEvidenceMigrationCoordinator(this, lifeMemoryRuntime)
+        sharedFileEvidenceMigration =
+            SharedFileEvidenceMigrationCoordinator(this, lifeMemoryRuntime)
         multimodalPerception = installed.multimodalPerception
-        selfHealingRuntime = installed.selfHealingRuntime
-        escalationRuntime = installed.escalationRuntime
 
         val selfObservationHealthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
             "Self observation requires the productive HealthGraph"
@@ -233,7 +265,13 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             healthSnapshot = { selfObservationHealthGraph.snapshot() },
             hardwareSnapshot = hardwareResourceIntelligence::currentHardwareSnapshot,
             toolStatus = generatedToolStatusReader::snapshot,
-            activeRepairs = selfHealingRuntime.ledger::active,
+            activeRepairs = {
+                if (::selfHealingRuntime.isInitialized) {
+                    selfHealingRuntime.ledger.active()
+                } else {
+                    emptyList()
+                }
+            },
             liveSourceSnapshot = { latestLiveSourceSync },
             liveSourceFailure = { liveSourceSyncFailure },
         )
@@ -250,10 +288,6 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                 mutableSelfObservationAnalysis.value = analysis
             },
         )
-        if (kernel.bootstrapState.value.actionable) {
-            selfObservationController.start()
-            liveSourceController.startContinuousRefresh()
-        }
 
         initialDataSources = AndroidInitialDataSourceCatalog(this)
         initialDataBootstrap = InitialDataBootstrapRuntime(
@@ -271,6 +305,47 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
                 initialDataBootstrapFailure = failure
             },
         )
+
+        val availability = kernel.bootstrapState.value.availability
+        mutableStartupState.value = LifeOsProcessStartupState.ready(availability)
+
+        if (startupState.value.actionable) {
+            selfObservationController.start()
+            liveSourceController.startContinuousRefresh()
+            refreshInitialDataBootstrap()
+            refreshLiveSources()
+            refreshStorageIntelligence()
+        }
+    }
+
+    private fun applyWarmInstall(installed: ProcessRuntimeWarmInstallResult) {
+        installed.selfHealingRuntime?.let {
+            selfHealingRuntime = it
+        }
+        installed.escalationRuntime?.let {
+            escalationRuntime = it
+        }
+
+        if (installed.startupReport.degraded) {
+            val current = mutableStartupState.value
+            if (current.ready) {
+                val summary = installed.startupReport.failures
+                    .joinToString("; ") { "${it.diagnosticCode}:${it.stage.displayName}" }
+                mutableStartupState.value = current.copy(
+                    availability = if (current.availability == RuntimeAvailability.FULL) {
+                        RuntimeAvailability.DEGRADED
+                    } else {
+                        current.availability
+                    },
+                    stage = "Runtime eingeschränkt",
+                    failure = current.failure ?: "Warm Boot eingeschränkt: $summary",
+                )
+            }
+        }
+
+        if (startupState.value.actionable) {
+            refreshSelfObservation()
+        }
     }
 
     fun refreshSelfObservation() {
