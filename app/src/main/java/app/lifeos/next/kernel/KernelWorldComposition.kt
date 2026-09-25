@@ -16,6 +16,7 @@ import app.lifeos.core.data.world.EncryptedWorldFormulaSnapshotRepository
 import app.lifeos.core.data.worldmodel.EncryptedWorldModelRepository
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.runtime.boot.BootEngineFrozenInputs
+import app.lifeos.core.runtime.boot.BootEnginePerceptionBindingValidator
 import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootReadSession
 import app.lifeos.core.runtime.boot.BootSnapshotLoader
@@ -185,6 +186,11 @@ internal class KernelWorldComposition(
             worldCommitter = productiveWorldHeadCommitter,
             newCycleId = {
                 CognitiveCycleId("cycle:${java.util.UUID.randomUUID()}")
+            },
+            perceptionBindingValidator = personalContextBootBindingSource?.let { source ->
+                BootEnginePerceptionBindingValidator { expected ->
+                    source.matchesCurrent(expected)
+                }
             },
         )
         val productiveDecisionCoordinator = DurableConvergenceDecisionCoordinator(
