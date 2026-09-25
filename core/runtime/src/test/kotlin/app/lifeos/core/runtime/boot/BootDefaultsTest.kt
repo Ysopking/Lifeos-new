@@ -3,6 +3,7 @@ package app.lifeos.core.runtime.boot
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
@@ -58,7 +59,7 @@ class BootDefaultsTest {
             maxConcurrentProbes = 2,
         )
 
-        val verification = kotlinx.coroutines.async {
+        val verification = async {
             verifier.verify()
         }
         withTimeout(1_000) { secondStarted.await() }
