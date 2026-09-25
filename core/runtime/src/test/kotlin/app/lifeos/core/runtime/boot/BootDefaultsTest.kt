@@ -77,7 +77,7 @@ class BootDefaultsTest {
                 probe(
                     id = "protection",
                     state = StoreState.CORRUPTED,
-                    criticality = BootCriticality.SECURE_REQUIRED,
+                    probeCriticality = BootCriticality.SECURE_REQUIRED,
                 )
             )
         ).verify()
@@ -95,7 +95,7 @@ class BootDefaultsTest {
                 probe(
                     id = "world-head",
                     state = StoreState.CORRUPTED,
-                    criticality = BootCriticality.REQUIRED_DEGRADED,
+                    probeCriticality = BootCriticality.REQUIRED_DEGRADED,
                 )
             )
         ).verify()
@@ -115,7 +115,7 @@ class BootDefaultsTest {
                 probe(
                     id = "generated-tools",
                     state = StoreState.CORRUPTED,
-                    criticality = BootCriticality.OPTIONAL_WARM,
+                    probeCriticality = BootCriticality.OPTIONAL_WARM,
                 )
             )
         ).verify()
@@ -173,10 +173,10 @@ class BootDefaultsTest {
     private fun probe(
         id: String,
         state: StoreState,
-        criticality: BootCriticality = BootCriticality.SECURE_REQUIRED,
+        probeCriticality: BootCriticality = BootCriticality.SECURE_REQUIRED,
     ) = object : StoreProbe {
         override val storeId: String = id
-        override val criticality: BootCriticality = criticality
+        override val criticality: BootCriticality = probeCriticality
         override suspend fun probe() = StoreStatus(storeId, state)
     }
 }
