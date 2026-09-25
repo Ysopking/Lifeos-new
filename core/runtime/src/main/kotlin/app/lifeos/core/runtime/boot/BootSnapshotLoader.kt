@@ -57,7 +57,7 @@ fun interface BootCapabilityStateSource { suspend fun load(): List<CapabilityDes
 fun interface BootToolStateSource { suspend fun load(): List<GeneratedToolRecord> }
 fun interface BootFieldSnapshotSource { suspend fun load(): FieldSnapshotLoadReport }
 
-internal data class BootBootSourceRead<T>(
+internal data class BootSourceRead<T>(
     val value: T,
     val failures: List<BootSnapshotReadFailure>,
 )
@@ -162,35 +162,35 @@ class BootSnapshotLoader(
     private val fieldSnapshots: BootFieldSnapshotSource,
     private val now: () -> Instant = Instant::now,
 ) {
-    internal suspend fun loadPhotonSource(): BootBootSourceRead<PhotonLoadReport> =
+    internal suspend fun loadPhotonSource(): BootSourceRead<PhotonLoadReport> =
         readSource(
             BootSnapshotSource.PHOTON,
             PhotonLoadReport(emptyList(), emptyList()),
         ) { photons.load() }
 
-    internal suspend fun loadTaskSource(): BootBootSourceRead<TaskLoadReport> =
+    internal suspend fun loadTaskSource(): BootSourceRead<TaskLoadReport> =
         readSource(
             BootSnapshotSource.TASK,
             TaskLoadReport(emptyList(), emptyList()),
         ) { tasks.load() }
 
-    internal suspend fun loadCheckpointSource(): BootBootSourceRead<CheckpointLoadReport> =
+    internal suspend fun loadCheckpointSource(): BootSourceRead<CheckpointLoadReport> =
         readSource(
             BootSnapshotSource.CHECKPOINT,
             CheckpointLoadReport(emptyList(), emptyList()),
         ) { checkpoints.load() }
 
-    internal suspend fun loadCapabilitySource(): BootBootSourceRead<List<CapabilityDescriptor>> =
+    internal suspend fun loadCapabilitySource(): BootSourceRead<List<CapabilityDescriptor>> =
         readSource(BootSnapshotSource.CAPABILITY, emptyList()) {
             capabilities.load()
         }
 
-    internal suspend fun loadToolSource(): BootBootSourceRead<List<GeneratedToolRecord>> =
+    internal suspend fun loadToolSource(): BootSourceRead<List<GeneratedToolRecord>> =
         readSource(BootSnapshotSource.TOOL, emptyList()) {
             tools.load()
         }
 
-    internal suspend fun loadFieldSource(): BootBootSourceRead<FieldSnapshotLoadReport> =
+    internal suspend fun loadFieldSource(): BootSourceRead<FieldSnapshotLoadReport> =
         readSource(
             BootSnapshotSource.FIELD,
             FieldSnapshotLoadReport(emptyList(), emptyList()),
