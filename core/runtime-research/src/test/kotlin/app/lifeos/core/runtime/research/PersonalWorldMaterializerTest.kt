@@ -4,11 +4,12 @@ import app.lifeos.core.field.EvidenceKind
 import app.lifeos.core.field.EvidencePayload
 import app.lifeos.core.field.EvidenceReliability
 import app.lifeos.core.field.FieldDomainId
+import app.lifeos.core.field.FieldEvidence
+import app.lifeos.core.field.SourceAuthority
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import app.lifeos.core.runtime.life.InformationObservationId
-import app.lifeos.core.runtime.life.SemanticEvidenceCandidate
 import app.lifeos.core.runtime.life.SemanticProjectionResult
 import app.lifeos.core.runtime.reasoning.TemporalEpisodeGraph
 import app.lifeos.core.runtime.reasoning.TemporalEpisodeNode
@@ -70,23 +71,31 @@ class PersonalWorldMaterializerTest {
                 createdAt = NOW,
             ),
         )
-        val candidate = SemanticEvidenceCandidate(
-            stateDimension = StateDimensionId(dimension),
-            semanticKey = seed,
+        val domainId = FieldDomainId(domain)
+        val stateDimension = StateDimensionId(dimension)
+        val evidence = FieldEvidence.create(
+            domainId = domainId,
+            sourcePhotonId = source.id,
+            sourceRevision = source.revision,
             kind = EvidenceKind.OBSERVATION,
+            semanticKey = dimension + ":" + seed,
             confidence = 0.8,
             reliability = EvidenceReliability(0.8, "test"),
+            authority = SourceAuthority.UNVERIFIED,
+            observedAt = NOW,
             payload = EvidencePayload("test", mapOf("seed" to seed)),
             explanation = "test",
         )
-        return SemanticProjectionResult.create(
+        return SemanticProjectionResult(
             projectorId = "projector-$seed",
-            domainId = FieldDomainId(domain),
+            domainId = domainId,
             sourceObservationId = InformationObservationId(
                 InformationObservationId.PREFIX + "a".repeat(64)
             ),
-            sourcePhoton = source,
-            candidates = listOf(candidate),
+            sourcePhotonId = source.id,
+            sourcePhotonRevision = source.revision,
+            evidence = listOf(evidence),
+            touchedStateDimensions = setOf(stateDimension),
         )
     }
 
