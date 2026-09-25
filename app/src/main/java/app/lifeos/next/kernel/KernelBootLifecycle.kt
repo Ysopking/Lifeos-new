@@ -208,7 +208,7 @@ internal class KernelBootLifecycle(
         }
     }
 
-    private fun completeReadOnlyBoot(
+    private suspend fun completeReadOnlyBoot(
         context: BootContext,
         warnings: List<String>,
         failureMessage: String,

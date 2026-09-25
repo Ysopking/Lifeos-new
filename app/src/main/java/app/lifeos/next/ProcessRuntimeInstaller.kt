@@ -105,7 +105,7 @@ internal class ProcessRuntimeInstaller(
     private val onStorageSnapshot: (StorageIntelligenceSnapshot) -> Unit,
     private val onStorageFailure: (String?) -> Unit,
     private val onStartupEvent: (LifeOsStartupStageEvent) -> Unit,
-    private val onCriticalReady: (ProcessRuntimeCriticalInstallResult) -> Unit,
+    private val onCriticalReady: suspend (ProcessRuntimeCriticalInstallResult) -> Unit,
 ) {
     private val appContext = context.applicationContext
     private val selfHealingScope =

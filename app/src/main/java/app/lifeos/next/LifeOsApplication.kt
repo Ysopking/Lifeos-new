@@ -2,20 +2,14 @@ package app.lifeos.next
 
 import android.app.Application
 import app.lifeos.core.data.LiveSourceSyncSnapshot
-import app.lifeos.core.runtime.boot.RuntimeAvailability
 import app.lifeos.core.runtime.capability.GeneratedToolRuntimeStatusReader
-import app.lifeos.core.runtime.health.HealthGraphProcessRegistry
 import app.lifeos.core.runtime.life.DurableLifeMemoryRuntime
-import app.lifeos.core.runtime.life.InitialDataBootstrapRuntime
 import app.lifeos.core.runtime.life.InitialDataBootstrapSnapshot
 import app.lifeos.core.runtime.policy.OwnerPolicyLedger
 import app.lifeos.core.runtime.resource.ResourceBudgetCoordinator
-import app.lifeos.core.runtime.self.SelfObservationAuthorityRuntimeRegistry
-import app.lifeos.core.runtime.self.SelfObservationCapture
 import app.lifeos.core.runtime.self.SelfObservationCoordinator
 import app.lifeos.core.runtime.self.SelfObservationDecisionTraceRecorder
 import app.lifeos.core.runtime.self.SelfObservationTrigger
-import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.next.kernel.CanonicalLifePhotonRepository
@@ -145,57 +139,15 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                val current = mutableStartupState.value
-                if (current.ready) {
-                    mutableStartupState.value = current.copy(
-                        availability = if (current.availability == RuntimeAvailability.FULL) {
-                            RuntimeAvailability.DEGRADED
-                        } else {
-                            current.availability
-                        },
-                        stage = "Runtime eingeschränkt",
-                        failure =
-                            error.message ?: error::class.simpleName ?: "lifeos-warm-startup-failed",
-                    )
-                } else if (current.phase != LifeOsProcessStartupPhase.FAILED) {
-                    mutableStartupState.value = LifeOsProcessStartupState.failed(
-                        error.message ?: error::class.simpleName ?: "lifeos-startup-failed",
-                    )
-                }
+                mutableStartupState.value =
+                    LifeOsStartupStateProjector.projectStartupFailure(mutableStartupState.value, error)
             }
         }
     }
 
     private fun onStartupEvent(event: LifeOsStartupStageEvent) {
-        val current = mutableStartupState.value
-        if (
-            current.ready &&
-            LifeOsStartupStageGraph.laneFor(event.stage) == LifeOsStartupLane.WARM
-        ) {
-            if (event is LifeOsStartupStageEvent.Failed) {
-                mutableStartupState.value = current.copy(
-                    availability = if (current.availability == RuntimeAvailability.FULL) {
-                        RuntimeAvailability.DEGRADED
-                    } else {
-                        current.availability
-                    },
-                    stage = "Runtime eingeschränkt",
-                    diagnosticCode = event.diagnosticCode,
-                    durationMillis = event.durationMillis,
-                    failure = "Warm Boot · ${event.stage.displayName}: ${event.message}",
-                )
-            }
-            return
-        }
-
-        mutableStartupState.value = when (event) {
-            is LifeOsStartupStageEvent.Started ->
-                LifeOsProcessStartupState.stageStarted(event.stage)
-            is LifeOsStartupStageEvent.Completed ->
-                LifeOsProcessStartupState.stageCompleted(event)
-            is LifeOsStartupStageEvent.Failed ->
-                LifeOsProcessStartupState.stageFailed(event)
-        }
+        mutableStartupState.value =
+            LifeOsStartupStateProjector.projectEvent(mutableStartupState.value, event)
     }
 
     private suspend fun initializeRuntime() {
@@ -222,7 +174,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         applyWarmInstall(installed.warm)
     }
 
-    private fun applyCriticalInstall(installed: ProcessRuntimeCriticalInstallResult) {
+    private suspend fun applyCriticalInstall(installed: ProcessRuntimeCriticalInstallResult) {
         kernel = installed.kernel
         photonIngress = installed.photonIngress
         generatedToolStatusReader = installed.generatedToolStatusReader
@@ -238,73 +190,30 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
         goalDecisionTraceRecorder = installed.goalDecisionTraceRecorder
         lifePhotonRepository = installed.lifePhotonRepository
         lifeMemoryRuntime = installed.lifeMemoryRuntime
-        sharedFileEvidenceMigration =
-            SharedFileEvidenceMigrationCoordinator(this, lifeMemoryRuntime)
-        multimodalPerception = installed.multimodalPerception
-
-        val selfObservationHealthGraph = requireNotNull(HealthGraphProcessRegistry.current()) {
-            "Self observation requires the productive HealthGraph"
-        }
-        liveSourceController = LiveSourceProcessController(
+        val applicationRuntime = LifeOsCriticalApplicationRuntimeFactory.create(
             context = this,
-            photonIngress = photonIngress,
-            healthGraph = selfObservationHealthGraph,
-            onSnapshot = { snapshot ->
-                latestLiveSourceSync = snapshot
-                sharedFileEvidenceMigration.onLiveSnapshot(snapshot)
-            },
-            onFailure = { failure ->
-                liveSourceSyncFailure = failure
-            },
-        )
-        selfObservationRuntime = SelfObservationRuntime(
-            photonIndex = kernel.photonStore::indexReport,
-            memorySnapshot = lifeMemoryRuntime::current,
-            authorityReader = SelfObservationAuthorityRuntimeRegistry.requireCurrent(),
-            topologySnapshot = LifeOsProcessTopology::snapshot,
-            healthSnapshot = { selfObservationHealthGraph.snapshot() },
-            hardwareSnapshot = hardwareResourceIntelligence::currentHardwareSnapshot,
-            toolStatus = generatedToolStatusReader::snapshot,
+            installed = installed,
+            startupActionable = { startupState.value.actionable },
             activeRepairs = {
-                if (::selfHealingRuntime.isInitialized) {
-                    selfHealingRuntime.ledger.active()
-                } else {
-                    emptyList()
-                }
+                if (::selfHealingRuntime.isInitialized) selfHealingRuntime.ledger.active()
+                else emptyList()
             },
-            liveSourceSnapshot = { latestLiveSourceSync },
+            latestLiveSourceSync = { latestLiveSourceSync },
             liveSourceFailure = { liveSourceSyncFailure },
+            onLiveSourceSnapshot = { latestLiveSourceSync = it },
+            onLiveSourceFailure = { liveSourceSyncFailure = it },
+            onSelfObservationAnalysis = { mutableSelfObservationAnalysis.value = it },
+            onInitialDataSnapshot = { latestInitialDataBootstrap = it },
+            onInitialDataFailure = { initialDataBootstrapFailure = it },
         )
-        selfObservationCoordinator = SelfObservationCoordinator(
-            capture = SelfObservationCapture {
-                selfObservationRuntime.capture()
-            }
-        )
-        selfObservationController = SelfObservationProcessController(
-            coordinator = selfObservationCoordinator,
-            healthGraph = selfObservationHealthGraph,
-            traceRecorder = selfObservationDecisionTraceRecorder,
-            onAnalysis = { analysis ->
-                mutableSelfObservationAnalysis.value = analysis
-            },
-        )
-
-        initialDataSources = AndroidInitialDataSourceCatalog(this)
-        initialDataBootstrap = InitialDataBootstrapRuntime(
-            photons = lifePhotonRepository,
-            memory = lifeMemoryRuntime,
-            sources = initialDataSources.sources,
-        )
-        initialDataController = InitialDataProcessController(
-            bootstrap = { initialDataBootstrap },
-            startupReady = { startupState.value.actionable },
-            onSnapshot = { snapshot ->
-                latestInitialDataBootstrap = snapshot
-            },
-            onFailure = { failure ->
-                initialDataBootstrapFailure = failure
-            },
-        )
+        sharedFileEvidenceMigration = applicationRuntime.sharedFileEvidenceMigration
+        liveSourceController = applicationRuntime.liveSourceController
+        selfObservationRuntime = applicationRuntime.selfObservationRuntime
+        selfObservationCoordinator = applicationRuntime.selfObservationCoordinator
+        selfObservationController = applicationRuntime.selfObservationController
+        initialDataSources = applicationRuntime.initialDataSources
+        initialDataBootstrap = applicationRuntime.initialDataBootstrap
+        initialDataController = applicationRuntime.initialDataController
 
         val availability = kernel.bootstrapState.value.availability
         mutableStartupState.value = LifeOsProcessStartupState.ready(availability)
@@ -319,38 +228,14 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private fun applyWarmInstall(installed: ProcessRuntimeWarmInstallResult) {
-        installed.selfHealingRuntime?.let {
-            selfHealingRuntime = it
-        }
-        installed.escalationRuntime?.let {
-            escalationRuntime = it
-        }
-
-        val kernelAvailability = kernel.bootstrapState.value.availability
-        val warmDegraded =
-            installed.startupReport.degraded ||
-                kernelAvailability == RuntimeAvailability.DEGRADED
-        if (warmDegraded) {
-            val current = mutableStartupState.value
-            if (current.ready) {
-                val summary = installed.startupReport.failures
-                    .joinToString("; ") { "${it.diagnosticCode}:${it.stage.displayName}" }
-                    .ifBlank { "kernel-warm-rehydration" }
-                mutableStartupState.value = current.copy(
-                    availability = if (current.availability == RuntimeAvailability.FULL) {
-                        RuntimeAvailability.DEGRADED
-                    } else {
-                        current.availability
-                    },
-                    stage = "Runtime eingeschränkt",
-                    failure = current.failure ?: "Warm Boot eingeschränkt: $summary",
-                )
-            }
-        }
-
-        if (startupState.value.actionable) {
-            refreshSelfObservation()
-        }
+        installed.selfHealingRuntime?.let { selfHealingRuntime = it }
+        installed.escalationRuntime?.let { escalationRuntime = it }
+        mutableStartupState.value = LifeOsStartupStateProjector.projectWarmCompletion(
+            current = mutableStartupState.value,
+            kernelAvailability = kernel.bootstrapState.value.availability,
+            report = installed.startupReport,
+        )
+        if (startupState.value.actionable) refreshSelfObservation()
     }
 
     fun refreshSelfObservation() {
