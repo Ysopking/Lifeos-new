@@ -333,7 +333,7 @@ class ProductivePerceptionContextRuntimeTest {
             registry.state(bridge.descriptor.sensorId)?.health,
         )
         assertEquals(
-            SensorAttentionMode.EVENT_DRIVEN,
+            SensorAttentionMode.FOCUSED,
             registry.state(bridge.descriptor.sensorId)?.mode,
         )
 
