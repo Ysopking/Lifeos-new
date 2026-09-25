@@ -55,9 +55,8 @@ fact, owner intent, health fact, or complete world state.
 - B479/B480 PersonalContext binding remains based on the live sensor registry plus durable Owner
   Observation Policy revision.
 
-## Next block
+## B483 continuation
 
-The next step is to bring event-driven app surfaces—starting with Android notifications—under the
-same registered sensor/attention/B467 batch path instead of the older direct notification-specific
-observation ingress. That enables app relevance and WorldGap demand to control other-app sensing
-without weakening owner policy or effect gates.
+B483 brings Android notifications under the same registered sensor/attention/B467 batch path,
+removing the older notification-specific authorization/Photon conversion route while preserving
+Owner Observation Policy and effect-authority separation.
