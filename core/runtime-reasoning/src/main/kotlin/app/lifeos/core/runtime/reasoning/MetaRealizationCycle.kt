@@ -5,7 +5,6 @@ import app.lifeos.core.field.StableFieldIds
 enum class MetaRealizationCycleState {
     STATE_FROZEN,
     PREDICTIVE_STATE_READY,
-    IDENTIFIABILITY_READY,
     INFORMATION_REQUIRED,
     AWAITING_OBSERVATION,
     OUTCOME_OBSERVED,
@@ -16,49 +15,89 @@ enum class MetaRealizationCycleState {
 data class MetaRealizationCycle private constructor(
     val cycleId: String,
     val state: MetaRealizationCycleState,
+    val sourceRevisionId: String,
     val realizationProfileFingerprint: String,
-    val sourceRealizationStateId: String,
-    val sourceRealizationRevisionId: String,
-    val predictiveStateId: String?,
+    val predictiveQuotientFingerprint: String?,
     val identifiabilityFingerprint: String?,
     val informationPlanFingerprint: String?,
     val observationFingerprint: String?,
-    val successorRealizationRevisionId: String?,
+    val successorRevisionId: String?,
     val transitionFingerprint: String?,
-    val unresolvedReason: String?,
     val predecessorCycleFingerprint: String?,
     val fingerprint: String,
 ) {
     init {
+        require(sourceRevisionId.isNotBlank())
         require(realizationProfileFingerprint.isNotBlank())
-        require(sourceRealizationStateId.isNotBlank())
-        require(sourceRealizationRevisionId.isNotBlank())
-        require(cycleId == expectedCycleId(
-            realizationProfileFingerprint,
-            sourceRealizationRevisionId,
-        ))
+        require(predecessorCycleFingerprint?.isNotBlank() != false)
+        when (state) {
+            MetaRealizationCycleState.STATE_FROZEN -> {
+                require(predictiveQuotientFingerprint == null)
+                require(identifiabilityFingerprint == null)
+                require(informationPlanFingerprint == null)
+                require(observationFingerprint == null)
+                require(successorRevisionId == null)
+                require(transitionFingerprint == null)
+            }
+            MetaRealizationCycleState.PREDICTIVE_STATE_READY -> {
+                require(!predictiveQuotientFingerprint.isNullOrBlank())
+                require(identifiabilityFingerprint == null)
+                require(informationPlanFingerprint == null)
+                require(observationFingerprint == null)
+                require(successorRevisionId == null)
+                require(transitionFingerprint == null)
+            }
+            MetaRealizationCycleState.INFORMATION_REQUIRED,
+            MetaRealizationCycleState.UNRESOLVED -> {
+                require(!predictiveQuotientFingerprint.isNullOrBlank())
+                require(!identifiabilityFingerprint.isNullOrBlank())
+                require(informationPlanFingerprint == null)
+                require(observationFingerprint == null)
+                require(successorRevisionId == null)
+                require(transitionFingerprint == null)
+            }
+            MetaRealizationCycleState.AWAITING_OBSERVATION -> {
+                require(!predictiveQuotientFingerprint.isNullOrBlank())
+                require(!identifiabilityFingerprint.isNullOrBlank())
+                require(!informationPlanFingerprint.isNullOrBlank())
+                require(observationFingerprint == null)
+                require(successorRevisionId == null)
+                require(transitionFingerprint == null)
+            }
+            MetaRealizationCycleState.OUTCOME_OBSERVED -> {
+                require(!predictiveQuotientFingerprint.isNullOrBlank())
+                require(!identifiabilityFingerprint.isNullOrBlank())
+                require(!informationPlanFingerprint.isNullOrBlank())
+                require(!observationFingerprint.isNullOrBlank())
+                require(successorRevisionId == null)
+                require(transitionFingerprint == null)
+            }
+            MetaRealizationCycleState.REBASED -> {
+                require(!predictiveQuotientFingerprint.isNullOrBlank())
+                require(!identifiabilityFingerprint.isNullOrBlank())
+                require(!informationPlanFingerprint.isNullOrBlank())
+                require(!observationFingerprint.isNullOrBlank())
+                require(!successorRevisionId.isNullOrBlank())
+                require(!transitionFingerprint.isNullOrBlank())
+                require(successorRevisionId != sourceRevisionId)
+            }
+        }
         require(
             fingerprint == expectedFingerprint(
-                cycleId = cycleId,
-                state = state,
-                realizationProfileFingerprint = realizationProfileFingerprint,
-                sourceRealizationStateId = sourceRealizationStateId,
-                sourceRealizationRevisionId = sourceRealizationRevisionId,
-                predictiveStateId = predictiveStateId,
-                identifiabilityFingerprint = identifiabilityFingerprint,
-                informationPlanFingerprint = informationPlanFingerprint,
-                observationFingerprint = observationFingerprint,
-                successorRealizationRevisionId = successorRealizationRevisionId,
-                transitionFingerprint = transitionFingerprint,
-                unresolvedReason = unresolvedReason,
-                predecessorCycleFingerprint = predecessorCycleFingerprint,
+                state,
+                sourceRevisionId,
+                realizationProfileFingerprint,
+                predictiveQuotientFingerprint,
+                identifiabilityFingerprint,
+                informationPlanFingerprint,
+                observationFingerprint,
+                successorRevisionId,
+                transitionFingerprint,
+                predecessorCycleFingerprint,
             )
         )
-        validateStateShape()
+        require(cycleId == "meta-realization-cycle:$fingerprint")
     }
-
-    val truthAuthority: Boolean
-        get() = false
 
     val executionAuthority: Boolean
         get() = false
@@ -66,326 +105,199 @@ data class MetaRealizationCycle private constructor(
     val directWorldMutationAllowed: Boolean
         get() = false
 
-    private fun validateStateShape() {
-        when (state) {
-            MetaRealizationCycleState.STATE_FROZEN -> {
-                require(predictiveStateId == null)
-                require(identifiabilityFingerprint == null)
-                require(informationPlanFingerprint == null)
-                require(observationFingerprint == null)
-                require(successorRealizationRevisionId == null)
-                require(transitionFingerprint == null)
-                require(unresolvedReason == null)
-            }
-
-            MetaRealizationCycleState.PREDICTIVE_STATE_READY -> {
-                require(!predictiveStateId.isNullOrBlank())
-                require(identifiabilityFingerprint == null)
-                require(informationPlanFingerprint == null)
-                require(observationFingerprint == null)
-                require(successorRealizationRevisionId == null)
-                require(transitionFingerprint == null)
-                require(unresolvedReason == null)
-            }
-
-            MetaRealizationCycleState.IDENTIFIABILITY_READY -> {
-                require(!predictiveStateId.isNullOrBlank())
-                require(!identifiabilityFingerprint.isNullOrBlank())
-                require(informationPlanFingerprint == null)
-                require(observationFingerprint == null)
-                require(successorRealizationRevisionId == null)
-                require(transitionFingerprint == null)
-                require(unresolvedReason == null)
-            }
-
-            MetaRealizationCycleState.INFORMATION_REQUIRED -> {
-                require(!predictiveStateId.isNullOrBlank())
-                require(!identifiabilityFingerprint.isNullOrBlank())
-                require(informationPlanFingerprint == null)
-                require(observationFingerprint == null)
-                require(successorRealizationRevisionId == null)
-                require(transitionFingerprint == null)
-                require(unresolvedReason == null)
-            }
-
-            MetaRealizationCycleState.AWAITING_OBSERVATION -> {
-                require(!predictiveStateId.isNullOrBlank())
-                require(!identifiabilityFingerprint.isNullOrBlank())
-                require(!informationPlanFingerprint.isNullOrBlank())
-                require(observationFingerprint == null)
-                require(successorRealizationRevisionId == null)
-                require(transitionFingerprint == null)
-                require(unresolvedReason == null)
-            }
-
-            MetaRealizationCycleState.OUTCOME_OBSERVED -> {
-                require(!predictiveStateId.isNullOrBlank())
-                require(!identifiabilityFingerprint.isNullOrBlank())
-                require(!observationFingerprint.isNullOrBlank())
-                require(successorRealizationRevisionId == null)
-                require(transitionFingerprint == null)
-                require(unresolvedReason == null)
-            }
-
-            MetaRealizationCycleState.REBASED -> {
-                require(!predictiveStateId.isNullOrBlank())
-                require(!identifiabilityFingerprint.isNullOrBlank())
-                require(!observationFingerprint.isNullOrBlank())
-                require(!successorRealizationRevisionId.isNullOrBlank())
-                require(!transitionFingerprint.isNullOrBlank())
-                require(unresolvedReason == null)
-            }
-
-            MetaRealizationCycleState.UNRESOLVED -> {
-                require(!unresolvedReason.isNullOrBlank())
-                require(successorRealizationRevisionId == null)
-                require(transitionFingerprint == null)
-            }
-        }
-    }
-
-    companion object {
-        fun start(
-            source: CanonicalRealizationState,
-            realizationProfileFingerprint: String,
-            predecessorCycleFingerprint: String? = null,
-        ): MetaRealizationCycle {
-            require(realizationProfileFingerprint.isNotBlank())
-            return create(
-                state = MetaRealizationCycleState.STATE_FROZEN,
-                realizationProfileFingerprint = realizationProfileFingerprint,
-                sourceRealizationStateId = source.id,
-                sourceRealizationRevisionId = source.revisionId,
-                predecessorCycleFingerprint = predecessorCycleFingerprint,
-            )
-        }
-
-        internal fun create(
-            state: MetaRealizationCycleState,
-            realizationProfileFingerprint: String,
-            sourceRealizationStateId: String,
-            sourceRealizationRevisionId: String,
-            predictiveStateId: String? = null,
-            identifiabilityFingerprint: String? = null,
-            informationPlanFingerprint: String? = null,
-            observationFingerprint: String? = null,
-            successorRealizationRevisionId: String? = null,
-            transitionFingerprint: String? = null,
-            unresolvedReason: String? = null,
-            predecessorCycleFingerprint: String? = null,
-        ): MetaRealizationCycle {
-            val cycleId = expectedCycleId(
-                realizationProfileFingerprint,
-                sourceRealizationRevisionId,
-            )
-            return MetaRealizationCycle(
-                cycleId = cycleId,
-                state = state,
-                realizationProfileFingerprint = realizationProfileFingerprint,
-                sourceRealizationStateId = sourceRealizationStateId,
-                sourceRealizationRevisionId = sourceRealizationRevisionId,
-                predictiveStateId = predictiveStateId,
-                identifiabilityFingerprint = identifiabilityFingerprint,
-                informationPlanFingerprint = informationPlanFingerprint,
-                observationFingerprint = observationFingerprint,
-                successorRealizationRevisionId = successorRealizationRevisionId,
-                transitionFingerprint = transitionFingerprint,
-                unresolvedReason = unresolvedReason,
-                predecessorCycleFingerprint = predecessorCycleFingerprint,
-                fingerprint = expectedFingerprint(
-                    cycleId = cycleId,
-                    state = state,
-                    realizationProfileFingerprint = realizationProfileFingerprint,
-                    sourceRealizationStateId = sourceRealizationStateId,
-                    sourceRealizationRevisionId = sourceRealizationRevisionId,
-                    predictiveStateId = predictiveStateId,
-                    identifiabilityFingerprint = identifiabilityFingerprint,
-                    informationPlanFingerprint = informationPlanFingerprint,
-                    observationFingerprint = observationFingerprint,
-                    successorRealizationRevisionId = successorRealizationRevisionId,
-                    transitionFingerprint = transitionFingerprint,
-                    unresolvedReason = unresolvedReason,
-                    predecessorCycleFingerprint = predecessorCycleFingerprint,
-                ),
-            )
-        }
-
-        private fun expectedCycleId(
-            realizationProfileFingerprint: String,
-            sourceRealizationRevisionId: String,
-        ): String = "meta-realization-cycle:" + StableFieldIds.fingerprint(
-            "meta-realization-cycle-id/v1",
-            realizationProfileFingerprint,
-            sourceRealizationRevisionId,
-        )
-
-        private fun expectedFingerprint(
-            cycleId: String,
-            state: MetaRealizationCycleState,
-            realizationProfileFingerprint: String,
-            sourceRealizationStateId: String,
-            sourceRealizationRevisionId: String,
-            predictiveStateId: String?,
-            identifiabilityFingerprint: String?,
-            informationPlanFingerprint: String?,
-            observationFingerprint: String?,
-            successorRealizationRevisionId: String?,
-            transitionFingerprint: String?,
-            unresolvedReason: String?,
-            predecessorCycleFingerprint: String?,
-        ): String = StableFieldIds.fingerprint(
-            "meta-realization-cycle/v1",
-            cycleId,
-            state.name,
-            realizationProfileFingerprint,
-            sourceRealizationStateId,
-            sourceRealizationRevisionId,
-            predictiveStateId.orEmpty(),
-            identifiabilityFingerprint.orEmpty(),
-            informationPlanFingerprint.orEmpty(),
-            observationFingerprint.orEmpty(),
-            successorRealizationRevisionId.orEmpty(),
-            transitionFingerprint.orEmpty(),
-            unresolvedReason.orEmpty(),
-            predecessorCycleFingerprint.orEmpty(),
-        )
-    }
-}
-
-/**
- * B525 M9 transition coordinator.
- *
- * It only advances immutable epistemic cycle state. Execution remains delegated to existing
- * evidence-action, owner-policy and effect-authority layers.
- */
-class MetaRealizationCycleCoordinator {
-    fun recordPredictiveState(
-        cycle: MetaRealizationCycle,
-        predictiveState: PredictiveStateClass,
+    fun predictiveReady(
+        predictiveQuotientFingerprint: String,
     ): MetaRealizationCycle {
-        require(cycle.state == MetaRealizationCycleState.STATE_FROZEN)
-        require(
-            predictiveState.realizationProfileFingerprint ==
-                cycle.realizationProfileFingerprint
-        )
-        return transition(
-            cycle = cycle,
+        require(state == MetaRealizationCycleState.STATE_FROZEN)
+        require(predictiveQuotientFingerprint.isNotBlank())
+        return create(
             state = MetaRealizationCycleState.PREDICTIVE_STATE_READY,
-            predictiveStateId = predictiveState.id,
+            predictiveQuotientFingerprint = predictiveQuotientFingerprint,
         )
     }
 
-    fun recordIdentifiability(
-        cycle: MetaRealizationCycle,
-        assessment: IdentifiabilityAssessment,
+    fun assessIdentifiability(
+        identifiability: IdentifiabilityAssessment,
     ): MetaRealizationCycle {
-        require(cycle.state == MetaRealizationCycleState.PREDICTIVE_STATE_READY)
-        require(
-            assessment.realizationProfileFingerprint ==
-                cycle.realizationProfileFingerprint
-        )
-        return transition(
-            cycle = cycle,
-            state = MetaRealizationCycleState.IDENTIFIABILITY_READY,
-            identifiabilityFingerprint = assessment.fingerprint,
-        )
-    }
-
-    fun requireInformation(
-        cycle: MetaRealizationCycle,
-    ): MetaRealizationCycle {
-        require(cycle.state == MetaRealizationCycleState.IDENTIFIABILITY_READY)
-        return transition(
-            cycle = cycle,
-            state = MetaRealizationCycleState.INFORMATION_REQUIRED,
+        require(state == MetaRealizationCycleState.PREDICTIVE_STATE_READY)
+        require(identifiability.realizationProfileFingerprint == realizationProfileFingerprint)
+        val nextState = if (
+            identifiability.status == IdentifiabilityStatus.OBSERVATIONALLY_DISTINCT
+        ) {
+            MetaRealizationCycleState.UNRESOLVED
+        } else {
+            MetaRealizationCycleState.INFORMATION_REQUIRED
+        }
+        return create(
+            state = nextState,
+            predictiveQuotientFingerprint = predictiveQuotientFingerprint,
+            identifiabilityFingerprint = identifiability.fingerprint,
         )
     }
 
-    fun attachInformationPlan(
-        cycle: MetaRealizationCycle,
-        plan: InformationActionPlan,
+    fun awaitObservation(
+        informationPlan: InformationActionPlan,
     ): MetaRealizationCycle {
-        require(cycle.state == MetaRealizationCycleState.INFORMATION_REQUIRED)
-        require(plan.identifiabilityFingerprint == cycle.identifiabilityFingerprint)
-        require(!plan.executionAuthority)
-        return transition(
-            cycle = cycle,
+        require(state == MetaRealizationCycleState.INFORMATION_REQUIRED)
+        require(informationPlan.identifiabilityFingerprint == identifiabilityFingerprint)
+        require(informationPlan.items.isNotEmpty()) {
+            "Awaiting observation requires at least one planned information action"
+        }
+        return create(
             state = MetaRealizationCycleState.AWAITING_OBSERVATION,
-            informationPlanFingerprint = plan.fingerprint,
+            predictiveQuotientFingerprint = predictiveQuotientFingerprint,
+            identifiabilityFingerprint = identifiabilityFingerprint,
+            informationPlanFingerprint = informationPlan.fingerprint,
         )
     }
 
-    fun recordObservation(
-        cycle: MetaRealizationCycle,
+    fun observe(
         observationFingerprint: String,
     ): MetaRealizationCycle {
-        require(
-            cycle.state == MetaRealizationCycleState.AWAITING_OBSERVATION ||
-                cycle.state == MetaRealizationCycleState.IDENTIFIABILITY_READY
-        )
+        require(state == MetaRealizationCycleState.AWAITING_OBSERVATION)
         require(observationFingerprint.isNotBlank())
-        return transition(
-            cycle = cycle,
+        return create(
             state = MetaRealizationCycleState.OUTCOME_OBSERVED,
+            predictiveQuotientFingerprint = predictiveQuotientFingerprint,
+            identifiabilityFingerprint = identifiabilityFingerprint,
+            informationPlanFingerprint = informationPlanFingerprint,
             observationFingerprint = observationFingerprint,
         )
     }
 
     fun rebase(
-        cycle: MetaRealizationCycle,
         successor: CanonicalRealizationState,
+        transitionFingerprint: String,
     ): MetaRealizationCycle {
-        require(cycle.state == MetaRealizationCycleState.OUTCOME_OBSERVED)
-        require(successor.predecessorRevisionId == cycle.sourceRealizationRevisionId) {
-            "Successor realization must bind the cycle source revision"
+        require(state == MetaRealizationCycleState.OUTCOME_OBSERVED)
+        require(transitionFingerprint.isNotBlank())
+        require(successor.predecessorRevisionId == sourceRevisionId) {
+            "Rebased realization must bind the source revision"
         }
-        val transitionFingerprint = requireNotNull(successor.transitionFingerprint) {
-            "Successor realization requires transition provenance"
+        require(successor.transitionFingerprint == transitionFingerprint) {
+            "Successor realization transition must match cycle transition"
         }
-        return transition(
-            cycle = cycle,
+        return create(
             state = MetaRealizationCycleState.REBASED,
-            successorRealizationRevisionId = successor.revisionId,
+            predictiveQuotientFingerprint = predictiveQuotientFingerprint,
+            identifiabilityFingerprint = identifiabilityFingerprint,
+            informationPlanFingerprint = informationPlanFingerprint,
+            observationFingerprint = observationFingerprint,
+            successorRevisionId = successor.revisionId,
             transitionFingerprint = transitionFingerprint,
         )
     }
 
-    fun unresolved(
-        cycle: MetaRealizationCycle,
-        reason: String,
-    ): MetaRealizationCycle {
-        require(cycle.state != MetaRealizationCycleState.REBASED)
-        require(cycle.state != MetaRealizationCycleState.UNRESOLVED)
-        require(reason.isNotBlank())
-        return transition(
-            cycle = cycle,
-            state = MetaRealizationCycleState.UNRESOLVED,
-            unresolvedReason = reason,
-        )
-    }
-
-    private fun transition(
-        cycle: MetaRealizationCycle,
+    private fun create(
         state: MetaRealizationCycleState,
-        predictiveStateId: String? = cycle.predictiveStateId,
-        identifiabilityFingerprint: String? = cycle.identifiabilityFingerprint,
-        informationPlanFingerprint: String? = cycle.informationPlanFingerprint,
-        observationFingerprint: String? = cycle.observationFingerprint,
-        successorRealizationRevisionId: String? = cycle.successorRealizationRevisionId,
-        transitionFingerprint: String? = cycle.transitionFingerprint,
-        unresolvedReason: String? = cycle.unresolvedReason,
-    ): MetaRealizationCycle = MetaRealizationCycle.create(
+        predictiveQuotientFingerprint: String? = null,
+        identifiabilityFingerprint: String? = null,
+        informationPlanFingerprint: String? = null,
+        observationFingerprint: String? = null,
+        successorRevisionId: String? = null,
+        transitionFingerprint: String? = null,
+    ): MetaRealizationCycle = create(
         state = state,
-        realizationProfileFingerprint = cycle.realizationProfileFingerprint,
-        sourceRealizationStateId = cycle.sourceRealizationStateId,
-        sourceRealizationRevisionId = cycle.sourceRealizationRevisionId,
-        predictiveStateId = predictiveStateId,
+        sourceRevisionId = sourceRevisionId,
+        realizationProfileFingerprint = realizationProfileFingerprint,
+        predictiveQuotientFingerprint = predictiveQuotientFingerprint,
         identifiabilityFingerprint = identifiabilityFingerprint,
         informationPlanFingerprint = informationPlanFingerprint,
         observationFingerprint = observationFingerprint,
-        successorRealizationRevisionId = successorRealizationRevisionId,
+        successorRevisionId = successorRevisionId,
         transitionFingerprint = transitionFingerprint,
-        unresolvedReason = unresolvedReason,
-        predecessorCycleFingerprint = cycle.predecessorCycleFingerprint,
+        predecessorCycleFingerprint = fingerprint,
     )
+
+    companion object {
+        fun start(
+            source: CanonicalRealizationState,
+            profile: RealizationTransferProfile,
+        ): MetaRealizationCycle {
+            require(
+                profile.requiredComponents.all { required ->
+                    source.components.any { it.kind == required }
+                }
+            ) {
+                "Frozen realization state does not satisfy transfer-profile component contract"
+            }
+            return create(
+                state = MetaRealizationCycleState.STATE_FROZEN,
+                sourceRevisionId = source.revisionId,
+                realizationProfileFingerprint = profile.fingerprint,
+                predictiveQuotientFingerprint = null,
+                identifiabilityFingerprint = null,
+                informationPlanFingerprint = null,
+                observationFingerprint = null,
+                successorRevisionId = null,
+                transitionFingerprint = null,
+                predecessorCycleFingerprint = null,
+            )
+        }
+
+        private fun create(
+            state: MetaRealizationCycleState,
+            sourceRevisionId: String,
+            realizationProfileFingerprint: String,
+            predictiveQuotientFingerprint: String?,
+            identifiabilityFingerprint: String?,
+            informationPlanFingerprint: String?,
+            observationFingerprint: String?,
+            successorRevisionId: String?,
+            transitionFingerprint: String?,
+            predecessorCycleFingerprint: String?,
+        ): MetaRealizationCycle {
+            val fp = expectedFingerprint(
+                state,
+                sourceRevisionId,
+                realizationProfileFingerprint,
+                predictiveQuotientFingerprint,
+                identifiabilityFingerprint,
+                informationPlanFingerprint,
+                observationFingerprint,
+                successorRevisionId,
+                transitionFingerprint,
+                predecessorCycleFingerprint,
+            )
+            return MetaRealizationCycle(
+                cycleId = "meta-realization-cycle:$fp",
+                state = state,
+                sourceRevisionId = sourceRevisionId,
+                realizationProfileFingerprint = realizationProfileFingerprint,
+                predictiveQuotientFingerprint = predictiveQuotientFingerprint,
+                identifiabilityFingerprint = identifiabilityFingerprint,
+                informationPlanFingerprint = informationPlanFingerprint,
+                observationFingerprint = observationFingerprint,
+                successorRevisionId = successorRevisionId,
+                transitionFingerprint = transitionFingerprint,
+                predecessorCycleFingerprint = predecessorCycleFingerprint,
+                fingerprint = fp,
+            )
+        }
+
+        private fun expectedFingerprint(
+            state: MetaRealizationCycleState,
+            sourceRevisionId: String,
+            realizationProfileFingerprint: String,
+            predictiveQuotientFingerprint: String?,
+            identifiabilityFingerprint: String?,
+            informationPlanFingerprint: String?,
+            observationFingerprint: String?,
+            successorRevisionId: String?,
+            transitionFingerprint: String?,
+            predecessorCycleFingerprint: String?,
+        ): String = StableFieldIds.fingerprint(
+            "meta-realization-cycle/v1",
+            state.name,
+            sourceRevisionId,
+            realizationProfileFingerprint,
+            predictiveQuotientFingerprint.orEmpty(),
+            identifiabilityFingerprint.orEmpty(),
+            informationPlanFingerprint.orEmpty(),
+            observationFingerprint.orEmpty(),
+            successorRevisionId.orEmpty(),
+            transitionFingerprint.orEmpty(),
+            predecessorCycleFingerprint.orEmpty(),
+        )
+    }
 }
