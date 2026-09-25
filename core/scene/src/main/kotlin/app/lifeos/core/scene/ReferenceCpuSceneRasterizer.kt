@@ -189,6 +189,10 @@ class ReferenceCpuSceneRasterizer(
     }
 
     private fun intersectHumanoid(ray: Ray, prepared: PreparedNode): Hit? {
+        val boundsMin = requireNotNull(prepared.boundsMin)
+        val boundsMax = requireNotNull(prepared.boundsMax)
+        if (!rayIntersectsAabb(ray, boundsMin, boundsMax)) return null
+
         var nearest: Hit? = null
         for (part in prepared.humanoidParts) {
             val intersection = intersectEllipsoid(ray, part.center, part.radii) ?: continue
@@ -286,19 +290,31 @@ class ReferenceCpuSceneRasterizer(
                     boxHalf = dimensions * 0.5,
                 )
 
-            GeometryPrimitive.PARAMETRIC_HUMANOID ->
+            GeometryPrimitive.PARAMETRIC_HUMANOID -> {
+                val parts = humanoidParts(
+                    node = node,
+                    center = center,
+                    width = dimensions.x,
+                    depth = dimensions.y,
+                    height = dimensions.z,
+                )
                 PreparedNode(
                     node = node,
                     center = center,
                     dimensions = dimensions,
-                    humanoidParts = humanoidParts(
-                        node = node,
-                        center = center,
-                        width = dimensions.x,
-                        depth = dimensions.y,
-                        height = dimensions.z,
+                    humanoidParts = parts,
+                    boundsMin = Vec3(
+                        parts.minOf { it.center.x - it.radii.x },
+                        parts.minOf { it.center.y - it.radii.y },
+                        parts.minOf { it.center.z - it.radii.z },
+                    ),
+                    boundsMax = Vec3(
+                        parts.maxOf { it.center.x + it.radii.x },
+                        parts.maxOf { it.center.y + it.radii.y },
+                        parts.maxOf { it.center.z + it.radii.z },
                     ),
                 )
+            }
         }
     }
 
@@ -306,6 +322,39 @@ class ReferenceCpuSceneRasterizer(
         val d = node.geometry.dimensionsMeters
         val s = node.transform.scale
         return Vec3(d.x * s.x, d.y * s.y, d.z * s.z)
+    }
+
+    private fun rayIntersectsAabb(
+        ray: Ray,
+        minCorner: Vec3,
+        maxCorner: Vec3,
+    ): Boolean {
+        var tMin = 0.0
+        var tMax = Double.POSITIVE_INFINITY
+        for (axis in 0..2) {
+            val origin = ray.origin.component(axis)
+            val direction = ray.direction.component(axis)
+            val low = minCorner.component(axis)
+            val high = maxCorner.component(axis)
+
+            if (abs(direction) < EPSILON) {
+                if (origin < low || origin > high) return false
+                continue
+            }
+
+            val inverse = 1.0 / direction
+            var near = (low - origin) * inverse
+            var far = (high - origin) * inverse
+            if (near > far) {
+                val swap = near
+                near = far
+                far = swap
+            }
+            tMin = max(tMin, near)
+            tMax = min(tMax, far)
+            if (tMin > tMax) return false
+        }
+        return tMax > EPSILON
     }
 
     private fun intersectEllipsoid(ray: Ray, center: Vec3, radii: Vec3): EllipsoidIntersection? {
@@ -347,6 +396,8 @@ class ReferenceCpuSceneRasterizer(
         val planeSurfaceZ: Double? = null,
         val boxHalf: Vec3? = null,
         val humanoidParts: List<HumanoidEllipsoid> = emptyList(),
+        val boundsMin: Vec3? = null,
+        val boundsMax: Vec3? = null,
     )
 
     private data class HumanoidEllipsoid(
