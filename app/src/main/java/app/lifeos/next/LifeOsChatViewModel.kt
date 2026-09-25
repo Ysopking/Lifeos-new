@@ -49,6 +49,7 @@ data class LifeOsChatUiState(
     val draft: String = "",
     val turnProcessing: ChatTurnProcessingState = ChatTurnProcessingState.idle(),
     val voice: ChatVoiceUiState = ChatVoiceUiState(),
+    val clarificationOptions: List<String> = emptyList(),
     val bootStatus: KernelBootstrapStatus = KernelBootstrapStatus.CREATED,
     val registeredSubsystems: Int = 0,
     val unavailableSubsystems: Int = 0,
@@ -103,7 +104,6 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
             )
         }
     }
-
     fun dismissError() {
         mutableState.update { current ->
             current.copy(
@@ -116,7 +116,6 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
             )
         }
     }
-
     fun beginVoiceCapture(): ChatVoiceStartResult {
         val current = mutableState.value
         if (!ChatVoicePolicy.canStartVoice(current.bootStatus, current.turnProcessing, current.voice)) {
@@ -152,7 +151,6 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
             }
         }
     }
-
     fun stopVoiceCapture() {
         val current = mutableState.value
         if (current.voice.phase != ChatVoicePhase.RECORDING) return
@@ -166,7 +164,6 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
             )
         }
     }
-
     fun acceptStagedVoiceTranscript() {
         val current = mutableState.value
         val transcript = current.voice.stagedTranscript ?: return
@@ -248,6 +245,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                     voiceDraftBaseline = null,
                     voiceInputEdited = false,
                 ),
+                clarificationOptions = emptyList(),
                 error = null,
             )
         }
@@ -267,7 +265,7 @@ class LifeOsChatViewModel(application: Application) : AndroidViewModel(applicati
                     state.copy(
                         turnProcessing = ChatTurnProcessingState.idle(),
                         error = turn.assistant.processingFailure ?: state.error,
-                    )
+                    ).withClarificationFrom(turn)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
