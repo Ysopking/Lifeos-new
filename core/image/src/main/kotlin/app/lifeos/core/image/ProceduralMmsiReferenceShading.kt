@@ -22,12 +22,17 @@ class ProceduralMmsiReferenceShading(
 
     class Scratch internal constructor(
         internal val coefficients: DoubleArray,
+        internal val projectedBaseRgb: DoubleArray,
         val rgb: DoubleArray,
+        internal var lastAlbedoRBits: Long = Long.MIN_VALUE,
+        internal var lastAlbedoGBits: Long = Long.MIN_VALUE,
+        internal var lastAlbedoBBits: Long = Long.MIN_VALUE,
     )
 
     fun newScratch(): Scratch =
         Scratch(
             coefficients = DoubleArray(profile.coefficientProjection.componentCount),
+            projectedBaseRgb = DoubleArray(3),
             rgb = DoubleArray(3),
         )
 
@@ -93,27 +98,44 @@ class ProceduralMmsiReferenceShading(
         require(shadowVisibility in 0.0..1.0)
         require(ambientOcclusion in 0.0..1.0)
 
-        val coefficientProjection = profile.coefficientProjection
-        val coefficients = scratch.coefficients
-        for (component in coefficients.indices) {
-            val row = coefficientProjection.rgbToCoefficients[component]
-            coefficients[component] =
-                coefficientProjection.bias[component] +
-                    row[0] * albedoR +
-                    row[1] * albedoG +
-                    row[2] * albedoB
+        val rBits = albedoR.toBits()
+        val gBits = albedoG.toBits()
+        val bBits = albedoB.toBits()
+        if (
+            rBits != scratch.lastAlbedoRBits ||
+            gBits != scratch.lastAlbedoGBits ||
+            bBits != scratch.lastAlbedoBBits
+        ) {
+            val coefficientProjection = profile.coefficientProjection
+            val coefficients = scratch.coefficients
+            for (component in coefficients.indices) {
+                val row = coefficientProjection.rgbToCoefficients[component]
+                coefficients[component] =
+                    coefficientProjection.bias[component] +
+                        row[0] * albedoR +
+                        row[1] * albedoG +
+                        row[2] * albedoB
+            }
+
+            val rgbProjection = profile.rgbProjection
+            val projectedBase = scratch.projectedBaseRgb
+            for (channel in 0..2) {
+                var value = rgbProjection.meanRgb[channel]
+                val row = rgbProjection.coefficientsToRgb[channel]
+                for (component in coefficients.indices) {
+                    value += row[component] * coefficients[component]
+                }
+                projectedBase[channel] = value.coerceIn(0.0, 1.0)
+            }
+            scratch.lastAlbedoRBits = rBits
+            scratch.lastAlbedoGBits = gBits
+            scratch.lastAlbedoBBits = bBits
         }
 
-        val rgbProjection = profile.rgbProjection
         val base = scratch.rgb
-        for (channel in 0..2) {
-            var value = rgbProjection.meanRgb[channel]
-            val row = rgbProjection.coefficientsToRgb[channel]
-            for (component in coefficients.indices) {
-                value += row[component] * coefficients[component]
-            }
-            base[channel] = value.coerceIn(0.0, 1.0)
-        }
+        base[0] = scratch.projectedBaseRgb[0]
+        base[1] = scratch.projectedBaseRgb[1]
+        base[2] = scratch.projectedBaseRgb[2]
 
         val nDotL = max(
             normalX * light.x + normalY * light.y + normalZ * light.z,
