@@ -46,6 +46,7 @@ import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserver
 import app.lifeos.core.runtime.workers.CausalCognitionTaskObserverRegistry
 import app.lifeos.next.kernel.AndroidAppUsageSensorBridge
+import app.lifeos.next.kernel.AndroidSemanticAppContentSensorBridge
 import app.lifeos.next.kernel.AndroidHardwareSensorBridge
 import app.lifeos.next.kernel.CanonicalLifePhotonRepository
 import app.lifeos.next.kernel.CanonicalPhotonIngress
