@@ -21,6 +21,7 @@ EVIDENCE = {
         "min_ms": 250,
         "median_ms": 875,
         "max_ms": 1500,
+        "slowest_sample": {"file": "seed-b.txt", "elapsed_ms": 1500},
         "samples": [
             {"file": "seed-a.txt", "elapsed_ms": 250},
             {"file": "seed-b.txt", "elapsed_ms": 1500},
@@ -77,14 +78,33 @@ def rejects(mutator, expected: str) -> None:
         raise AssertionError(f"expected rejection containing {expected!r}")
 
 
+def exceed_instrumentation_max(evidence, budget) -> None:
+    evidence["instrumentation"]["max_ms"] = 1601
+    evidence["instrumentation"]["samples"][1]["elapsed_ms"] = 1601
+    evidence["instrumentation"]["slowest_sample"]["elapsed_ms"] = 1601
+
+
 module.check(copy.deepcopy(EVIDENCE), copy.deepcopy(BUDGET))
 rejects(lambda e, b: e["cold_start"].__setitem__("total_ms", 441), "cold-total")
 rejects(lambda e, b: e["cold_start"].__setitem__("wait_ms", 481), "cold-wait")
 rejects(lambda e, b: e["instrumentation"].__setitem__("median_ms", 951), "instrumentation-median")
-rejects(lambda e, b: e["instrumentation"].__setitem__("max_ms", 1601), "instrumentation-max")
+rejects(
+    exceed_instrumentation_max,
+    "instrumentation-max:max=1600:actual=1601:file=seed-b.txt",
+)
 rejects(lambda e, b: e["instrumentation"].__setitem__("sample_count", 1), "instrumentation-sample-count")
 rejects(lambda e, b: e["instrumentation"].__setitem__("samples", e["instrumentation"]["samples"][:1]), "instrumentation-sample-count-mismatch")
-rejects(lambda e, b: e["instrumentation"]["samples"][1].__setitem__("file", "other.txt"), "required-samples-missing")
+rejects(
+    lambda e, b: e["instrumentation"]["slowest_sample"].__setitem__("file", "seed-a.txt"),
+    "instrumentation-slowest-sample-mismatch",
+)
+rejects(
+    lambda e, b: (
+        e["instrumentation"]["samples"][1].__setitem__("file", "other.txt"),
+        e["instrumentation"]["slowest_sample"].__setitem__("file", "other.txt"),
+    ),
+    "required-samples-missing",
+)
 rejects(lambda e, b: b.__setitem__("blocking", False), "budget-not-blocking")
 rejects(lambda e, b: b.__setitem__("schema_version", 2), "budget-schema")
 rejects(lambda e, b: b["baseline"].__setitem__("measurements", b["baseline"]["measurements"][:2]), "baseline-measurements-min-3")
