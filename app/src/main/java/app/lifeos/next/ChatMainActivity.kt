@@ -177,6 +177,11 @@ class ChatMainActivity : ComponentActivity() {
                         notificationAccess.launch(
                             Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                         )
+
+                    PermissionSpecialAccess.APP_USAGE_STATS ->
+                        notificationAccess.launch(
+                            Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                        )
                 }
             }
 

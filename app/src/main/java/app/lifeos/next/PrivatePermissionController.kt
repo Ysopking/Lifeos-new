@@ -1,10 +1,13 @@
 package app.lifeos.next
 
 import android.Manifest
+import android.app.AppOpsManager
 import android.app.Application
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import android.os.Process
 import androidx.core.app.NotificationManagerCompat
 
 internal class PrivatePermissionController(
@@ -121,7 +124,9 @@ internal class PrivatePermissionController(
         )
 
     private fun assistantAccessProfile(): PermissionProfile =
-        PrivatePermissionProfiles.assistantAccess()
+        PrivatePermissionProfiles.assistantAccess(
+            usageStatsPermission = Manifest.permission.PACKAGE_USAGE_STATS,
+        )
 
     private fun evaluate(profile: PermissionProfile): PermissionProfileEvaluation =
         PermissionProfileEvaluator(
@@ -133,6 +138,7 @@ internal class PrivatePermissionController(
                     PermissionSpecialAccess.BROAD_FILE_ACCESS ->
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     PermissionSpecialAccess.NOTIFICATION_LISTENER -> true
+                    PermissionSpecialAccess.APP_USAGE_STATS -> true
                 }
             },
             specialAccessGranted = { special ->
@@ -144,6 +150,18 @@ internal class PrivatePermissionController(
                         NotificationManagerCompat
                             .getEnabledListenerPackages(application)
                             .contains(application.packageName)
+                    PermissionSpecialAccess.APP_USAGE_STATS ->
+                        try {
+                            val appOps =
+                                application.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
+                            appOps?.checkOpNoThrow(
+                                AppOpsManager.OPSTR_GET_USAGE_STATS,
+                                Process.myUid(),
+                                application.packageName,
+                            ) == AppOpsManager.MODE_ALLOWED
+                        } catch (_: RuntimeException) {
+                            false
+                        }
                 }
             },
         ).evaluate(profile)

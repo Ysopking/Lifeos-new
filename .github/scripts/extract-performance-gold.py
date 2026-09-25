@@ -64,6 +64,10 @@ def build(root: Path) -> dict:
     wait_ms = parse_single(COLD_WAIT, cold, "cold-wait-time")
     samples = instrumentation_samples(root)
     values = [sample["elapsed_ms"] for sample in samples]
+    slowest_sample = max(
+        samples,
+        key=lambda sample: (sample["elapsed_ms"], sample["file"]),
+    )
     return {
         "schema_version": 1,
         "blocking": False,
@@ -77,6 +81,7 @@ def build(root: Path) -> dict:
             "min_ms": min(values),
             "median_ms": int(round(statistics.median(values))),
             "max_ms": max(values),
+            "slowest_sample": slowest_sample,
             "samples": samples,
         },
     }

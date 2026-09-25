@@ -206,6 +206,73 @@ class ProductivePerceptionContextRuntimeTest {
     }
 
     @Test
+    fun appUsageBridgeRegistersCoverageAndReplansWhenOwnerGrantsPlatformAccess() = runTest {
+        val registry = AppSensorRegistry()
+        val runtime = ProductivePerceptionContextRuntime(
+            ownerObservationPolicy = OwnerObservationPolicyLedger(EmptyPolicyRepository()),
+            sensorRegistry = registry,
+        )
+        var granted = false
+        val source = object : AppUsageEventSource {
+            override fun isAccessGranted(): Boolean = granted
+
+            override fun queryEvents(
+                beginMillis: Long,
+                endMillis: Long,
+                maxEvents: Int,
+            ): List<PlatformAppUsageEvent> = emptyList()
+        }
+        val bridge = AndroidAppUsageSensorBridge(
+            source = source,
+            commitBatch = AppUsageBatchCommitter { _, _, _, _ -> Unit },
+            scope = this,
+        )
+
+        runtime.attachAppUsageBridge(bridge)
+
+        assertEquals(
+            SensorHealthState.UNAVAILABLE,
+            registry.state(bridge.descriptor.sensorId)?.health,
+        )
+        assertEquals(
+            SensorAttentionMode.SUSPENDED,
+            bridge.descriptor.defaultMode,
+        )
+        assertTrue(
+            runtime.coverageSnapshot().any { it.sensorId == bridge.descriptor.sensorId }
+        )
+
+        granted = true
+        bridge.refreshAvailability()
+
+        assertEquals(
+            SensorHealthState.HEALTHY,
+            registry.state(bridge.descriptor.sensorId)?.health,
+        )
+        assertEquals(
+            SensorAttentionMode.SUSPENDED,
+            registry.state(bridge.descriptor.sensorId)?.mode,
+        )
+
+        val update = runtime.applyWorldGaps(
+            listOf(
+                WorldGap.Perception(
+                    domain = FieldDomainId("app"),
+                    missingDimensions = setOf(StateDimensionId("app.usage.current")),
+                    reason = "app-usage-context-missing",
+                )
+            )
+        )
+
+        assertEquals(
+            SensorAttentionMode.FOCUSED,
+            registry.state(bridge.descriptor.sensorId)?.mode,
+        )
+        assertEquals(false, update.observationGrantAuthority)
+        assertEquals(false, update.effectAuthority)
+    }
+
+    @Test
     fun notificationBridgeBuildsCanonicalSensorBatchAndHonorsSuspension() = runTest {
         val revisions = mutableListOf<Pair<Long, Long>>()
         val committed = mutableListOf<InformationObservation>()

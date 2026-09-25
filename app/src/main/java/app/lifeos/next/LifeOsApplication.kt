@@ -18,6 +18,7 @@ import app.lifeos.core.runtime.topology.LifeOsProcessTopology
 import app.lifeos.core.runtime.trace.DecisionTraceLedger
 import app.lifeos.core.runtime.trace.GoalDecisionTraceRecorder
 import app.lifeos.next.kernel.CanonicalLifePhotonRepository
+import app.lifeos.next.kernel.ProductiveAppUsageSensorRuntimeRegistry
 import app.lifeos.next.kernel.CanonicalPhotonIngress
 import app.lifeos.next.kernel.HardwareResourceIntelligenceRuntime
 import app.lifeos.next.kernel.LifeOsKernel
@@ -273,8 +274,12 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     fun refreshLiveSources() {
-        if (!::liveSourceController.isInitialized) return
-        liveSourceController.refresh()
+        if (::liveSourceController.isInitialized) {
+            liveSourceController.refresh()
+        }
+        startupScope.launch {
+            ProductiveAppUsageSensorRuntimeRegistry.refreshAvailability()
+        }
     }
 
     internal fun runtimePermissionRequestPlan(): RuntimePermissionRequestPlan =

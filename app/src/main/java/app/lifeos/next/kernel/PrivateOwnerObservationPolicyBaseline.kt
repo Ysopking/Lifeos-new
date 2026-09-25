@@ -22,6 +22,9 @@ object PrivateOwnerObservationPolicyBaseline {
     const val DEVICE_SENSOR_SCOPE = "private-apk-device-sensor-observation"
     const val DEVICE_SENSOR_ID = "android-hardware-sensor-manager"
     const val DEVICE_SENSOR_RESOURCE_PREFIX = "android-sensor:"
+    const val APP_USAGE_SCOPE = "private-apk-app-usage-observation"
+    const val APP_USAGE_SENSOR_ID = "android-app-usage-stats"
+    const val APP_USAGE_RESOURCE_PREFIX = "android-usage:"
 
     private val mutex = Mutex()
 
@@ -60,6 +63,17 @@ object PrivateOwnerObservationPolicyBaseline {
             ),
             scope = DEVICE_SENSOR_SCOPE,
             sensorId = DEVICE_SENSOR_ID,
+            validFrom = Instant.EPOCH,
+        ),
+        OwnerObservationGrant.create(
+            actorId = PrivateOwnerPolicyBaseline.ownerActorId,
+            observationType = OwnerObservationType.APP_USAGE,
+            resource = OwnerResourceSelector(
+                OwnerResourceSelectorType.PREFIX,
+                APP_USAGE_RESOURCE_PREFIX,
+            ),
+            scope = APP_USAGE_SCOPE,
+            sensorId = APP_USAGE_SENSOR_ID,
             validFrom = Instant.EPOCH,
         )
     )
