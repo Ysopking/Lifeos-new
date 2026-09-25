@@ -137,6 +137,48 @@ class ProductivePerceptionContextRuntimeTest {
         assertEquals(false, update.effectAuthority)
     }
 
+    @Test
+    fun installedWorldGapSinkUsesRegisteredCoverageAndPreservesAuthoritySeparation() = runTest {
+        val registry = AppSensorRegistry(listOf(SensorRuntimeState(descriptor)))
+        val runtime = ProductivePerceptionContextRuntime(
+            ownerObservationPolicy = OwnerObservationPolicyLedger(EmptyPolicyRepository()),
+            sensorRegistry = registry,
+        )
+        runtime.registerCoverage(
+            SensorAttentionCoverageProfile(
+                sensorId = sensorId,
+                stateDimensions = listOf(
+                    SensorStateDimensionSelector(
+                        SensorStateDimensionSelectorType.PREFIX,
+                        "device.motion.",
+                    )
+                ),
+                informationGainMicros = 700_000L,
+                goalRelevanceMicros = 800_000L,
+                verificationValueMicros = 800_000L,
+                energyCostMicros = 100_000L,
+                privacyCostMicros = 100_000L,
+                latencyCostMicros = 100_000L,
+                resourceCostMicros = 100_000L,
+            )
+        )
+        val gap = WorldGap.Perception(
+            domain = FieldDomainId("device"),
+            missingDimensions = setOf(StateDimensionId("device.motion.current")),
+            reason = "motion-state-missing",
+        )
+
+        try {
+            ProductiveWorldGapAttentionRuntimeRegistry.install(runtime)
+            ProductiveWorldGapAttentionRuntimeRegistry.update(listOf(gap))
+
+            assertEquals(SensorAttentionMode.FOCUSED, registry.state(sensorId)?.mode)
+            assertEquals(listOf(sensorId), runtime.coverageSnapshot().map { it.sensorId })
+        } finally {
+            ProductiveWorldGapAttentionRuntimeRegistry.clearForTests()
+        }
+    }
+
     private fun workingSet() = ThoughtGraphWorkingSet(
         sourceSnapshotId = "goal-thought-snapshot:test",
         sourceRevision = 7L,
