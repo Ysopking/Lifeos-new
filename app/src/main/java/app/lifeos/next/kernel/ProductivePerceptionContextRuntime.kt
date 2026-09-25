@@ -36,6 +36,10 @@ fun interface PersonalContextBootBindingSource {
     suspend fun freeze(
         workingSet: ThoughtGraphWorkingSet,
     ): PersonalContextBootBinding
+
+    suspend fun matchesCurrent(
+        expected: PersonalContextBootBinding,
+    ): Boolean = true
 }
 
 internal class ProductivePerceptionContextRuntime(
@@ -116,6 +120,15 @@ internal class ProductivePerceptionContextRuntime(
      * No placeholder authority is manufactured: the sensor fingerprint comes from the live
      * registry and the policy revision comes from the durable Owner Observation Policy head.
      */
+    override suspend fun matchesCurrent(
+        expected: PersonalContextBootBinding,
+    ): Boolean {
+        val sensors = sensorRegistry.snapshot()
+        val policy = ownerObservationPolicy.snapshot()
+        return expected.sensorRegistryFingerprint == sensors.fingerprint() &&
+            expected.ownerObservationPolicyRevision == policy.revision
+    }
+
     override suspend fun freeze(
         workingSet: ThoughtGraphWorkingSet,
     ): PersonalContextBootBinding {

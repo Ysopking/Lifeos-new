@@ -25,6 +25,7 @@ import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -62,6 +63,22 @@ class ProductivePerceptionContextRuntimeTest {
         val changed = runtime.freeze(workingSet)
         assertNotEquals(first.sensorRegistryFingerprint, changed.sensorRegistryFingerprint)
         assertNotEquals(first.personalContextSnapshotId, changed.personalContextSnapshotId)
+    }
+
+    @Test
+    fun liveBindingValidationDetectsSensorRegistryDrift() = runTest {
+        val registry = AppSensorRegistry(listOf(SensorRuntimeState(descriptor)))
+        val runtime = ProductivePerceptionContextRuntime(
+            ownerObservationPolicy = OwnerObservationPolicyLedger(EmptyPolicyRepository()),
+            sensorRegistry = registry,
+        )
+        val frozen = runtime.freeze(workingSet())
+
+        assertTrue(runtime.matchesCurrent(frozen))
+
+        registry.updateMode(sensorId, SensorAttentionMode.PERIODIC)
+
+        assertFalse(runtime.matchesCurrent(frozen))
     }
 
     @Test
