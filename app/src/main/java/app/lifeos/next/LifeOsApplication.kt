@@ -153,6 +153,8 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private fun onStartupEvent(event: LifeOsStartupStageEvent) {
+        mutableWarmStartupReport.value =
+            LifeOsWarmStartupProgressProjector.project(mutableWarmStartupReport.value, event)
         mutableStartupState.value =
             LifeOsStartupStateProjector.projectEvent(mutableStartupState.value, event)
     }
