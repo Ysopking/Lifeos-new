@@ -68,17 +68,23 @@ class WorldEquationPromotionEvaluator(
         val observations = evidence.observations
         val protocol = evidence.protocol
         val changed = candidate.changedCoefficientIdsComparedWith(baseline)
+        val evaluationObservations = observations.filter {
+            it.partition != WorldEquationEvidencePartition.EXCLUSION
+        }
+        val exclusionObservations = observations.filter {
+            it.partition == WorldEquationEvidencePartition.EXCLUSION
+        }
 
-        val independentRuns = observations.map { it.runId }.distinct().size
-        val distinctWorkloads = observations.map { it.workloadId }.distinct().size
-        val shadowObservations = observations.filter {
+        val independentRuns = evaluationObservations.map { it.runId }.distinct().size
+        val distinctWorkloads = evaluationObservations.map { it.workloadId }.distinct().size
+        val shadowObservations = evaluationObservations.filter {
             it.partition == WorldEquationEvidencePartition.SHADOW
         }
         val shadowRuns = shadowObservations
             .map { it.runId }
             .distinct()
             .size
-        val holdoutObservations = observations.filter {
+        val holdoutObservations = evaluationObservations.filter {
             it.partition == WorldEquationEvidencePartition.HOLDOUT
         }
         val holdoutRuns = holdoutObservations.map { it.runId }.distinct().size
@@ -144,12 +150,12 @@ class WorldEquationPromotionEvaluator(
                 "independent-runs:" + independentRuns + "/" + protocol.minimumIndependentRuns,
             )
         } else {
-            val baselineBad = observations.count {
+            val baselineBad = evaluationObservations.count {
                 it.baseline.status != WorldFormulaStatus.CONVERGED
-            }.toDouble() / observations.size
-            val candidateBad = observations.count {
+            }.toDouble() / evaluationObservations.size
+            val candidateBad = evaluationObservations.count {
                 it.candidate.status != WorldFormulaStatus.CONVERGED
-            }.toDouble() / observations.size
+            }.toDouble() / evaluationObservations.size
             val regression = candidateBad - baselineBad
             result(
                 WorldEquationEvidenceGate.STATUS_NON_INFERIORITY,
@@ -170,9 +176,9 @@ class WorldEquationPromotionEvaluator(
                 "independent-runs:" + independentRuns + "/" + protocol.minimumIndependentRuns,
             )
         } else {
-            val fraction = observations.count {
+            val fraction = evaluationObservations.count {
                 it.improvement(protocol.primaryMetric) > 0.0
-            }.toDouble() / observations.size
+            }.toDouble() / evaluationObservations.size
             result(
                 WorldEquationEvidenceGate.REPRODUCIBILITY,
                 if (fraction >= policy.minimumImprovedRunFraction) {
@@ -192,7 +198,7 @@ class WorldEquationPromotionEvaluator(
                 "workloads:" + distinctWorkloads + "/" + protocol.minimumDistinctWorkloads,
             )
         } else {
-            val worstMean = observations
+            val worstMean = evaluationObservations
                 .groupBy { it.workloadId }
                 .values
                 .minOf { group ->
@@ -218,7 +224,7 @@ class WorldEquationPromotionEvaluator(
             )
         } else {
             val minimumSeen = changed.minOf { id ->
-                observations.count { id in it.candidate.activeCoefficientIds }
+                evaluationObservations.count { id in it.candidate.activeCoefficientIds }
             }
             val status = when {
                 minimumSeen >= protocol.minimumActiveObservationsPerChangedCoefficient ->
@@ -264,6 +270,47 @@ class WorldEquationPromotionEvaluator(
                 ";maximum=" + hex(policy.maximumSingleParameterDelta),
         )
 
+        val exclusionRuns = exclusionObservations
+            .map { it.runId }
+            .distinct()
+            .size
+        val antiVacuity = when {
+            !protocol.antiVacuityAttested ->
+                result(
+                    WorldEquationEvidenceGate.ANTI_VACUITY,
+                    WorldEquationGateStatus.INCONCLUSIVE,
+                    "protocol=legacy-unattested",
+                )
+
+            exclusionRuns < protocol.minimumExclusionRuns ->
+                result(
+                    WorldEquationEvidenceGate.ANTI_VACUITY,
+                    WorldEquationGateStatus.INCONCLUSIVE,
+                    "exclusion-runs=" + exclusionRuns + "/" + protocol.minimumExclusionRuns,
+                )
+
+            else -> {
+                val maximumAbsoluteImprovement = exclusionObservations.maxOf {
+                    kotlin.math.abs(it.improvement(protocol.primaryMetric))
+                }
+                result(
+                    WorldEquationEvidenceGate.ANTI_VACUITY,
+                    if (
+                        maximumAbsoluteImprovement <=
+                            protocol.maximumExclusionAbsoluteImprovement
+                    ) {
+                        WorldEquationGateStatus.PASS
+                    } else {
+                        WorldEquationGateStatus.FAIL
+                    },
+                    "max-exclusion-absolute-improvement=" +
+                        hex(maximumAbsoluteImprovement) +
+                        ";maximum=" +
+                        hex(protocol.maximumExclusionAbsoluteImprovement),
+                )
+            }
+        }
+
         val invalidRuns = observations.count {
             it.candidate.status == WorldFormulaStatus.INVALID_EQUATION
         }
@@ -282,6 +329,7 @@ class WorldEquationPromotionEvaluator(
             identifiability,
             nonDegeneracy,
             boundedChange,
+            antiVacuity,
             safety,
         )
         val decision = when {
