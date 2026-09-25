@@ -195,12 +195,17 @@ class ReferenceCpuSceneRasterizer(
         if (t <= EPSILON) return null
         val p = ray.at(t)
         val local = p - center
-        val normalizedFaceDistance = listOf(
-            abs(abs(local.x) - half.x) to Vec3(if (local.x >= 0.0) 1.0 else -1.0, 0.0, 0.0),
-            abs(abs(local.y) - half.y) to Vec3(0.0, if (local.y >= 0.0) 1.0 else -1.0, 0.0),
-            abs(abs(local.z) - half.z) to Vec3(0.0, 0.0, if (local.z >= 0.0) 1.0 else -1.0),
-        )
-        val normal = normalizedFaceDistance.minBy { it.first }.second
+        val xFaceDistance = abs(abs(local.x) - half.x)
+        val yFaceDistance = abs(abs(local.y) - half.y)
+        val zFaceDistance = abs(abs(local.z) - half.z)
+        val normal = when {
+            xFaceDistance <= yFaceDistance && xFaceDistance <= zFaceDistance ->
+                Vec3(if (local.x >= 0.0) 1.0 else -1.0, 0.0, 0.0)
+            yFaceDistance <= zFaceDistance ->
+                Vec3(0.0, if (local.y >= 0.0) 1.0 else -1.0, 0.0)
+            else ->
+                Vec3(0.0, 0.0, if (local.z >= 0.0) 1.0 else -1.0)
+        }
         return Hit(node, t, normal)
     }
 

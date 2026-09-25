@@ -59,7 +59,13 @@ class ReferenceCpuProceduralMmsiRenderer(
                 val normalY = buffers.normalsXyz[normalBase + 1].toDouble()
                 val normalZ = buffers.normalsXyz[normalBase + 2].toDouble()
                 val roughness = buffers.roughness[pixel].toDouble()
-                val shadow = softShadow(pixel, buffers, shadowKernel)
+                val shadow = softShadow(
+                    pixelIndex = pixel,
+                    x = pixel - rowStart,
+                    y = y,
+                    buffers = buffers,
+                    kernel = shadowKernel,
+                )
                 val ambientOcclusion = (0.35 + 0.65 * normalZ).coerceIn(0.0, 1.0)
                 shading.shadeNormalizedInto(
                     albedoR = buffers.albedoLinearRgba[albedoBase].toDouble(),
@@ -83,13 +89,13 @@ class ReferenceCpuProceduralMmsiRenderer(
 
     private fun softShadow(
         pixelIndex: Int,
+        x: Int,
+        y: Int,
         buffers: MmsiSceneRasterBuffers,
         kernel: ShadowKernel,
     ): Double {
         val width = buffers.size.width
         val height = buffers.size.height
-        val x = pixelIndex % width
-        val y = pixelIndex / width
         val sourceDepth = buffers.depth[pixelIndex].toDouble()
         var visibility = 1.0
 
@@ -97,7 +103,7 @@ class ReferenceCpuProceduralMmsiRenderer(
             val sx = x + kernel.offsetX[step]
             val sy = y + kernel.offsetY[step]
             if (sx !in 0 until width || sy !in 0 until height) break
-            val sampleIndex = sy * width + sx
+            val sampleIndex = pixelIndex + kernel.indexDelta[step]
             val expectedDepth = sourceDepth + kernel.depthDelta[step]
             val delta = expectedDepth - buffers.depth[sampleIndex]
             if (delta > 0.001) {
@@ -115,6 +121,7 @@ class ReferenceCpuProceduralMmsiRenderer(
     private data class ShadowKernel(
         val offsetX: IntArray,
         val offsetY: IntArray,
+        val indexDelta: IntArray,
         val depthDelta: DoubleArray,
         val coneRadius: DoubleArray,
     ) {
@@ -123,6 +130,7 @@ class ReferenceCpuProceduralMmsiRenderer(
 
         init {
             require(offsetY.size == size)
+            require(indexDelta.size == size)
             require(depthDelta.size == size)
             require(coneRadius.size == size)
         }
@@ -138,6 +146,7 @@ class ReferenceCpuProceduralMmsiRenderer(
             ): ShadowKernel {
                 val offsetX = IntArray(SHADOW_STEPS)
                 val offsetY = IntArray(SHADOW_STEPS)
+                val indexDelta = IntArray(SHADOW_STEPS)
                 val depthDelta = DoubleArray(SHADOW_STEPS)
                 val coneRadius = DoubleArray(SHADOW_STEPS)
 
@@ -145,6 +154,7 @@ class ReferenceCpuProceduralMmsiRenderer(
                     val t = (index + 1) * SHADOW_STEP_DISTANCE
                     offsetX[index] = round(lightX * t * width).toInt()
                     offsetY[index] = round(lightY * t * height).toInt()
+                    indexDelta[index] = offsetY[index] * width + offsetX[index]
                     depthDelta[index] = lightZ * t
                     coneRadius[index] = max(t * coneTangent, MIN_CONE_RADIUS)
                 }
@@ -152,6 +162,7 @@ class ReferenceCpuProceduralMmsiRenderer(
                 return ShadowKernel(
                     offsetX = offsetX,
                     offsetY = offsetY,
+                    indexDelta = indexDelta,
                     depthDelta = depthDelta,
                     coneRadius = coneRadius,
                 )
