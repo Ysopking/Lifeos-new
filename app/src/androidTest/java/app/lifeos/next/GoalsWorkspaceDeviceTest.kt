@@ -119,7 +119,14 @@ class GoalsWorkspaceDeviceTest {
         if (boot.status == KernelBootstrapStatus.FAILED) {
             error("Kernel boot failed before Goals workspace proof: ${boot.failureMessage ?: "unknown"}")
         }
-        assertTrue("Kernel must restore goal plans before Goals workspace proof", boot.ready)
+        assertTrue("Kernel critical runtime must be ready before Goals workspace proof", boot.ready)
+        val warm = withTimeout(30_000) {
+            app.warmStartupReport.first { report ->
+                report != null &&
+                    LifeOsStartupStage.DURABLE_GOALS in report.completedStages
+            }
+        }
+        checkNotNull(warm)
     }
 
     private fun fixtureState(): app.lifeos.core.runtime.goal.GoalPlanRuntimeState {

@@ -117,10 +117,13 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     private lateinit var sharedFileEvidenceMigration: SharedFileEvidenceMigrationCoordinator
     private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutableStartupState = MutableStateFlow(LifeOsProcessStartupState.starting())
+    private val mutableWarmStartupReport = MutableStateFlow<LifeOsWarmStartupReport?>(null)
     private val mutableSelfObservationAnalysis =
         MutableStateFlow<SelfObservationAnalysisState?>(null)
 
     override val startupState: StateFlow<LifeOsProcessStartupState> = mutableStartupState.asStateFlow()
+    internal val warmStartupReport: StateFlow<LifeOsWarmStartupReport?> =
+        mutableWarmStartupReport.asStateFlow()
     val selfObservationAnalysis: StateFlow<SelfObservationAnalysisState?> =
         mutableSelfObservationAnalysis.asStateFlow()
 
@@ -222,6 +225,7 @@ class LifeOsApplication : Application(), LifeOsProcessStartupStateReader {
     }
 
     private suspend fun applyWarmInstall(installed: ProcessRuntimeWarmInstallResult) {
+        mutableWarmStartupReport.value = installed.startupReport
         installed.selfHealingRuntime?.let { selfHealingRuntime = it }
         installed.escalationRuntime?.let { escalationRuntime = it }
         mutableStartupState.value = LifeOsStartupStateProjector.projectWarmCompletion(
