@@ -121,6 +121,24 @@ class MetaRealizationShadowRuntimeTest {
     }
 
     @Test
+    fun `projection closure is derived on demand from bounded shadow history`() = runTest {
+        val runtime = MetaRealizationShadowRuntime(historyCapacity = 8)
+
+        runtime.observe(snapshot(T0, "world:x"))
+        runtime.observe(snapshot(T0.plusSeconds(1), "world:a"))
+        runtime.observe(snapshot(T0.plusSeconds(2), "world:x"))
+        runtime.observe(snapshot(T0.plusSeconds(3), "world:b"))
+
+        val closure = requireNotNull(
+            runtime.projectionClosure(RealizationComponentKind.PRODUCTIVE_WORLD)
+        )
+
+        assertEquals(ProjectionClosureStatus.NOT_CLOSED, closure.status)
+        assertFalse(closure.autonomousProjectionEstablished)
+        runtime.close()
+    }
+
+    @Test
     fun `registry publishes exactly the installed shadow runtime`() {
         val runtime = MetaRealizationShadowRuntime()
 

@@ -87,6 +87,8 @@ class MetaRealizationShadowRuntime(
     }
 
     private val mutex = Mutex()
+    private val projectionHistoryAnalyzer =
+        MetaRealizationProjectionHistoryAnalyzer()
     private val submissions = Channel<SelfStateProjectionResult>(capacity = submissionCapacity)
     private val rejectedSubmissions = AtomicLong(0L)
     private val history = ArrayDeque<MetaRealizationShadowSnapshot>()
@@ -179,6 +181,22 @@ class MetaRealizationShadowRuntime(
 
     suspend fun history(): List<MetaRealizationShadowSnapshot> =
         mutex.withLock { history.toList() }
+
+    /**
+     * On-demand closure analysis. It snapshots the bounded shadow history under the mutex and
+     * performs the CPU work after releasing the productive shadow state lock.
+     */
+    suspend fun projectionClosure(
+        componentKind: RealizationComponentKind,
+        projectionId: String = "meta-shadow:${componentKind.name.lowercase()}",
+    ): ProjectionClosureResult? {
+        val snapshotHistory = mutex.withLock { history.toList() }
+        return projectionHistoryAnalyzer.analyze(
+            history = snapshotHistory,
+            componentKind = componentKind,
+            projectionId = projectionId,
+        )
+    }
 
     fun close() {
         submissions.close()
