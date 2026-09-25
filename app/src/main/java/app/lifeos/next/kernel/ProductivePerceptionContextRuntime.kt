@@ -77,9 +77,36 @@ internal class ProductivePerceptionContextRuntime(
     private val coverageMutex = Mutex()
     private val coverageProfiles = linkedMapOf<String, SensorAttentionCoverageProfile>()
     private var latestWorldGaps: List<WorldGap> = emptyList()
-    private var hardwareBridge: AndroidHardwareSensorBridge? = null
-    private var notificationBridge: LiveNotificationSensorBridge? = null
-    private var appUsageBridge: AndroidAppUsageSensorBridge? = null
+    private val sensorTargets = linkedMapOf<SensorId, ProductiveSensorAttentionTarget>()
+    private val sensorTargetOwners = linkedMapOf<SensorId, Any>()
+    private var requiredHardwareSensorId: SensorId? = null
+
+    /**
+     * Registers one productive sensor target behind the generic B485 attention boundary.
+     *
+     * Source identity is retained only to preserve idempotent process composition. The target owns
+     * no observation grant and no effect authority; those remain in the existing policy layers.
+     */
+    private suspend fun attachTarget(
+        owner: Any,
+        target: ProductiveSensorAttentionTarget,
+    ): Boolean {
+        val sensorId = target.descriptor.sensorId
+        val currentOwner = sensorTargetOwners[sensorId]
+        if (currentOwner === owner) return false
+        require(currentOwner == null) {
+            "Productive perception runtime cannot replace attached sensor target: $sensorId"
+        }
+        require(sensorTargets[sensorId] == null) {
+            "Productive perception runtime already has sensor target: $sensorId"
+        }
+
+        sensorRegistry.register(target.descriptor)
+        registerCoverage(target.coverage)
+        sensorTargets[sensorId] = target
+        sensorTargetOwners[sensorId] = owner
+        return true
+    }
 
     /**
      * Registers the concrete hardware bridge contract without starting physical acquisition.
@@ -88,13 +115,17 @@ internal class ProductivePerceptionContextRuntime(
     suspend fun attachHardwareBridge(
         bridge: AndroidHardwareSensorBridge,
     ) {
-        val current = hardwareBridge
-        require(current == null || current === bridge) {
-            "Productive perception runtime cannot replace an attached hardware bridge"
+        val attached = attachTarget(
+            owner = bridge,
+            target = ProductiveSensorAttentionTarget(
+                descriptor = bridge.descriptor,
+                coverage = bridge.attentionCoverage,
+                applyAttention = { mode -> bridge.applyAttention(mode) },
+            ),
+        )
+        if (attached) {
+            requiredHardwareSensorId = bridge.descriptor.sensorId
         }
-        sensorRegistry.register(bridge.descriptor)
-        registerCoverage(bridge.attentionCoverage)
-        hardwareBridge = bridge
     }
 
     /**
@@ -104,13 +135,16 @@ internal class ProductivePerceptionContextRuntime(
     suspend fun attachNotificationBridge(
         bridge: LiveNotificationSensorBridge,
     ) {
-        val current = notificationBridge
-        if (current === bridge) return
-        require(current == null) {
-            "Productive perception runtime cannot replace an attached notification bridge"
-        }
-        sensorRegistry.register(bridge.descriptor)
-        registerCoverage(bridge.attentionCoverage)
+        val attached = attachTarget(
+            owner = bridge,
+            target = ProductiveSensorAttentionTarget(
+                descriptor = bridge.descriptor,
+                coverage = bridge.attentionCoverage,
+                applyAttention = bridge::applyAttention,
+            ),
+        )
+        if (!attached) return
+
         sensorRegistry.updateHealth(
             bridge.descriptor.sensorId,
             SensorHealthState.UNAVAILABLE,
@@ -123,7 +157,6 @@ internal class ProductivePerceptionContextRuntime(
                 failure = failure,
             )
         }
-        notificationBridge = bridge
         LiveNotificationPhotonIngress.install(bridge)
     }
 
@@ -134,13 +167,18 @@ internal class ProductivePerceptionContextRuntime(
     suspend fun attachAppUsageBridge(
         bridge: AndroidAppUsageSensorBridge,
     ) {
-        val current = appUsageBridge
-        if (current === bridge) return
-        require(current == null) {
-            "Productive perception runtime cannot replace an attached app-usage bridge"
-        }
-        sensorRegistry.register(bridge.descriptor)
-        registerCoverage(bridge.attentionCoverage)
+        val attached = attachTarget(
+            owner = bridge,
+            target = ProductiveSensorAttentionTarget(
+                descriptor = bridge.descriptor,
+                coverage = bridge.attentionCoverage,
+                applyAttention = bridge::applyAttention,
+                start = { bridge.start() },
+                stop = { bridge.stop() },
+            ),
+        )
+        if (!attached) return
+
         bridge.bindHealthReporter { health, failure ->
             updateSensorHealth(
                 sensorId = bridge.descriptor.sensorId,
@@ -158,7 +196,6 @@ internal class ProductivePerceptionContextRuntime(
                 "usage-access-not-granted"
             },
         )
-        appUsageBridge = bridge
     }
 
     /**
@@ -166,9 +203,13 @@ internal class ProductivePerceptionContextRuntime(
      * SUSPENDED until their lifecycle reports HEALTHY.
      */
     suspend fun start(): List<SensorAttentionDecision> {
-        requireNotNull(hardwareBridge) {
+        val hardwareSensorId = requireNotNull(requiredHardwareSensorId) {
             "Productive perception runtime requires the hardware bridge before start"
         }
+        require(sensorTargets.containsKey(hardwareSensorId)) {
+            "Required productive hardware sensor target is not registered"
+        }
+
         val snapshot = coverageMutex.withLock {
             latestWorldGaps.toList() to
                 coverageProfiles.values.sortedBy { it.sensorId.value }
@@ -177,7 +218,11 @@ internal class ProductivePerceptionContextRuntime(
             gaps = snapshot.first,
             coverage = snapshot.second,
         ).decisions
-        appUsageBridge?.start()
+
+        sensorTargets.values
+            .sortedBy { it.descriptor.sensorId.value }
+            .forEach { target -> target.start() }
+
         return decisions
     }
 
@@ -190,20 +235,9 @@ internal class ProductivePerceptionContextRuntime(
     ): List<SensorAttentionDecision> {
         val decisions = attentionRuntime.apply(demands)
 
-        hardwareBridge?.let { bridge ->
-            decisions
-                .firstOrNull { it.sensorId == bridge.descriptor.sensorId }
-                ?.let { decision -> bridge.applyAttention(decision.mode) }
-        }
-        notificationBridge?.let { bridge ->
-            decisions
-                .firstOrNull { it.sensorId == bridge.descriptor.sensorId }
-                ?.let { decision -> bridge.applyAttention(decision.mode) }
-        }
-        appUsageBridge?.let { bridge ->
-            decisions
-                .firstOrNull { it.sensorId == bridge.descriptor.sensorId }
-                ?.let { decision -> bridge.applyAttention(decision.mode) }
+        decisions.forEach { decision ->
+            sensorTargets[decision.sensorId]
+                ?.applyAttention(decision.mode)
         }
         return decisions
     }

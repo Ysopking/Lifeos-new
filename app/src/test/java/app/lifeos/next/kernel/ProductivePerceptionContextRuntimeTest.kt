@@ -206,6 +206,34 @@ class ProductivePerceptionContextRuntimeTest {
     }
 
     @Test
+    fun productiveSensorTargetCarriesSchedulingOnly() {
+        val target = ProductiveSensorAttentionTarget(
+            descriptor = descriptor,
+            coverage = SensorAttentionCoverageProfile(
+                sensorId = sensorId,
+                stateDimensions = listOf(
+                    SensorStateDimensionSelector(
+                        SensorStateDimensionSelectorType.EXACT,
+                        "test.dimension",
+                    )
+                ),
+                informationGainMicros = 1L,
+                goalRelevanceMicros = 1L,
+                verificationValueMicros = 1L,
+                energyCostMicros = 1L,
+                privacyCostMicros = 1L,
+                latencyCostMicros = 1L,
+                resourceCostMicros = 1L,
+            ),
+            applyAttention = {},
+        )
+
+        assertFalse(target.observationGrantAuthority)
+        assertFalse(target.effectAuthority)
+        assertEquals(sensorId, target.coverage.sensorId)
+    }
+
+    @Test
     fun appUsageBridgeRegistersCoverageAndReplansWhenOwnerGrantsPlatformAccess() = runTest {
         val registry = AppSensorRegistry()
         val runtime = ProductivePerceptionContextRuntime(
