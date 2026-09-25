@@ -206,6 +206,34 @@ class ProductivePerceptionContextRuntimeTest {
     }
 
     @Test
+    fun productiveSensorTargetCarriesSchedulingOnly() {
+        val target = ProductiveSensorAttentionTarget(
+            descriptor = descriptor,
+            coverage = SensorAttentionCoverageProfile(
+                sensorId = sensorId,
+                stateDimensions = listOf(
+                    SensorStateDimensionSelector(
+                        SensorStateDimensionSelectorType.EXACT,
+                        "test.dimension",
+                    )
+                ),
+                informationGainMicros = 1L,
+                goalRelevanceMicros = 1L,
+                verificationValueMicros = 1L,
+                energyCostMicros = 1L,
+                privacyCostMicros = 1L,
+                latencyCostMicros = 1L,
+                resourceCostMicros = 1L,
+            ),
+            applyAttention = {},
+        )
+
+        assertFalse(target.observationGrantAuthority)
+        assertFalse(target.effectAuthority)
+        assertEquals(sensorId, target.coverage.sensorId)
+    }
+
+    @Test
     fun appUsageBridgeRegistersCoverageAndReplansWhenOwnerGrantsPlatformAccess() = runTest {
         val registry = AppSensorRegistry()
         val runtime = ProductivePerceptionContextRuntime(
@@ -270,6 +298,57 @@ class ProductivePerceptionContextRuntimeTest {
         )
         assertEquals(false, update.observationGrantAuthority)
         assertEquals(false, update.effectAuthority)
+    }
+
+    @Test
+    fun appContentBridgeStartsUnavailableThenReplansOnlyAfterServiceConnection() = runTest {
+        val registry = AppSensorRegistry()
+        val runtime = ProductivePerceptionContextRuntime(
+            ownerObservationPolicy = OwnerObservationPolicyLedger(EmptyPolicyRepository()),
+            sensorRegistry = registry,
+        )
+        val bridge = AndroidSemanticAppContentSensorBridge(
+            AppContentBatchCommitter { _, _, _, _ -> Unit }
+        )
+
+        try {
+            runtime.attachAppContentBridge(bridge)
+
+            assertEquals(
+                SensorHealthState.UNAVAILABLE,
+                registry.state(bridge.descriptor.sensorId)?.health,
+            )
+            assertEquals(
+                SensorAttentionMode.SUSPENDED,
+                registry.state(bridge.descriptor.sensorId)?.mode,
+            )
+
+            bridge.connected()
+
+            assertEquals(
+                SensorHealthState.HEALTHY,
+                registry.state(bridge.descriptor.sensorId)?.health,
+            )
+
+            val update = runtime.applyWorldGaps(
+                listOf(
+                    WorldGap.Perception(
+                        domain = FieldDomainId("app"),
+                        missingDimensions = setOf(StateDimensionId("app.ui.current")),
+                        reason = "semantic-app-ui-missing",
+                    )
+                )
+            )
+
+            assertEquals(
+                SensorAttentionMode.FOCUSED,
+                registry.state(bridge.descriptor.sensorId)?.mode,
+            )
+            assertFalse(update.observationGrantAuthority)
+            assertFalse(update.effectAuthority)
+        } finally {
+            ProductiveSemanticAppContentIngress.clearForTests()
+        }
     }
 
     @Test

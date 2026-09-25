@@ -32,6 +32,15 @@ class SemanticAccessibilityRuntimeTest {
     )
 
     @Test
+    fun ungrantedProjectionCannotSelfAuthorizeObservation() {
+        val observation = boundary.project(snapshot)
+
+        assertEquals(null, observation.observationGrantId)
+        assertEquals(RepresentationLevel.PROJECTED, observation.realization.representation)
+        assertEquals(ObservationAuthorityClass.UI_OBSERVATION, observation.authority)
+    }
+
+    @Test
     fun semanticUiObservationRemainsProjectedAndLowAuthority() {
         val observation = boundary.observe(
             snapshot,
