@@ -8,7 +8,7 @@ import kotlin.test.assertTrue
 
 class MetaInformationActionBridgeTest {
     @Test
-    fun unresolvedPairsReuseExistingInformationPlannerWithoutExecutionAuthority() {
+    fun unresolvedPairsReuseExistingPlannerWithoutExecutionAuthority() {
         val pair = CandidatePair("a", "b")
         val inference = MetaInferenceResult(
             sourceGroupFingerprint = "group",
@@ -27,7 +27,6 @@ class MetaInformationActionBridgeTest {
             deformation = null,
             fingerprint = "inference",
         )
-
         val candidates = MetaInformationActionBridge().candidates(inference)
 
         assertEquals(

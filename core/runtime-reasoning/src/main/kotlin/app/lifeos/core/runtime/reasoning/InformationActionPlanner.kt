@@ -277,14 +277,14 @@ class InformationActionPlanner(
             .filter { it.kind in allowedKinds }
             .map { candidate ->
                 val score = score(candidate)
-                val gapFingerprint = StableFieldIds.fingerprint(
+                val requestGapFingerprint = StableFieldIds.fingerprint(
                     "information-action-gap/v1",
                     gapFingerprint,
                     candidate.interventionId,
                 )
                 val request = EvidenceActionRequest.create(
                     sourceCycleId = sourceCycleId,
-                    gapFingerprint = gapFingerprint,
+                    gapFingerprint = requestGapFingerprint,
                     kind = candidate.kind,
                     rationale = candidate.rationale,
                     budgetFingerprint = budgetFingerprint,
