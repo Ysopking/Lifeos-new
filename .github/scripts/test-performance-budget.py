@@ -31,25 +31,29 @@ EVIDENCE = {
 
 MEASUREMENTS = [
     {
-        "run_id": 1001, "attempt": 1, "artifact_id": 3001, "artifact_sha256": "a" * 64,
+        "run_id": 1001, "attempt": 1, "head_sha": "3" * 40, "tree_sha": "2" * 40,
+        "artifact_id": 3001, "artifact_sha256": "a" * 64,
         "cold_total_ms": 400, "cold_wait_ms": 430, "sample_count": 2, "median_ms": 800, "max_ms": 1400,
     },
     {
-        "run_id": 1001, "attempt": 2, "artifact_id": 3002, "artifact_sha256": "b" * 64,
+        "run_id": 1002, "attempt": 1, "head_sha": "4" * 40, "tree_sha": "2" * 40,
+        "artifact_id": 3002, "artifact_sha256": "b" * 64,
         "cold_total_ms": 420, "cold_wait_ms": 455, "sample_count": 2, "median_ms": 875, "max_ms": 1500,
     },
     {
-        "run_id": 1001, "attempt": 3, "artifact_id": 3003, "artifact_sha256": "c" * 64,
+        "run_id": 1003, "attempt": 1, "head_sha": "5" * 40, "tree_sha": "2" * 40,
+        "artifact_id": 3003, "artifact_sha256": "c" * 64,
         "cold_total_ms": 410, "cold_wait_ms": 440, "sample_count": 2, "median_ms": 850, "max_ms": 1450,
     },
 ]
 
 BUDGET = {
-    "schema_version": 1,
+    "schema_version": 2,
     "blocking": True,
     "source": "android-emulator-recovery",
     "baseline": {
         "head_sha": "1" * 40,
+        "tree_sha": "2" * 40,
         "derivation": "upper=max_observed+(max_observed-min_observed)",
         "measurements": MEASUREMENTS,
     },
@@ -106,9 +110,19 @@ rejects(
     "required-samples-missing",
 )
 rejects(lambda e, b: b.__setitem__("blocking", False), "budget-not-blocking")
-rejects(lambda e, b: b.__setitem__("schema_version", 2), "budget-schema")
+rejects(lambda e, b: b.__setitem__("schema_version", 1), "budget-schema")
 rejects(lambda e, b: b["baseline"].__setitem__("measurements", b["baseline"]["measurements"][:2]), "baseline-measurements-min-3")
-rejects(lambda e, b: b["baseline"]["measurements"][2].__setitem__("run_id", 1002), "baseline-run-id-mismatch")
+rejects(
+    lambda e, b: b["baseline"]["measurements"][2].__setitem__("tree_sha", "9" * 40),
+    "baseline-tree-sha-mismatch",
+)
+rejects(
+    lambda e, b: (
+        b["baseline"]["measurements"][2].__setitem__("run_id", 1002),
+        b["baseline"]["measurements"][2].__setitem__("attempt", 1),
+    ),
+    "baseline-run-attempt-duplicate",
+)
 rejects(lambda e, b: b["cold_start"].__setitem__("total_ms_max", 999), "cold-total-budget-not-derived")
 rejects(lambda e, b: b["instrumentation"].__setitem__("median_ms_max", 999), "median-budget-not-derived")
 rejects(lambda e, b: e.__setitem__("schema_version", 2), "evidence-schema")

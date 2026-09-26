@@ -1,54 +1,61 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "blocking": true,
   "source": "android-emulator-recovery",
   "baseline": {
-    "head_sha": "e3b2adcea6ee87fd415ec0121a2e2096873c9ef5",
+    "head_sha": "d333107d5155f6fba3bddec1a67dbc5b0413c1ac",
+    "tree_sha": "9b58775fef7a4527c2f8a1f90d61d1fb2ab8f074",
     "derivation": "upper=max_observed+(max_observed-min_observed)",
     "measurements": [
       {
-        "run_id": 35534351228,
+        "run_id": 36214753467,
         "attempt": 1,
-        "artifact_id": 10612363554,
-        "artifact_sha256": "05e7b4b0c747d0e5c022378825f0ad0b9630e304f951408e8cde429ad53bca23",
-        "cold_total_ms": 711,
-        "cold_wait_ms": 713,
+        "head_sha": "dad0956e60edab6a27ce101dd602f65c9ad03782",
+        "tree_sha": "9b58775fef7a4527c2f8a1f90d61d1fb2ab8f074",
+        "artifact_id": 10896599606,
+        "artifact_sha256": "0d56399c56a461973d407f7e05a3b7ff56ded438ab91ae030195f8f9baeeb8d1",
+        "cold_total_ms": 765,
+        "cold_wait_ms": 766,
         "sample_count": 40,
-        "median_ms": 1593,
-        "max_ms": 25904
+        "median_ms": 2380,
+        "max_ms": 28381
       },
       {
-        "run_id": 35534351228,
+        "run_id": 36214753467,
         "attempt": 2,
-        "artifact_id": 10612044759,
-        "artifact_sha256": "5c8192bc17f6d9e5bd452e108b27397bac9e9a05536cdda771263f0bc6989ea9",
-        "cold_total_ms": 627,
-        "cold_wait_ms": 630,
+        "head_sha": "dad0956e60edab6a27ce101dd602f65c9ad03782",
+        "tree_sha": "9b58775fef7a4527c2f8a1f90d61d1fb2ab8f074",
+        "artifact_id": 10896996661,
+        "artifact_sha256": "e9817141b346ef1e195d2609ac6205d603cb94eeb714be39ca5c13a380f0020c",
+        "cold_total_ms": 666,
+        "cold_wait_ms": 668,
         "sample_count": 40,
-        "median_ms": 1729,
-        "max_ms": 28278
+        "median_ms": 1934,
+        "max_ms": 25836
       },
       {
-        "run_id": 35534351228,
-        "attempt": 3,
-        "artifact_id": 10612661122,
-        "artifact_sha256": "14bde30e247932d75c58be2ee390fddb69b9adf2d7fc065f8731fdf28834f3f6",
-        "cold_total_ms": 692,
-        "cold_wait_ms": 695,
+        "run_id": 36215148632,
+        "attempt": 1,
+        "head_sha": "d333107d5155f6fba3bddec1a67dbc5b0413c1ac",
+        "tree_sha": "9b58775fef7a4527c2f8a1f90d61d1fb2ab8f074",
+        "artifact_id": 10897660913,
+        "artifact_sha256": "9fa723143e9e0d6dd8f6b0c7c73e9996e399799264501ea283a46a28605e22af",
+        "cold_total_ms": 789,
+        "cold_wait_ms": 791,
         "sample_count": 40,
-        "median_ms": 1589,
-        "max_ms": 25141
+        "median_ms": 2234,
+        "max_ms": 32160
       }
     ]
   },
   "cold_start": {
-    "total_ms_max": 795,
-    "wait_ms_max": 796
+    "total_ms_max": 912,
+    "wait_ms_max": 914
   },
   "instrumentation": {
     "sample_count_min": 40,
-    "median_ms_max": 1869,
-    "max_ms_max": 31415,
+    "median_ms_max": 2826,
+    "max_ms_max": 38484,
     "required_sample_files": [
       "deepsearch-encrypted-recovery-corruption.txt",
       "field-snapshot-atomic-recovery.txt",

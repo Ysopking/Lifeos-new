@@ -50,7 +50,7 @@ def derived_upper(values: list[int]) -> int:
 def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
     if evidence.get("schema_version") != 1:
         fail("evidence-schema")
-    if budget.get("schema_version") != 1:
+    if budget.get("schema_version") != 2:
         fail("budget-schema")
     if budget.get("blocking") is not True:
         fail("budget-not-blocking")
@@ -65,6 +65,9 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
     head_sha = require_string(baseline.get("head_sha"), "baseline-head-sha")
     if len(head_sha) != 40 or any(ch not in "0123456789abcdef" for ch in head_sha.lower()):
         fail("baseline-head-sha-invalid")
+    tree_sha = require_string(baseline.get("tree_sha"), "baseline-tree-sha")
+    if len(tree_sha) != 40 or any(ch not in "0123456789abcdef" for ch in tree_sha.lower()):
+        fail("baseline-tree-sha-invalid")
     if baseline.get("derivation") != "upper=max_observed+(max_observed-min_observed)":
         fail("baseline-derivation")
 
@@ -72,8 +75,7 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
     if not isinstance(measurements, list) or len(measurements) < 3:
         fail("baseline-measurements-min-3")
 
-    seen_runs: set[int] = set()
-    seen_attempts: set[int] = set()
+    seen_run_attempts: set[tuple[int, int]] = set()
     seen_artifacts: set[int] = set()
     cold_totals: list[int] = []
     cold_waits: list[int] = []
@@ -85,17 +87,38 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
         if not isinstance(measurement, dict):
             fail("baseline-measurement-not-object")
         run_id = require_int(measurement.get("run_id"), "baseline-run-id", 1)
-        seen_runs.add(run_id)
         attempt = require_int(measurement.get("attempt"), "baseline-attempt", 1)
+        measurement_head_sha = require_string(
+            measurement.get("head_sha"),
+            "baseline-measurement-head-sha",
+        )
+        if len(measurement_head_sha) != 40 or any(
+            ch not in "0123456789abcdef" for ch in measurement_head_sha.lower()
+        ):
+            fail("baseline-measurement-head-sha-invalid")
+        measurement_tree_sha = require_string(
+            measurement.get("tree_sha"),
+            "baseline-measurement-tree-sha",
+        )
+        if len(measurement_tree_sha) != 40 or any(
+            ch not in "0123456789abcdef" for ch in measurement_tree_sha.lower()
+        ):
+            fail("baseline-measurement-tree-sha-invalid")
+        if measurement_tree_sha != tree_sha:
+            fail(
+                "baseline-tree-sha-mismatch:"
+                f"expected={tree_sha}:actual={measurement_tree_sha}"
+            )
+        run_attempt = (run_id, attempt)
         artifact_id = require_int(measurement.get("artifact_id"), "baseline-artifact-id", 1)
         digest = require_string(measurement.get("artifact_sha256"), "baseline-artifact-sha256")
         if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest.lower()):
             fail("baseline-artifact-sha256-invalid")
-        if attempt in seen_attempts:
-            fail(f"baseline-attempt-duplicate:{attempt}")
+        if run_attempt in seen_run_attempts:
+            fail(f"baseline-run-attempt-duplicate:{run_id}:{attempt}")
         if artifact_id in seen_artifacts:
             fail(f"baseline-artifact-duplicate:{artifact_id}")
-        seen_attempts.add(attempt)
+        seen_run_attempts.add(run_attempt)
         seen_artifacts.add(artifact_id)
         cold_totals.append(require_int(measurement.get("cold_total_ms"), "baseline-cold-total"))
         cold_waits.append(require_int(measurement.get("cold_wait_ms"), "baseline-cold-wait"))
@@ -103,8 +126,6 @@ def check(evidence: dict[str, Any], budget: dict[str, Any]) -> None:
         maxima.append(require_int(measurement.get("max_ms"), "baseline-max"))
         sample_counts.append(require_int(measurement.get("sample_count"), "baseline-sample-count", 1))
 
-    if len(seen_runs) != 1:
-        fail(f"baseline-run-id-mismatch:{sorted(seen_runs)}")
 
     cold_budget = budget.get("cold_start")
     timing_budget = budget.get("instrumentation")
