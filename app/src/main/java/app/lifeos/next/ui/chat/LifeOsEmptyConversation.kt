@@ -12,9 +12,9 @@ import androidx.compose.ui.Modifier
 import app.lifeos.next.ui.theme.LifeOsTokens
 
 private val Suggestions = listOf(
-    "Was ist heute wichtig?",
-    "Finde …",
-    "Erstelle …",
+    "Was ist diese Woche wichtig?",
+    "Zeig mir offene Rückfragen.",
+    "Woran soll ich bei meinen Projekten weiterarbeiten?",
 )
 
 @Composable
@@ -31,9 +31,9 @@ fun LifeOsEmptyConversation(
     ) {
         Text(
             text = if (contextReady) {
-                "Was möchtest du tun?"
+                "Was soll LIFEOS für dich tun?"
             } else {
-                "LIFEOS wird vorbereitet …"
+                "Dein Kontext wird aufgebaut …"
             },
             style = MaterialTheme.typography.headlineMedium,
         )

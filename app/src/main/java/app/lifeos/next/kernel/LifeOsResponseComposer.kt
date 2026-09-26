@@ -44,8 +44,8 @@ class LifeOsResponseComposer(
                     result = result,
                     act = LanguageResponseAct.REPORT_SUCCESS,
                     statement = when (language(result)) {
-                        LanguageCode.EN -> "I stored this in the local LIFEOS memory: ${produced.output.photon.content}"
-                        else -> "Ich habe das im lokalen LIFEOS-Gedächtnis gespeichert: ${produced.output.photon.content}"
+                        LanguageCode.EN -> "I stored this locally: ${produced.output.photon.content}"
+                        else -> "Ich habe das lokal gespeichert: ${produced.output.photon.content}"
                     },
                     confidence = produced.output.photon.confidence,
                     semanticTags = setOf("MEMORY"),
@@ -66,7 +66,7 @@ class LifeOsResponseComposer(
                 return generated(
                     result,
                     LanguageResponseAct.REPORT_SUCCESS,
-                    statement(result, "Die geplante Aktion wurde lokal erstellt und als LIFEOS-Photon gespeichert.", "The scheduled action was created locally and stored as a LIFEOS photon."),
+                    statement(result, "Die geplante Aktion wurde lokal angelegt und gespeichert.", "The scheduled action was created and stored locally."),
                     semanticTags = setOf("SCHEDULE"),
                 )
             is LocalScheduleExecutionResult.Blocked ->
@@ -90,14 +90,14 @@ class LifeOsResponseComposer(
                 val fact = if (transformed.ownerReviewCandidateId != null) {
                     statement(
                         result,
-                        "Das Bild wurde lokal verarbeitet. Das Ergebnis wartet in Assets auf deine Freigabe und wird erst danach als LIFEOS-Photon veröffentlicht.",
-                        "The image was processed locally. The result is waiting in Assets for your approval and will only then be published as a LIFEOS photon.",
+                        "Das Bild wurde lokal verarbeitet. Das Ergebnis liegt unter Artefakte und wartet dort auf deine Freigabe.",
+                        "The image was processed locally. The result is available under Artifacts and waits there for your approval.",
                     )
                 } else {
                     statement(
                         result,
-                        "Das Bild wurde lokal verarbeitet und das Ergebnis wieder als LIFEOS-Photon gespeichert.",
-                        "The image was processed locally and the result was stored again as a LIFEOS photon.",
+                        "Das Bild wurde lokal verarbeitet und gespeichert.",
+                        "The image was processed and stored locally.",
                     )
                 }
                 return generated(result, LanguageResponseAct.REPORT_SUCCESS, fact, semanticTags = setOf("IMAGE", "TRANSFORM"))
@@ -176,14 +176,14 @@ class LifeOsResponseComposer(
                 val fact = if (image.value.ownerReviewCandidateId != null) {
                     statement(
                         result,
-                        "Das Bild wurde lokal erzeugt. Es wartet in Assets auf deine Freigabe und wird erst danach als LIFEOS-Photon veröffentlicht.",
-                        "The image was generated locally. It is waiting in Assets for your approval and will only then be published as a LIFEOS photon.",
+                        "Das Bild wurde lokal erzeugt. Du findest es unter Artefakte zur Prüfung und Freigabe.",
+                        "The image was generated locally. You can review and approve it under Artifacts.",
                     )
                 } else {
                     statement(
                         result,
-                        "Das Bild wurde lokal erzeugt und als LIFEOS-Photon gespeichert.",
-                        "The image was generated locally and stored as a LIFEOS photon.",
+                        "Das Bild wurde lokal erzeugt und gespeichert.",
+                        "The image was generated and stored locally.",
                     )
                 }
                 return generated(result, LanguageResponseAct.REPORT_SUCCESS, fact, semanticTags = setOf("IMAGE", "CREATE"))
@@ -223,26 +223,20 @@ class LifeOsResponseComposer(
                 LanguageResponseAct.REPORT_BLOCKED,
                 statement(
                     result,
-                    "Das Ziel wurde verstanden, aber der produktive Provider für $missing fehlt noch. Genesis wählt den kleinsten sicheren Erweiterungspfad; Handoff und ToolWorkshop-/BuildStudio-/Evolution-Status bleiben im Systemstrom nachvollziehbar.",
-                    "The goal was understood, but the productive provider for $missing is still missing. Genesis selects the smallest safe expansion path; handoff and ToolWorkshop/BuildStudio/Evolution status remain traceable in the system stream.",
+                    "Ich habe verstanden, was du erreichen willst. Für $missing fehlt noch eine ausführbare Funktion. LIFEOS bereitet dafür den kleinsten sicheren Erweiterungspfad vor; den technischen Status findest du im Systembereich.",
+                    "I understood the goal. An executable function for $missing is still missing. LIFEOS prepares the smallest safe extension path; technical details remain available in the System area.",
                 ),
                 semanticTags = setOf("CAPABILITY", "GENESIS"),
             )
         }
         val goal = result.effectiveGoal
         if (goal?.intent == IntentType.CONVERSATION) {
-            val topic = goal.objective.substringAfter(": ", goal.objective).trim().take(320)
-            val fact = if (topic.isBlank()) {
+            val utterance = result.source.photon.content.trim().take(320)
+            val fact = utterance.ifBlank {
                 statement(
                     result,
-                    "Der Gesprächskontext ist aktiv. LIFEOS kann die nächste Antwort aus dem aktuellen semantischen Kontext und der verfügbaren lokalen Evidenz ableiten.",
-                    "The conversation context is active. LIFEOS can derive the next response from the current semantic context and available local evidence.",
-                )
-            } else {
-                statement(
-                    result,
-                    "Der Gesprächskontext ist aktiv und dein Anliegen wurde semantisch erfasst: $topic",
-                    "The conversation context is active and your request was captured semantically: $topic",
+                    "Ich bin bereit. Sag mir, was ich als Nächstes tun soll.",
+                    "I am ready. Tell me what you want me to do next.",
                 )
             }
             return generated(
@@ -259,8 +253,8 @@ class LifeOsResponseComposer(
                 LanguageResponseAct.ASSERT,
                 statement(
                     result,
-                    "Die Nachricht wurde verarbeitet und als ${goal.intent.name.lowercase()}-Ziel in LIFEOS übernommen.",
-                    "The message was processed and adopted as a ${goal.intent.name.lowercase()} goal in LIFEOS.",
+                    "Verstanden. Ich habe daraus ein Ziel gemacht und ordne den nächsten sinnvollen Schritt zu.",
+                    "Understood. I turned this into a goal and will determine the next useful step.",
                 ),
                 confidence = goal.confidence,
                 semanticTags = setOf("GOAL"),
@@ -269,7 +263,7 @@ class LifeOsResponseComposer(
             generated(
                 result,
                 LanguageResponseAct.ASSERT,
-                statement(result, "Die Nachricht wurde verarbeitet und im LIFEOS-Gedächtnis verankert.", "The message was processed and anchored in LIFEOS memory."),
+                statement(result, "Verstanden. Ich habe die Information lokal gespeichert.", "Understood. I stored the information locally."),
                 semanticTags = setOf("MEMORY"),
             )
         }

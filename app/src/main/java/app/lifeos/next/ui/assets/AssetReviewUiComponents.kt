@@ -27,6 +27,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import app.lifeos.core.runtime.artifact.ArtifactKind
+import app.lifeos.core.runtime.artifact.OwnerAssetReviewCandidate
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewDecision
 import app.lifeos.core.runtime.artifact.OwnerAssetReviewRecord
 import app.lifeos.next.AssetReviewFilter
@@ -58,9 +59,17 @@ internal fun AssetReviewSummaryCard(
             if (candidate.kind == ArtifactKind.IMAGE) {
                 AssetImagePreview(previewState, 180)
             } else {
-                candidate.previewText?.lineSequence()?.firstOrNull()?.takeIf { it.isNotBlank() }?.let {
-                    Text(it.take(180), style = MaterialTheme.typography.bodySmall, maxLines = 2)
-                }
+                artifactPreviewText(candidate)
+                    ?.lineSequence()
+                    ?.firstOrNull()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let {
+                        Text(
+                            it.take(220),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 3,
+                        )
+                    }
             }
             val context = listOfNotNull(
                 candidate.participatingModules.takeIf { it.isNotEmpty() }?.let { "${it.size} Module" },
@@ -151,18 +160,64 @@ internal fun AssetReviewPreview(record: OwnerAssetReviewRecord, state: PhotonIma
         AssetImagePreview(state, 420)
         return
     }
-    candidate.previewText?.takeIf { it.isNotBlank() }?.let { preview ->
+    val preview = artifactPreviewText(candidate)
+    if (!preview.isNullOrBlank()) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(if (candidate.kind == ArtifactKind.CODE) "Exakte Code-Revision" else "Vorschau", style = MaterialTheme.typography.titleSmall)
-            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+            Text(
+                if (candidate.kind == ArtifactKind.CODE) {
+                    "Exakte Code-Revision"
+                } else {
+                    "Vorschau"
+                },
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+            ) {
                 SelectionContainer {
                     Text(
                         preview,
                         modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = if (candidate.kind == ArtifactKind.CODE) FontFamily.Monospace else null,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = if (candidate.kind == ArtifactKind.CODE) {
+                            FontFamily.Monospace
+                        } else {
+                            null
+                        },
                     )
                 }
+            }
+        }
+    } else {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("Vorschau", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = buildString {
+                        append(assetKindLabel(candidate.kind))
+                        append(" · ")
+                        append(candidate.targetMimeType)
+                        candidate.materializedAsset?.let {
+                            append(" · ")
+                            append(it.byteCount)
+                            append(" Byte")
+                        }
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Für diese Revision liegt keine lesbare Textvorschau vor. Die technische Revision bleibt vollständig erhalten.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -233,21 +288,21 @@ private fun AssetImagePreview(state: PhotonImagePreviewState?, maxHeight: Int) {
 }
 
 internal fun filterLabel(filter: AssetReviewFilter, state: OwnerAssetReviewUiState): String = when (filter) {
-    AssetReviewFilter.PENDING -> "Offen ${state.pendingCount}"
-    AssetReviewFilter.APPROVED -> "Freigegeben ${state.approvedCount}"
-    AssetReviewFilter.FEEDBACK -> "Rückmeldung ${state.feedbackCount}"
+    AssetReviewFilter.PENDING -> "Neu ${state.pendingCount}"
+    AssetReviewFilter.APPROVED -> "Fertig ${state.approvedCount}"
+    AssetReviewFilter.FEEDBACK -> "Überarbeiten ${state.feedbackCount}"
 }
 
 internal fun emptyTitle(filter: AssetReviewFilter): String = when (filter) {
-    AssetReviewFilter.PENDING -> "Alles geprüft"
-    AssetReviewFilter.APPROVED -> "Noch nichts freigegeben"
-    AssetReviewFilter.FEEDBACK -> "Noch keine Rückmeldungen"
+    AssetReviewFilter.PENDING -> "Nichts Neues"
+    AssetReviewFilter.APPROVED -> "Noch kein fertiges Artefakt"
+    AssetReviewFilter.FEEDBACK -> "Nichts zu überarbeiten"
 }
 
 internal fun emptyBody(filter: AssetReviewFilter): String = when (filter) {
-    AssetReviewFilter.PENDING -> "Aktuell wartet kein neues Asset auf deine Entscheidung."
-    AssetReviewFilter.APPROVED -> "Freigegebene Assets erscheinen hier mit ihrer Entscheidungshistorie."
-    AssetReviewFilter.FEEDBACK -> "Änderungswünsche und abgelehnte Assets werden hier gesammelt."
+    AssetReviewFilter.PENDING -> "Aktuell wartet kein neues Bild, Dokument oder Text auf deine Prüfung."
+    AssetReviewFilter.APPROVED -> "Freigegebene Artefakte erscheinen hier mit ihrer Entscheidungshistorie."
+    AssetReviewFilter.FEEDBACK -> "Änderungswünsche und abgelehnte Revisionen werden hier gesammelt."
 }
 
 internal fun assetKindLabel(kind: ArtifactKind): String = when (kind) {
@@ -267,3 +322,23 @@ internal fun reviewStatus(record: OwnerAssetReviewRecord): String = when (record
 
 internal val ASSET_REVIEW_TIME: DateTimeFormatter =
     DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm").withZone(ZoneId.systemDefault())
+
+
+private fun artifactPreviewText(candidate: OwnerAssetReviewCandidate): String? =
+    candidate.previewText
+        ?.takeIf { it.isNotBlank() }
+        ?: candidate.stagedPhotons
+            .asSequence()
+            .filter { photon ->
+                photon.mimeType.startsWith("text/") ||
+                    photon.mimeType.contains("json") ||
+                    photon.mimeType.contains("xml") ||
+                    photon.mimeType.contains("markdown") ||
+                    photon.mimeType.contains("document") ||
+                    photon.mimeType.contains("report")
+            }
+            .map { it.content.trim() }
+            .firstOrNull { it.isNotBlank() }
+            ?.take(MAX_ARTIFACT_PREVIEW_CHARS)
+
+private const val MAX_ARTIFACT_PREVIEW_CHARS = 24_000

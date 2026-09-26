@@ -11,16 +11,16 @@ class AssetReviewUiComponentsTest {
     fun `overview labels use owner facing language`() {
         val state = OwnerAssetReviewUiState()
 
-        assertEquals("Offen 0", filterLabel(AssetReviewFilter.PENDING, state))
-        assertEquals("Freigegeben 0", filterLabel(AssetReviewFilter.APPROVED, state))
-        assertEquals("Rückmeldung 0", filterLabel(AssetReviewFilter.FEEDBACK, state))
+        assertEquals("Neu 0", filterLabel(AssetReviewFilter.PENDING, state))
+        assertEquals("Fertig 0", filterLabel(AssetReviewFilter.APPROVED, state))
+        assertEquals("Überarbeiten 0", filterLabel(AssetReviewFilter.FEEDBACK, state))
     }
 
     @Test
     fun `empty states explain the selected review bucket`() {
-        assertEquals("Alles geprüft", emptyTitle(AssetReviewFilter.PENDING))
-        assertEquals("Noch nichts freigegeben", emptyTitle(AssetReviewFilter.APPROVED))
-        assertEquals("Noch keine Rückmeldungen", emptyTitle(AssetReviewFilter.FEEDBACK))
+        assertEquals("Nichts Neues", emptyTitle(AssetReviewFilter.PENDING))
+        assertEquals("Noch kein fertiges Artefakt", emptyTitle(AssetReviewFilter.APPROVED))
+        assertEquals("Nichts zu überarbeiten", emptyTitle(AssetReviewFilter.FEEDBACK))
     }
 
     @Test

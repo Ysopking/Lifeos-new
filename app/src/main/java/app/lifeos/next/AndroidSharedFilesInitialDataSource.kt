@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Environment
 import android.webkit.MimeTypeMap
 import app.lifeos.core.model.StableCognitiveIds
+import app.lifeos.next.fileingest.FileContentParserRegistry
 import app.lifeos.core.runtime.life.InitialDataSourceAdapter
 import app.lifeos.core.runtime.life.InitialDataSourcePage
 import app.lifeos.core.runtime.life.InitialDataSourceStatus
@@ -138,7 +139,7 @@ internal class AndroidSharedFilesInitialDataSource(
 
     companion object {
         const val SOURCE_ID = "android-shared-files"
-        const val ADAPTER_VERSION = "android-shared-files/v2"
+        const val ADAPTER_VERSION = "android-shared-files/v3"
     }
 }
 
@@ -184,6 +185,14 @@ internal object AndroidFilesystemMetadataPager {
                 continue
             }
             if (file.isDirectory) {
+                if (
+                    after.isNotEmpty() &&
+                    current.relativePath < after &&
+                    !after.startsWith(current.relativePath + "/")
+                ) {
+                    // Lexicographically complete subtree lies before the durable cursor.
+                    continue
+                }
                 val canonical = runCatching { file.canonicalPath }.getOrNull()
                 if (canonical == null || !insideRoot(rootPath, canonical) || !visitedDirectories.add(canonical)) {
                     if (current.relativePath > after) {
@@ -239,8 +248,20 @@ internal object AndroidFilesystemMetadataPager {
             "android-filesystem-file-identity/v1",
             relativePath,
         )
+        val extraction = contentParsers.extract(
+            file = file,
+            classification = classification,
+            maxOutputBytes = MAX_EXTRACTED_CONTENT_BYTES,
+        )
+        val contentFingerprint = extraction.text?.let {
+            StableCognitiveIds.fingerprint(
+                "android-filesystem-extracted-content/v1",
+                extraction.parserVersion.orEmpty(),
+                it,
+            )
+        }
         val state = StableCognitiveIds.fingerprint(
-            "android-filesystem-file-state/v1",
+            "android-filesystem-file-state/v2",
             identity,
             file.length().toString(),
             file.lastModified().toString(),
@@ -248,15 +269,27 @@ internal object AndroidFilesystemMetadataPager {
             classification.category.name,
             classification.whatsapp.toString(),
             classification.suspectedEncrypted.toString(),
+            extraction.state.name,
+            extraction.parserVersion.orEmpty(),
+            contentFingerprint.orEmpty(),
         )
         val parent = relativePath.substringBeforeLast('/', "")
         val extension = file.name.substringAfterLast('.', "").lowercase()
+        val fileEntity = "file-$identity"
+        val parentIdentity = parent.takeIf { it.isNotBlank() }?.let {
+            StableCognitiveIds.fingerprint("android-filesystem-folder-identity/v1", it)
+        }
+        val parentEntity = parentIdentity?.let { "folder-$it" }
         val record = LifeSourceRecord(
             sourceId = AndroidSharedFilesInitialDataSource.SOURCE_ID,
             recordId = "file-$identity-$state",
             observedAt = instantFromMillis(file.lastModified()),
             payload = buildString {
-                appendLine("schema=1")
+                appendLine(
+                    "content_excerpt=" +
+                        safeContent(extraction.text ?: file.name)
+                )
+                appendLine("schema=2")
                 appendLine("file_identity=$identity")
                 appendLine("state_fingerprint=$state")
                 appendLine("relative_path=${safe(relativePath)}")
@@ -270,16 +303,32 @@ internal object AndroidFilesystemMetadataPager {
                 appendLine("category=${classification.category.name}")
                 appendLine("whatsapp=${classification.whatsapp}")
                 appendLine("suspected_encrypted=${classification.suspectedEncrypted}")
-                appendLine("content_hash_state=DEFERRED")
-                append("decode_state=METADATA_ONLY")
+                appendLine("decode_state=${extraction.state.name}")
+                appendLine("parser_id=${extraction.parserId.orEmpty()}")
+                appendLine("parser_version=${extraction.parserVersion.orEmpty()}")
+                appendLine("extracted_chars=${extraction.extractedChars}")
+                append("content_fingerprint=${contentFingerprint.orEmpty()}")
             },
-            mimeType = "application/vnd.lifeos.file-metadata+text",
+            mimeType = "application/vnd.lifeos.file-evidence+text",
             tags = buildSet {
                 add("file")
-                add("file-metadata")
+                add("file-evidence")
                 add("shared-storage")
                 add("file:${classification.category.name.lowercase()}")
                 add("file-identity:$identity")
+                add("document:$fileEntity")
+                add("file-decode:${extraction.state.name.lowercase()}")
+                add("mime:${classification.mimeType}")
+                if (extension.isNotBlank()) add("extension:$extension")
+                extraction.parserId?.let { add("file-parser:$it") }
+                contentFingerprint?.let { add("file-content:$it") }
+                parentEntity?.let {
+                    add("document:$it")
+                    add(
+                        "entity-relationship:CONTAINED_IN|" +
+                            "DOCUMENT:$fileEntity|DOCUMENT:$it"
+                    )
+                }
                 when (classification.category) {
                     AndroidFileCategory.DOCUMENT -> add("document")
                     AndroidFileCategory.ARCHIVE -> add("archive")
@@ -337,8 +386,18 @@ internal object AndroidFilesystemMetadataPager {
         .replace('\r', ' ')
         .trim()
 
+    private fun safeContent(value: String): String = value
+        .replace("\\", "\\\\")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\u0000", "")
+        .trim()
+
     private fun instantFromMillis(value: Long): Instant =
         if (value > 0L) Instant.ofEpochMilli(value) else Instant.EPOCH
+
+    private val contentParsers = FileContentParserRegistry()
+    private const val MAX_EXTRACTED_CONTENT_BYTES = 64 * 1024
 
     private val MEDIA_CATEGORIES = setOf(
         AndroidFileCategory.IMAGE,

@@ -88,9 +88,9 @@ private fun AssetReviewOverview(
         verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.medium),
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.xSmall)) {
-            Text("Asset-Freigaben", style = MaterialTheme.typography.headlineMedium)
+            Text("Artefakte", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "Prüfe neue Ergebnisse, bevor LIFEOS sie veröffentlicht oder weiterverwendet.",
+                "Generierte Bilder, Texte, Dokumente und Berichte ansehen, prüfen und freigeben.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -154,6 +154,9 @@ private fun AssetReviewDetail(
 ) {
     val candidate = record.candidate
     val feedback = state.feedbackDrafts[candidate.id.value].orEmpty()
+    var showTechnicalDetails by rememberSaveable(candidate.id.value) {
+        mutableStateOf(false)
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(
@@ -213,6 +216,21 @@ private fun AssetReviewDetail(
                 onReject = onReject,
             )
         }
-        item { TechnicalEvidence(record) }
+        item {
+            TextButton(
+                onClick = { showTechnicalDetails = !showTechnicalDetails },
+            ) {
+                Text(
+                    if (showTechnicalDetails) {
+                        "Technische Details ausblenden"
+                    } else {
+                        "Technische Details"
+                    }
+                )
+            }
+        }
+        if (showTechnicalDetails) {
+            item { TechnicalEvidence(record) }
+        }
     }
 }

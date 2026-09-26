@@ -11,6 +11,10 @@ import app.lifeos.core.runtime.boot.BootEngineRuntime
 import app.lifeos.core.runtime.boot.BootRehydrationReport
 import app.lifeos.core.runtime.boot.BootRunResult
 import app.lifeos.core.runtime.boot.RuntimeAvailability
+import app.lifeos.core.runtime.reasoning.MetaCandidateIndex
+import app.lifeos.core.runtime.reasoning.MetaCandidateIndexRuntimeRegistry
+import app.lifeos.core.runtime.reasoning.MetaTheoryMemoryProjection
+import app.lifeos.core.runtime.reasoning.MetaTheoryMemoryProjector
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -30,11 +34,17 @@ internal class KernelBootLifecycle(
     private val warmBootRehydrator: suspend () -> BootRehydrationReport,
     private val bootEngineRuntime: BootEngineRuntime,
     private val bootReadyMaintenanceTrigger: () -> Unit,
+    private val metaTheoryMemoryProjector: MetaTheoryMemoryProjector = MetaTheoryMemoryProjector(),
+    private val metaCandidateIndex: MetaCandidateIndex = MetaCandidateIndex(),
 ) {
     private val startLock = Any()
     private var bootstrapJob: Job? = null
     private var warmBootstrapJob: Job? = null
     private val mutableBootstrapState = MutableStateFlow(KernelBootstrapState())
+
+    init {
+        MetaCandidateIndexRuntimeRegistry.install(metaCandidateIndex)
+    }
 
     val bootstrapState: StateFlow<KernelBootstrapState> =
         mutableBootstrapState.asStateFlow()
@@ -214,7 +224,7 @@ internal class KernelBootLifecycle(
         failureMessage: String,
     ) {
         val runtimePhotons = context.photons.hot + context.photons.warm
-        matrix.rebuildFromPhotons(runtimePhotons)
+        rebuildBootMatrix(runtimePhotons)
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = KernelBootstrapStatus.READ_ONLY,
@@ -243,7 +253,7 @@ internal class KernelBootLifecycle(
         val runtimePhotons = context.photons.hot + context.photons.warm
         // Offensive first-read stays kernel-critical, but projects the complete eligible Photon set
         // as one matrix generation and persists it once instead of rewriting a growing snapshot per Photon.
-        matrix.rebuildFromPhotons(runtimePhotons)
+        rebuildBootMatrix(runtimePhotons)
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = if (degraded) {
@@ -255,6 +265,14 @@ internal class KernelBootLifecycle(
             unreadableFiles = context.photons.unreadableFiles.size,
             warnings = warnings,
         )
+    }
+
+    private suspend fun rebuildBootMatrix(photons: List<Photon>) {
+        val projections = photons.map(metaTheoryMemoryProjector::project)
+        matrix.rebuildFromProjectionInputs(
+            projections.map(MetaTheoryMemoryProjection::projection)
+        )
+        metaCandidateIndex.replace(projections)
     }
 
     private suspend fun warmBootstrap() {

@@ -144,24 +144,58 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
 
         val reads = mutableListOf<HeadReadResult>()
         entries.chunked(MAX_PARALLEL_HEAD_READS).forEach { batch ->
-            reads += coroutineScope {
+            // Disk I/O may run concurrently, but Android Keystore GCM operations are completed
+            // sequentially below. Real devices expose a bounded number of Keystore operation
+            // handles; overlapping one operation per Photon can invalidate handles during a large
+            // first-read/recovery scan.
+            val containers = coroutineScope {
                 batch.map { entry ->
                     async {
                         try {
-                            HeadReadResult(
-                                photon = readRevisionInternal(entry.ref),
+                            HeadContainerRead(
+                                ref = entry.ref,
+                                container = readAtomic(
+                                    revisionFile(entry.ref),
+                                    MAX_PHOTON_FILE_BYTES,
+                                ),
                                 failure = null,
                             )
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (_: Exception) {
-                            HeadReadResult(
-                                photon = null,
+                            HeadContainerRead(
+                                ref = entry.ref,
+                                container = null,
                                 failure = revisionRelativePath(entry.ref),
                             )
                         }
                     }
                 }.awaitAll()
+            }
+
+            containers.forEach { containerRead ->
+                if (containerRead.container == null) {
+                    reads += HeadReadResult(
+                        photon = null,
+                        failure = requireNotNull(containerRead.failure),
+                    )
+                    return@forEach
+                }
+                try {
+                    val photon = decryptPhoton(containerRead.container)
+                    require(
+                        photon.id == containerRead.ref.photonId &&
+                            photon.revision == containerRead.ref.revision
+                    ) { "Photon revision identity mismatch" }
+                    reads += HeadReadResult(photon = photon, failure = null)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    reads += HeadReadResult(
+                        photon = null,
+                        failure = revisionRelativePath(containerRead.ref),
+                    )
+                }
             }
         }
 
@@ -820,6 +854,18 @@ class EncryptedPhotonStore(context: Context) : RevisionedPhotonRepository {
                     .build()
             )
             generateKey()
+        }
+    }
+
+    private data class HeadContainerRead(
+        val ref: PhotonRevisionRef,
+        val container: ByteArray?,
+        val failure: String?,
+    ) {
+        init {
+            require((container == null) != (failure == null)) {
+                "Photon head container read must contain exactly one outcome"
+            }
         }
     }
 

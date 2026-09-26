@@ -95,6 +95,35 @@ class PhotonIngressCoordinatorTest {
     }
 
     @Test
+    fun `production durable reconciliation turns accepted backpressure into deferred success`() = runTest {
+        val repository = InMemoryRevisionedPhotonRepository()
+        val observed = mutableListOf<Photon>()
+        val source = photon(revision = 1, confidence = 1.0)
+        val coordinator = PhotonIngressCoordinator(
+            photonStore = repository,
+            liveSubmissionBudget = budget,
+            submitCognition = { _, _, _, _, _ ->
+                CognitiveSubmissionResult(
+                    journalOffset = 1,
+                    workId = "work-deferred",
+                    accepted = true,
+                    durableTaskId = null,
+                )
+            },
+            onPhotonPersisted = observed::add,
+            durableDeferralSupported = true,
+        )
+
+        val result = coordinator.persistAndIngest(source)
+
+        assertTrue(result.processingQueued)
+        assertTrue(result.processingDeferred)
+        assertNull(result.processingFailure)
+        assertEquals(source, repository.load(source.id))
+        assertEquals(listOf(source), observed)
+    }
+
+    @Test
     fun `non durable cognition admission stays persisted but reports failure`() = runTest {
         val repository = InMemoryRevisionedPhotonRepository()
         val observed = mutableListOf<Photon>()
@@ -116,6 +145,7 @@ class PhotonIngressCoordinatorTest {
         val result = coordinator.persistAndIngest(source)
 
         assertFalse(result.processingQueued)
+        assertFalse(result.processingDeferred)
         assertEquals("Cognitive work was not durabilized", result.processingFailure)
         assertEquals(source, repository.load(source.id))
         assertEquals(listOf(source), observed)
