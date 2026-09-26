@@ -2,7 +2,7 @@ package app.lifeos.next.ui.system
 
 import app.lifeos.next.ui.components.RuntimeHealthLevel
 import app.lifeos.next.ui.layout.attentionBadgeLabel
-import app.lifeos.next.ui.layout.systemActionDescription
+import app.lifeos.next.ui.layout.hubActionDescription
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -20,7 +20,7 @@ class OwnerAttentionProjectorTest {
         assertEquals(0, state.totalCount)
         assertFalse(state.hasAttention)
         assertFalse(state.runtimeNeedsAttention)
-        assertEquals("System öffnen", systemActionDescription(state.totalCount))
+        assertEquals("LIFEOS Bereiche öffnen", hubActionDescription(state.totalCount))
     }
 
     @Test
@@ -35,8 +35,8 @@ class OwnerAttentionProjectorTest {
         assertTrue(state.hasAttention)
         assertFalse(state.runtimeNeedsAttention)
         assertEquals(
-            "System öffnen, 5 Punkte brauchen dich",
-            systemActionDescription(state.totalCount),
+            "LIFEOS Bereiche öffnen, 5 Punkte brauchen dich",
+            hubActionDescription(state.totalCount),
         )
     }
 
