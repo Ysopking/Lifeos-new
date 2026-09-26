@@ -21,11 +21,11 @@ object HumanReadableOutput {
         .trim()
 
     fun forSpeech(raw: String): String = forDisplay(raw)
-        .replace(Regex("\`\`\`[\\s\\S]*?\`\`\`"), " Code ist in der Textansicht sichtbar. ")
+        .replace(Regex("```[\\s\\S]*?```"), " Code ist in der Textansicht sichtbar. ")
         .replace(Regex("\\[([^]]+)]\\(https?://[^)]+\\)"), "$1")
         .replace(Regex("https?://\\S+"), " Link ")
         .replace("•", "")
-        .replace("\`", "")
+        .replace("`", "")
         .replace(Regex("[ \\t]+"), " ")
         .replace(Regex("\\n+"), ". ")
         .replace(Regex("\\.{2,}"), ".")
