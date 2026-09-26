@@ -28,6 +28,7 @@ internal class AndroidInitialDataSourceCatalog(
     val sources: List<InitialDataSourceAdapter> = listOf(
         AndroidContactsInitialDataSource(context),
         AndroidCalendarInitialDataSource(context),
+        AndroidSharedFilesInitialDataSource(context),
         AndroidMediaInitialDataSource(context, AndroidMediaKind.IMAGE),
         AndroidMediaInitialDataSource(context, AndroidMediaKind.VIDEO),
         AndroidMediaInitialDataSource(context, AndroidMediaKind.AUDIO),
