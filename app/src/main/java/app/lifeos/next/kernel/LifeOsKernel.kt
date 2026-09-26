@@ -155,6 +155,10 @@ class LifeOsKernel internal constructor(
             )
         },
         onPhotonPersisted = bootLifecycle::onPhotonPersisted,
+        // KernelCognitionComposition always wires DurableCognitionReconciler plus the terminal
+        // recovery observer. Persisted uncovered revisions therefore form a durable overflow queue
+        // when the bounded TaskStore admission is temporarily full.
+        durableDeferralSupported = true,
     )
 
     suspend fun freezeCognitiveModulesForCurrentCycle(
