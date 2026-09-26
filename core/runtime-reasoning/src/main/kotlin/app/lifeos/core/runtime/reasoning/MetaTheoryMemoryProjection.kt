@@ -31,21 +31,26 @@ data class MetaDomainDescriptor(
     val domain: MetaDomainFamily,
     val stateFingerprint: String,
     val transitionFingerprint: String?,
-    val channelFingerprints: List<String>,
-    val observableFingerprints: List<String>,
-    val invariantFingerprints: List<String>,
+    val observationSignature: MetaObservationSignature,
     val equivalenceCandidateFingerprint: String,
     val deformationFingerprint: String?,
 ) {
     init {
         require(stateFingerprint.isNotBlank())
         require(transitionFingerprint?.isNotBlank() != false)
-        require(channelFingerprints == channelFingerprints.distinct().sorted())
-        require(observableFingerprints == observableFingerprints.distinct().sorted())
-        require(invariantFingerprints == invariantFingerprints.distinct().sorted())
+        require(observationSignature.domain == domain)
         require(equivalenceCandidateFingerprint.isNotBlank())
         require(deformationFingerprint?.isNotBlank() != false)
     }
+
+    val channelFingerprints: List<String>
+        get() = observationSignature.values(MetaObservableRole.CHANNEL)
+
+    val observableFingerprints: List<String>
+        get() = observationSignature.values(MetaObservableRole.OBSERVABLE)
+
+    val invariantFingerprints: List<String>
+        get() = observationSignature.values(MetaObservableRole.INVARIANT)
 
     val truthAuthority: Boolean get() = false
     val mergeAuthority: Boolean get() = false
@@ -84,18 +89,46 @@ class MetaTheoryMemoryProjector {
             *photon.tags.sorted().map { "tag:$it" }.toTypedArray(),
         )
         val transitionFingerprint = transitionFingerprint(photon)
-        val channels = channels(photon).map {
-            StableFieldIds.fingerprint("metatheory-channel/v1", domain.name, it)
-        }.distinct().sorted()
-        val observables = observables(photon).map {
-            StableFieldIds.fingerprint("metatheory-observable/v1", domain.name, it)
-        }.distinct().sorted()
-        val invariants = listOf(
-            StableFieldIds.fingerprint(
-                "metatheory-invariant/source-identity/v1",
-                photon.id.value,
+        val channelCoordinates = channels(photon).map { raw ->
+            MetaObservableCoordinate.create(
+                semanticId = raw.substringBefore(':'),
+                role = MetaObservableRole.CHANNEL,
+                valueFingerprint = StableFieldIds.fingerprint(
+                    "metatheory-channel/v1",
+                    domain.name,
+                    raw,
+                ),
+            )
+        }
+        val observableCoordinates = observables(photon).map { raw ->
+            MetaObservableCoordinate.create(
+                semanticId = raw.substringBefore(':'),
+                role = MetaObservableRole.OBSERVABLE,
+                valueFingerprint = StableFieldIds.fingerprint(
+                    "metatheory-observable/v1",
+                    domain.name,
+                    raw,
+                ),
+            )
+        }
+        val invariantCoordinates = listOf(
+            MetaObservableCoordinate.create(
+                semanticId = "source-identity",
+                role = MetaObservableRole.INVARIANT,
+                valueFingerprint = StableFieldIds.fingerprint(
+                    "metatheory-invariant/source-identity/v1",
+                    photon.id.value,
+                ),
             )
         )
+        val observationSignature = MetaObservationSignature.create(
+            domain = domain,
+            coordinates =
+                channelCoordinates + observableCoordinates + invariantCoordinates,
+        )
+        val channels = observationSignature.values(MetaObservableRole.CHANNEL)
+        val observables = observationSignature.values(MetaObservableRole.OBSERVABLE)
+        val invariants = observationSignature.values(MetaObservableRole.INVARIANT)
         val equivalenceCandidate = StableFieldIds.fingerprint(
             "metatheory-equivalence-candidate/v1",
             domain.name,
@@ -118,9 +151,7 @@ class MetaTheoryMemoryProjector {
             domain = domain,
             stateFingerprint = stateFingerprint,
             transitionFingerprint = transitionFingerprint,
-            channelFingerprints = channels,
-            observableFingerprints = observables,
-            invariantFingerprints = invariants,
+            observationSignature = observationSignature,
             equivalenceCandidateFingerprint = equivalenceCandidate,
             deformationFingerprint = deformation,
         )
