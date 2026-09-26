@@ -1,5 +1,6 @@
 package app.lifeos.core.runtime.reasoning
 
+import app.lifeos.core.runtime.level7.EvidenceActionKind
 import app.lifeos.core.runtime.self.LifeOsSelfStateSnapshot
 import app.lifeos.core.runtime.self.SelfHealthState
 import app.lifeos.core.runtime.self.SelfLiveSourceState
@@ -12,13 +13,16 @@ import app.lifeos.core.runtime.self.SelfStateProjectionResult
 import app.lifeos.core.runtime.self.SelfToolState
 import app.lifeos.core.runtime.self.SelfWorldState
 import java.time.Instant
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 class MetaRealizationShadowRuntimeTest {
     @AfterTest
@@ -41,6 +45,27 @@ class MetaRealizationShadowRuntimeTest {
         assertFalse(ready.snapshot.truthAuthority)
         assertFalse(ready.snapshot.executionAuthority)
         assertFalse(ready.snapshot.cycle.executionAuthority)
+    }
+
+    @Test
+    fun `submit hands shadow work off without awaiting realization processing`() = runTest {
+        val runtime = MetaRealizationShadowRuntime(
+            processingScope = backgroundScope,
+        )
+
+        assertTrue(runtime.submit(snapshot(T0, "world:queued")))
+
+        val ready = withTimeout(1_000) {
+            runtime.status.first { it is MetaRealizationShadowStatus.Ready }
+        } as MetaRealizationShadowStatus.Ready
+
+        assertTrue(
+            "world:queued" in ready.snapshot.realization.components
+                .single { it.kind == RealizationComponentKind.PRODUCTIVE_WORLD }
+                .provenanceFingerprints
+        )
+        assertEquals(0L, runtime.rejectedSubmissionCount())
+        runtime.close()
     }
 
     @Test
@@ -94,6 +119,72 @@ class MetaRealizationShadowRuntimeTest {
         assertEquals(2, history.size)
         assertEquals(listOf(2L, 3L), history.map { it.realization.revision })
         assertEquals(3L, latest.realization.revision)
+    }
+
+    @Test
+    fun `projection closure is derived on demand from bounded shadow history`() = runTest {
+        val runtime = MetaRealizationShadowRuntime(historyCapacity = 8)
+
+        runtime.observe(snapshot(T0, "world:x"))
+        runtime.observe(snapshot(T0.plusSeconds(1), "world:a"))
+        runtime.observe(snapshot(T0.plusSeconds(2), "world:x"))
+        runtime.observe(snapshot(T0.plusSeconds(3), "world:b"))
+
+        val closure = requireNotNull(
+            runtime.projectionClosure(RealizationComponentKind.PRODUCTIVE_WORLD)
+        )
+
+        assertEquals(ProjectionClosureStatus.NOT_CLOSED, closure.status)
+        assertFalse(closure.autonomousProjectionEstablished)
+        runtime.close()
+    }
+
+    @Test
+    fun `retained shadow snapshot can be evaluated explicitly without gaining authority`() = runTest {
+        val runtime = MetaRealizationShadowRuntime()
+        val ready = assertIs<MetaRealizationShadowStatus.Ready>(
+            runtime.observe(snapshot(T0, "world:evidence"))
+        ).snapshot
+        val law = DiscreteFutureLaw.create(
+            mapOf("continue" to 700_000L, "pause" to 300_000L)
+        )
+        val evidence = MetaRealizationShadowEvidence(
+            predictiveHistories = listOf(
+                PredictiveHistory(runtime.profile.fingerprint, "history:a", law),
+                PredictiveHistory(runtime.profile.fingerprint, "history:b", law),
+            ),
+            candidateSignatures = listOf(
+                PredictiveCandidateSignature.create(
+                    realizationProfileFingerprint = runtime.profile.fingerprint,
+                    candidateId = "candidate:a",
+                    observationalLawFingerprint = "observed:same",
+                    interventionalLawFingerprints = mapOf("ask-owner" to "law:a"),
+                ),
+                PredictiveCandidateSignature.create(
+                    realizationProfileFingerprint = runtime.profile.fingerprint,
+                    candidateId = "candidate:b",
+                    observationalLawFingerprint = "observed:same",
+                    interventionalLawFingerprints = mapOf("ask-owner" to "law:b"),
+                ),
+            ),
+            informationCandidates = listOf(
+                InformationActionCandidate.create(
+                    interventionId = "ask-owner",
+                    kind = EvidenceActionKind.ASK_USER,
+                    expectedInformationGainMicros = 800_000L,
+                    rationale = "Resolve shadow ambiguity",
+                )
+            ),
+            allowedActionKinds = setOf(EvidenceActionKind.ASK_USER),
+            budgetFingerprint = "budget:shadow",
+        )
+
+        val analysis = runtime.evaluateEvidence(ready.fingerprint, evidence)
+
+        assertEquals(MetaRealizationCycleState.AWAITING_OBSERVATION, analysis.cycle.state)
+        assertFalse(analysis.executionAuthority)
+        assertFalse(analysis.cycle.executionAuthority)
+        runtime.close()
     }
 
     @Test
