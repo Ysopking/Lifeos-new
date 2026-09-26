@@ -42,7 +42,10 @@ enum class LifeOsDestination(
             listOf(CHAT, PROJECTS, WEEK, ACTIONS, ARTIFACTS)
         val default: LifeOsDestination = entries.single { it.isDefault }
 
-        fun fromKey(key: String?): LifeOsDestination =
-            entries.firstOrNull { it.key == key } ?: default
+        fun fromKey(key: String?): LifeOsDestination = when (key) {
+            "goals" -> PROJECTS
+            "assets" -> ARTIFACTS
+            else -> entries.firstOrNull { it.key == key } ?: default
+        }
     }
 }

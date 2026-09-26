@@ -10,9 +10,8 @@ import org.junit.Test
 /**
  * Deterministic accessibility semantics contract.
  *
- * These assertions are pure Kotlin and intentionally run on the JVM. The F11 workflow separately
- * cold-starts the real ChatMainActivity/LifeOsApplication on an Android emulator, so this contract
- * does not need to boot the productive kernel a second time through instrumentation.
+ * Chat remains the single default surface. Secondary productive workspaces live behind one hub and
+ * must still expose distinct readable labels to accessibility services.
  */
 class LifeOsFrontendAccessibilityContractTest {
     @Test
@@ -20,8 +19,10 @@ class LifeOsFrontendAccessibilityContractTest {
         assertEquals(
             listOf(
                 LifeOsDestination.CHAT,
-                LifeOsDestination.GOALS,
-                LifeOsDestination.MEMORY,
+                LifeOsDestination.PROJECTS,
+                LifeOsDestination.WEEK,
+                LifeOsDestination.ACTIONS,
+                LifeOsDestination.ARTIFACTS,
             ),
             LifeOsDestination.ordered,
         )

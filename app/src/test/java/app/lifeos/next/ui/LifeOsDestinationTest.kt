@@ -11,8 +11,10 @@ class LifeOsDestinationTest {
         assertEquals(
             listOf(
                 LifeOsDestination.CHAT,
-                LifeOsDestination.GOALS,
-                LifeOsDestination.MEMORY,
+                LifeOsDestination.PROJECTS,
+                LifeOsDestination.WEEK,
+                LifeOsDestination.ACTIONS,
+                LifeOsDestination.ARTIFACTS,
             ),
             LifeOsDestination.ordered,
         )
@@ -29,15 +31,19 @@ class LifeOsDestinationTest {
     }
 
     @Test
-    fun restoredKeysResolveAndFormerTechnicalKeysFailSafeToLifeos() {
+    fun restoredKeysResolveAndLegacyWorkspaceKeysMigrateSafely() {
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey(null))
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("unknown"))
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("chat"))
-        assertSame(LifeOsDestination.GOALS, LifeOsDestination.fromKey("goals"))
-        assertSame(LifeOsDestination.MEMORY, LifeOsDestination.fromKey("memory"))
+        assertSame(LifeOsDestination.PROJECTS, LifeOsDestination.fromKey("projects"))
+        assertSame(LifeOsDestination.WEEK, LifeOsDestination.fromKey("week"))
+        assertSame(LifeOsDestination.ACTIONS, LifeOsDestination.fromKey("actions"))
+        assertSame(LifeOsDestination.ARTIFACTS, LifeOsDestination.fromKey("artifacts"))
+        assertSame(LifeOsDestination.PROJECTS, LifeOsDestination.fromKey("goals"))
+        assertSame(LifeOsDestination.ARTIFACTS, LifeOsDestination.fromKey("assets"))
+        assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("memory"))
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("system"))
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("tools"))
-        assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("assets"))
         assertSame(LifeOsDestination.CHAT, LifeOsDestination.fromKey("why"))
     }
 }
