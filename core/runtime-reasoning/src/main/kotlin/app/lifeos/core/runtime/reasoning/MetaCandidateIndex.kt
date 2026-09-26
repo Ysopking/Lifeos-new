@@ -70,7 +70,13 @@ class MetaCandidateIndex {
                             stateFingerprint = projection.descriptor.stateFingerprint,
                         )
                     }
-                    .distinctBy { it.fingerprint }
+                    .groupBy { it.photonId }
+                    .map { (_, revisions) ->
+                        revisions.maxWith(
+                            compareBy<MetaCandidateRef> { it.sourceRevision }
+                                .thenBy { it.fingerprint }
+                        )
+                    }
                     .sortedWith(
                         compareBy<MetaCandidateRef> { it.photonId.value }
                             .thenBy { it.sourceRevision }

@@ -220,13 +220,49 @@ class InformationActionPlanner(
         allowedKinds: Set<EvidenceActionKind>,
         candidates: Collection<InformationActionCandidate>,
     ): InformationActionPlan {
-        require(sourceCycleId.isNotBlank())
-        require(budgetFingerprint.isNotBlank())
         require(
             identifiability.status != IdentifiabilityStatus.OBSERVATIONALLY_DISTINCT
         ) {
             "Information-action planning requires an unresolved or intervention-sensitive gap"
         }
+        return planForGap(
+            sourceCycleId = sourceCycleId,
+            budgetFingerprint = budgetFingerprint,
+            gapFingerprint = identifiability.fingerprint,
+            allowedKinds = allowedKinds,
+            candidates = candidates,
+        )
+    }
+
+    fun plan(
+        sourceCycleId: String,
+        budgetFingerprint: String,
+        inference: MetaInferenceResult,
+        allowedKinds: Set<EvidenceActionKind>,
+        candidates: Collection<InformationActionCandidate>,
+    ): InformationActionPlan {
+        require(inference.informationRequired) {
+            "Meta information-action planning requires an information gap"
+        }
+        return planForGap(
+            sourceCycleId = sourceCycleId,
+            budgetFingerprint = budgetFingerprint,
+            gapFingerprint = inference.fingerprint,
+            allowedKinds = allowedKinds,
+            candidates = candidates,
+        )
+    }
+
+    private fun planForGap(
+        sourceCycleId: String,
+        budgetFingerprint: String,
+        gapFingerprint: String,
+        allowedKinds: Set<EvidenceActionKind>,
+        candidates: Collection<InformationActionCandidate>,
+    ): InformationActionPlan {
+        require(sourceCycleId.isNotBlank())
+        require(budgetFingerprint.isNotBlank())
+        require(gapFingerprint.isNotBlank())
         require(candidates.isNotEmpty()) {
             "Information-action planning requires candidates"
         }
@@ -243,7 +279,7 @@ class InformationActionPlanner(
                 val score = score(candidate)
                 val gapFingerprint = StableFieldIds.fingerprint(
                     "information-action-gap/v1",
-                    identifiability.fingerprint,
+                    gapFingerprint,
                     candidate.interventionId,
                 )
                 val request = EvidenceActionRequest.create(
@@ -276,14 +312,14 @@ class InformationActionPlanner(
 
         return InformationActionPlan(
             sourceCycleId = sourceCycleId,
-            identifiabilityFingerprint = identifiability.fingerprint,
+            identifiabilityFingerprint = gapFingerprint,
             budgetFingerprint = budgetFingerprint,
             policyFingerprint = policy.fingerprint(),
             items = items,
             omittedCandidateFingerprints = omitted,
             fingerprint = expectedPlanFingerprint(
                 sourceCycleId = sourceCycleId,
-                identifiabilityFingerprint = identifiability.fingerprint,
+                identifiabilityFingerprint = gapFingerprint,
                 budgetFingerprint = budgetFingerprint,
                 policyFingerprint = policy.fingerprint(),
                 items = items,
