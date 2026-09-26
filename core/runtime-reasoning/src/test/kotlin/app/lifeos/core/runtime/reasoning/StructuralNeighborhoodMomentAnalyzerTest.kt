@@ -2,7 +2,7 @@ package app.lifeos.core.runtime.reasoning
 
 import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.model.PhotonId
-import app.lifeos.core.runtime.thought.ThoughtLifecycleState
+import app.lifeos.core.runtime.thought.ThoughtLifecycleStatus
 import app.lifeos.core.runtime.thought.ThoughtMatrixSnapshot
 import app.lifeos.core.runtime.thought.ThoughtNode
 import app.lifeos.core.runtime.thought.ThoughtNodeId
@@ -65,7 +65,7 @@ class StructuralNeighborhoodMomentAnalyzerTest {
     private fun node(id: String): ThoughtNode {
         val photonId = PhotonId(id)
         return ThoughtNode(
-            id = ThoughtNodeId("node-$id"),
+            id = ThoughtNodeId.create(photonId, StableFieldIds.domain("test"), "key-$id"),
             provenance = ThoughtProvenance(
                 sourcePhotonId = photonId,
                 sourceRevision = 1,
@@ -81,7 +81,7 @@ class StructuralNeighborhoodMomentAnalyzerTest {
             energy = 1.0,
             confidence = 1.0,
             validity = TemporalValidity.UNBOUNDED,
-            lifecycle = ThoughtLifecycleState.ACTIVE,
+            lifecycle = ThoughtLifecycleStatus.ACTIVE,
             verification = ThoughtVerificationStatus.OBSERVED,
             tags = emptySet(),
         )
@@ -106,7 +106,7 @@ class StructuralNeighborhoodMomentAnalyzerTest {
         relations: List<ThoughtRelation>,
     ) = ThoughtMatrixSnapshot(
         revision = 1,
-        nodes = nodes.sortedWith(ThoughtMatrixSnapshot.nodeOrdering()),
+        nodes = nodes.sortedBy { it.id.value },
         relations = relations.sortedBy { it.id },
         conflicts = emptyList(),
         capturedAt = at,
