@@ -112,6 +112,10 @@ fun LifeOsRoot(
 
                 LifeOsDestination.WEEK -> LifeOsWeekScreen(
                     goalsModel = goalsModel,
+                    onOpenProject = { planId ->
+                        goalsModel.selectPlan(planId)
+                        selectedKey = LifeOsDestination.PROJECTS.key
+                    },
                     modifier = contentModifier,
                 )
 

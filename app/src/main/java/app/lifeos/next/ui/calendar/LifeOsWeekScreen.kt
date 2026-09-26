@@ -35,6 +35,7 @@ import java.util.Locale
 @Composable
 fun LifeOsWeekScreen(
     goalsModel: LifeOsGoalsViewModel,
+    onOpenProject: (app.lifeos.core.runtime.goal.GoalPlanId) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by goalsModel.state.collectAsStateWithLifecycle()
@@ -85,7 +86,7 @@ fun LifeOsWeekScreen(
                         it.start.atZone(zone).toLocalDate() == date
                     },
                     plans = state.workspace.plans,
-                    onOpenPlan = goalsModel::selectPlan,
+                    onOpenPlan = onOpenProject,
                 )
             }
         }

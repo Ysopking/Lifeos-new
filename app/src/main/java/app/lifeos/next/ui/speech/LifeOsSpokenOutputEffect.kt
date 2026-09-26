@@ -54,11 +54,12 @@ fun LifeOsSpokenOutputEffect(
         .filter { !it.text.isNullOrBlank() }
         .lastOrNull()
 
-    LaunchedEffect(bootStatus, latest?.id) {
+    LaunchedEffect(bootStatus, voicePhase, latest?.id) {
         if (
             bootStatus != KernelBootstrapStatus.READY &&
             bootStatus != KernelBootstrapStatus.DEGRADED
         ) return@LaunchedEffect
+        if (voicePhase != ChatVoicePhase.IDLE) return@LaunchedEffect
 
         val event = latest ?: return@LaunchedEffect
         if (event.createdAt.toEpochMilli() < sessionStartedAtMillis) return@LaunchedEffect
