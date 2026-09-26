@@ -138,10 +138,7 @@ class SemanticActionRecoveryDeviceTest {
             }
         }
         withTimeout(WARM_TIMEOUT_MS) {
-            app.warmStartupReport.first { report ->
-                report != null &&
-                    LifeOsStartupStage.DURABLE_GOALS in report.completedStages
-            }
+            app.awaitWarmStage(LifeOsStartupStage.DURABLE_GOALS)
         }
         kernelState
     }

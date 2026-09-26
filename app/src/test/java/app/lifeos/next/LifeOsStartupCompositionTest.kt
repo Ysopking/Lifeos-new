@@ -5,7 +5,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 
 class LifeOsStartupCompositionTest {
     @Test
@@ -73,6 +76,48 @@ class LifeOsStartupCompositionTest {
                 it.evidence.manifestGraphFingerprint == LifeOsProcessTopology.manifestFingerprint
             }
         )
+    }
+
+    @Test
+    fun `fast warm sibling publishes completion before slow sibling finishes`() = runTest {
+        val slowStarted = CompletableDeferred<Unit>()
+        val releaseSlow = CompletableDeferred<Unit>()
+        val durableGoalCompleted = CompletableDeferred<Unit>()
+        val hooks = LifeOsStartupHooks(
+            installSharedResourceRuntime = {},
+            installGoalExecutionRuntime = {},
+            createKernel = {},
+            startKernel = {},
+            requireCognitiveStateReady = {},
+            warmPersonalRuntime = {},
+            installDeepSearchRuntime = {
+                slowStarted.complete(Unit)
+                releaseSlow.await()
+            },
+            startSelfHealingRuntime = {},
+            installDurableGoalPlanRuntime = {},
+            stageObserver = { event ->
+                if (
+                    event is LifeOsStartupStageEvent.Completed &&
+                    event.stage == LifeOsStartupStage.DURABLE_GOALS
+                ) {
+                    durableGoalCompleted.complete(Unit)
+                }
+            },
+        )
+
+        LifeOsStartupComposition.startCritical(hooks)
+        val warm = async { LifeOsStartupComposition.startWarm(hooks) }
+
+        withTimeout(1_000) { slowStarted.await() }
+        withTimeout(1_000) { durableGoalCompleted.await() }
+        assertFalse(warm.isCompleted)
+
+        releaseSlow.complete(Unit)
+        val report = warm.await()
+
+        assertFalse(report.degraded)
+        assertTrue(LifeOsStartupStage.DURABLE_GOALS in report.completedStages)
     }
 
     @Test

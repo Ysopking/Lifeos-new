@@ -184,23 +184,25 @@ class ProductGoldenChatDeviceTest {
                 error("Kernel boot failed during Product-Gold chat recovery: ${state.failureMessage ?: "unknown"}")
             }
         }
-        val warm = checkNotNull(app.warmStartupReport.first { it != null })
-        if (warm.failures.isNotEmpty()) {
-            error(
-                "Product-Gold warm startup failed: " +
-                    warm.failures.joinToString(";") {
-                        "${it.diagnosticCode}:${it.stage.name}:${it.message}"
-                    }
-            )
+        withTimeout(WARM_TIMEOUT_MS) {
+            PRODUCT_TOPOLOGY_WARM_STAGES.forEach { stage ->
+                app.awaitWarmStage(stage)
+            }
         }
         boot
     }
 
     companion object {
         private const val BOOT_TIMEOUT_MS = 20_000L
+        private const val WARM_TIMEOUT_MS = 30_000L
         private const val USER_SENTINEL_TAG = "product-gold-chat:user"
         private const val ASSISTANT_SENTINEL_TAG = "product-gold-chat:assistant"
         private const val SEMANTIC_USER_SENTINEL_TAG = "product-gold-semantic:user"
         private val ADAPTIVE_ONLY_SUBSYSTEMS = setOf("build-studio")
+        private val PRODUCT_TOPOLOGY_WARM_STAGES = listOf(
+            LifeOsStartupStage.DEEP_SEARCH,
+            LifeOsStartupStage.SELF_HEALING,
+            LifeOsStartupStage.DURABLE_GOALS,
+        )
     }
 }

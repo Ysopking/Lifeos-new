@@ -83,10 +83,7 @@ class MemoryWorkspaceDeviceTest {
 
     private suspend fun awaitPersonalRuntimeWarmup() {
         withTimeout(BOOT_TIMEOUT_MS) {
-            app.warmStartupReport.first { report ->
-                report != null &&
-                    LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP in report.completedStages
-            }
+            app.awaitWarmStage(LifeOsStartupStage.PERSONAL_RUNTIME_WARMUP)
         }
     }
 

@@ -50,13 +50,9 @@ class GoalPlanRecoveryDeviceTest {
             error("Kernel boot failed during V7 recovery: ${boot.failureMessage ?: "unknown"}")
         }
         assertTrue("Kernel critical runtime must be ready before V7 warm restore", boot.ready)
-        val warm = withTimeout(30_000) {
-            app.warmStartupReport.first { report ->
-                report != null &&
-                    LifeOsStartupStage.DURABLE_GOALS in report.completedStages
-            }
+        withTimeout(30_000) {
+            app.awaitWarmStage(LifeOsStartupStage.DURABLE_GOALS)
         }
-        checkNotNull(warm)
     }
 
     @Test
