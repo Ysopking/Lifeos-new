@@ -26,6 +26,7 @@ import app.lifeos.next.ui.theme.LifeOsTokens
 data class LifeOsTopBarState(
     val title: String,
     val attentionCount: Int = 0,
+    val showBack: Boolean = false,
 ) {
     init {
         require(attentionCount >= 0)
@@ -35,7 +36,8 @@ data class LifeOsTopBarState(
 @Composable
 fun LifeOsTopBar(
     state: LifeOsTopBarState,
-    onOpenSystem: () -> Unit,
+    onBack: () -> Unit,
+    onOpenHub: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -49,7 +51,7 @@ fun LifeOsTopBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
-                    start = LifeOsTokens.Layout.compactHorizontalPadding,
+                    start = LifeOsTokens.Spacing.small,
                     end = LifeOsTokens.Spacing.small,
                     top = LifeOsTokens.Spacing.xSmall,
                     bottom = LifeOsTokens.Spacing.xSmall,
@@ -57,11 +59,31 @@ fun LifeOsTopBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = state.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.xSmall),
+            ) {
+                if (state.showBack) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(LifeOsTokens.Size.minimumTouchTarget)
+                            .semantics { contentDescription = "Zurück zum Chat" },
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_back),
+                            contentDescription = null,
+                            modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
+                        )
+                    }
+                }
+                Text(
+                    text = state.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+
             BadgedBox(
                 badge = {
                     if (state.attentionCount > 0) {
@@ -75,12 +97,12 @@ fun LifeOsTopBar(
                     modifier = Modifier
                         .size(LifeOsTokens.Size.minimumTouchTarget)
                         .semantics {
-                            contentDescription = systemActionDescription(state.attentionCount)
+                            contentDescription = hubActionDescription(state.attentionCount)
                         },
-                    onClick = onOpenSystem,
+                    onClick = onOpenHub,
                 ) {
                     Icon(
-                        painter = painterResource(R.drawable.ic_system),
+                        painter = painterResource(R.drawable.ic_hub),
                         contentDescription = null,
                         modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
                         tint = if (state.attentionCount > 0) {
@@ -98,11 +120,11 @@ fun LifeOsTopBar(
 internal fun attentionBadgeLabel(attentionCount: Int): String =
     if (attentionCount > MAX_BADGE_COUNT) "${MAX_BADGE_COUNT}+" else attentionCount.toString()
 
-internal fun systemActionDescription(attentionCount: Int): String =
+internal fun hubActionDescription(attentionCount: Int): String =
     if (attentionCount > 0) {
-        "System öffnen, $attentionCount Punkte brauchen dich"
+        "LIFEOS Bereiche öffnen, $attentionCount Punkte brauchen dich"
     } else {
-        "System öffnen"
+        "LIFEOS Bereiche öffnen"
     }
 
 private const val MAX_BADGE_COUNT = 9

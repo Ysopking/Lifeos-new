@@ -15,20 +15,31 @@ enum class LifeOsDestination(
         iconRes = R.drawable.ic_lifeos,
         isDefault = true,
     ),
-    GOALS(
-        key = "goals",
-        label = "Heute",
+    PROJECTS(
+        key = "projects",
+        label = "Projekte",
         iconRes = R.drawable.ic_today,
     ),
-    MEMORY(
-        key = "memory",
-        label = "Gedächtnis",
+    WEEK(
+        key = "week",
+        label = "Woche",
+        iconRes = R.drawable.ic_today,
+    ),
+    ACTIONS(
+        key = "actions",
+        label = "Rückfragen & Aktionen",
+        iconRes = R.drawable.ic_system,
+    ),
+    ARTIFACTS(
+        key = "artifacts",
+        label = "Artefakte",
         iconRes = R.drawable.ic_memory,
     ),
     ;
 
     companion object {
-        val ordered: List<LifeOsDestination> = listOf(CHAT, GOALS, MEMORY)
+        val ordered: List<LifeOsDestination> =
+            listOf(CHAT, PROJECTS, WEEK, ACTIONS, ARTIFACTS)
         val default: LifeOsDestination = entries.single { it.isDefault }
 
         fun fromKey(key: String?): LifeOsDestination =
