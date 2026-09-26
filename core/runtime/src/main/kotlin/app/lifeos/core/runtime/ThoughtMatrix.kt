@@ -4,6 +4,7 @@ import app.lifeos.core.field.StableFieldIds
 import app.lifeos.core.model.FieldInfluence
 import app.lifeos.core.model.Photon
 import app.lifeos.core.model.PhotonId
+import app.lifeos.core.runtime.thought.ThoughtMatrixRebuildReport
 import app.lifeos.core.runtime.thought.ThoughtMatrixSnapshot
 import app.lifeos.core.runtime.thought.ThoughtMatrixV2
 import app.lifeos.core.runtime.thought.ThoughtProjectionInput
@@ -113,6 +114,52 @@ class ThoughtMatrix(
             )
         )
         influence
+    }
+
+    /**
+     * Kernel-boot fast path for the offensive first-read.
+     *
+     * All eligible Photons are projected as one coherent matrix generation and the durable matrix
+     * is written at most once. This preserves full first-read semantics without serializing the
+     * complete growing matrix once per Photon.
+     */
+    suspend fun rebuildFromPhotons(photons: Iterable<Photon>): ThoughtMatrixRebuildReport = mutex.withLock {
+        val report = v2.rebuild(
+            photons.map { photon ->
+                ThoughtProjectionInput(
+                    photon = photon,
+                    fieldDomainId = LEGACY_DOMAIN,
+                    semanticKey = semanticKey(photon),
+                    verification = ThoughtVerificationStatus.OBSERVED,
+                )
+            }
+        )
+        val nextLegacyNodes = report.snapshot.nodes.associate { projected ->
+            projected.photonId to ThoughtNode(
+                photonId = projected.photonId,
+                summary = projected.summary.take(120),
+                energy = projected.energy,
+                confidence = projected.confidence,
+                tags = projected.tags,
+                revision = projected.sourceRevision,
+            )
+        }
+        val nextLegacyState = MatrixState(
+            nodes = nextLegacyNodes,
+            totalEnergy = nextLegacyNodes.values.sumOf { it.energy },
+        )
+        val legacyChanged = nextLegacyState != mutableState.value
+        mutableState.value = nextLegacyState
+
+        if (report.changed || legacyChanged) {
+            durableState?.save(
+                ThoughtMatrixDurableState(
+                    v2Snapshot = report.snapshot,
+                    legacyState = nextLegacyState,
+                )
+            )
+        }
+        report
     }
 
     suspend fun rehydrate(): ThoughtMatrixRestoreSummary = mutex.withLock {

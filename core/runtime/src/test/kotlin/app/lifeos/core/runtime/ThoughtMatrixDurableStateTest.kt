@@ -1,6 +1,7 @@
 package app.lifeos.core.runtime
 
 import app.lifeos.core.model.Photon
+import app.lifeos.core.model.PhotonId
 import app.lifeos.core.model.Provenance
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -69,6 +70,34 @@ class ThoughtMatrixDurableStateTest {
     }
 
     @Test
+    fun bootBatchRebuildProjectsFullMatrixWithSingleDurableWrite() = runTest {
+        val repository = InMemoryThoughtMatrixStateRepository()
+        val matrix = ThoughtMatrix(durableState = repository)
+        val photons = List(512) { index ->
+            Photon(
+                id = PhotonId("boot-batch-$index"),
+                content = "boot memory $index",
+                energy = 1.0,
+                confidence = 0.9,
+                tags = setOf("boot-memory"),
+                provenance = Provenance("boot-first-read", "lifeos"),
+            )
+        }
+
+        val first = matrix.rebuildFromPhotons(photons)
+
+        assertTrue(first.changed)
+        assertEquals(512, matrix.state.value.nodes.size)
+        assertEquals(512.0, matrix.state.value.totalEnergy)
+        assertEquals(1, repository.saveCount)
+
+        val second = matrix.rebuildFromPhotons(photons)
+
+        assertTrue(!second.changed)
+        assertEquals(1, repository.saveCount)
+    }
+
+    @Test
     fun persistenceFailureMakesFieldCallFailSoWorkerCannotCheckpointIt() = runTest {
         val repository = object : ThoughtMatrixStateRepository {
             override suspend fun save(state: ThoughtMatrixDurableState) {
@@ -94,8 +123,11 @@ class ThoughtMatrixDurableStateTest {
     ) : ThoughtMatrixStateRepository {
         var state: ThoughtMatrixDurableState? = initial
             private set
+        var saveCount: Int = 0
+            private set
 
         override suspend fun save(state: ThoughtMatrixDurableState) {
+            saveCount += 1
             // Encode/decode also makes this fake obey the durable serialization boundary.
             this.state = ThoughtMatrixDurableStateCodec.decode(
                 ThoughtMatrixDurableStateCodec.encode(state)

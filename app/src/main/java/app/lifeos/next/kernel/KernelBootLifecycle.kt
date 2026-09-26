@@ -214,7 +214,7 @@ internal class KernelBootLifecycle(
         failureMessage: String,
     ) {
         val runtimePhotons = context.photons.hot + context.photons.warm
-        runtimePhotons.forEach { matrix.influence(it) }
+        matrix.rebuildFromPhotons(runtimePhotons)
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = KernelBootstrapStatus.READ_ONLY,
@@ -241,9 +241,9 @@ internal class KernelBootLifecycle(
         supervisor.start()
 
         val runtimePhotons = context.photons.hot + context.photons.warm
-        // Restore the process-local read model without enqueuing a second task family.
-        // Durable reconciliation has already restored missing work; terminal work stays terminal.
-        runtimePhotons.forEach { matrix.influence(it) }
+        // Offensive first-read stays kernel-critical, but projects the complete eligible Photon set
+        // as one matrix generation and persists it once instead of rewriting a growing snapshot per Photon.
+        matrix.rebuildFromPhotons(runtimePhotons)
 
         mutableBootstrapState.value = KernelBootstrapState(
             status = if (degraded) {
