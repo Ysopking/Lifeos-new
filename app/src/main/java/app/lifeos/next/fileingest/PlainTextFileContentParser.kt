@@ -73,13 +73,14 @@ internal class PlainTextFileContentParser : FileContentParser {
 
     private companion object {
         val EXTENSIONS = setOf(
-            "txt", "md", "csv", "json", "xml", "html", "htm",
+            "txt", "md", "csv", "json", "xml", "html", "htm", "rtf",
             "log", "yaml", "yml", "ics", "vcf",
         )
         val STRUCTURED_TEXT_MIME_TYPES = setOf(
             "application/json",
             "application/xml",
             "application/xhtml+xml",
+            "application/rtf",
         )
     }
 }

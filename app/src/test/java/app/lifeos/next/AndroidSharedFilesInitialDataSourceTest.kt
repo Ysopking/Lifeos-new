@@ -70,8 +70,13 @@ class AndroidSharedFilesInitialDataSourceTest {
             assertFalse(first.complete)
             assertEquals("b.bin", first.nextPosition)
             assertEquals(listOf("a.txt", "b.bin"), first.records.map(::relativePath))
-            assertTrue(first.records.all { "decode_state=METADATA_ONLY" in it.payload })
-            assertTrue(first.records.all { "content_hash_state=DEFERRED" in it.payload })
+            val textRecord = first.records.single { relativePath(it) == "a.txt" }
+            val binaryRecord = first.records.single { relativePath(it) == "b.bin" }
+            assertEquals("DECODED", field(textRecord.payload, "decode_state"))
+            assertEquals("UNSUPPORTED", field(binaryRecord.payload, "decode_state"))
+            assertTrue(field(textRecord.payload, "content_excerpt").contains("alpha"))
+            assertTrue(textRecord.tags.any { it.startsWith("document:file-") })
+            assertTrue(textRecord.tags.any { it == "file-parser:plain-text" })
 
             val replay = AndroidFilesystemMetadataPager.page(root, null, 2, mime)
             assertEquals(first.records.map { it.recordId }, replay.records.map { it.recordId })
@@ -81,6 +86,28 @@ class AndroidSharedFilesInitialDataSourceTest {
             assertEquals(null, second.nextPosition)
             assertEquals(listOf("c.zip"), second.records.map(::relativePath))
             assertTrue(second.records.none { relativePath(it) == "d.jpg" })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `nested files emit stable containment evidence for LifeGraph`() {
+        val root = Files.createTempDirectory("lifeos-file-relations").toFile()
+        try {
+            val folder = root.resolve("ProjectA").apply { mkdirs() }
+            folder.resolve("notes.md").writeText("project memory")
+
+            val record = AndroidFilesystemMetadataPager.page(root, null, 10) { "text/markdown" }
+                .records
+                .single()
+
+            assertTrue(record.tags.any { it.startsWith("document:file-") })
+            assertTrue(record.tags.any { it.startsWith("document:folder-") })
+            assertTrue(record.tags.any {
+                it.startsWith("entity-relationship:CONTAINED_IN|DOCUMENT:file-")
+            })
+            assertEquals("DECODED", field(record.payload, "decode_state"))
         } finally {
             root.deleteRecursively()
         }

@@ -123,8 +123,8 @@ class ThoughtMatrix(
      * is written at most once. This preserves full first-read semantics without serializing the
      * complete growing matrix once per Photon.
      */
-    suspend fun rebuildFromPhotons(photons: Iterable<Photon>): ThoughtMatrixRebuildReport = mutex.withLock {
-        val report = v2.rebuild(
+    suspend fun rebuildFromPhotons(photons: Iterable<Photon>): ThoughtMatrixRebuildReport =
+        rebuildFromProjectionInputs(
             photons.map { photon ->
                 ThoughtProjectionInput(
                     photon = photon,
@@ -134,6 +134,15 @@ class ThoughtMatrix(
                 )
             }
         )
+
+    /**
+     * Rebuilds one complete matrix generation from already typed projection inputs.
+     * The caller may enrich projection-only metadata and relations without mutating Photon truth.
+     */
+    suspend fun rebuildFromProjectionInputs(
+        inputs: Iterable<ThoughtProjectionInput>,
+    ): ThoughtMatrixRebuildReport = mutex.withLock {
+        val report = v2.rebuild(inputs)
         val nextLegacyNodes = report.snapshot.nodes.associate { projected ->
             projected.photonId to ThoughtNode(
                 photonId = projected.photonId,

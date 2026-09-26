@@ -297,6 +297,66 @@ class BootSnapshotLoaderTest {
     }
 
     @Test
+    fun sourceProbeThenSnapshotReusesEverySourceReadExactlyOnce() = runTest {
+        var photonReads = 0
+        var taskReads = 0
+        var checkpointReads = 0
+        var capabilityReads = 0
+        var toolReads = 0
+        var fieldReads = 0
+        val session = BootReadSession(
+            BootSnapshotLoader(
+                photons = BootPhotonSource {
+                    photonReads += 1
+                    PhotonLoadReport(listOf(photon("once", "single-flight")), emptyList())
+                },
+                tasks = BootTaskSource {
+                    taskReads += 1
+                    TaskLoadReport(emptyList(), emptyList())
+                },
+                checkpoints = BootCheckpointSource {
+                    checkpointReads += 1
+                    CheckpointLoadReport(emptyList(), emptyList())
+                },
+                capabilities = BootCapabilityStateSource {
+                    capabilityReads += 1
+                    emptyList()
+                },
+                tools = BootToolStateSource {
+                    toolReads += 1
+                    emptyList()
+                },
+                fieldSnapshots = BootFieldSnapshotSource {
+                    fieldReads += 1
+                    FieldSnapshotLoadReport(emptyList(), emptyList())
+                },
+                now = { t0 },
+            )
+        )
+
+        assertTrue(session.readFailures(BootSnapshotSource.PHOTON).isEmpty())
+        assertTrue(session.readFailures(BootSnapshotSource.TASK).isEmpty())
+        assertTrue(session.readFailures(BootSnapshotSource.CHECKPOINT).isEmpty())
+        assertTrue(session.readFailures(BootSnapshotSource.CAPABILITY).isEmpty())
+        assertTrue(session.readFailures(BootSnapshotSource.TOOL).isEmpty())
+        assertTrue(session.readFailures(BootSnapshotSource.FIELD).isEmpty())
+
+        val snapshot = session.snapshot()
+
+        assertEquals(listOf("once"), snapshot.photons.map { it.id.value })
+        assertEquals(1, photonReads)
+        assertEquals(1, taskReads)
+        assertEquals(1, checkpointReads)
+        assertEquals(1, capabilityReads)
+        assertEquals(1, toolReads)
+        assertEquals(1, fieldReads)
+
+        session.snapshot()
+        session.photonReport()
+        assertEquals(1, photonReads)
+    }
+
+    @Test
     fun cancellationPropagatesInsteadOfBecomingPartialSnapshot() = runTest {
         val loader = BootSnapshotLoader(
             photons = BootPhotonSource { throw CancellationException("cancel") },

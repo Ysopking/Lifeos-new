@@ -4,18 +4,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -63,7 +60,10 @@ fun ChatComposer(
         processing = processing,
         voice = voice,
     )
-    val editorEnabled = cognitiveContext.contextReady && !processing.inFlight
+    val editorEnabled =
+        cognitiveContext.contextReady &&
+            !processing.inFlight &&
+            voice.phase != ChatVoicePhase.PROCESSING
     val contextNotice = LifeOsUxPolicy.contextNotice(cognitiveContext)
     val processingNotice = LifeOsUxPolicy.processingNotice(processing)
 
@@ -79,7 +79,7 @@ fun ChatComposer(
             }
             ?.let { notice ->
                 Text(
-                    text = notice.message,
+                    text = HumanReadableOutput.forDisplay(notice.message),
                     style = MaterialTheme.typography.bodySmall,
                     color = if (notice.priority == LifeOsUxPriority.BLOCKING) {
                         MaterialTheme.colorScheme.error
@@ -97,20 +97,27 @@ fun ChatComposer(
             tonalElevation = LifeOsTokens.Elevation.resting,
             color = MaterialTheme.colorScheme.surfaceVariant,
         ) {
-            Column(
+            Row(
                 modifier = Modifier.padding(
-                    horizontal = LifeOsTokens.Spacing.large,
-                    vertical = LifeOsTokens.Spacing.medium,
+                    start = LifeOsTokens.Spacing.large,
+                    end = LifeOsTokens.Spacing.small,
+                    top = LifeOsTokens.Spacing.small,
+                    bottom = LifeOsTokens.Spacing.small,
                 ),
-                verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
             ) {
-                Box(modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = LifeOsTokens.Spacing.xSmall),
+                ) {
                     if (draft.isEmpty()) {
                         Text(
-                            text = if (cognitiveContext.contextReady) {
-                                "Frag LIFEOS …"
-                            } else {
-                                "Wird vorbereitet …"
+                            text = when {
+                                !cognitiveContext.contextReady -> "Dein Kontext wird aufgebaut …"
+                                voice.phase == ChatVoicePhase.RECORDING -> "Ich höre zu …"
+                                else -> "Frag LIFEOS …"
                             },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -119,7 +126,7 @@ fun ChatComposer(
                     BasicTextField(
                         value = draft,
                         onValueChange = onDraftChange,
-                        enabled = editorEnabled,
+                        enabled = editorEnabled && voice.phase != ChatVoicePhase.RECORDING,
                         modifier = Modifier
                             .fillMaxWidth()
                             .semantics {
@@ -130,7 +137,7 @@ fun ChatComposer(
                         ),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         minLines = 1,
-                        maxLines = 5,
+                        maxLines = 6,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(
                             onSend = {
@@ -140,75 +147,64 @@ fun ChatComposer(
                     )
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.small),
-                ) {
-                    when (voice.phase) {
-                        ChatVoicePhase.IDLE -> IconButton(
-                            onClick = onStartVoice,
-                            enabled = canStartVoice,
-                            modifier = Modifier.semantics {
-                                contentDescription = "Spracheingabe starten"
+                when {
+                    processing.inFlight || voice.phase == ChatVoicePhase.PROCESSING -> Box(
+                        modifier = Modifier
+                            .size(LifeOsTokens.Size.minimumTouchTarget)
+                            .semantics {
+                                contentDescription = if (processing.inFlight) {
+                                    "Antwort wird verarbeitet"
+                                } else {
+                                    "Sprache wird lokal verarbeitet"
+                                }
                             },
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_voice),
-                                contentDescription = null,
-                                modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
-                            )
-                        }
-
-                        ChatVoicePhase.RECORDING -> Button(
-                            onClick = onStopVoice,
-                            modifier = Modifier.semantics {
-                                contentDescription = "Sprachaufnahme stoppen"
-                            },
-                        ) {
-                            Text("Stopp")
-                        }
-
-                        ChatVoicePhase.PROCESSING -> Box(
-                            modifier = Modifier
-                                .size(LifeOsTokens.Size.minimumTouchTarget)
-                                .semantics {
-                                    contentDescription = "Sprache wird lokal verarbeitet"
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
-                                strokeWidth = 2.dp,
-                            )
-                        }
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
+                            strokeWidth = 2.dp,
+                        )
                     }
 
-                    Spacer(Modifier.weight(1f))
-
-                    FilledIconButton(
+                    voice.phase == ChatVoicePhase.RECORDING -> FilledIconButton(
+                        onClick = onStopVoice,
                         modifier = Modifier.semantics {
-                            contentDescription = when {
-                                !cognitiveContext.contextReady -> "Gedächtnis wird vorbereitet"
-                                processing.inFlight -> "Nachricht wird verarbeitet"
-                                else -> "Senden"
-                            }
+                            contentDescription = "Sprachaufnahme stoppen"
                         },
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_voice),
+                            contentDescription = null,
+                            modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
+                        )
+                    }
+
+                    draft.isNotBlank() -> FilledIconButton(
                         onClick = onSend,
                         enabled = canSend,
+                        modifier = Modifier.semantics {
+                            contentDescription = "Senden"
+                        },
                     ) {
-                        if (processing.inFlight) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_send),
-                                contentDescription = null,
-                                modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
-                            )
-                        }
+                        Icon(
+                            painter = painterResource(R.drawable.ic_send),
+                            contentDescription = null,
+                            modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
+                        )
+                    }
+
+                    else -> FilledIconButton(
+                        onClick = onStartVoice,
+                        enabled = canStartVoice,
+                        modifier = Modifier.semantics {
+                            contentDescription = "Spracheingabe starten"
+                        },
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_voice),
+                            contentDescription = null,
+                            modifier = Modifier.size(LifeOsTokens.Size.actionIcon),
+                        )
                     }
                 }
             }
@@ -241,10 +237,14 @@ fun ChatComposer(
         }
 
         voice.status
-            ?.takeIf { voice.phase != ChatVoicePhase.IDLE || voice.stagedTranscript != null }
+            ?.takeIf {
+                voice.phase == ChatVoicePhase.RECORDING ||
+                    voice.phase == ChatVoicePhase.PROCESSING ||
+                    voice.stagedTranscript != null
+            }
             ?.let { status ->
                 Text(
-                    text = status,
+                    text = HumanReadableOutput.forDisplay(status),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -252,11 +252,10 @@ fun ChatComposer(
 
         processingNotice?.let { notice ->
             Text(
-                text = notice.message,
+                text = HumanReadableOutput.forDisplay(notice.message),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
         }
     }
 }
-

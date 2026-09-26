@@ -69,7 +69,7 @@ private fun LifeOsMessage(
     ) {
         event.text?.let { text ->
             Text(
-                text = text,
+                text = HumanReadableOutput.forDisplay(text),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurface,
             )
