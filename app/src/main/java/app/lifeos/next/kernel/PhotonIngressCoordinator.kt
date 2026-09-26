@@ -26,6 +26,12 @@ internal class PhotonIngressCoordinator(
         CognitiveWorkBudget,
     ) -> CognitiveSubmissionResult,
     private val onPhotonPersisted: (Photon) -> Unit,
+    /**
+     * True only when production has DurableCognitionReconciler + coverage recovery wired.
+     * In that topology an accepted submission without an immediate TaskStore id is a durable
+     * backpressure deferral, not lost work.
+     */
+    private val durableDeferralSupported: Boolean = false,
 ) {
     suspend fun persistWithoutCognition(
         photon: Photon,
@@ -85,15 +91,21 @@ internal class PhotonIngressCoordinator(
                 setOf("Gedankenmatrix"),
                 liveSubmissionBudget,
             )
-            val durable = submission.accepted && submission.durableTaskId != null
+            val durableTask = submission.accepted && submission.durableTaskId != null
+            val durableDeferred =
+                durableDeferralSupported &&
+                    submission.accepted &&
+                    submission.durableTaskId == null
+            val durableObligation = durableTask || durableDeferred
             PhotonSubmissionResult(
                 photon = photon,
-                processingQueued = durable,
-                processingFailure = if (durable) {
+                processingQueued = durableObligation,
+                processingFailure = if (durableObligation) {
                     null
                 } else {
                     "Cognitive work was not durabilized"
                 },
+                processingDeferred = durableDeferred,
             )
         } catch (cancelled: CancellationException) {
             throw cancelled

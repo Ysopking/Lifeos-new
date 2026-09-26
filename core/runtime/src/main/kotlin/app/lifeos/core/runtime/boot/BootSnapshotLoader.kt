@@ -204,13 +204,24 @@ class BootSnapshotLoader(
         val toolRead = async { loadToolSource() }
         val fieldRead = async { loadFieldSource() }
 
-        val photonResult = photonRead.await()
-        val taskResult = taskRead.await()
-        val checkpointResult = checkpointRead.await()
-        val capabilityResult = capabilityRead.await()
-        val toolResult = toolRead.await()
-        val fieldResult = fieldRead.await()
+        assemble(
+            photonResult = photonRead.await(),
+            taskResult = taskRead.await(),
+            checkpointResult = checkpointRead.await(),
+            capabilityResult = capabilityRead.await(),
+            toolResult = toolRead.await(),
+            fieldResult = fieldRead.await(),
+        )
+    }
 
+    internal fun assemble(
+        photonResult: BootSourceRead<PhotonLoadReport>,
+        taskResult: BootSourceRead<TaskLoadReport>,
+        checkpointResult: BootSourceRead<CheckpointLoadReport>,
+        capabilityResult: BootSourceRead<List<CapabilityDescriptor>>,
+        toolResult: BootSourceRead<List<GeneratedToolRecord>>,
+        fieldResult: BootSourceRead<FieldSnapshotLoadReport>,
+    ): DurableBootSnapshot {
         val photonReport = photonResult.value
         val taskReport = taskResult.value
         val checkpointReport = checkpointResult.value
@@ -260,7 +271,7 @@ class BootSnapshotLoader(
         val canonicalFields = fieldReport.snapshots.sortedWith(fieldSnapshotComparator)
         val canonicalFailures = failures.distinct().sortedWith(readFailureComparator)
 
-        DurableBootSnapshot(
+        return DurableBootSnapshot(
             generationId = fingerprintGeneration(
                 canonicalPhotons,
                 canonicalTasks,
@@ -339,7 +350,23 @@ class BootReadSession(
 
         if (owner) {
             try {
-                val loaded = loader.load()
+                val loaded = coroutineScope {
+                    val photonRead = async { photonSourceRead() }
+                    val taskRead = async { taskSourceRead() }
+                    val checkpointRead = async { checkpointSourceRead() }
+                    val capabilityRead = async { capabilitySourceRead() }
+                    val toolRead = async { toolSourceRead() }
+                    val fieldRead = async { fieldSourceRead() }
+
+                    loader.assemble(
+                        photonResult = photonRead.await(),
+                        taskResult = taskRead.await(),
+                        checkpointResult = checkpointRead.await(),
+                        capabilityResult = capabilityRead.await(),
+                        toolResult = toolRead.await(),
+                        fieldResult = fieldRead.await(),
+                    )
+                }
                 cached = loaded
                 flight.complete(loaded)
             } catch (error: Throwable) {
