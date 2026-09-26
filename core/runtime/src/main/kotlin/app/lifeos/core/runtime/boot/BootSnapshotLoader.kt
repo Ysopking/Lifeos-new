@@ -271,7 +271,7 @@ class BootSnapshotLoader(
         val canonicalFields = fieldReport.snapshots.sortedWith(fieldSnapshotComparator)
         val canonicalFailures = failures.distinct().sortedWith(readFailureComparator)
 
-        DurableBootSnapshot(
+        return DurableBootSnapshot(
             generationId = fingerprintGeneration(
                 canonicalPhotons,
                 canonicalTasks,
