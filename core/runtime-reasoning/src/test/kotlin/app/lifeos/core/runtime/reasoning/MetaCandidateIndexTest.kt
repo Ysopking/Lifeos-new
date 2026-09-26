@@ -34,5 +34,13 @@ class MetaCandidateIndexTest {
         assertEquals(1, groups.size)
         assertEquals(listOf("a", "b"), groups.single().candidates.map { it.photonId.value })
         assertTrue(groups.single().candidates.all { it.sourceRevision == 1L })
+        assertEquals(
+            1,
+            groups.single().candidates.map { it.comparisonFingerprint }.distinct().size,
+        )
+        assertEquals(
+            2,
+            groups.single().candidates.map { it.observationFingerprint }.distinct().size,
+        )
     }
 }

@@ -9,11 +9,13 @@ data class MetaCandidateRef(
     val sourceRevision: Long,
     val domain: MetaDomainFamily,
     val observationFingerprint: String,
+    val comparisonFingerprint: String,
     val stateFingerprint: String,
 ) {
     init {
         require(sourceRevision > 0L)
         require(observationFingerprint.isNotBlank())
+        require(comparisonFingerprint.isNotBlank())
         require(stateFingerprint.isNotBlank())
     }
 
@@ -23,6 +25,7 @@ data class MetaCandidateRef(
         sourceRevision.toString(),
         domain.name,
         observationFingerprint,
+        comparisonFingerprint,
         stateFingerprint,
     )
 }
@@ -62,6 +65,8 @@ class MetaCandidateIndex {
                             domain = projection.descriptor.domain,
                             observationFingerprint =
                                 projection.descriptor.observationSignature.fingerprint,
+                            comparisonFingerprint =
+                                projection.descriptor.observationSignature.comparisonFingerprint,
                             stateFingerprint = projection.descriptor.stateFingerprint,
                         )
                     }

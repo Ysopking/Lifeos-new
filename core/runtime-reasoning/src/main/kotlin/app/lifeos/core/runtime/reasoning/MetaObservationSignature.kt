@@ -79,6 +79,19 @@ data class MetaObservationSignature private constructor(
             .sorted()
             .toList()
 
+    /**
+     * Candidate comparison intentionally excludes invariant source identity. Audit identity remains
+     * in [fingerprint], while semantic/structural identifiability starts only from observations.
+     */
+    val comparisonFingerprint: String = StableFieldIds.fingerprint(
+        "meta-observation-comparison/v1",
+        domain.name,
+        *coordinates
+            .filter { it.role != MetaObservableRole.INVARIANT }
+            .map { it.fingerprint }
+            .toTypedArray(),
+    )
+
     companion object {
         fun create(
             domain: MetaDomainFamily,
