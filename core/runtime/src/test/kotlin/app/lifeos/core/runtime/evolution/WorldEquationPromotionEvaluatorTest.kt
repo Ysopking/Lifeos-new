@@ -200,6 +200,67 @@ class WorldEquationPromotionEvaluatorTest {
     }
 
     @Test
+    fun antiVacuityPolicyRequiresIndependentExclusionEvidence() {
+        val antiPolicy = WorldEquationPromotionPolicy.V2_ANTI_VACUITY
+        val antiEvaluator = WorldEquationPromotionEvaluator(antiPolicy)
+        val withoutExclusion = evidence(
+            observations = listOf(
+                observation("run-1", "workload-a", 5, 3),
+                observation("run-2", "workload-a", 6, 4),
+                observation("run-3", "workload-b", 5, 4, WorldEquationEvidencePartition.HOLDOUT),
+            ),
+            policyFingerprint = antiPolicy.fingerprint(),
+        )
+
+        val verdict = antiEvaluator.evaluate(candidate, baseline, withoutExclusion)
+
+        assertTrue(verdict.decision != WorldEquationPromotionDecision.PROMOTABLE)
+        assertEquals(
+            WorldEquationGateStatus.INCONCLUSIVE,
+            verdict.gateResults.single {
+                it.gate == WorldEquationEvidenceGate.ANTI_VACUITY
+            }.status,
+        )
+    }
+
+    @Test
+    fun exclusionEvidenceSatisfiesAntiVacuityWithoutContaminatingPrimaryStatistics() {
+        val antiPolicy = WorldEquationPromotionPolicy.V2_ANTI_VACUITY
+        val antiEvaluator = WorldEquationPromotionEvaluator(antiPolicy)
+        val withExclusion = evidence(
+            observations = listOf(
+                observation("run-1", "workload-a", 5, 3),
+                observation("run-2", "workload-a", 6, 4),
+                observation("run-3", "workload-b", 5, 4, WorldEquationEvidencePartition.HOLDOUT),
+                observation(
+                    "run-exclusion",
+                    "negative-control",
+                    1,
+                    99,
+                    WorldEquationEvidencePartition.EXCLUSION,
+                ),
+            ),
+            policyFingerprint = antiPolicy.fingerprint(),
+        )
+
+        val verdict = antiEvaluator.evaluate(candidate, baseline, withExclusion)
+
+        assertEquals(WorldEquationPromotionDecision.PROMOTABLE, verdict.decision)
+        assertEquals(
+            WorldEquationGateStatus.PASS,
+            verdict.gateResults.single {
+                it.gate == WorldEquationEvidenceGate.ANTI_VACUITY
+            }.status,
+        )
+        assertEquals(
+            WorldEquationGateStatus.PASS,
+            verdict.gateResults.single {
+                it.gate == WorldEquationEvidenceGate.PRIMARY_IMPROVEMENT
+            }.status,
+        )
+    }
+
+    @Test
     fun policyFingerprintCannotBeSubstituted() {
         val evidence = evidence(
             observations = listOf(

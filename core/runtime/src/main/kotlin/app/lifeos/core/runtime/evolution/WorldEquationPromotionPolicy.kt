@@ -12,6 +12,8 @@ data class WorldEquationPromotionPolicy(
     val workloadNonInferiorityMargin: Double,
     val minimumCoefficientNormRatio: Double,
     val maximumSingleParameterDelta: Double = 0.25,
+    val minimumExclusionRuns: Int = 0,
+    val antiVacuityContractFingerprint: String? = null,
 ) {
     init {
         require(version.isNotBlank())
@@ -21,18 +23,42 @@ data class WorldEquationPromotionPolicy(
         require(workloadNonInferiorityMargin.isFinite() && workloadNonInferiorityMargin >= 0.0)
         require(minimumCoefficientNormRatio.isFinite() && minimumCoefficientNormRatio in 0.0..1.0)
         require(maximumSingleParameterDelta.isFinite() && maximumSingleParameterDelta in 0.0..1.0)
+        require(minimumExclusionRuns >= 0)
+        if (minimumExclusionRuns > 0) {
+            require(!antiVacuityContractFingerprint.isNullOrBlank()) {
+                "Anti-vacuity policy requires a frozen contract fingerprint"
+            }
+        } else {
+            require(antiVacuityContractFingerprint == null || antiVacuityContractFingerprint.isNotBlank())
+        }
     }
 
-    fun fingerprint(): String = StableFieldIds.fingerprint(
-        "world-equation-promotion-policy/v1",
-        version,
-        java.lang.Double.toHexString(primaryImprovementMargin),
-        java.lang.Double.toHexString(statusNonInferiorityMargin),
-        java.lang.Double.toHexString(minimumImprovedRunFraction),
-        java.lang.Double.toHexString(workloadNonInferiorityMargin),
-        java.lang.Double.toHexString(minimumCoefficientNormRatio),
-        java.lang.Double.toHexString(maximumSingleParameterDelta),
-    )
+    fun fingerprint(): String =
+        if (minimumExclusionRuns == 0 && antiVacuityContractFingerprint == null) {
+            StableFieldIds.fingerprint(
+                "world-equation-promotion-policy/v1",
+                version,
+                java.lang.Double.toHexString(primaryImprovementMargin),
+                java.lang.Double.toHexString(statusNonInferiorityMargin),
+                java.lang.Double.toHexString(minimumImprovedRunFraction),
+                java.lang.Double.toHexString(workloadNonInferiorityMargin),
+                java.lang.Double.toHexString(minimumCoefficientNormRatio),
+                java.lang.Double.toHexString(maximumSingleParameterDelta),
+            )
+        } else {
+            StableFieldIds.fingerprint(
+                "world-equation-promotion-policy/v2",
+                version,
+                java.lang.Double.toHexString(primaryImprovementMargin),
+                java.lang.Double.toHexString(statusNonInferiorityMargin),
+                java.lang.Double.toHexString(minimumImprovedRunFraction),
+                java.lang.Double.toHexString(workloadNonInferiorityMargin),
+                java.lang.Double.toHexString(minimumCoefficientNormRatio),
+                java.lang.Double.toHexString(maximumSingleParameterDelta),
+                minimumExclusionRuns.toString(),
+                antiVacuityContractFingerprint.orEmpty(),
+            )
+        }
 
     companion object {
         val V1 = WorldEquationPromotionPolicy(
@@ -43,6 +69,19 @@ data class WorldEquationPromotionPolicy(
             workloadNonInferiorityMargin = 0.0,
             minimumCoefficientNormRatio = 0.20,
             maximumSingleParameterDelta = 0.25,
+        )
+
+        val V2_ANTI_VACUITY = WorldEquationPromotionPolicy(
+            version = "world-equation-promotion-policy-v2-antivacuity",
+            primaryImprovementMargin = 0.0,
+            statusNonInferiorityMargin = 0.0,
+            minimumImprovedRunFraction = 0.60,
+            workloadNonInferiorityMargin = 0.0,
+            minimumCoefficientNormRatio = 0.20,
+            maximumSingleParameterDelta = 0.25,
+            minimumExclusionRuns = 1,
+            antiVacuityContractFingerprint =
+                "meta-realization-v2.2:frozen-profile+observables+failures+negative-control",
         )
     }
 }
@@ -66,19 +105,25 @@ class WorldEquationPromotionEvaluator(
         require(candidate.schemaFingerprint() == baseline.schemaFingerprint())
 
         val observations = evidence.observations
+        val evaluationObservations = observations.filter {
+            it.partition != WorldEquationEvidencePartition.EXCLUSION
+        }
+        val exclusionObservations = observations.filter {
+            it.partition == WorldEquationEvidencePartition.EXCLUSION
+        }
         val protocol = evidence.protocol
         val changed = candidate.changedCoefficientIdsComparedWith(baseline)
 
-        val independentRuns = observations.map { it.runId }.distinct().size
-        val distinctWorkloads = observations.map { it.workloadId }.distinct().size
-        val shadowObservations = observations.filter {
+        val independentRuns = evaluationObservations.map { it.runId }.distinct().size
+        val distinctWorkloads = evaluationObservations.map { it.workloadId }.distinct().size
+        val shadowObservations = evaluationObservations.filter {
             it.partition == WorldEquationEvidencePartition.SHADOW
         }
         val shadowRuns = shadowObservations
             .map { it.runId }
             .distinct()
             .size
-        val holdoutObservations = observations.filter {
+        val holdoutObservations = evaluationObservations.filter {
             it.partition == WorldEquationEvidencePartition.HOLDOUT
         }
         val holdoutRuns = holdoutObservations.map { it.runId }.distinct().size
@@ -144,12 +189,12 @@ class WorldEquationPromotionEvaluator(
                 "independent-runs:" + independentRuns + "/" + protocol.minimumIndependentRuns,
             )
         } else {
-            val baselineBad = observations.count {
+            val baselineBad = evaluationObservations.count {
                 it.baseline.status != WorldFormulaStatus.CONVERGED
-            }.toDouble() / observations.size
-            val candidateBad = observations.count {
+            }.toDouble() / evaluationObservations.size
+            val candidateBad = evaluationObservations.count {
                 it.candidate.status != WorldFormulaStatus.CONVERGED
-            }.toDouble() / observations.size
+            }.toDouble() / evaluationObservations.size
             val regression = candidateBad - baselineBad
             result(
                 WorldEquationEvidenceGate.STATUS_NON_INFERIORITY,
@@ -170,9 +215,9 @@ class WorldEquationPromotionEvaluator(
                 "independent-runs:" + independentRuns + "/" + protocol.minimumIndependentRuns,
             )
         } else {
-            val fraction = observations.count {
+            val fraction = evaluationObservations.count {
                 it.improvement(protocol.primaryMetric) > 0.0
-            }.toDouble() / observations.size
+            }.toDouble() / evaluationObservations.size
             result(
                 WorldEquationEvidenceGate.REPRODUCIBILITY,
                 if (fraction >= policy.minimumImprovedRunFraction) {
@@ -192,7 +237,7 @@ class WorldEquationPromotionEvaluator(
                 "workloads:" + distinctWorkloads + "/" + protocol.minimumDistinctWorkloads,
             )
         } else {
-            val worstMean = observations
+            val worstMean = evaluationObservations
                 .groupBy { it.workloadId }
                 .values
                 .minOf { group ->
@@ -218,7 +263,7 @@ class WorldEquationPromotionEvaluator(
             )
         } else {
             val minimumSeen = changed.minOf { id ->
-                observations.count { id in it.candidate.activeCoefficientIds }
+                evaluationObservations.count { id in it.candidate.activeCoefficientIds }
             }
             val status = when {
                 minimumSeen >= protocol.minimumActiveObservationsPerChangedCoefficient ->
@@ -264,6 +309,29 @@ class WorldEquationPromotionEvaluator(
                 ";maximum=" + hex(policy.maximumSingleParameterDelta),
         )
 
+        val antiVacuity = if (policy.minimumExclusionRuns == 0) {
+            result(
+                WorldEquationEvidenceGate.ANTI_VACUITY,
+                WorldEquationGateStatus.PASS,
+                "legacy-policy-disabled",
+            )
+        } else {
+            val exclusionRuns = exclusionObservations.map { it.runId }.distinct().size
+            result(
+                WorldEquationEvidenceGate.ANTI_VACUITY,
+                if (
+                    exclusionRuns >= policy.minimumExclusionRuns &&
+                    !policy.antiVacuityContractFingerprint.isNullOrBlank()
+                ) {
+                    WorldEquationGateStatus.PASS
+                } else {
+                    WorldEquationGateStatus.INCONCLUSIVE
+                },
+                "exclusion-runs=" + exclusionRuns + "/" + policy.minimumExclusionRuns +
+                    ";contract=" + policy.antiVacuityContractFingerprint.orEmpty(),
+            )
+        }
+
         val invalidRuns = observations.count {
             it.candidate.status == WorldFormulaStatus.INVALID_EQUATION
         }
@@ -282,6 +350,7 @@ class WorldEquationPromotionEvaluator(
             identifiability,
             nonDegeneracy,
             boundedChange,
+            antiVacuity,
             safety,
         )
         val decision = when {

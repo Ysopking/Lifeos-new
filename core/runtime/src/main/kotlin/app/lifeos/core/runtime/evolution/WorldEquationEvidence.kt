@@ -27,6 +27,7 @@ enum class WorldEquationPrimaryMetric {
 enum class WorldEquationEvidencePartition {
     SHADOW,
     HOLDOUT,
+    EXCLUSION,
 }
 
 enum class WorldEquationEvidenceGate {
@@ -38,6 +39,7 @@ enum class WorldEquationEvidenceGate {
     IDENTIFIABILITY,
     NON_DEGENERACY,
     BOUNDED_PARAMETER_CHANGE,
+    ANTI_VACUITY,
     SAFETY,
 }
 
