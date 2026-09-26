@@ -59,6 +59,21 @@ class MetaTheoryMemoryProjectorTest {
     }
 
     @Test
+    fun mediaDomainWinsOverCrossDomainDocumentTag() {
+        val source = Photon(
+            id = PhotonId("media-item"),
+            content = "name=photo.jpg",
+            mimeType = "application/vnd.lifeos.android-media-metadata+text",
+            provenance = Provenance("life-source:android-media-images", "android", at),
+            tags = setOf("media", "media:image", "document", "document:photo.jpg"),
+        )
+
+        val descriptor = MetaTheoryMemoryProjector().project(source).descriptor
+
+        assertEquals(MetaDomainFamily.MEDIA, descriptor.domain)
+    }
+
+    @Test
     fun optionalTransitionAndDeformationRemainUndefinedWhenNotSupported() {
         val source = Photon(
             id = PhotonId("standalone"),

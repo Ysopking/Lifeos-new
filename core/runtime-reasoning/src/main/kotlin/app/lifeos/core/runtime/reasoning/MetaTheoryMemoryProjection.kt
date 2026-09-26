@@ -162,6 +162,13 @@ class MetaTheoryMemoryProjector {
         val tags = photon.tags
         val mime = photon.mimeType.lowercase()
         return when {
+            // Media adapters intentionally also expose document tags for cross-domain retrieval;
+            // media identity therefore has priority over the generic document projection.
+            "media" in tags ||
+                mime.startsWith("image/") ||
+                mime.startsWith("audio/") ||
+                mime.startsWith("video/") -> MetaDomainFamily.MEDIA
+
             "document" in tags ||
                 "file" in tags ||
                 tags.any {
@@ -171,11 +178,6 @@ class MetaTheoryMemoryProjector {
                         it == "database" ||
                         it == "backup"
                 } -> MetaDomainFamily.DOCUMENT
-
-            "media" in tags ||
-                mime.startsWith("image/") ||
-                mime.startsWith("audio/") ||
-                mime.startsWith("video/") -> MetaDomainFamily.MEDIA
 
             "contact" in tags ||
                 tags.any { it.startsWith("person:") } -> MetaDomainFamily.CONTACT
