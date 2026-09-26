@@ -26,8 +26,8 @@ fun LifeOsSpokenOutputEffect(
     voicePhase: ChatVoicePhase,
 ) {
     val context = LocalContext.current
-    val speech = remember(context.applicationContext) {
-        AndroidSpeechOutput(context.applicationContext)
+    var speech by remember(context.applicationContext) {
+        mutableStateOf<AndroidSpeechOutput?>(null)
     }
     val sessionStartedAtMillis by rememberSaveable {
         mutableStateOf(System.currentTimeMillis())
@@ -36,13 +36,16 @@ fun LifeOsSpokenOutputEffect(
         mutableStateOf<String?>(null)
     }
 
-    DisposableEffect(speech) {
-        onDispose { speech.close() }
+    DisposableEffect(Unit) {
+        onDispose {
+            speech?.close()
+            speech = null
+        }
     }
 
     LaunchedEffect(voicePhase) {
         if (voicePhase == ChatVoicePhase.RECORDING) {
-            speech.stop()
+            speech?.stop()
         }
     }
 
@@ -66,7 +69,10 @@ fun LifeOsSpokenOutputEffect(
         if (event.id == lastSpokenEventId) return@LaunchedEffect
 
         lastSpokenEventId = event.id
-        speech.speak(
+        val output = speech ?: AndroidSpeechOutput(
+            context.applicationContext
+        ).also { speech = it }
+        output.speak(
             id = event.id,
             text = HumanReadableOutput.forSpeech(event.text.orEmpty()),
         )
