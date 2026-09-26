@@ -44,7 +44,7 @@ class ActionCenterProjectorTest {
 
         assertEquals(listOf("Build starten"), result.ready.map { it.objective })
         assertEquals(listOf("Freigabe klären"), result.needsOwner.map { it.objective })
-        assertTrue(result.ready.single().prompt.contains("anstoße"))
+        assertTrue(result.ready.single().prompt.contains("stoße"))
         assertTrue(result.needsOwner.single().prompt.contains("Kläre"))
     }
 

@@ -142,23 +142,10 @@ class LifeOsKernel internal constructor(
     )
     val bootstrapState: StateFlow<KernelBootstrapState> = bootLifecycle.bootstrapState
 
-    private val photonIngress = PhotonIngressCoordinator(
-        photonStore = photonStore,
-        liveSubmissionBudget = LifeOsKernelDefaults.LIVE_SUBMISSION_BUDGET,
-        submitCognition = { delta, priority, salience, targetModules, budget ->
-            continuousCognition.submit(
-                delta = delta,
-                priority = priority,
-                salience = salience,
-                targetModules = targetModules,
-                budget = budget,
-            )
-        },
+    private val photonIngress = KernelPhotonIngressComposition.create(
+        photonStore = revisionedPhotonStore,
+        continuousCognition = continuousCognition,
         onPhotonPersisted = bootLifecycle::onPhotonPersisted,
-        // KernelCognitionComposition always wires DurableCognitionReconciler plus the terminal
-        // recovery observer. Persisted uncovered revisions therefore form a durable overflow queue
-        // when the bounded TaskStore admission is temporarily full.
-        durableDeferralSupported = true,
     )
 
     suspend fun freezeCognitiveModulesForCurrentCycle(

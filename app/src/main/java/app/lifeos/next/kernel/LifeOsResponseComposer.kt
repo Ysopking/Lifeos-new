@@ -231,18 +231,12 @@ class LifeOsResponseComposer(
         }
         val goal = result.effectiveGoal
         if (goal?.intent == IntentType.CONVERSATION) {
-            val topic = goal.objective.substringAfter(": ", goal.objective).trim().take(320)
-            val fact = if (topic.isBlank()) {
+            val utterance = result.source.photon.content.trim().take(320)
+            val fact = utterance.ifBlank {
                 statement(
                     result,
                     "Ich bin bereit. Sag mir, was ich als Nächstes tun soll.",
                     "I am ready. Tell me what you want me to do next.",
-                )
-            } else {
-                statement(
-                    result,
-                    "Verstanden: $topic",
-                    "Understood: $topic",
                 )
             }
             return generated(
