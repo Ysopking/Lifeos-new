@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import app.lifeos.core.model.Photon
 import app.lifeos.core.runtime.goal.GoalPlanId
 import app.lifeos.next.kernel.KernelBootstrapStatus
+import app.lifeos.next.ui.calendar.CalendarEventUiModel
+import app.lifeos.next.ui.calendar.WeekCalendarProjector
 import app.lifeos.next.ui.goals.GoalPlanUiModel
 import app.lifeos.next.ui.goals.GoalPlanUiStatus
 import app.lifeos.next.ui.goals.GoalWorkspaceProjector
@@ -29,6 +31,7 @@ enum class GoalWorkspaceFilter {
 data class LifeOsGoalsUiState(
     val workspace: GoalWorkspaceUiModel = GoalWorkspaceUiModel.empty(),
     val today: TodayPlanUiModel? = null,
+    val calendarEvents: List<CalendarEventUiModel> = emptyList(),
     val filter: GoalWorkspaceFilter = GoalWorkspaceFilter.ACTIVE,
     val selectedPlanId: GoalPlanId? = null,
     val loading: Boolean = true,
@@ -139,10 +142,12 @@ class LifeOsGoalsViewModel(application: Application) : AndroidViewModel(applicat
             zoneId = ZoneId.systemDefault(),
             photons = photons,
         )
+        val calendarEvents = WeekCalendarProjector.events(photons)
         mutableState.update { current ->
             current.copy(
                 workspace = workspace,
                 today = today,
+                calendarEvents = calendarEvents,
                 selectedPlanId = current.selectedPlanId?.takeIf { selected ->
                     workspace.plans.any { it.id == selected }
                 },

@@ -25,8 +25,10 @@ internal fun LifeOsGoalsOverview(
     state: LifeOsGoalsUiState,
     onSelectFilter: (GoalWorkspaceFilter) -> Unit,
     onOpenPlan: (GoalPlanUiModel) -> Unit,
-    onShowToday: () -> Unit,
+    onShowToday: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    title: String = "Ziele",
+    subtitle: String = "Langfristige Pläne und ihr Fortschritt.",
 ) {
     LifeOsContentFrame(modifier = modifier.fillMaxSize()) {
         Row(
@@ -37,15 +39,17 @@ internal fun LifeOsGoalsOverview(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(LifeOsTokens.Spacing.xSmall),
             ) {
-                Text("Ziele", style = MaterialTheme.typography.headlineMedium)
+                Text(title, style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    "Langfristige Pläne und ihr Fortschritt.",
+                    subtitle,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = onShowToday) {
-                Text("Heute")
+            onShowToday?.let { showToday ->
+                TextButton(onClick = showToday) {
+                    Text("Heute")
+                }
             }
         }
 

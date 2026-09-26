@@ -16,11 +16,14 @@ import app.lifeos.next.LifeOsToolCenterViewModel
 import app.lifeos.next.OwnerAssetReviewViewModel
 import app.lifeos.next.PersonalConversationImportViewModel
 import app.lifeos.next.StorageMaintenanceViewModel
+import app.lifeos.next.ui.actions.LifeOsActionCenterScreen
+import app.lifeos.next.ui.assets.OwnerAssetReviewScreen
+import app.lifeos.next.ui.calendar.LifeOsWeekScreen
 import app.lifeos.next.ui.chat.LifeOsChatScreen
 import app.lifeos.next.ui.components.buildRuntimeHealthUiModel
-import app.lifeos.next.ui.goals.LifeOsGoalsScreen
+import app.lifeos.next.ui.goals.LifeOsProjectsScreen
 import app.lifeos.next.ui.layout.AdaptiveLifeOsScaffold
-import app.lifeos.next.ui.memory.LifeOsMemoryScreen
+import app.lifeos.next.ui.speech.LifeOsSpokenOutputEffect
 import app.lifeos.next.ui.system.LifeOsSystemOverlay
 import app.lifeos.next.ui.system.OwnerAttentionProjector
 import app.lifeos.next.ui.theme.LifeOsTheme
@@ -37,12 +40,15 @@ fun LifeOsRoot(
     personalConversationImportModel: PersonalConversationImportViewModel,
     onRequestMicrophonePermission: () -> Unit = {},
 ) {
+    @Suppress("UNUSED_VARIABLE")
+    val retainedMemoryRuntime = memoryModel
+
     var selectedKey by rememberSaveable {
         mutableStateOf(LifeOsDestination.default.key)
     }
-    var showSystem by rememberSaveable {
-        mutableStateOf(false)
-    }
+    var showHub by rememberSaveable { mutableStateOf(false) }
+    var showSystem by rememberSaveable { mutableStateOf(false) }
+
     val selected = LifeOsDestination.fromKey(selectedKey)
     val chatState by model.state.collectAsStateWithLifecycle()
     val assetState by assetReviewModel.state.collectAsStateWithLifecycle()
@@ -63,19 +69,33 @@ fun LifeOsRoot(
         toolCenterModel.refresh()
     }
 
-    BackHandler(enabled = showSystem || selected != LifeOsDestination.CHAT) {
-        if (showSystem) {
-            showSystem = false
-        } else {
-            selectedKey = LifeOsDestination.CHAT.key
+    fun submitFromWorkspace(prompt: String) {
+        model.editDraft(prompt)
+        model.sendMessage()
+        selectedKey = LifeOsDestination.CHAT.key
+    }
+
+    BackHandler(
+        enabled = showSystem || showHub || selected != LifeOsDestination.CHAT
+    ) {
+        when {
+            showSystem -> showSystem = false
+            showHub -> showHub = false
+            else -> selectedKey = LifeOsDestination.CHAT.key
         }
     }
 
     LifeOsTheme {
+        LifeOsSpokenOutputEffect(
+            timeline = chatState.timeline,
+            bootStatus = chatState.bootStatus,
+            voicePhase = chatState.voice.phase,
+        )
+
         AdaptiveLifeOsScaffold(
             selected = selected,
-            onSelect = { destination -> selectedKey = destination.key },
-            onOpenSystem = { showSystem = true },
+            onOpenHub = { showHub = true },
+            onBackToChat = { selectedKey = LifeOsDestination.CHAT.key },
             attentionCount = ownerAttention.totalCount,
         ) { contentModifier ->
             when (selected) {
@@ -85,16 +105,44 @@ fun LifeOsRoot(
                     onRequestMicrophonePermission = onRequestMicrophonePermission,
                 )
 
-                LifeOsDestination.GOALS -> LifeOsGoalsScreen(
+                LifeOsDestination.PROJECTS -> LifeOsProjectsScreen(
                     model = goalsModel,
                     modifier = contentModifier,
                 )
 
-                LifeOsDestination.MEMORY -> LifeOsMemoryScreen(
-                    model = memoryModel,
+                LifeOsDestination.WEEK -> LifeOsWeekScreen(
+                    goalsModel = goalsModel,
+                    modifier = contentModifier,
+                )
+
+                LifeOsDestination.ACTIONS -> LifeOsActionCenterScreen(
+                    chatModel = model,
+                    goalsModel = goalsModel,
+                    onSubmitPrompt = ::submitFromWorkspace,
+                    modifier = contentModifier,
+                )
+
+                LifeOsDestination.ARTIFACTS -> OwnerAssetReviewScreen(
+                    model = assetReviewModel,
                     modifier = contentModifier,
                 )
             }
+        }
+
+        if (showHub) {
+            LifeOsHubSheet(
+                selected = selected,
+                attentionCount = ownerAttention.totalCount,
+                onSelect = { destination ->
+                    selectedKey = destination.key
+                    showHub = false
+                },
+                onOpenSystem = {
+                    showHub = false
+                    showSystem = true
+                },
+                onDismiss = { showHub = false },
+            )
         }
 
         if (showSystem) {
